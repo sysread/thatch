@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { ThatchDB } from "../src/db";
 import { detectRepo } from "../src/git";
+import { BgeEmbeddingModel } from "../src/embeddings";
 
 const dbPath = process.env.THATCH_DB_PATH ?? join(homedir(), ".config", "thatch", "thatch.db");
 const db = new ThatchDB(dbPath);
@@ -16,9 +17,10 @@ function usage(): never {
   thatch list   [store]            List memory labels in a store  
   thatch show   <label> [store]    Display a memory by label
   thatch forget <label> [store]    Remove a memory by label
-  thatch search <query> [store]    Full-text search (not semantic)
+  thatch search <query> [store]    Semantic search (cosine similarity)
 
-Stores default to the repo detected from git remote. Use "global" for the global store.`);
+Stores default to the repo detected from git remote. Use "global" for the
+global store. Use "all" with search to search project + global together.`);
   process.exit(1);
 }
 
@@ -85,18 +87,21 @@ switch (command) {
     if (!args[0]) usage();
     const query = args[0];
     const store = args[1] ?? await defaultStore();
-    // Full-text substring search, not semantic. Semantic search requires
-    // the embedding model which is heavy for a CLI.
-    const entries = db.listEntries(store);
-    const matches = entries.filter((e) => {
-      const entry = db.showEntry(store, e.label);
-      return entry?.content.toLowerCase().includes(query.toLowerCase());
-    });
-    if (matches.length === 0) {
-      console.log(`No matches for "${query}" in "${store}".`);
+    const stores = store === "all" ? [await defaultStore(), "global"] : [store];
+
+    console.error("Loading embedding model...");
+    const model = new BgeEmbeddingModel();
+    const queryEmb = await model.queryEmbed(query);
+    const results = db.recall(stores, queryEmb, { limit: 10 });
+
+    if (results.length === 0) {
+      console.log(`No matches for "${query}" in [${stores.join(", ")}].`);
     } else {
-      for (const m of matches) {
-        console.log(`[${store}] ${m.label}`);
+      for (const r of results) {
+        const score = r._score.toFixed(3);
+        const branch = r.branch ? ` branch:${r.branch}` : "";
+        const conf = r.confidence ? ` c:${r.confidence}` : "";
+        console.log(`[score:${score}] [${r.store}${branch}${conf}] ${r.label}`);
       }
     }
     break;
