@@ -94,6 +94,10 @@ export class ExtractionPipeline {
     return this.#buffer.length > 0;
   }
 
+  get bufferSize(): number {
+    return this.#buffer.length;
+  }
+
   /** Build the extraction prompt payload from buffered interactions. */
   buildPayload(
     interactions: ToolInteraction[],

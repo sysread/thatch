@@ -49,14 +49,34 @@ export const server: Plugin = async ({ client }) => {
       thatch_find_duplicates: createFindDuplicatesTool(db, repo),
     },
 
+    // 1. System prompt — always in context.
     "experimental.chat.system.transform": async (_input, output) => {
       output.system.push(sys);
     },
 
+    // 2. Compaction context — re-familiarizes after compaction.
     "experimental.session.compacting": async (_input, output) => {
       output.context.push(compact);
     },
 
+    // 3. Per-message nudges — lightweight reminders on each user message.
+    "chat.message": async (_input, output) => {
+      const nudges: string[] = [];
+
+      if (extraction.pending) {
+        nudges.push(
+          `[thatch] ${extraction.bufferSize} recent tool interactions are available for fact extraction. ` +
+          `Consider using thatch_memory_recall to check for related existing facts, then thatch_memory_remember to save new ones.`,
+        );
+        extraction.flush(); // clear buffer so we don't nag every turn
+      }
+
+      if (nudges.length > 0) {
+        output.parts.unshift({ type: "text", text: nudges.join("\n") } as any);
+      }
+    },
+
+    // 4. Events — startup reminders and tool buffering.
     event: async ({ event }) => {
       switch (event.type) {
         case "session.created": {
@@ -84,18 +104,6 @@ export const server: Plugin = async ({ client }) => {
             title: (event.properties as any)?.title ?? "",
             output: (event.properties as any)?.output ?? "",
           });
-          return;
-        }
-
-        case "session.idle": {
-          const sessionID = (event.properties as any)?.id;
-          if (!sessionID) return;
-
-          if (extraction.pending) {
-            await runExtraction(client as any, db, model, extraction, repo, sessionID);
-          }
-
-          await runDedup(client as any, db, model, dedup, repo, sessionID);
           return;
         }
       }
@@ -138,130 +146,4 @@ function createFindDuplicatesTool(db: ThatchDB, defaultStore: string) {
         .join("\n");
     },
   });
-}
-
-// ---------------------------------------------------------------------------
-// Extraction — background subagent session
-// ---------------------------------------------------------------------------
-
-async function runExtraction(
-  client: any,
-  db: ThatchDB,
-  model: BgeEmbeddingModel,
-  pipeline: ExtractionPipeline,
-  projectStore: string,
-  sessionID: string,
-): Promise<void> {
-  const interactions = pipeline.flush();
-  if (interactions.length === 0) return;
-
-  const payload = pipeline.buildPayload(interactions, projectStore);
-  await runSubagent(client, db, model, "thatch-fact-extractor", payload,
-    (json) => pipeline.applyActions(db, model, json),
-    sessionID, "extraction");
-}
-
-// ---------------------------------------------------------------------------
-// Deduplication — background subagent session
-// ---------------------------------------------------------------------------
-
-async function runDedup(
-  client: any,
-  db: ThatchDB,
-  model: BgeEmbeddingModel,
-  dedup: DedupPipeline,
-  projectStore: string,
-  sessionID: string,
-): Promise<void> {
-  const threshold = parseFloat(process.env.THATCH_DEDUP_THRESHOLD ?? "0.80");
-  const candidates = dedup.findCandidates(db, [projectStore, "global"], threshold);
-  if (candidates.length === 0) return;
-
-  // Process up to 3 candidates per idle cycle.
-  for (const candidate of candidates.slice(0, 3)) {
-    try {
-      const payload = dedup.buildPayload(candidate);
-      await runSubagent(client, db, model, "thatch-dedup-classifier", payload,
-        async (json: any) => {
-          const classification = json as import("./dedup").DedupClassification;
-          const result = await dedup.applyClassification(db, model, candidate.store, candidate, classification);
-          db.markPairChecked(candidate.store, candidate.slugA, candidate.slugB, classification.relationship);
-
-          try {
-            await client.app.log({
-              body: { service: "thatch", level: "info", message: result },
-            });
-          } catch { /* ok */ }
-        },
-        sessionID, "dedup");
-    } catch {
-      // best-effort
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Shared subagent runner
-// ---------------------------------------------------------------------------
-
-async function runSubagent(
-  client: any,
-  _db: ThatchDB,
-  _model: BgeEmbeddingModel,
-  agent: string,
-  payload: string,
-  apply: (json: any) => Promise<any>,
-  parentSessionID: string,
-  label: string,
-): Promise<void> {
-  let childID: string | undefined;
-
-  try {
-    const created: any = await client.session.create({
-      parentID: parentSessionID,
-      title: `thatch ${label}`,
-    });
-    childID = created.data?.id ?? (created as any).id;
-    if (!childID) return;
-
-    const result: any = await client.session.prompt({
-      path: { id: childID },
-      body: {
-        agent,
-        parts: [{ type: "text", text: payload }],
-      },
-    });
-
-    const body = result.data ?? result;
-    const parts = body.parts ?? [];
-    const text = parts
-      .filter((p: any) => p.type === "text")
-      .map((p: any) => p.text)
-      .join("\n");
-
-    const json = extractJson(text);
-    if (json) {
-      await apply(json);
-    }
-  } catch {
-    // background work is best-effort
-  } finally {
-    if (childID) {
-      try {
-        await client.session.delete({ path: { id: childID } });
-      } catch {
-        // best-effort cleanup
-      }
-    }
-  }
-}
-
-function extractJson(text: string): any | null {
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) return null;
-  try {
-    return JSON.parse(m[0]);
-  } catch {
-    return null;
-  }
 }

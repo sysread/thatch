@@ -47,6 +47,10 @@ describe("plugin entry", () => {
     expect(typeof hooks["experimental.chat.system.transform"]).toBe("function");
   });
 
+  test("has chat.message hook", () => {
+    expect(typeof hooks["chat.message"]).toBe("function");
+  });
+
   test("has compaction hook", () => {
     expect(typeof hooks["experimental.session.compacting"]).toBe("function");
   });
@@ -60,6 +64,12 @@ describe("plugin entry", () => {
     await hooks["experimental.chat.system.transform"]!({}, output);
     expect(output.system.length).toBe(1);
     expect(output.system[0]).toContain("Thatch provides persistent memory");
+  });
+
+  test("chat.message prepends nudge when extraction is empty", async () => {
+    const output: any = { parts: [{ type: "text", text: "hello" }] };
+    await hooks["chat.message"]!({}, output);
+    expect(output.parts.length).toBe(1); // no nudge, buffer empty
   });
 
   test("compaction hook appends to context array", async () => {
