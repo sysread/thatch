@@ -5,7 +5,7 @@ remember information across sessions using local embeddings and SQLite.
 
 ## Installation
 
-Add thatch to your opencode config:
+Publish to npm and add thatch to your opencode config:
 
 ```jsonc
 // opencode.jsonc or opencode.json
@@ -15,6 +15,14 @@ Add thatch to your opencode config:
 ```
 
 OpenCode installs the plugin and its dependencies automatically on next start.
+
+For local development before publishing, use a file path:
+
+```jsonc
+{ "plugin": ["./path/to/thatch/src/index.ts"] }
+```
+
+Or place the thatch repo in `.opencode/plugins/` for auto-loading.
 
 ## How it works
 

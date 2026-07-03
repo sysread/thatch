@@ -11,12 +11,20 @@ on your machine.
 ## Quick start
 
 ```jsonc
-// opencode.jsonc
+// opencode.jsonc — after publishing to npm
 { "plugin": ["thatch"] }
 ```
 
 That's it. On next start, OpenCode installs thatch and its tools are available
-immediately:
+immediately.
+
+**Self-hosting** (local development, before npm publication):
+
+```jsonc
+{ "plugin": ["./path/to/thatch/src/index.ts"] }
+```
+
+Or place the repo under `.opencode/plugins/` and OpenCode auto-loads it.
 
 | Tool | What it does |
 |------|-------------|
