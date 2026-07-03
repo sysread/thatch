@@ -88,7 +88,7 @@ export const server: Plugin = async ({ client }) => {
           if (!pipeline.pending) return;
           const sessionID = (event.properties as any)?.id;
           if (!sessionID) return;
-          await runExtraction(client as any, db, pipeline, repo, sessionID);
+          await runExtraction(client as any, db, model, pipeline, repo, sessionID);
           return;
         }
       }
@@ -107,6 +107,7 @@ export const server: Plugin = async ({ client }) => {
 async function runExtraction(
   client: any,
   db: ThatchDB,
+  model: BgeEmbeddingModel,
   pipeline: ExtractionPipeline,
   projectStore: string,
   sessionID: string,
@@ -142,7 +143,7 @@ async function runExtraction(
 
     const json = extractJson(text);
     if (json?.actions?.length) {
-      const results = pipeline.applyActions(db, json);
+      const results = await pipeline.applyActions(db, model, json);
       for (const r of results) {
         try {
           await client.app.log({

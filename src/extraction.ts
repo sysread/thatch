@@ -1,4 +1,5 @@
 import type { ThatchDB } from "./db";
+import type { EmbeddingModel } from "./embeddings";
 
 export const FACT_EXTRACTOR_PROMPT = `You are the Thatch Fact Extractor. Your job: review tool interactions and extract durable project knowledge to persist across sessions.
 
@@ -116,10 +117,11 @@ export class ExtractionPipeline {
    * Parses the extraction response and executes actions against the database.
    * Handles add, replace, and delete. Returns a summary of what happened.
    */
-  applyActions(
+  async applyActions(
     db: ThatchDB,
+    model: EmbeddingModel,
     response: ExtractionResponse,
-  ): string[] {
+  ): Promise<string[]> {
     const results: string[] = [];
 
     for (const act of response.actions) {
@@ -130,17 +132,14 @@ export class ExtractionPipeline {
             results.push(`[thatch] extraction: skipped ${act.action} for "${act.label}" — no content`);
             continue;
           }
-          // Use a zero embedding for extraction-saved facts since we can't
-          // embed without the model loaded. These memories will still be
-          // retrievable via text-based listing but won't match in recall
-          // until they're re-embedded on next explicit remember.
-          const emb = new Float32Array(384);
+          const content = `# ${act.label}\n\n${act.content}`;
+          const emb = await model.passageEmbed(content);
           const result = db.remember(
             act.store,
             act.label,
-            `# ${act.label}\n\n${act.content}`,
+            content,
             emb,
-            "extracted",
+            "bge-small-en-v1.5",
             {
               confidence: act.confidence,
               overwrite: act.action === "replace",
