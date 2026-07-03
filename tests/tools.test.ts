@@ -1,0 +1,268 @@
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ThatchDB } from "../src/db";
+import { MockEmbeddingModel } from "../src/embeddings";
+import {
+  createRememberTool,
+  createRecallTool,
+  createListTool,
+  createShowTool,
+  createForgetTool,
+  createListStoresTool,
+} from "../src/tools";
+
+let dbPath: string;
+let dbDir: string;
+let db: ThatchDB;
+let model: MockEmbeddingModel;
+const defaultStore = "test-owner/test-repo";
+
+beforeEach(() => {
+  dbDir = mkdtempSync(join(tmpdir(), "thatch-tool-test-"));
+  dbPath = join(dbDir, "test.db");
+  db = new ThatchDB(dbPath);
+  model = new MockEmbeddingModel();
+});
+
+afterEach(() => {
+  db.close();
+  rmSync(dbDir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// thatch_memory_remember
+// ---------------------------------------------------------------------------
+
+describe("thatch_memory_remember", () => {
+  test("saves a memory and returns confirmation", async () => {
+    const tool = createRememberTool(db, model, defaultStore);
+    const result = await tool.execute({
+      label: "My Memory",
+      content: "Some content to remember",
+    });
+
+    expect(typeof result).toBe("string");
+    expect(result).toContain("[saved]");
+    expect(result).toContain(defaultStore);
+    expect(result).toContain("My Memory");
+  });
+
+  test("rejects duplicate label", async () => {
+    const tool = createRememberTool(db, model, defaultStore);
+
+    await tool.execute({ label: "Dup", content: "First" });
+    const result = await tool.execute({ label: "Dup", content: "Second" });
+
+    expect(typeof result).toBe("string");
+    expect(result).toContain("already exists");
+  });
+
+  test("overwrites when overwrite: true", async () => {
+    const tool = createRememberTool(db, model, defaultStore);
+
+    await tool.execute({ label: "Over", content: "Original" });
+    const result = await tool.execute({ label: "Over", content: "Updated", overwrite: true });
+
+    expect(typeof result).toBe("string");
+    expect(result).toContain("[saved]");
+
+    const entry = db.showEntry(defaultStore, "Over");
+    expect(entry?.content).toContain("Updated");
+  });
+
+  test("uses explicit store argument", async () => {
+    const tool = createRememberTool(db, model, defaultStore);
+    const result = await tool.execute({
+      label: "Custom Store Entry",
+      content: "Content",
+      store: "other/other-repo",
+    });
+
+    expect(result).toContain("other/other-repo");
+
+    const entry = db.showEntry("other/other-repo", "Custom Store Entry");
+    expect(entry).not.toBeNull();
+  });
+
+  test("stores branch and confidence metadata", async () => {
+    const tool = createRememberTool(db, model, defaultStore);
+    await tool.execute({
+      label: "Branch Test",
+      content: "Content",
+      branch: "feature/x",
+      confidence: 9,
+    });
+
+    const entry = db.showEntry(defaultStore, "Branch Test");
+    expect(entry?.branch).toBe("feature/x");
+    expect(entry?.confidence).toBe(9);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// thatch_memory_recall
+// ---------------------------------------------------------------------------
+
+describe("thatch_memory_recall", () => {
+  test("searches repo + global by default", async () => {
+    const remember = createRememberTool(db, model, defaultStore);
+    const recall = createRecallTool(db, model, defaultStore);
+
+    await remember.execute({ label: "Repo Memory", content: "In repo store", store: defaultStore });
+    await remember.execute({ label: "Global Memory", content: "In global store", store: "global" });
+
+    const result = await recall.execute({ query: "something" });
+    expect(typeof result).toBe("string");
+    expect(result).not.toBe("No matching memories found.");
+  });
+
+  test("returns empty result message for no matches", async () => {
+    const recall = createRecallTool(db, model, defaultStore);
+    // Don't seed any memories in "empty-store"
+    const result = await recall.execute({ query: "nothing", store: "empty-store" });
+    expect(result).toBe("No matching memories found.");
+  });
+
+  test("respects store override", async () => {
+    const remember = createRememberTool(db, model, defaultStore);
+    const recall = createRecallTool(db, model, defaultStore);
+
+    await remember.execute({ label: "Only Here", content: "Only in this store", store: "isolated" });
+
+    const result = await recall.execute({ query: "Only Here", store: "isolated" });
+    expect(result).toContain("Only Here");
+  });
+
+  test("respects limit parameter", async () => {
+    const remember = createRememberTool(db, model, defaultStore);
+    const recall = createRecallTool(db, model, defaultStore);
+
+    for (let i = 0; i < 5; i++) {
+      await remember.execute({ label: `Entry ${i}`, content: `Content ${i}` });
+    }
+
+    // limit 1 should return at most 1 result separator
+    const result = await recall.execute({ query: "Entry", limit: 1 });
+    const separator = "-----";
+    // Should have at most 1 result (0 separators) or be the empty message
+    if (result !== "No matching memories found.") {
+      const parts = result.split(separator);
+      expect(parts.length).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// thatch_memory_list
+// ---------------------------------------------------------------------------
+
+describe("thatch_memory_list", () => {
+  test("lists entries in a store", async () => {
+    const remember = createRememberTool(db, model, defaultStore);
+    const list = createListTool(db, defaultStore);
+
+    await remember.execute({ label: "Alpha", content: "A" });
+    await remember.execute({ label: "Beta", content: "B" });
+
+    const result = await list.execute({});
+    expect(typeof result).toBe("string");
+    expect(result).toContain("Alpha");
+    expect(result).toContain("Beta");
+  });
+
+  test("empty store returns message", async () => {
+    const list = createListTool(db, defaultStore);
+    const result = await list.execute({});
+    expect(result).toContain("No memories");
+  });
+
+  test("respects store argument", async () => {
+    const remember = createRememberTool(db, model, defaultStore);
+    const list = createListTool(db, defaultStore);
+
+    await remember.execute({ label: "Other", content: "C", store: "other" });
+
+    const result = await list.execute({ store: "other" });
+    expect(result).toContain("Other");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// thatch_memory_show
+// ---------------------------------------------------------------------------
+
+describe("thatch_memory_show", () => {
+  test("shows full content of a memory", async () => {
+    const remember = createRememberTool(db, model, defaultStore);
+    const show = createShowTool(db, defaultStore);
+
+    await remember.execute({ label: "Show Me", content: "Detailed content here" });
+
+    const result = await show.execute({ label: "Show Me" });
+    expect(typeof result).toBe("string");
+    expect(result).toContain("Detailed content here");
+    expect(result).toContain(defaultStore);
+  });
+
+  test("returns not-found message for unknown label", async () => {
+    const show = createShowTool(db, defaultStore);
+    const result = await show.execute({ label: "Nope" });
+    expect(result).toContain("No memory");
+    expect(result).toContain("Nope");
+  });
+
+  test("respects store argument", async () => {
+    const remember = createRememberTool(db, model, defaultStore);
+    const show = createShowTool(db, defaultStore);
+
+    await remember.execute({ label: "Cross Store", content: "Content", store: "other" });
+
+    const result = await show.execute({ label: "Cross Store", store: "other" });
+    expect(result).toContain("Content");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// thatch_memory_forget
+// ---------------------------------------------------------------------------
+
+describe("thatch_memory_forget", () => {
+  test("deletes an existing memory", async () => {
+    const remember = createRememberTool(db, model, defaultStore);
+    const forget = createForgetTool(db, defaultStore);
+
+    await remember.execute({ label: "Delete Me", content: "Temp" });
+    const result = await forget.execute({ label: "Delete Me" });
+
+    expect(result).toContain("[forgotten]");
+    expect(result).toContain("Delete Me");
+
+    const entry = db.showEntry(defaultStore, "Delete Me");
+    expect(entry).toBeNull();
+  });
+
+  test("returns not-found for unknown label", async () => {
+    const forget = createForgetTool(db, defaultStore);
+    const result = await forget.execute({ label: "Ghost" });
+    expect(result).toContain("No memory");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// thatch_store_list
+// ---------------------------------------------------------------------------
+
+describe("thatch_store_list", () => {
+  test("lists stores including global", async () => {
+    const remember = createRememberTool(db, model, defaultStore);
+    const listStores = createListStoresTool(db);
+
+    await remember.execute({ label: "Trigger", content: "Creates store" });
+
+    const result = await listStores.execute({});
+    expect(result).toContain("global");
+    expect(result).toContain(defaultStore);
+  });
+});
