@@ -1,5 +1,7 @@
 # Thatch
 
+[![CI](https://github.com/sysread/thatch/actions/workflows/ci.yml/badge.svg)](https://github.com/sysread/thatch/actions/workflows/ci.yml)
+
 Persistent memory for [OpenCode] — local embeddings, SQLite stores, zero config.
 
 Your AI agent can remember information across sessions. Stores are per-repo
