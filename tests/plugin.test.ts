@@ -10,7 +10,12 @@ let dbDir: string;
 beforeAll(async () => {
   dbDir = mkdtempSync(join(tmpdir(), "thatch-plugin-test-"));
   process.env.THATCH_DB_PATH = join(dbDir, "test.db");
-  hooks = await server();
+  const mockClient = {
+    session: {
+      prompt: async () => {},
+    },
+  };
+  hooks = await server({ client: mockClient } as any);
 });
 
 afterAll(() => {
@@ -35,6 +40,32 @@ describe("plugin entry", () => {
       "thatch_memory_show",
       "thatch_store_list",
     ]);
+  });
+
+  test("has system transform hook", () => {
+    expect(typeof hooks["experimental.chat.system.transform"]).toBe("function");
+  });
+
+  test("has compaction hook", () => {
+    expect(typeof hooks["experimental.session.compacting"]).toBe("function");
+  });
+
+  test("has event hook", () => {
+    expect(typeof hooks.event).toBe("function");
+  });
+
+  test("system transform appends to system array", async () => {
+    const output = { system: [] as string[] };
+    await hooks["experimental.chat.system.transform"]!({}, output);
+    expect(output.system.length).toBe(1);
+    expect(output.system[0]).toContain("Thatch provides persistent memory");
+  });
+
+  test("compaction hook appends to context array", async () => {
+    const output = { context: [] as string[] };
+    await hooks["experimental.session.compacting"]!({}, output);
+    expect(output.context.length).toBe(1);
+    expect(output.context[0]).toContain("thatch_memory_recall");
   });
 
   test("each tool has description and execute", () => {
