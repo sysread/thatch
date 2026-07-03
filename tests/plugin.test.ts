@@ -15,7 +15,7 @@ beforeAll(async () => {
       prompt: async () => {},
     },
   };
-  hooks = await server({ client: mockClient } as any);
+  hooks = await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree" } as any);
 });
 
 afterAll(() => {

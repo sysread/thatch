@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { ThatchDB } from "./db";
@@ -25,7 +26,7 @@ import { installSkills } from "./skills";
 // V1 server export — tools, prompt injection, session hooks
 // ---------------------------------------------------------------------------
 
-export const server: Plugin = async ({ client }) => {
+export const server: Plugin = async ({ client, worktree }) => {
   const repo = await detectRepo();
   const home = process.env.HOME ?? "/tmp";
   const dbPath = process.env.THATCH_DB_PATH ?? join(home, ".config", "thatch", "thatch.db");
@@ -36,9 +37,13 @@ export const server: Plugin = async ({ client }) => {
   const extraction = new ExtractionPipeline();
   const dedup = new DedupPipeline();
 
-  // Install skill files into the skills directory (idempotent).
+  // Install skill files matching the plugin's installation scope.
+  // Project-local install → project skills dir. Global install → global skills dir.
+  const projectSkillsDir = join(worktree, ".opencode", "skills");
   const globalSkillsDir = join(home, ".config", "opencode", "skills");
-  installSkills(globalSkillsDir);
+  const projectPluginsDir = join(worktree, ".opencode", "plugins");
+  const skillsDir = existsSync(projectPluginsDir) ? projectSkillsDir : globalSkillsDir;
+  installSkills(skillsDir);
 
   const sys = systemPrompt(repo);
   const compact = compactionContext(repo);
