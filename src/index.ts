@@ -1,4 +1,3 @@
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin } from "@opencode-ai/plugin";
 import { define } from "@opencode-ai/plugin/v2/promise";
@@ -18,7 +17,7 @@ import {
   compactionContext,
   sessionStartReminder,
 } from "./prompts";
-import { FACT_EXTRACTOR_PROMPT } from "./extraction";
+import { FACT_EXTRACTOR_PROMPT, ExtractionPipeline } from "./extraction";
 
 // ---------------------------------------------------------------------------
 // V1 server export — tools, prompt injection, session hooks
@@ -26,11 +25,13 @@ import { FACT_EXTRACTOR_PROMPT } from "./extraction";
 
 export const server: Plugin = async ({ client }) => {
   const repo = await detectRepo();
-  const dbPath = process.env.THATCH_DB_PATH ?? join(homedir(), ".config", "thatch", "thatch.db");
+  const home = process.env.HOME ?? "/tmp";
+  const dbPath = process.env.THATCH_DB_PATH ?? join(home, ".config", "thatch", "thatch.db");
   const modelName = process.env.THATCH_MODEL ?? "Xenova/bge-small-en-v1.5";
 
   const db = new ThatchDB(dbPath);
   const model = new BgeEmbeddingModel(modelName);
+  const pipeline = new ExtractionPipeline();
 
   const sys = systemPrompt(repo);
   const compact = compactionContext(repo);
@@ -45,34 +46,51 @@ export const server: Plugin = async ({ client }) => {
       thatch_store_list: createListStoresTool(db),
     },
 
-    // Belt-and-suspenders: inject thatch instructions at three surfaces.
-    //
-    // 1. System prompt — always in context, the primary reference.
     "experimental.chat.system.transform": async (_input, output) => {
       output.system.push(sys);
     },
 
-    // 2. Compaction context — re-familiarizes the agent after compaction.
     "experimental.session.compacting": async (_input, output) => {
       output.context.push(compact);
     },
 
-    // 3. Session startup — a no-reply reminder injected at session creation.
     event: async ({ event }) => {
-      if (event.type !== "session.created") return;
-      const id = (event.properties as any)?.id;
-      if (!id) return;
+      switch (event.type) {
+        case "session.created": {
+          const id = (event.properties as any)?.id;
+          if (!id) return;
+          try {
+            await client.session.prompt({
+              path: { id },
+              body: {
+                noReply: true,
+                parts: [{ type: "text", text: sessionStartReminder(repo) }],
+              },
+            });
+          } catch {
+            // fail silently
+          }
+          return;
+        }
 
-      try {
-        await client.session.prompt({
-          path: { id },
-          body: {
-            noReply: true,
-            parts: [{ type: "text", text: sessionStartReminder(repo) }],
-          },
-        });
-      } catch {
-        // fail silently — don't break the session over a reminder
+        case "tool.execute.after": {
+          pipeline.push({
+            tool: (event.properties as any)?.tool ?? "unknown",
+            sessionID: (event.properties as any)?.sessionID ?? "",
+            args: (event.properties as any)?.args ?? {},
+            title: (event.properties as any)?.title ?? "",
+            output: (event.properties as any)?.output ?? "",
+          });
+          return;
+        }
+
+        case "session.idle": {
+          if (!pipeline.pending) return;
+          const sessionID = (event.properties as any)?.id;
+          if (!sessionID) return;
+          await runExtraction(client as any, db, pipeline, repo, sessionID);
+          return;
+        }
       }
     },
 
@@ -81,6 +99,83 @@ export const server: Plugin = async ({ client }) => {
     },
   };
 };
+
+// ---------------------------------------------------------------------------
+// Extraction — background subagent session
+// ---------------------------------------------------------------------------
+
+async function runExtraction(
+  client: any,
+  db: ThatchDB,
+  pipeline: ExtractionPipeline,
+  projectStore: string,
+  sessionID: string,
+): Promise<void> {
+  const interactions = pipeline.flush();
+  if (interactions.length === 0) return;
+
+  const payload = pipeline.buildPayload(interactions, projectStore);
+  let childID: string | undefined;
+
+  try {
+    const created: any = await client.session.create({
+      parentID: sessionID,
+      title: "thatch extraction",
+    });
+    childID = created.data?.id ?? (created as any).id;
+    if (!childID) return;
+
+    const result: any = await client.session.prompt({
+      path: { id: childID },
+      body: {
+        agent: "thatch-fact-extractor",
+        parts: [{ type: "text", text: payload }],
+      },
+    });
+
+    const body = result.data ?? result;
+    const parts = body.parts ?? [];
+    const text = parts
+      .filter((p: any) => p.type === "text")
+      .map((p: any) => p.text)
+      .join("\n");
+
+    const json = extractJson(text);
+    if (json?.actions?.length) {
+      const results = pipeline.applyActions(db, json);
+      for (const r of results) {
+        try {
+          await client.app.log({
+            body: { service: "thatch", level: "info", message: r },
+          });
+        } catch {
+          // log fail is fine
+        }
+      }
+    }
+  } catch {
+    // Extraction is best-effort — never break the user's session
+  } finally {
+    if (childID) {
+      try {
+        await client.session.delete({ path: { id: childID } });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
+}
+
+function extractJson(text: string): any | null {
+  // Try to find a JSON object in the response
+  const m = text.match(/\{[\s\S]*"actions"[\s\S]*\}/);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[0]);
+  } catch {
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // V2 export — registers the fact-extractor subagent
