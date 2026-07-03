@@ -54,21 +54,29 @@ const URL_PATTERNS: UrlPattern[] = [
  * 3. Fall back to the directory basename
  */
 export async function detectRepo(cwd?: string): Promise<string> {
-  const opts = cwd ? { cwd } : {};
+  const dir = cwd ?? process.cwd();
 
-  const remote = await $`git remote get-url origin`.cwd(opts.cwd ?? process.cwd()).quiet();
-  if (remote.exitCode === 0) {
-    const parsed = parseGitUrl(remote.stdout.toString());
-    if (parsed) return parsed;
+  try {
+    const remote = await $`git remote get-url origin`.cwd(dir).quiet();
+    if (remote.exitCode === 0) {
+      const parsed = parseGitUrl(remote.stdout.toString());
+      if (parsed) return parsed;
+    }
+  } catch {
+    // no remote 'origin', or not a git repo
   }
 
-  const gitDir = await $`git rev-parse --git-common-dir`.cwd(opts.cwd ?? process.cwd()).quiet();
-  if (gitDir.exitCode === 0) {
-    const dir = gitDir.stdout.toString().trim();
-    const parent = dir.endsWith("/.git") ? dir.slice(0, -5) : dir;
-    const name = parent.split("/").pop() || "unknown";
-    if (name !== "unknown") return name;
+  try {
+    const gitDir = await $`git rev-parse --git-common-dir`.cwd(dir).quiet();
+    if (gitDir.exitCode === 0) {
+      const d = gitDir.stdout.toString().trim();
+      const parent = d.endsWith("/.git") ? d.slice(0, -5) : d;
+      const name = parent.split("/").pop() || "unknown";
+      if (name !== "unknown") return name;
+    }
+  } catch {
+    // not a git repo
   }
 
-  return (cwd || process.cwd()).split("/").pop() || "unknown";
+  return dir.split("/").pop() || "unknown";
 }
