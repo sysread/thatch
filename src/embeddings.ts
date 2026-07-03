@@ -57,7 +57,9 @@ export class BgeEmbeddingModel implements EmbeddingModel {
 }
 
 /**
- * Mock embedding model for tests. Returns a fixed vector.
+ * Mock embedding model for tests. Returns deterministic non-zero vectors
+ * derived from the input text, so different inputs produce different
+ * embeddings and cosine similarity yields meaningful scores.
  * Never loads a real model or makes network calls.
  */
 export class MockEmbeddingModel implements EmbeddingModel {
@@ -66,12 +68,24 @@ export class MockEmbeddingModel implements EmbeddingModel {
 
   async load(): Promise<void> {}
 
-  async queryEmbed(_text: string): Promise<Float32Array> {
-    return new Float32Array(this.dims).fill(0.01);
+  async queryEmbed(text: string): Promise<Float32Array> {
+    return this.#embed(text);
   }
 
-  async passageEmbed(_text: string): Promise<Float32Array> {
-    // Deterministic but unique per call — just zeros is fine for tests
-    return new Float32Array(this.dims);
+  async passageEmbed(text: string): Promise<Float32Array> {
+    return this.#embed(text);
+  }
+
+  #embed(text: string): Float32Array {
+    const vec = new Float32Array(this.dims);
+    let h = 0;
+    for (let i = 0; i < text.length; i++) {
+      h = ((h << 5) - h) + text.charCodeAt(i);
+      h |= 0;
+    }
+    for (let i = 0; i < this.dims; i++) {
+      vec[i] = Math.sin(h * 0.01 + i * 0.1);
+    }
+    return vec;
   }
 }

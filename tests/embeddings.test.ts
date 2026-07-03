@@ -17,17 +17,33 @@ describe("MockEmbeddingModel", () => {
     await model.load(); // should not throw
   });
 
-  test("queryEmbed returns fixed vector", async () => {
+  test("queryEmbed returns deterministic non-zero vector", async () => {
     const model = new MockEmbeddingModel();
-    const vec = await model.queryEmbed("any query");
+    const vec = await model.queryEmbed("hello");
     expect(vec.length).toBe(384);
-    expect(vec[0]).toBeCloseTo(0.01, 2);
+    expect(vec[0]).not.toBe(0);
   });
 
-  test("passageEmbed returns zero vector", async () => {
+  test("passageEmbed returns deterministic non-zero vector", async () => {
     const model = new MockEmbeddingModel();
-    const vec = await model.passageEmbed("any passage");
+    const vec = await model.passageEmbed("hello");
     expect(vec.length).toBe(384);
-    expect(vec[0]).toBe(0);
+    expect(vec[0]).not.toBe(0);
+  });
+
+  test("same text produces same vector regardless of embed type", async () => {
+    const model = new MockEmbeddingModel();
+    const q = await model.queryEmbed("hello");
+    const p = await model.passageEmbed("hello");
+    expect(q).toEqual(p);
+  });
+
+  test("different texts produce different vectors", async () => {
+    const model = new MockEmbeddingModel();
+    const a = await model.passageEmbed("alpha");
+    const b = await model.passageEmbed("beta");
+    // Should differ in at least one position
+    const differs = a.some((v, i) => v !== b[i]);
+    expect(differs).toBe(true);
   });
 });
