@@ -1,7 +1,6 @@
 import { join } from "node:path";
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import { define } from "@opencode-ai/plugin/v2/promise";
 import { ThatchDB } from "./db";
 import { BgeEmbeddingModel } from "./embeddings";
 import { detectRepo } from "./git";
@@ -18,8 +17,8 @@ import {
   compactionContext,
   sessionStartReminder,
 } from "./prompts";
-import { FACT_EXTRACTOR_PROMPT, ExtractionPipeline } from "./extraction";
-import { DEDUP_CLASSIFIER_PROMPT, DedupPipeline } from "./dedup";
+import { ExtractionPipeline } from "./extraction";
+import { DedupPipeline } from "./dedup";
 
 // ---------------------------------------------------------------------------
 // V1 server export — tools, prompt injection, session hooks
@@ -174,30 +173,30 @@ async function runDedup(
   projectStore: string,
   sessionID: string,
 ): Promise<void> {
-  const candidates = dedup.findCandidates(db, [projectStore, "global"], 0.85);
+  const threshold = parseFloat(process.env.THATCH_DEDUP_THRESHOLD ?? "0.80");
+  const candidates = dedup.findCandidates(db, [projectStore, "global"], threshold);
   if (candidates.length === 0) return;
 
-  // Take the top candidate per idle cycle to avoid long chains.
-  const candidate = candidates[0];
+  // Process up to 3 candidates per idle cycle.
+  for (const candidate of candidates.slice(0, 3)) {
+    try {
+      const payload = dedup.buildPayload(candidate);
+      await runSubagent(client, db, model, "thatch-dedup-classifier", payload,
+        async (json: any) => {
+          const classification = json as import("./dedup").DedupClassification;
+          const result = await dedup.applyClassification(db, model, candidate.store, candidate, classification);
+          db.markPairChecked(candidate.store, candidate.slugA, candidate.slugB, classification.relationship);
 
-  try {
-    const payload = dedup.buildPayload(candidate);
-    await runSubagent(client, db, model, "thatch-dedup-classifier", payload,
-      async (json: any) => {
-        const classification = json as import("./dedup").DedupClassification;
-        const store = candidate.slugA.startsWith("global") ? "global" : projectStore;
-        const result = await dedup.applyClassification(db, model, store, candidate, classification);
-        db.markPairChecked(store, candidate.slugA, candidate.slugB, classification.relationship);
-
-        try {
-          await client.app.log({
-            body: { service: "thatch", level: "info", message: result },
-          });
-        } catch { /* ok */ }
-      },
-      sessionID, "dedup");
-  } catch {
-    // best-effort
+          try {
+            await client.app.log({
+              body: { service: "thatch", level: "info", message: result },
+            });
+          } catch { /* ok */ }
+        },
+        sessionID, "dedup");
+    } catch {
+      // best-effort
+    }
   }
 }
 
@@ -266,34 +265,3 @@ function extractJson(text: string): any | null {
     return null;
   }
 }
-
-// ---------------------------------------------------------------------------
-// V2 export — registers subagents
-// ---------------------------------------------------------------------------
-
-const v2 = define({
-  id: "thatch",
-  setup: async (ctx) => {
-    await ctx.agent.transform(async (draft) => {
-      draft.update("thatch-fact-extractor", (agent) => {
-        agent.mode = "subagent";
-        agent.hidden = true;
-        agent.system = FACT_EXTRACTOR_PROMPT;
-        agent.description =
-          "Extracts durable project facts, user preferences, and environmental knowledge from tool interactions.";
-        agent.steps = 3;
-      });
-
-      draft.update("thatch-dedup-classifier", (agent) => {
-        agent.mode = "subagent";
-        agent.hidden = true;
-        agent.system = DEDUP_CLASSIFIER_PROMPT;
-        agent.description =
-          "Classifies relationships between similar memory pairs for deduplication.";
-        agent.steps = 2;
-      });
-    });
-  },
-});
-
-export const { id, setup } = v2;

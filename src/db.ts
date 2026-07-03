@@ -15,6 +15,7 @@ export interface MemoryRow {
 }
 
 export interface DedupCandidate {
+  store: string;
   slugA: string;
   labelA: string;
   contentA: string;
@@ -293,6 +294,7 @@ export class ThatchDB {
         const score = cosineSimilarity(entries[i].embedding, entries[j].embedding);
         if (score >= threshold) {
           candidates.push({
+            store,
             slugA: entries[i].slug,
             labelA: entries[i].label,
             contentA: entries[i].content,
