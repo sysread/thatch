@@ -78,6 +78,15 @@ export class ThatchDB {
       )
     `);
 
+    this.#db.run(`
+      CREATE TABLE IF NOT EXISTS locks (
+        name        TEXT PRIMARY KEY,
+        session_id  TEXT NOT NULL,
+        acquired_at TEXT NOT NULL,
+        pid         INTEGER NOT NULL
+      )
+    `);
+
     this.#db.run("INSERT OR IGNORE INTO stores (name) VALUES ('global')");
 
     this.#migrateColumns();
@@ -336,6 +345,44 @@ export class ThatchDB {
     this.#db.run(
       `UPDATE entries SET dedup_checked_at = ? WHERE store = ? AND slug IN (${placeholders})`,
       [now, store, ...slugs],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Advisory locks — prevents concurrent background work across sessions.
+  // Locks expire after `ttlMs` milliseconds (default 5 minutes) so a crashed
+  // session doesn't permanently block other sessions.
+  // ---------------------------------------------------------------------------
+
+  acquireLock(name: string, sessionId: string, ttlMs = 300_000): boolean {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const pid = process.pid;
+    const expireBefore = new Date(now.getTime() - ttlMs).toISOString();
+
+    // Clean up any stale lock with the same name.
+    this.#db.run(
+      "DELETE FROM locks WHERE name = ? AND acquired_at < ?",
+      [name, expireBefore],
+    );
+
+    // Try to insert. If the name already exists (another session holds a
+    // fresh lock), the PK constraint will cause the insert to fail.
+    try {
+      this.#db.run(
+        "INSERT INTO locks (name, session_id, acquired_at, pid) VALUES (?, ?, ?, ?)",
+        [name, sessionId, nowIso, pid],
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  releaseLock(name: string, sessionId: string): void {
+    this.#db.run(
+      "DELETE FROM locks WHERE name = ? AND session_id = ?",
+      [name, sessionId],
     );
   }
 

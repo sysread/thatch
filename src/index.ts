@@ -19,6 +19,7 @@ import {
 } from "./prompts";
 import { ExtractionPipeline } from "./extraction";
 import { DedupPipeline } from "./dedup";
+import { installSkills } from "./skills";
 
 // ---------------------------------------------------------------------------
 // V1 server export — tools, prompt injection, session hooks
@@ -34,6 +35,10 @@ export const server: Plugin = async ({ client }) => {
   const model = new BgeEmbeddingModel(modelName);
   const extraction = new ExtractionPipeline();
   const dedup = new DedupPipeline();
+
+  // Install skill files into the skills directory (idempotent).
+  const globalSkillsDir = join(home, ".config", "opencode", "skills");
+  installSkills(globalSkillsDir);
 
   const sys = systemPrompt(repo);
   const compact = compactionContext(repo);
@@ -66,9 +71,10 @@ export const server: Plugin = async ({ client }) => {
       if (extraction.pending) {
         nudges.push(
           `[thatch] ${extraction.bufferSize} recent tool interactions are available for fact extraction. ` +
-          `Consider using thatch_memory_recall to check for related existing facts, then thatch_memory_remember to save new ones.`,
+          `Use the skill tool to load thatch-fact-extractor, review the queued interactions, ` +
+          `then use thatch_memory_remember to save any new durable facts.`,
         );
-        extraction.flush(); // clear buffer so we don't nag every turn
+        extraction.flush();
       }
 
       if (nudges.length > 0) {
