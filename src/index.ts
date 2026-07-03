@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin } from "@opencode-ai/plugin";
+import { define } from "@opencode-ai/plugin/v2/promise";
 import { ThatchDB } from "./db";
 import { BgeEmbeddingModel } from "./embeddings";
 import { detectRepo } from "./git";
@@ -17,14 +18,12 @@ import {
   compactionContext,
   sessionStartReminder,
 } from "./prompts";
+import { FACT_EXTRACTOR_PROMPT } from "./extraction";
 
-/**
- * Thatch opencode plugin — persistent memory with local embeddings.
- *
- * On startup, detects the current repo identity (owner/repo from git remote)
- * and opens (or creates) a SQLite database at ~/.config/thatch/thatch.db.
- * The embedding model (bge-small-en-v1.5) is lazy-loaded on first use.
- */
+// ---------------------------------------------------------------------------
+// V1 server export — tools, prompt injection, session hooks
+// ---------------------------------------------------------------------------
+
 export const server: Plugin = async ({ client }) => {
   const repo = await detectRepo();
   const dbPath = process.env.THATCH_DB_PATH ?? join(homedir(), ".config", "thatch", "thatch.db");
@@ -82,3 +81,25 @@ export const server: Plugin = async ({ client }) => {
     },
   };
 };
+
+// ---------------------------------------------------------------------------
+// V2 export — registers the fact-extractor subagent
+// ---------------------------------------------------------------------------
+
+const v2 = define({
+  id: "thatch",
+  setup: async (ctx) => {
+    await ctx.agent.transform(async (draft) => {
+      draft.update("thatch-fact-extractor", (agent) => {
+        agent.mode = "subagent";
+        agent.hidden = true;
+        agent.system = FACT_EXTRACTOR_PROMPT;
+        agent.description =
+          "Extracts durable project facts, user preferences, and environmental knowledge from tool interactions.";
+        agent.steps = 3;
+      });
+    });
+  },
+});
+
+export const { id, setup } = v2;
