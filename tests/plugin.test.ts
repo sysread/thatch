@@ -33,6 +33,7 @@ describe("plugin entry", () => {
     expect(hooks.tool).toBeDefined();
     const names = Object.keys(hooks.tool);
     expect(names.sort()).toEqual([
+      "thatch_find_duplicates",
       "thatch_memory_forget",
       "thatch_memory_list",
       "thatch_memory_recall",

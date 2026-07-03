@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { Plugin } from "@opencode-ai/plugin";
+import { tool } from "@opencode-ai/plugin";
 import { define } from "@opencode-ai/plugin/v2/promise";
 import { ThatchDB } from "./db";
 import { BgeEmbeddingModel } from "./embeddings";
@@ -18,6 +19,7 @@ import {
   sessionStartReminder,
 } from "./prompts";
 import { FACT_EXTRACTOR_PROMPT, ExtractionPipeline } from "./extraction";
+import { DEDUP_CLASSIFIER_PROMPT, DedupPipeline } from "./dedup";
 
 // ---------------------------------------------------------------------------
 // V1 server export — tools, prompt injection, session hooks
@@ -31,7 +33,8 @@ export const server: Plugin = async ({ client }) => {
 
   const db = new ThatchDB(dbPath);
   const model = new BgeEmbeddingModel(modelName);
-  const pipeline = new ExtractionPipeline();
+  const extraction = new ExtractionPipeline();
+  const dedup = new DedupPipeline();
 
   const sys = systemPrompt(repo);
   const compact = compactionContext(repo);
@@ -44,6 +47,7 @@ export const server: Plugin = async ({ client }) => {
       thatch_memory_show: createShowTool(db, repo),
       thatch_memory_forget: createForgetTool(db, repo),
       thatch_store_list: createListStoresTool(db),
+      thatch_find_duplicates: createFindDuplicatesTool(db, repo),
     },
 
     "experimental.chat.system.transform": async (_input, output) => {
@@ -74,7 +78,7 @@ export const server: Plugin = async ({ client }) => {
         }
 
         case "tool.execute.after": {
-          pipeline.push({
+          extraction.push({
             tool: (event.properties as any)?.tool ?? "unknown",
             sessionID: (event.properties as any)?.sessionID ?? "",
             args: (event.properties as any)?.args ?? {},
@@ -85,10 +89,14 @@ export const server: Plugin = async ({ client }) => {
         }
 
         case "session.idle": {
-          if (!pipeline.pending) return;
           const sessionID = (event.properties as any)?.id;
           if (!sessionID) return;
-          await runExtraction(client as any, db, model, pipeline, repo, sessionID);
+
+          if (extraction.pending) {
+            await runExtraction(client as any, db, model, extraction, repo, sessionID);
+          }
+
+          await runDedup(client as any, db, model, dedup, repo, sessionID);
           return;
         }
       }
@@ -99,6 +107,39 @@ export const server: Plugin = async ({ client }) => {
     },
   };
 };
+
+// ---------------------------------------------------------------------------
+// thatch_find_duplicates tool
+// ---------------------------------------------------------------------------
+
+function createFindDuplicatesTool(db: ThatchDB, defaultStore: string) {
+  return tool({
+    description:
+      "Find memories with unusually similar content that may be candidates " +
+      "for consolidation. Uses cosine similarity on embeddings.",
+    args: {
+      store: tool.schema.string().optional().describe(
+        `Which store to check. Defaults to the project store ("${defaultStore}").`,
+      ),
+      threshold: tool.schema.number().min(0).max(1).optional().describe(
+        "Similarity threshold (0-1). Default 0.85.",
+      ),
+    },
+    async execute(args, _ctx) {
+      const store = args.store || defaultStore;
+      const threshold = args.threshold ?? 0.85;
+      const candidates = db.findDuplicates(store, threshold);
+
+      if (candidates.length === 0) return `No duplicate candidates found in "${store}" above threshold ${threshold}.`;
+
+      return candidates
+        .map((c) =>
+          `[score:${c.score}] "${c.labelA}" ↔ "${c.labelB}"`,
+        )
+        .join("\n");
+    },
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Extraction — background subagent session
@@ -116,12 +157,70 @@ async function runExtraction(
   if (interactions.length === 0) return;
 
   const payload = pipeline.buildPayload(interactions, projectStore);
+  await runSubagent(client, db, model, "thatch-fact-extractor", payload,
+    (json) => pipeline.applyActions(db, model, json),
+    sessionID, "extraction");
+}
+
+// ---------------------------------------------------------------------------
+// Deduplication — background subagent session
+// ---------------------------------------------------------------------------
+
+async function runDedup(
+  client: any,
+  db: ThatchDB,
+  model: BgeEmbeddingModel,
+  dedup: DedupPipeline,
+  projectStore: string,
+  sessionID: string,
+): Promise<void> {
+  const candidates = dedup.findCandidates(db, [projectStore, "global"], 0.85);
+  if (candidates.length === 0) return;
+
+  // Take the top candidate per idle cycle to avoid long chains.
+  const candidate = candidates[0];
+
+  try {
+    const payload = dedup.buildPayload(candidate);
+    await runSubagent(client, db, model, "thatch-dedup-classifier", payload,
+      async (json: any) => {
+        const classification = json as import("./dedup").DedupClassification;
+        const store = candidate.slugA.startsWith("global") ? "global" : projectStore;
+        const result = await dedup.applyClassification(db, model, store, candidate, classification);
+        db.markPairChecked(store, candidate.slugA, candidate.slugB, classification.relationship);
+
+        try {
+          await client.app.log({
+            body: { service: "thatch", level: "info", message: result },
+          });
+        } catch { /* ok */ }
+      },
+      sessionID, "dedup");
+  } catch {
+    // best-effort
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared subagent runner
+// ---------------------------------------------------------------------------
+
+async function runSubagent(
+  client: any,
+  _db: ThatchDB,
+  _model: BgeEmbeddingModel,
+  agent: string,
+  payload: string,
+  apply: (json: any) => Promise<any>,
+  parentSessionID: string,
+  label: string,
+): Promise<void> {
   let childID: string | undefined;
 
   try {
     const created: any = await client.session.create({
-      parentID: sessionID,
-      title: "thatch extraction",
+      parentID: parentSessionID,
+      title: `thatch ${label}`,
     });
     childID = created.data?.id ?? (created as any).id;
     if (!childID) return;
@@ -129,7 +228,7 @@ async function runExtraction(
     const result: any = await client.session.prompt({
       path: { id: childID },
       body: {
-        agent: "thatch-fact-extractor",
+        agent,
         parts: [{ type: "text", text: payload }],
       },
     });
@@ -142,20 +241,11 @@ async function runExtraction(
       .join("\n");
 
     const json = extractJson(text);
-    if (json?.actions?.length) {
-      const results = await pipeline.applyActions(db, model, json);
-      for (const r of results) {
-        try {
-          await client.app.log({
-            body: { service: "thatch", level: "info", message: r },
-          });
-        } catch {
-          // log fail is fine
-        }
-      }
+    if (json) {
+      await apply(json);
     }
   } catch {
-    // Extraction is best-effort — never break the user's session
+    // background work is best-effort
   } finally {
     if (childID) {
       try {
@@ -168,8 +258,7 @@ async function runExtraction(
 }
 
 function extractJson(text: string): any | null {
-  // Try to find a JSON object in the response
-  const m = text.match(/\{[\s\S]*"actions"[\s\S]*\}/);
+  const m = text.match(/\{[\s\S]*\}/);
   if (!m) return null;
   try {
     return JSON.parse(m[0]);
@@ -179,7 +268,7 @@ function extractJson(text: string): any | null {
 }
 
 // ---------------------------------------------------------------------------
-// V2 export — registers the fact-extractor subagent
+// V2 export — registers subagents
 // ---------------------------------------------------------------------------
 
 const v2 = define({
@@ -193,6 +282,15 @@ const v2 = define({
         agent.description =
           "Extracts durable project facts, user preferences, and environmental knowledge from tool interactions.";
         agent.steps = 3;
+      });
+
+      draft.update("thatch-dedup-classifier", (agent) => {
+        agent.mode = "subagent";
+        agent.hidden = true;
+        agent.system = DEDUP_CLASSIFIER_PROMPT;
+        agent.description =
+          "Classifies relationships between similar memory pairs for deduplication.";
+        agent.steps = 2;
       });
     });
   },

@@ -11,6 +11,17 @@ export interface MemoryRow {
   confidence: number | null;
   created_at: string;
   updated_at: string;
+  dedup_checked_at: string | null;
+}
+
+export interface DedupCandidate {
+  slugA: string;
+  labelA: string;
+  contentA: string;
+  slugB: string;
+  labelB: string;
+  contentB: string;
+  score: number;
 }
 
 /**
@@ -55,7 +66,35 @@ export class ThatchDB {
       )
     `);
 
+    this.#db.run(`
+      CREATE TABLE IF NOT EXISTS dedup_pairs (
+        store     TEXT NOT NULL,
+        slug_a    TEXT NOT NULL,
+        slug_b    TEXT NOT NULL,
+        status    TEXT NOT NULL,
+        checked_at TEXT NOT NULL,
+        PRIMARY KEY (store, slug_a, slug_b)
+      )
+    `);
+
     this.#db.run("INSERT OR IGNORE INTO stores (name) VALUES ('global')");
+
+    this.#migrateColumns();
+  }
+
+  #migrateColumns(): void {
+    for (const col of ["dedup_checked_at"]) {
+      if (!this.#columnExists("entries", col)) {
+        this.#db.run(`ALTER TABLE entries ADD COLUMN ${col} TEXT`);
+      }
+    }
+  }
+
+  #columnExists(table: string, column: string): boolean {
+    const rows = this.#db
+      .query(`PRAGMA table_info(${table})`)
+      .all() as any[];
+    return rows.some((r: any) => r.name === column);
   }
 
   // ---------------------------------------------------------------------------
@@ -209,7 +248,7 @@ export class ThatchDB {
     const slug = this.slugify(label);
     return this.#db
       .query(
-        "SELECT slug, store, label, content, embedding, model, branch, confidence, created_at, updated_at FROM entries WHERE slug = ? AND store = ?",
+        "SELECT slug, store, label, content, embedding, model, branch, confidence, created_at, updated_at, dedup_checked_at FROM entries WHERE slug = ? AND store = ?",
       )
       .get(slug, store) as MemoryRow | null;
   }
@@ -218,7 +257,84 @@ export class ThatchDB {
     const slug = this.slugify(label);
     if (!this.entryExists(store, slug)) return false;
     this.#db.run("DELETE FROM entries WHERE slug = ? AND store = ?", [slug, store]);
+    this.#db.run("DELETE FROM dedup_pairs WHERE store = ? AND (slug_a = ? OR slug_b = ?)", [store, slug, slug]);
     return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Deduplication
+  // ---------------------------------------------------------------------------
+
+  /** Finds pairs of entries with cosine similarity above the threshold. */
+  findDuplicates(store: string, threshold = 0.85): DedupCandidate[] {
+    const rows = this.#db
+      .query(
+        "SELECT slug, label, content, embedding FROM entries WHERE store = ? AND embedding IS NOT NULL ORDER BY slug",
+      )
+      .all(store) as any[];
+
+    if (rows.length < 2) return [];
+
+    const entries = rows.map((r: any) => ({
+      slug: r.slug,
+      label: r.label,
+      content: r.content,
+      embedding: new Float32Array(r.embedding.buffer),
+    }));
+
+    const candidates: DedupCandidate[] = [];
+    const checked = this.#checkedPairs(store);
+
+    for (let i = 0; i < entries.length; i++) {
+      for (let j = i + 1; j < entries.length; j++) {
+        const key = [entries[i].slug, entries[j].slug].sort().join("|");
+        if (checked.has(key)) continue;
+
+        const score = cosineSimilarity(entries[i].embedding, entries[j].embedding);
+        if (score >= threshold) {
+          candidates.push({
+            slugA: entries[i].slug,
+            labelA: entries[i].label,
+            contentA: entries[i].content,
+            slugB: entries[j].slug,
+            labelB: entries[j].label,
+            contentB: entries[j].content,
+            score: Math.round(score * 1000) / 1000,
+          });
+        }
+      }
+    }
+
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates;
+  }
+
+  #checkedPairs(store: string): Set<string> {
+    const rows = this.#db
+      .query("SELECT slug_a, slug_b FROM dedup_pairs WHERE store = ?")
+      .all(store) as any[];
+    return new Set(rows.map((r: any) => [r.slug_a, r.slug_b].sort().join("|")));
+  }
+
+  /** Records a pair as reviewed with its classification. */
+  markPairChecked(store: string, slugA: string, slugB: string, status: string): void {
+    const [a, b] = [slugA, slugB].sort();
+    const now = new Date().toISOString();
+    this.#db.run(
+      "INSERT OR REPLACE INTO dedup_pairs (store, slug_a, slug_b, status, checked_at) VALUES (?, ?, ?, ?, ?)",
+      [store, a, b, status, now],
+    );
+  }
+
+  /** Marks entries as dedup-checked so they're skipped in future passes. */
+  markEntriesReviewed(store: string, slugs: string[]): void {
+    if (slugs.length === 0) return;
+    const now = new Date().toISOString();
+    const placeholders = slugs.map(() => "?").join(", ");
+    this.#db.run(
+      `UPDATE entries SET dedup_checked_at = ? WHERE store = ? AND slug IN (${placeholders})`,
+      [now, store, ...slugs],
+    );
   }
 
   close(): void {
