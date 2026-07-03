@@ -5,7 +5,10 @@
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
-  "files": ["src", "docs"],
+  "bin": {
+    "thatch": "./bin/thatch"
+  },
+  "files": ["src", "docs", "bin"],
   "scripts": {
     "test": "bun test",
     "test:watch": "bun test --watch"

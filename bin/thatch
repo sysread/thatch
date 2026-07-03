@@ -1,0 +1,109 @@
+#!/usr/bin/env bun
+
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { ThatchDB } from "../src/db";
+import { detectRepo } from "../src/git";
+
+const dbPath = process.env.THATCH_DB_PATH ?? join(homedir(), ".config", "thatch", "thatch.db");
+const db = new ThatchDB(dbPath);
+
+const [command, ...args] = process.argv.slice(2);
+
+function usage(): never {
+  console.error(`USAGE
+  thatch stores                    List all stores
+  thatch list   [store]            List memory labels in a store  
+  thatch show   <label> [store]    Display a memory by label
+  thatch forget <label> [store]    Remove a memory by label
+  thatch search <query> [store]    Full-text search (not semantic)
+
+Stores default to the repo detected from git remote. Use "global" for the global store.`);
+  process.exit(1);
+}
+
+async function defaultStore(): Promise<string> {
+  try {
+    return await detectRepo();
+  } catch {
+    return "unknown";
+  }
+}
+
+switch (command) {
+  case "stores":
+    console.log(db.listStores().join("\n"));
+    break;
+
+  case "list": {
+    const store = args[0] ?? await defaultStore();
+    const entries = db.listEntries(store);
+    if (entries.length === 0) {
+      console.log(`No memories in "${store}".`);
+    } else {
+      for (const e of entries) {
+        const parts = [`[${store}]`, e.label];
+        if (e.branch) parts.push(`(branch:${e.branch})`);
+        if (e.confidence) parts.push(`(c:${e.confidence})`);
+        parts.push(`(${e.updated_at})`);
+        console.log(parts.join(" "));
+      }
+    }
+    break;
+  }
+
+  case "show": {
+    if (!args[0]) usage();
+    const label = args[0];
+    const store = args[1] ?? await defaultStore();
+    const entry = db.showEntry(store, label);
+    if (!entry) {
+      console.log(`No memory labeled "${label}" in "${store}".`);
+    } else {
+      console.log(`[${store}] ${entry.label}`);
+      if (entry.branch) console.log(`branch: ${entry.branch}`);
+      if (entry.confidence) console.log(`confidence: ${entry.confidence}`);
+      console.log(`created: ${entry.created_at}  updated: ${entry.updated_at}`);
+      console.log();
+      // Strip the "# Label\n\n" heading that remember() prepends.
+      const body = entry.content.replace(/^# .+\n\n/, "");
+      console.log(body);
+    }
+    break;
+  }
+
+  case "forget": {
+    if (!args[0]) usage();
+    const label = args[0];
+    const store = args[1] ?? await defaultStore();
+    const ok = db.forgetEntry(store, label);
+    console.log(ok ? `[forgotten] ${store} :: ${label}` : `No memory labeled "${label}" in "${store}".`);
+    break;
+  }
+
+  case "search": {
+    if (!args[0]) usage();
+    const query = args[0];
+    const store = args[1] ?? await defaultStore();
+    // Full-text substring search, not semantic. Semantic search requires
+    // the embedding model which is heavy for a CLI.
+    const entries = db.listEntries(store);
+    const matches = entries.filter((e) => {
+      const entry = db.showEntry(store, e.label);
+      return entry?.content.toLowerCase().includes(query.toLowerCase());
+    });
+    if (matches.length === 0) {
+      console.log(`No matches for "${query}" in "${store}".`);
+    } else {
+      for (const m of matches) {
+        console.log(`[${store}] ${m.label}`);
+      }
+    }
+    break;
+  }
+
+  default:
+    usage();
+}
+
+db.close();
