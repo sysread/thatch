@@ -50,6 +50,27 @@ Stores are created automatically — no setup required.
 |------|-------------|
 | `thatch_store_list` | List all available stores. |
 
+## CLI
+
+Thatch ships with a command-line tool for reviewing memories outside opencode:
+
+```bash
+# After npm publish: available globally
+thatch stores
+thatch list [store]
+thatch show <label> [store]
+thatch forget <label> [store]
+thatch search <query> [store]
+
+# Before publish: run from a git checkout or symlink
+bun run bin/thatch stores
+# or
+ln -s ~/dev/thatch/bin/thatch ~/.local/bin/thatch
+```
+
+`search` uses the same cosine-similarity search as `thatch_memory_recall`.
+Store defaults to your current git repo.
+
 ## Configuration
 
 No configuration needed. The default behavior:

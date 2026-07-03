@@ -11,3 +11,8 @@ run = "bun test"
 [tasks.test-watch]
 description = "Run tests in watch mode"
 run = "bun test --watch"
+
+[tasks.cli]
+description = "Run the thatch CLI (list, show, search, forget)"
+run = "bun run bin/thatch"
+
