@@ -25,11 +25,11 @@ bin/thatch                    → standalone CLI over the same db.ts (needs bun)
 
 | Module | Responsibility |
 |--------|---------------|
-| `index.ts` | Plugin entry. Wires DB, model, extraction; registers tools and hooks; installs skills. Also defines the dedup tools. |
+| `index.ts` | Plugin entry. Wires DB, model, extraction; registers tools and hooks; installs skills. |
 | `git.ts` | Parse `owner/repo` from git remote. Worktree-safe fallback chain. |
 | `db.ts` | SQLite schema, CRUD for entries/stores, brute-force cosine search, dedup-pair verdict tracking. |
 | `embeddings.ts` | Lazy-load the embedding model. Expose `queryEmbed`/`passageEmbed` and the model `name` (stored as an informational tag). `MockEmbeddingModel` for tests. |
-| `tools.ts` | Factories for the `thatch_memory_*` and `thatch_store_*` tools. Each accepts injected DB + model. |
+| `tools.ts` | Factories for all agent-facing tools: `thatch_memory_*`, `thatch_store_*`, and the dedup pair `thatch_find_duplicates`/`thatch_dedup_mark_checked`. Each accepts an injected DB (plus model where embedding is needed). |
 | `extraction.ts` | Buffers non-thatch tool interactions per session and serializes them into the JSON payload the extraction nudge carries. |
 | `prompts.ts` | Text constants: system prompt, compaction context, session-start reminder. Tool lists here must match `index.ts` registrations. |
 | `skills.ts` | `SKILL.md` content for `thatch-fact-extractor` and `thatch-dedup-classifier`, plus the installer. |
