@@ -21,7 +21,13 @@ jobs:
           bun-version: latest
       - run: bun install
       - run: bun test
-      # OIDC publish needs npm >= 11.5.1; the runner's default may lag.
-      # No registry-url / .npmrc / tokens — npm detects the OIDC environment.
+      # OIDC publish needs npm >= 11.5.1. setup-node installs into the
+      # user-writable tool cache (the runner's stock node in /usr/local is
+      # root-owned, so npm can't self-upgrade there). Deliberately NO
+      # registry-url — it writes a token-expecting .npmrc that preempts
+      # the OIDC exchange.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - run: npm install -g npm@latest
       - run: npm publish --access public
