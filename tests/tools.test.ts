@@ -11,6 +11,8 @@ import {
   createShowTool,
   createForgetTool,
   createListStoresTool,
+  createFindDuplicatesTool,
+  createMarkCheckedTool,
 } from "../src/tools";
 
 let dbPath: string;
@@ -264,5 +266,108 @@ describe("thatch_store_list", () => {
     const result = await listStores.execute({});
     expect(result).toContain("global");
     expect(result).toContain(defaultStore);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// thatch_find_duplicates
+// ---------------------------------------------------------------------------
+
+describe("thatch_find_duplicates", () => {
+  test("surfaces similar pairs above threshold", async () => {
+    // Use DB directly to control embeddings (mock model produces different
+    // vectors for different texts, even with similar content)
+    const emb = new Float32Array(384).fill(0.5);
+    db.remember(defaultStore, "Alpha", "# Alpha\n\nContent", emb, "mock");
+    db.remember(defaultStore, "Beta", "# Beta\n\nContent", emb, "mock");
+
+    const findDups = createFindDuplicatesTool(db, defaultStore);
+    const result = await findDups.execute({ threshold: 0.9 });
+
+    expect(typeof result).toBe("string");
+    expect(result).toContain("Alpha");
+    expect(result).toContain("Beta");
+    expect(result).toContain("score:");
+  });
+
+  test("returns message when no duplicates found", async () => {
+    const remember = createRememberTool(db, model, defaultStore);
+    const findDups = createFindDuplicatesTool(db, defaultStore);
+
+    await remember.execute({ label: "Unique One", content: "Completely different" });
+    await remember.execute({ label: "Unique Two", content: "Nothing alike at all xyz" });
+
+    const result = await findDups.execute({ threshold: 0.9 });
+    expect(result).toContain("No duplicate candidates");
+  });
+
+  test("respects store argument", async () => {
+    const emb = new Float32Array(384).fill(0.5);
+    db.remember("isolated", "Iso A", "# Iso A\n\nSame", emb, "mock");
+    db.remember("isolated", "Iso B", "# Iso B\n\nSame", emb, "mock");
+
+    const findDups = createFindDuplicatesTool(db, defaultStore);
+    const result = await findDups.execute({ store: "isolated", threshold: 0.9 });
+
+    expect(result).toContain("Iso A");
+    expect(result).toContain("Iso B");
+  });
+
+  test("skips checked pairs", async () => {
+    const emb = new Float32Array(384).fill(0.5);
+    db.remember(defaultStore, "Pair A", "# Pair A\n\nSame", emb, "mock");
+    db.remember(defaultStore, "Pair B", "# Pair B\n\nSame", emb, "mock");
+
+    const findDups = createFindDuplicatesTool(db, defaultStore);
+    const markChecked = createMarkCheckedTool(db, defaultStore);
+
+    // Mark as checked
+    await markChecked.execute({ label_a: "Pair A", label_b: "Pair B", status: "unrelated" });
+
+    // Should not surface the pair
+    const result = await findDups.execute({ threshold: 0.9 });
+    expect(result).toContain("No duplicate candidates");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// thatch_dedup_mark_checked
+// ---------------------------------------------------------------------------
+
+describe("thatch_dedup_mark_checked", () => {
+  test("records verdict and returns confirmation", async () => {
+    const remember = createRememberTool(db, model, defaultStore);
+    const markChecked = createMarkCheckedTool(db, defaultStore);
+
+    await remember.execute({ label: "Mem X", content: "Content" });
+    await remember.execute({ label: "Mem Y", content: "Content" });
+
+    const result = await markChecked.execute({
+      label_a: "Mem X",
+      label_b: "Mem Y",
+      status: "duplicate",
+    });
+
+    expect(result).toContain("[checked]");
+    expect(result).toContain("Mem X");
+    expect(result).toContain("Mem Y");
+    expect(result).toContain("duplicate");
+  });
+
+  test("respects store argument", async () => {
+    const remember = createRememberTool(db, model, defaultStore);
+    const markChecked = createMarkCheckedTool(db, defaultStore);
+
+    await remember.execute({ label: "Store A", content: "X", store: "other-store" });
+    await remember.execute({ label: "Store B", content: "X", store: "other-store" });
+
+    const result = await markChecked.execute({
+      label_a: "Store A",
+      label_b: "Store B",
+      status: "supplement",
+      store: "other-store",
+    });
+
+    expect(result).toContain("other-store");
   });
 });
