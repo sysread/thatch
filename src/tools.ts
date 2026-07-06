@@ -226,3 +226,66 @@ export function createListStoresTool(db: ThatchDB) {
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// thatch_find_duplicates
+// ---------------------------------------------------------------------------
+
+export function createFindDuplicatesTool(db: ThatchDB, defaultStore: string) {
+  return tool({
+    description:
+      "Find memories with unusually similar content that may be candidates " +
+      "for consolidation. Uses cosine similarity on embeddings. Pairs already " +
+      "reviewed via thatch_dedup_mark_checked are skipped.",
+    args: {
+      store: tool.schema.string().optional().describe(
+        `Which store to check. Defaults to the project store ("${defaultStore}").`,
+      ),
+      threshold: tool.schema.number().min(0).max(1).optional().describe(
+        "Similarity threshold (0-1). Default 0.85.",
+      ),
+    },
+    async execute(args, _ctx) {
+      const store = args.store || defaultStore;
+      const threshold = args.threshold ?? 0.85;
+      const candidates = db.findDuplicates(store, threshold);
+
+      if (candidates.length === 0) return `No duplicate candidates found in "${store}" above threshold ${threshold}.`;
+
+      return candidates
+        .map((c) =>
+          `[score:${c.score}] "${c.labelA}" ↔ "${c.labelB}"`,
+        )
+        .join("\n");
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// thatch_dedup_mark_checked
+// ---------------------------------------------------------------------------
+
+export function createMarkCheckedTool(db: ThatchDB, defaultStore: string) {
+  return tool({
+    description:
+      "Record the verdict for a duplicate-candidate pair after reviewing it, " +
+      "so thatch_find_duplicates stops re-reporting the pair. Use after " +
+      "resolving (or deciding not to touch) a pair it surfaced. Overwriting " +
+      "either memory later clears the verdict automatically.",
+    args: {
+      label_a: tool.schema.string().describe("Label of the first memory in the pair."),
+      label_b: tool.schema.string().describe("Label of the second memory in the pair."),
+      status: tool.schema.string().describe(
+        'The verdict: "duplicate", "supplement", "contradiction", or "unrelated".',
+      ),
+      store: tool.schema.string().optional().describe(
+        `Store the pair lives in. Defaults to the project store ("${defaultStore}").`,
+      ),
+    },
+    async execute(args, _ctx) {
+      const store = args.store || defaultStore;
+      db.markPairChecked(store, db.slugify(args.label_a), db.slugify(args.label_b), args.status);
+      return `[checked] ${store} :: "${args.label_a}" ↔ "${args.label_b}" → ${args.status}`;
+    },
+  });
+}

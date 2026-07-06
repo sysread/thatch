@@ -12,6 +12,10 @@ run = "bun test"
 description = "Run tests in watch mode"
 run = "bun test --watch"
 
+[tasks.coverage]
+description = "Run tests with coverage report"
+run = "bun test --coverage --coverage-reporter=text --coverage-reporter=lcov"
+
 [tasks.cli]
 description = "Run the thatch CLI (list, show, search, forget)"
 run = "bun run bin/thatch"
