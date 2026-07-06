@@ -57,6 +57,12 @@ describe("cosineSimilarity", () => {
     const score = cosineSimilarity(a, b);
     expect(score).toBeCloseTo(0.96, 2);
   });
+
+  test("throws on dimension mismatch", () => {
+    const a = new Float32Array([1, 0]);
+    const b = new Float32Array([1, 0, 0]);
+    expect(() => cosineSimilarity(a, b)).toThrow("dimension mismatch");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -123,6 +129,21 @@ describe("slugify", () => {
   test("trims whitespace", () => {
     expect(db.slugify("  hello  ")).toBe("hello");
   });
+
+  test("preserves non-ASCII letters so distinct labels get distinct slugs", () => {
+    const a = db.slugify("日本語のメモ");
+    const b = db.slugify("Кириллица");
+    expect(a).not.toBe("");
+    expect(b).not.toBe("");
+    expect(a).not.toBe(b);
+  });
+
+  test("all-symbol labels fall back to a non-empty hash slug", () => {
+    const a = db.slugify("!!!");
+    const b = db.slugify("???");
+    expect(a).not.toBe("");
+    expect(a).not.toBe(b);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -166,6 +187,18 @@ describe("remember", () => {
     expect(entry?.branch).toBe("feature/x");
     expect(entry?.confidence).toBe(7);
   });
+
+  test("round-trips an embedding that is a view into a larger buffer", () => {
+    // Simulates transformers.js returning a tensor view: the Float32Array
+    // starts at a non-zero byteOffset inside a larger ArrayBuffer.
+    const backing = new Float32Array([9, 9, 0.1, 0.2, 0.3, 0.4, 9, 9]);
+    const view = backing.subarray(2, 6);
+    db.remember("s", "view-test", "content", view, "m");
+
+    const results = db.recall(["s"], new Float32Array([0.1, 0.2, 0.3, 0.4]));
+    expect(results.length).toBe(1);
+    expect(results[0]._score).toBeCloseTo(1, 5);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -205,6 +238,20 @@ describe("recall", () => {
   test("returns empty for unknown store", () => {
     const results = db.recall(["nonexistent"], new Float32Array(4));
     expect(results).toEqual([]);
+  });
+
+  test("returns empty for empty store list", () => {
+    const results = db.recall([], new Float32Array(4));
+    expect(results).toEqual([]);
+  });
+
+  test("skips entries embedded with a different dimensionality", () => {
+    db.remember("s", "old-model", "content", new Float32Array([1, 0, 0, 0]), "old");
+    db.remember("s", "new-model", "content", new Float32Array([1, 0, 0, 0, 0, 0, 0, 0]), "new");
+
+    const results = db.recall(["s"], new Float32Array([1, 0, 0, 0]));
+    expect(results.map((r) => r.label)).toEqual(["old-model"]);
+    expect(results.every((r) => Number.isFinite(r._score))).toBe(true);
   });
 
   test("respects limit", () => {
@@ -295,5 +342,59 @@ describe("forgetEntry", () => {
   test("returns false for unknown label", () => {
     const result = db.forgetEntry("s", "nope");
     expect(result).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deduplication
+// ---------------------------------------------------------------------------
+
+describe("dedup", () => {
+  const embA = new Float32Array([1, 0, 0, 0]);
+  const embB = new Float32Array([0.999, 0.04, 0, 0]);
+  const embC = new Float32Array([0, 1, 0, 0]);
+
+  test("findDuplicates surfaces similar pairs above threshold", () => {
+    db.remember("s", "first", "content a", embA, "m");
+    db.remember("s", "second", "content b", embB, "m");
+    db.remember("s", "unrelated", "content c", embC, "m");
+
+    const pairs = db.findDuplicates("s", 0.85);
+    expect(pairs.length).toBe(1);
+    const labels = [pairs[0].labelA, pairs[0].labelB].sort();
+    expect(labels).toEqual(["first", "second"]);
+  });
+
+  test("checked pairs are not re-reported", () => {
+    db.remember("s", "first", "content a", embA, "m");
+    db.remember("s", "second", "content b", embB, "m");
+
+    db.markPairChecked("s", db.slugify("first"), db.slugify("second"), "unrelated");
+    expect(db.findDuplicates("s", 0.85)).toEqual([]);
+  });
+
+  test("overwriting an entry clears its checked-pair verdicts", () => {
+    db.remember("s", "first", "content a", embA, "m");
+    db.remember("s", "second", "content b", embB, "m");
+    db.markPairChecked("s", db.slugify("first"), db.slugify("second"), "unrelated");
+
+    db.remember("s", "first", "new content", embA, "m", { overwrite: true });
+    expect(db.findDuplicates("s", 0.85).length).toBe(1);
+  });
+
+  test("pairs with mismatched embedding dimensions are skipped", () => {
+    db.remember("s", "small", "content", new Float32Array([1, 0]), "m");
+    db.remember("s", "large", "content", new Float32Array([1, 0, 0, 0]), "m");
+    expect(db.findDuplicates("s", 0.1)).toEqual([]);
+  });
+
+  test("forgetting an entry clears its dedup pairs", () => {
+    db.remember("s", "first", "content a", embA, "m");
+    db.remember("s", "second", "content b", embB, "m");
+    db.markPairChecked("s", db.slugify("first"), db.slugify("second"), "duplicate");
+
+    db.forgetEntry("s", "second");
+    db.remember("s", "second", "content b again", embB, "m");
+    expect(db.findDuplicates("s", 0.85).length).toBe(1);
   });
 });

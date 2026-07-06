@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export interface SkillFile {
@@ -8,24 +8,34 @@ export interface SkillFile {
 }
 
 /**
- * Creates thatch skill files in the given skills directory if they don't
- * already exist. Called at plugin init — idempotent.
+ * Writes thatch skill files into the given skills directory. Called at plugin
+ * init — idempotent, and rewrites a skill whose on-disk content has drifted so
+ * plugin upgrades propagate. These files are plugin-owned: local edits are
+ * overwritten on next init.
  */
 export function installSkills(skillsDir: string): SkillFile[] {
   mkdirSync(skillsDir, { recursive: true });
-  const created: SkillFile[] = [];
+  const written: SkillFile[] = [];
 
   for (const skill of SKILLS) {
     const dir = join(skillsDir, skill.name);
     const file = join(dir, "SKILL.md");
-    if (!existsSync(file)) {
+
+    let current: string | null = null;
+    try {
+      current = readFileSync(file, "utf8");
+    } catch {
+      // missing file — first install
+    }
+
+    if (current !== skill.content) {
       mkdirSync(dir, { recursive: true });
       writeFileSync(file, skill.content);
-      created.push({ name: skill.name, path: file, content: skill.content });
+      written.push({ name: skill.name, path: file, content: skill.content });
     }
   }
 
-  return created;
+  return written;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,7 +110,9 @@ You will receive a JSON payload with:
 2. Classify the relationship.
 3. Use thatch_memory_forget to remove duplicates.
 4. Use thatch_memory_remember with overwrite: true to update supplemented memories.
-5. Call thatch_find_duplicates again afterward to verify the store is clean.
+5. For pairs you are NOT deleting (supplement, contradiction, unrelated), call
+   thatch_dedup_mark_checked with the verdict so the pair stops being re-reported.
+6. Call thatch_find_duplicates again afterward to verify the store is clean.
 
 ## Relationship types
 

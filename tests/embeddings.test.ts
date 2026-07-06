@@ -46,4 +46,19 @@ describe("MockEmbeddingModel", () => {
     const differs = a.some((v, i) => v !== b[i]);
     expect(differs).toBe(true);
   });
+
+  test("unrelated texts land near-orthogonal, like a real embedding space", async () => {
+    const { cosineSimilarity } = await import("../src/db");
+    const model = new MockEmbeddingModel();
+    const a = await model.passageEmbed("the sqlite schema uses WAL mode");
+    const b = await model.passageEmbed("cats enjoy sitting in cardboard boxes");
+    // Sine-wave vectors used to score >0.85 for arbitrary text pairs, blowing
+    // past the dedup threshold; hash-seeded vectors must not.
+    expect(Math.abs(cosineSimilarity(a, b))).toBeLessThan(0.3);
+  });
+
+  test("exposes a model name for the stored tag", () => {
+    const model = new MockEmbeddingModel();
+    expect(model.name).toBe("mock");
+  });
 });

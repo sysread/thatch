@@ -10,6 +10,8 @@ let dbDir: string;
 beforeAll(async () => {
   dbDir = mkdtempSync(join(tmpdir(), "thatch-plugin-test-"));
   process.env.THATCH_DB_PATH = join(dbDir, "test.db");
+  // Redirect skill installation away from the real ~/.config.
+  process.env.XDG_CONFIG_HOME = join(dbDir, "config");
   const mockClient = {
     session: {
       prompt: async () => {},
@@ -22,6 +24,7 @@ afterAll(() => {
   hooks.dispose?.();
   rmSync(dbDir, { recursive: true, force: true });
   delete process.env.THATCH_DB_PATH;
+  delete process.env.XDG_CONFIG_HOME;
 });
 
 describe("plugin entry", () => {
@@ -33,6 +36,7 @@ describe("plugin entry", () => {
     expect(hooks.tool).toBeDefined();
     const names = Object.keys(hooks.tool);
     expect(names.sort()).toEqual([
+      "thatch_dedup_mark_checked",
       "thatch_find_duplicates",
       "thatch_memory_forget",
       "thatch_memory_list",
@@ -95,5 +99,54 @@ describe("plugin entry", () => {
 
   test("dispose hook is defined", () => {
     expect(typeof hooks.dispose).toBe("function");
+  });
+
+  test("has tool.execute.after hook", () => {
+    expect(typeof hooks["tool.execute.after"]).toBe("function");
+  });
+
+  test("buffered tool interactions surface as a payload nudge, scoped per session", async () => {
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_a", callID: "c1", args: { command: "ls" } },
+      { title: "list files", output: "README.md", metadata: {} },
+    );
+
+    // A different session sees no nudge.
+    const otherOutput: any = { message: { id: "msg_0" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_b" } as any, otherOutput);
+    expect(otherOutput.parts.length).toBe(0);
+
+    // The originating session gets the nudge with the actual payload.
+    const output: any = { message: { id: "msg_1" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_a", messageID: "msg_1" } as any, output);
+    expect(output.parts.length).toBe(1);
+    expect(output.parts[0].type).toBe("text");
+    expect(output.parts[0].sessionID).toBe("ses_a");
+    expect(output.parts[0].text).toContain("thatch-fact-extractor");
+    expect(output.parts[0].text).toContain('"tool":"bash"');
+
+    // The buffer was flushed — no repeat nudge.
+    const output2: any = { message: { id: "msg_2" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_a" } as any, output2);
+    expect(output2.parts.length).toBe(0);
+  });
+
+  test("thatch's own tools are not buffered for extraction", async () => {
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_memory_remember", sessionID: "ses_c", callID: "c2", args: {} },
+      { title: "save", output: "[saved]", metadata: {} },
+    );
+    const output: any = { message: { id: "msg_3" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_c" } as any, output);
+    expect(output.parts.length).toBe(0);
+  });
+
+  test("installs skill files under the redirected config home", async () => {
+    const { readFileSync } = await import("node:fs");
+    const skillPath = join(
+      process.env.XDG_CONFIG_HOME!,
+      "opencode", "skills", "thatch-fact-extractor", "SKILL.md",
+    );
+    expect(readFileSync(skillPath, "utf8")).toContain("thatch-fact-extractor");
   });
 });

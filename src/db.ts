@@ -11,7 +11,6 @@ export interface MemoryRow {
   confidence: number | null;
   created_at: string;
   updated_at: string;
-  dedup_checked_at: string | null;
 }
 
 export interface DedupCandidate {
@@ -78,33 +77,7 @@ export class ThatchDB {
       )
     `);
 
-    this.#db.run(`
-      CREATE TABLE IF NOT EXISTS locks (
-        name        TEXT PRIMARY KEY,
-        session_id  TEXT NOT NULL,
-        acquired_at TEXT NOT NULL,
-        pid         INTEGER NOT NULL
-      )
-    `);
-
     this.#db.run("INSERT OR IGNORE INTO stores (name) VALUES ('global')");
-
-    this.#migrateColumns();
-  }
-
-  #migrateColumns(): void {
-    for (const col of ["dedup_checked_at"]) {
-      if (!this.#columnExists("entries", col)) {
-        this.#db.run(`ALTER TABLE entries ADD COLUMN ${col} TEXT`);
-      }
-    }
-  }
-
-  #columnExists(table: string, column: string): boolean {
-    const rows = this.#db
-      .query(`PRAGMA table_info(${table})`)
-      .all() as any[];
-    return rows.some((r: any) => r.name === column);
   }
 
   // ---------------------------------------------------------------------------
@@ -128,13 +101,26 @@ export class ThatchDB {
   // Entries
   // ---------------------------------------------------------------------------
 
+  /**
+   * Slugs are the primary key half derived from labels. Unicode letters and
+   * digits are preserved so non-English labels don't collapse onto each other;
+   * all-symbol labels fall back to a hash so no label ever maps to "".
+   * ASCII labels produce the same slugs as earlier releases.
+   */
   slugify(label: string): string {
-    return label
+    const slug = label
       .trim()
       .toLowerCase()
       .replace(/\s+/g, "-")
-      .replace(/[^a-z0-9_-]/g, "")
+      .replace(/[^\p{L}\p{N}_-]/gu, "")
       .replace(/-+/g, "-");
+    if (slug) return slug;
+
+    let h = 0;
+    for (const ch of label) {
+      h = ((h << 5) - h + ch.codePointAt(0)!) | 0;
+    }
+    return "x" + (h >>> 0).toString(36);
   }
 
   entryExists(store: string, slug: string): boolean {
@@ -159,18 +145,35 @@ export class ThatchDB {
     const slug = this.slugify(label);
     this.ensureStore(store);
 
-    if (this.entryExists(store, slug) && !opts?.overwrite) {
-      return {
-        ok: false,
-        error: `A memory with label "${label}" already exists in store "${store}". ` +
-          `Pass overwrite: true to replace it.`,
-      };
-    }
-
-    const blob = new Uint8Array(embedding.buffer);
+    // The embedding may be a view into a larger buffer (transformers.js tensor
+    // output); serialize exactly the view's bytes, not the whole backing buffer.
+    const blob = new Uint8Array(embedding.buffer, embedding.byteOffset, embedding.byteLength);
     const branch = opts?.branch ?? null;
     const confidence = opts?.confidence ?? null;
     const now = new Date().toISOString();
+    const params = [slug, store, label, content, blob, model, branch, confidence, now, now];
+
+    if (!opts?.overwrite) {
+      // Plain INSERT so the PK constraint enforces no-clobber atomically —
+      // a check-then-upsert would race against concurrent sessions.
+      try {
+        this.#db.run(
+          `INSERT INTO entries (slug, store, label, content, embedding, model, branch, confidence, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          params as any,
+        );
+        return { ok: true };
+      } catch (err: any) {
+        if (String(err?.code ?? err).includes("CONSTRAINT")) {
+          return {
+            ok: false,
+            error: `A memory with label "${label}" already exists in store "${store}". ` +
+              `Pass overwrite: true to replace it.`,
+          };
+        }
+        throw err;
+      }
+    }
 
     this.#db.run(
       `
@@ -185,7 +188,14 @@ export class ThatchDB {
         confidence = COALESCE(excluded.confidence, entries.confidence),
         updated_at = excluded.updated_at
       `,
-      [slug, store, label, content, blob, model, branch, confidence, now, now],
+      params as any,
+    );
+
+    // Content changed, so prior dedup verdicts involving this entry are stale;
+    // clear them so findDuplicates can re-flag the pair.
+    this.#db.run(
+      "DELETE FROM dedup_pairs WHERE store = ? AND (slug_a = ? OR slug_b = ?)",
+      [store, slug, slug],
     );
 
     return { ok: true };
@@ -201,6 +211,8 @@ export class ThatchDB {
     queryEmbedding: Float32Array,
     opts?: { branch?: string; limit?: number },
   ): (MemoryRow & { _score: number })[] {
+    if (stores.length === 0) return [];
+
     const limit = opts?.limit ?? 10;
     const branch = opts?.branch;
 
@@ -228,9 +240,14 @@ export class ThatchDB {
 
     if (rows.length === 0) return [];
 
-    const scored = rows.map((row) => {
-      const emb = new Float32Array(row.embedding!.buffer);
-      return { ...row, embedding: row.embedding, _score: cosineSimilarity(queryEmbedding, emb) };
+    // Entries embedded by a different model live in a different vector space;
+    // comparing them would produce NaN or nonsense scores, so they're skipped
+    // rather than ranked. Dimension is the discriminator — model tags are
+    // informational only.
+    const scored = rows.flatMap((row) => {
+      const emb = blobToVector(row.embedding!);
+      if (emb.length !== queryEmbedding.length) return [];
+      return [{ ...row, embedding: row.embedding, _score: cosineSimilarity(queryEmbedding, emb) }];
     });
 
     scored.sort((a, b) => b._score - a._score);
@@ -258,7 +275,7 @@ export class ThatchDB {
     const slug = this.slugify(label);
     return this.#db
       .query(
-        "SELECT slug, store, label, content, embedding, model, branch, confidence, created_at, updated_at, dedup_checked_at FROM entries WHERE slug = ? AND store = ?",
+        "SELECT slug, store, label, content, embedding, model, branch, confidence, created_at, updated_at FROM entries WHERE slug = ? AND store = ?",
       )
       .get(slug, store) as MemoryRow | null;
   }
@@ -289,7 +306,7 @@ export class ThatchDB {
       slug: r.slug,
       label: r.label,
       content: r.content,
-      embedding: new Float32Array(r.embedding.buffer),
+      embedding: blobToVector(r.embedding),
     }));
 
     const candidates: DedupCandidate[] = [];
@@ -299,6 +316,7 @@ export class ThatchDB {
       for (let j = i + 1; j < entries.length; j++) {
         const key = [entries[i].slug, entries[j].slug].sort().join("|");
         if (checked.has(key)) continue;
+        if (entries[i].embedding.length !== entries[j].embedding.length) continue;
 
         const score = cosineSimilarity(entries[i].embedding, entries[j].embedding);
         if (score >= threshold) {
@@ -337,55 +355,6 @@ export class ThatchDB {
     );
   }
 
-  /** Marks entries as dedup-checked so they're skipped in future passes. */
-  markEntriesReviewed(store: string, slugs: string[]): void {
-    if (slugs.length === 0) return;
-    const now = new Date().toISOString();
-    const placeholders = slugs.map(() => "?").join(", ");
-    this.#db.run(
-      `UPDATE entries SET dedup_checked_at = ? WHERE store = ? AND slug IN (${placeholders})`,
-      [now, store, ...slugs],
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Advisory locks — prevents concurrent background work across sessions.
-  // Locks expire after `ttlMs` milliseconds (default 5 minutes) so a crashed
-  // session doesn't permanently block other sessions.
-  // ---------------------------------------------------------------------------
-
-  acquireLock(name: string, sessionId: string, ttlMs = 300_000): boolean {
-    const now = new Date();
-    const nowIso = now.toISOString();
-    const pid = process.pid;
-    const expireBefore = new Date(now.getTime() - ttlMs).toISOString();
-
-    // Clean up any stale lock with the same name.
-    this.#db.run(
-      "DELETE FROM locks WHERE name = ? AND acquired_at < ?",
-      [name, expireBefore],
-    );
-
-    // Try to insert. If the name already exists (another session holds a
-    // fresh lock), the PK constraint will cause the insert to fail.
-    try {
-      this.#db.run(
-        "INSERT INTO locks (name, session_id, acquired_at, pid) VALUES (?, ?, ?, ?)",
-        [name, sessionId, nowIso, pid],
-      );
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  releaseLock(name: string, sessionId: string): void {
-    this.#db.run(
-      "DELETE FROM locks WHERE name = ? AND session_id = ?",
-      [name, sessionId],
-    );
-  }
-
   close(): void {
     this.#db.close();
   }
@@ -396,10 +365,24 @@ export class ThatchDB {
 // ---------------------------------------------------------------------------
 
 /**
- * Cosine similarity between two Float32Array vectors.
+ * Reconstructs a Float32Array from a stored BLOB. The Uint8Array bun:sqlite
+ * hands back may itself be a view, so honor its offset and length rather than
+ * reading the whole backing buffer.
+ */
+function blobToVector(blob: Uint8Array): Float32Array {
+  return new Float32Array(blob.buffer, blob.byteOffset, blob.byteLength / 4);
+}
+
+/**
+ * Cosine similarity between two Float32Array vectors of equal dimension.
  * Returns a value in [-1, 1]. Normalized embeddings will be close to [0, 1].
+ * Throws on dimension mismatch — comparing vectors from different embedding
+ * spaces is always a caller bug; callers filter by length first.
  */
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+  if (a.length !== b.length) {
+    throw new Error(`cosineSimilarity: dimension mismatch (${a.length} vs ${b.length})`);
+  }
   let dot = 0;
   let magA = 0;
   let magB = 0;

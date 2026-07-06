@@ -50,9 +50,17 @@ Stores are created automatically — no setup required.
 |------|-------------|
 | `thatch_store_list` | List all available stores. |
 
+### Deduplication tools
+
+| Tool | What it does |
+|------|-------------|
+| `thatch_find_duplicates` | Surface pairs of memories with suspiciously similar content. |
+| `thatch_dedup_mark_checked` | Record the verdict for a reviewed pair so it stops being re-reported. |
+
 ## CLI
 
-Thatch ships with a command-line tool for reviewing memories outside opencode:
+Thatch ships with a command-line tool for reviewing memories outside opencode.
+It requires Bun on your PATH:
 
 ```bash
 # After npm publish: available globally

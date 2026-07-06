@@ -1,1 +1,1 @@
-export { server } from "/Users/jeff.ober/dev/thatch/src/index";
+export { server } from "../../src/index";

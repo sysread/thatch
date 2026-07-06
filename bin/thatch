@@ -6,7 +6,8 @@ import { ThatchDB } from "../src/db";
 import { detectRepo } from "../src/git";
 import { BgeEmbeddingModel } from "../src/embeddings";
 
-const dbPath = process.env.THATCH_DB_PATH ?? join(homedir(), ".config", "thatch", "thatch.db");
+const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+const dbPath = process.env.THATCH_DB_PATH ?? join(configHome, "thatch", "thatch.db");
 const db = new ThatchDB(dbPath);
 
 const [command, ...args] = process.argv.slice(2);
@@ -85,8 +86,17 @@ switch (command) {
 
   case "search": {
     if (!args[0]) usage();
+    if (args.length > 2) {
+      console.error(`error: too many arguments — quote multi-word queries: thatch search "${args.join(" ")}"`);
+      process.exit(1);
+    }
     const query = args[0];
     const store = args[1] ?? await defaultStore();
+    if (args[1] && store !== "all" && !db.listStores().includes(store)) {
+      console.error(`error: no store named "${store}" (did you mean to quote the query?)`);
+      console.error(`stores: ${db.listStores().join(", ")}`);
+      process.exit(1);
+    }
     const stores = store === "all" ? [await defaultStore(), "global"] : [store];
 
     console.error("Loading embedding model...");

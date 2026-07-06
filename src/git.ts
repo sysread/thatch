@@ -7,7 +7,7 @@ import { $ } from "bun";
  * Returns null when the URL doesn't match any known format.
  */
 export function parseGitUrl(url: string): string | null {
-  const cleaned = url.trim().replace(/\.git$/, "");
+  const cleaned = url.trim().replace(/\/+$/, "").replace(/\.git$/, "");
 
   for (const pattern of URL_PATTERNS) {
     const m = cleaned.match(pattern.re);

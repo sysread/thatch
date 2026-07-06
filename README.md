@@ -34,14 +34,21 @@ Or place the repo under `.opencode/plugins/` and OpenCode auto-loads it.
 | `thatch_memory_show` | Read full content by exact label |
 | `thatch_memory_forget` | Delete a memory |
 | `thatch_store_list` | List all stores |
+| `thatch_find_duplicates` | Surface pairs of suspiciously similar memories |
+| `thatch_dedup_mark_checked` | Record a reviewed pair so it stops being re-reported |
 
 ## How it works
 
 Thatch auto-detects your repo identity from `git remote get-url origin`
-(e.g., `anomalyco/thatch`). Memories are embedded with
+(e.g., `sysread/thatch`). Memories are embedded with
 [bge-small-en-v1.5][bge] (384-dimensional vectors, ~34 MB model, cached
 locally) and stored in `~/.config/thatch/thatch.db` (SQLite, WAL mode).
 Search is brute-force cosine similarity — fast enough for thousands of entries.
+
+A `thatch` CLI ships with the package for inspecting stores from the shell
+(`thatch stores|list|show|search|forget`). It requires [Bun] on your PATH —
+the whole plugin runs on Bun, which OpenCode provides when loading plugins,
+but a globally installed CLI uses whatever is on your system.
 
 ## Privacy
 
@@ -59,7 +66,7 @@ and is cached. No data leaves your machine.
 
 ```bash
 bun install        # deps
-bun test           # 65 tests, zero network, zero external deps
+bun test           # full suite: zero network, zero external deps
 bun test --watch   # watch mode
 ```
 
@@ -71,4 +78,5 @@ temp directories for file I/O.
 MIT
 
 [OpenCode]: https://opencode.ai
+[Bun]: https://bun.sh
 [bge]: https://huggingface.co/BAAI/bge-small-en-v1.5

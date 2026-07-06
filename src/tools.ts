@@ -68,7 +68,7 @@ export function createRememberTool(
       const content = `# ${args.label}\n\n${args.content}`;
       const embedding = await model.passageEmbed(content);
 
-      const result = db.remember(store, args.label, content, embedding, "bge-small-en-v1.5", {
+      const result = db.remember(store, args.label, content, embedding, model.name, {
         branch: args.branch ?? undefined,
         confidence: args.confidence ?? undefined,
         overwrite: args.overwrite ?? undefined,
