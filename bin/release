@@ -1,5 +1,55 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
+
 v="${1:?usage: $0 patch|minor|major}"
-npm version "$v"
-git push --follow-tags
+
+case "$v" in patch|minor|major) ;; *)
+  echo "error: expected patch, minor, or major; got '$v'"
+  exit 1
+esac
+
+curr=$(node -p "require('./package.json').version")
+next=$(node -e "
+  const [maj, min, pat] = '$curr'.split('.').map(Number);
+  if ('$v' === 'major')  console.log((maj+1)+'.0.0');
+  else if ('$v' === 'minor') console.log(maj+'.'+(min+1)+'.0');
+  else console.log(maj+'.'+min+'.'+(pat+1));
+")
+
+echo "thatch release"
+echo "  current: $curr"
+echo "  bump:    $v"
+echo "  next:    $next"
+echo
+
+echo "▸ running tests..."
+bun test
+echo "  ✓ tests passed"
+echo
+
+echo "▸ bumping version..."
+npm version "$v" --no-git-tag-version 2>/dev/null
+echo "  ✓ package.json: $next"
+echo
+
+read -p "▸ commit, tag, and push v$next? [y/N] " -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+  echo "aborted — reverting package.json"
+  git checkout package.json
+  exit 0
+fi
+
+git add package.json
+git commit -m "v$next"
+git tag "v$next"
+echo "  ✓ committed and tagged v$next"
+echo
+
+echo "▸ pushing..."
+git push
+git push --tags
+echo "  ✓ pushed"
+echo
+
+echo "done — CI will publish v$next to npm"
