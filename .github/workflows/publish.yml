@@ -4,6 +4,13 @@ on:
   push:
     tags: ["v*"]
 
+# id-token: write lets npm authenticate via GitHub's OIDC token instead of a
+# stored secret. Requires a Trusted Publisher configured on npmjs.com for
+# this package pointing at sysread/thatch + publish.yml.
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -14,7 +21,7 @@ jobs:
           bun-version: latest
       - run: bun install
       - run: bun test
-      - run: echo "//registry.npmjs.org/:_authToken=\${NPM_TOKEN}" > ~/.npmrc
+      # OIDC publish needs npm >= 11.5.1; the runner's default may lag.
+      # No registry-url / .npmrc / tokens — npm detects the OIDC environment.
+      - run: npm install -g npm@latest
       - run: npm publish --access public
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
