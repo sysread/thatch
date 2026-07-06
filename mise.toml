@@ -18,5 +18,5 @@ run = "bun run bin/thatch"
 
 [tasks.release]
 description = "Bump version, commit, tag, and push (args: patch|minor|major)"
-run = "npm version $1 && git push && git push --tags"
+run = "bin/release"
 

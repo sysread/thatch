@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -e
+v="${1:?usage: $0 patch|minor|major}"
+npm version "$v"
+git push --follow-tags
