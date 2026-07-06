@@ -19,16 +19,29 @@ export interface EmbeddingModel {
 }
 
 /**
+ * Factory for creating a Hugging Face feature-extraction pipeline.
+ * Injected into BgeEmbeddingModel for testability.
+ */
+export type PipelineFactory = (modelName: string) => Promise<any>;
+
+const defaultPipelineFactory: PipelineFactory = async (modelName) => {
+  const { pipeline } = await import("@huggingface/transformers");
+  return pipeline("feature-extraction", modelName);
+};
+
+/**
  * Lazy-loads an embedding model via @huggingface/transformers.
  * Model files (~34 MB for the default) are downloaded once and cached by HF Hub.
  */
 export class BgeEmbeddingModel implements EmbeddingModel {
   #modelName: string;
+  #pipelineFactory: PipelineFactory;
   #pipe: any = null;
   #loading: Promise<void> | null = null;
 
-  constructor(modelName = "Xenova/bge-small-en-v1.5") {
+  constructor(modelName = "Xenova/bge-small-en-v1.5", pipelineFactory?: PipelineFactory) {
     this.#modelName = modelName;
+    this.#pipelineFactory = pipelineFactory ?? defaultPipelineFactory;
   }
 
   get loaded(): boolean {
@@ -44,8 +57,7 @@ export class BgeEmbeddingModel implements EmbeddingModel {
   async load(): Promise<void> {
     if (this.#pipe) return;
     this.#loading ??= (async () => {
-      const { pipeline } = await import("@huggingface/transformers");
-      this.#pipe = await pipeline("feature-extraction", this.#modelName);
+      this.#pipe = await this.#pipelineFactory(this.#modelName);
     })().catch((err) => {
       this.#loading = null;
       throw err;
