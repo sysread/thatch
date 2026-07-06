@@ -12,7 +12,7 @@ on your machine.
 
 ```jsonc
 // opencode.jsonc — after publishing to npm
-{ "plugin": ["thatch"] }
+{ "plugin": ["@jeffober/thatch"] }
 ```
 
 That's it. On next start, OpenCode installs thatch and its tools are available

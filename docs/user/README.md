@@ -10,7 +10,7 @@ Publish to npm and add thatch to your opencode config:
 ```jsonc
 // opencode.jsonc or opencode.json
 {
-  "plugin": ["thatch"]
+  "plugin": ["@jeffober/thatch"]
 }
 ```
 
