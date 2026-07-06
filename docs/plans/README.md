@@ -9,6 +9,7 @@ supersede earlier ones as the project evolves.
 | Plan | Description |
 |------|-------------|
 | [001 — Memory Store](001-memory-store.md) | Initial memory feature: stores, embeddings, tools |
+| [002 — Agent-Driven Pipelines](002-agent-driven-pipelines.md) | Extraction/dedup through the agent; hook wiring specifics; supersedes 001's "no CLI" |
 
 ## Plan format
 

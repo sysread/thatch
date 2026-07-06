@@ -70,8 +70,8 @@ bun test           # full suite: zero network, zero external deps
 bun test --watch   # watch mode
 ```
 
-Tests never reach outside the sandbox: `:memory:` SQLite, mock embeddings,
-temp directories for file I/O.
+Tests never reach outside the sandbox: temp-directory SQLite files, mock
+embeddings, no network.
 
 ## License
 

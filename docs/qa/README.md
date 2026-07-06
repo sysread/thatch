@@ -1,15 +1,23 @@
 # QA — Test Plan
 
-Thatch uses `bun:test` for all testing. Tests do not reach outside the sandbox
-or make network calls.
+Thatch uses `bun:test`. The full suite runs in well under a second with no
+network access and no writes outside temp directories.
 
 ## Test conventions
 
-- **DB tests**: use `:memory:` databases, never real files
-- **Embedding tests**: mock the embedding model with a fixed Float32Array
-- **Git tests**: create temp directories with stub repos
-- **Tool tests**: inject mock DB + model via factory functions
-- **Path tests**: override `HOME` to a temp directory
+- **DB tests** create a real SQLite file in a `mkdtempSync` temp directory,
+  removed in `afterEach`. (Real files, not `:memory:` — WAL behavior differs.)
+- **Embedding tests** use `MockEmbeddingModel`: hash-seeded deterministic
+  vectors, so identical texts embed identically and unrelated texts land
+  near-orthogonal. The real `BgeEmbeddingModel` is never instantiated in
+  tests — nothing downloads models.
+- **Git unit tests** exercise `parseGitUrl` on strings; **git integration
+  tests** create throwaway repos in temp directories and run real git.
+- **Tool tests** build tools via the factory functions with an injected temp
+  DB + mock model, then call `execute` directly.
+- **Plugin tests** call the `server` entry with a mock client and redirect
+  `THATCH_DB_PATH` and `XDG_CONFIG_HOME` into a temp directory so skill
+  installation never touches the real `~/.config`.
 
 ## Running tests
 
@@ -18,47 +26,66 @@ bun test          # all tests
 bun test --watch  # watch mode
 ```
 
-## Test categories
+## Test files and coverage
 
-### Unit — `tests/db.test.ts`
+### `tests/db.test.ts`
 
-- Schema creation and migration
-- CRUD operations on entries
-- Store creation and listing
-- Search (cosine similarity ranking)
-- Overwrite protection
-- Branch-scoped queries
-- Edge cases: empty content, special characters in labels, concurrent writes
+- `cosineSimilarity`: identical/orthogonal/opposite/zero vectors; throws on
+  dimension mismatch
+- Schema creation, store creation/idempotence
+- `slugify`: ASCII, unicode preservation, hash fallback for all-symbol labels
+- `remember`: insert, duplicate rejection without `overwrite`, overwrite,
+  metadata, embedding round-trip through a view with non-zero `byteOffset`
+- `recall`: ranking, multi-store, unknown store, empty store list, limit,
+  branch scoping, skipping dimension-mismatched entries
+- `listEntries`, `showEntry`, `forgetEntry`
+- Dedup: `findDuplicates` thresholding, checked-pair suppression, verdict
+  invalidation on overwrite and forget, dimension-mismatch pair skipping
 
-### Unit — `tests/git.test.ts`
+### `tests/git.test.ts`
 
-- Parse HTTPS remote URLs
-- Parse SSH remote URLs
-- Parse git:// remote URLs
-- Worktree detection (git-common-dir fallback)
-- Non-git directory fallback
-- Slash/hyphen handling in repo names
+- `parseGitUrl` across SSH shorthand, HTTPS/HTTP, `ssh://`, `git://`,
+  GitLab/self-hosted, hyphens/dots, trailing whitespace, unparseable input
 
-### Unit — `tests/embeddings.test.ts`
+### `tests/git-integration.test.ts`
 
-- Query embedding prefix application
-- Passage embedding (no prefix)
-- Model lazy loading
-- Error handling when model fails to load
-- Dimensionality consistency
+- `detectRepo` against real temp git repos: HTTPS remote, SSH remote,
+  no-`.git`-suffix remote, no-remote fallback, non-git-directory fallback
 
-### Unit — `tests/tools.test.ts`
+### `tests/embeddings.test.ts`
 
-- `thatch_memory_remember` — happy path, duplicate rejection, overwrite
-- `thatch_memory_recall` — default scope (repo + global), explicit store, empty results
-- `thatch_memory_list` — populated store, empty store
-- `thatch_memory_show` — found, not found
-- `thatch_memory_forget` — exists, doesn't exist
-- `thatch_store_list` — populated, empty
-- Argument validation (missing required fields)
-- Default store resolution
+- `MockEmbeddingModel` contract: dims, loaded, determinism, query/passage
+  equivalence, distinct texts → distinct near-orthogonal vectors, model name
+
+### `tests/tools.test.ts`
+
+- `thatch_memory_remember`: happy path, duplicate rejection, overwrite,
+  explicit store, metadata
+- `thatch_memory_recall`: default repo+global scope, empty results, store
+  override, limit
+- `thatch_memory_list` / `show` / `forget`: found, not-found, store override
+- `thatch_store_list`
+
+### `tests/plugin.test.ts`
+
+- `server` export shape: all eight tools, every hook present, tools carry
+  description/args/execute
+- System transform and compaction hooks append their text
+- `tool.execute.after` → `chat.message` extraction round-trip: nudge carries
+  the JSON payload, buffers are per-session, flush is one-shot, `thatch_*`
+  tools are excluded from buffering
+- Skill files land under the redirected `XDG_CONFIG_HOME`
+
+## Known gaps
+
+- `BgeEmbeddingModel` itself (lazy load memoization, query prefixing) is
+  untested — exercising it means downloading the real model, which violates
+  the no-network rule. It is exercised indirectly by any real opencode use.
+- The `event`/`session.created` reminder path has no test (needs a fuller
+  opencode client mock).
+- `bin/thatch` has no automated tests; it is a thin shell over `db.ts`.
 
 ## Use cases
 
-See `docs/qa/use-cases/` for detailed scenarios with preconditions, steps, and
-expected results.
+See `docs/qa/use-cases/` for manual end-to-end scenarios with preconditions,
+steps, and expected results.
