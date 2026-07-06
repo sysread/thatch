@@ -1,6 +1,6 @@
 {
   "name": "@jeffober/thatch",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Persistent memory for opencode — local embeddings, SQLite stores, zero config",
   "type": "module",
   "main": "src/index.ts",
@@ -8,7 +8,11 @@
   "bin": {
     "thatch": "./bin/thatch"
   },
-  "files": ["src", "docs", "bin"],
+  "files": [
+    "src",
+    "docs",
+    "bin"
+  ],
   "scripts": {
     "test": "bun test",
     "test:watch": "bun test --watch"
@@ -24,6 +28,12 @@
   "peerDependencies": {
     "@opencode-ai/plugin": "^1.0.0"
   },
-  "keywords": ["opencode", "opencode-plugin", "memory", "embeddings", "sqlite"],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "memory",
+    "embeddings",
+    "sqlite"
+  ],
   "license": "MIT"
 }
