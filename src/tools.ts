@@ -1,5 +1,5 @@
 import { tool } from "@opencode-ai/plugin";
-import type { ThatchDB } from "./db";
+import type { ThatchDB, DedupCandidate } from "./db";
 import type { EmbeddingModel } from "./embeddings";
 
 function formatEntry(
@@ -68,6 +68,13 @@ export function createRememberTool(
       const content = `# ${args.label}\n\n${args.content}`;
       const embedding = await model.passageEmbed(content);
 
+      // Write-time collision check: the embedding is already computed, so
+      // scanning the store is nearly free. The save proceeds regardless —
+      // the agent decides whether and how to reconcile.
+      const similar = db.findSimilar(store, embedding, {
+        excludeSlug: db.slugify(args.label),
+      });
+
       const result = db.remember(store, args.label, content, embedding, model.name, {
         branch: args.branch ?? undefined,
         confidence: args.confidence ?? undefined,
@@ -75,7 +82,19 @@ export function createRememberTool(
       });
 
       if (!result.ok) return result.error;
-      return `[saved] ${store} :: ${args.label}`;
+
+      const saved = `[saved] ${store} :: ${args.label}`;
+      if (similar.length === 0) return saved;
+
+      return (
+        `${saved}\n\n` +
+        `⚠ This memory is semantically similar to existing memories:\n` +
+        similar.map((s) => `  - "${s.label}" (similarity ${s.score})`).join("\n") +
+        `\n\nReview them with thatch_memory_show and decide how to reconcile: ` +
+        `merge into one entry (thatch_memory_remember with overwrite: true, then ` +
+        `thatch_memory_forget the other), or record that they are genuinely ` +
+        `distinct with thatch_dedup_mark_checked.`
+      );
     },
   });
 }
@@ -235,8 +254,11 @@ export function createFindDuplicatesTool(db: ThatchDB, defaultStore: string) {
   return tool({
     description:
       "Find memories with unusually similar content that may be candidates " +
-      "for consolidation. Uses cosine similarity on embeddings. Pairs already " +
-      "reviewed via thatch_dedup_mark_checked are skipped.",
+      "for consolidation. Uses cosine similarity on embeddings. Related pairs " +
+      "are grouped into clusters — a cluster of three or more usually means " +
+      "one topic fragmented across entries that should be consolidated into " +
+      "a single memory. Pairs already reviewed via thatch_dedup_mark_checked " +
+      "are skipped.",
     args: {
       store: tool.schema.string().optional().describe(
         `Which store to check. Defaults to the project store ("${defaultStore}").`,
@@ -252,13 +274,44 @@ export function createFindDuplicatesTool(db: ThatchDB, defaultStore: string) {
 
       if (candidates.length === 0) return `No duplicate candidates found in "${store}" above threshold ${threshold}.`;
 
-      return candidates
-        .map((c) =>
-          `[score:${c.score}] "${c.labelA}" ↔ "${c.labelB}"`,
-        )
-        .join("\n");
+      return renderClusters(candidates);
     },
   });
+}
+
+/**
+ * Groups candidate pairs into connected components over the similarity graph,
+ * so a topic fragmented across N entries reads as one cluster instead of
+ * O(N²) pairs. Verdicts stay pairwise (thatch_dedup_mark_checked) — this is
+ * presentation only.
+ */
+function renderClusters(candidates: DedupCandidate[]): string {
+  const parent = new Map<string, string>();
+  const find = (x: string): string => {
+    let root = parent.get(x) ?? x;
+    while (root !== (parent.get(root) ?? root)) root = parent.get(root) ?? root;
+    parent.set(x, root);
+    return root;
+  };
+  const union = (a: string, b: string): void => {
+    parent.set(find(a), find(b));
+  };
+
+  for (const c of candidates) union(c.slugA, c.slugB);
+
+  const clusters = new Map<string, DedupCandidate[]>();
+  for (const c of candidates) {
+    const root = find(c.slugA);
+    clusters.set(root, [...(clusters.get(root) ?? []), c]);
+  }
+
+  return [...clusters.values()]
+    .map((pairs) => {
+      const labels = new Set(pairs.flatMap((p) => [p.labelA, p.labelB]));
+      const lines = pairs.map((p) => `  [score:${p.score}] "${p.labelA}" ↔ "${p.labelB}"`);
+      return `Cluster of ${labels.size}:\n${lines.join("\n")}`;
+    })
+    .join("\n\n");
 }
 
 // ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseGitUrl, detectRepo } from "../src/git";
+import { parseGitUrl, detectRepo, listBranches } from "../src/git";
 
 let cwd: string;
 let origCwd: string;
@@ -71,5 +71,19 @@ describe("detectRepo", () => {
     // No git repo at all — should use CWD basename
     expect(typeof repo).toBe("string");
     expect(repo).not.toBe("unknown");
+  });
+});
+
+describe("listBranches", () => {
+  test("lists local branches", async () => {
+    await gitInit();
+    await shell("git branch feature/x");
+    const branches = await listBranches(cwd);
+    expect(branches).toContain("feature/x");
+    expect(branches.length).toBe(2); // default branch + feature/x
+  });
+
+  test("returns empty outside a git repo", async () => {
+    expect(await listBranches(cwd)).toEqual([]);
   });
 });

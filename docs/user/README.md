@@ -65,6 +65,14 @@ Beyond the tools, thatch hooks into opencode itself:
   the available stores and when to save/recall memories.
 - **Session-start reminder.** New sessions receive a prompt nudging the agent
   to recall user preferences and project context before its first response.
+- **Hygiene heartbeat.** The session-start reminder also reports store
+  maintenance signals when there are any: duplicate candidates pending review,
+  memories neither updated nor recalled in 90+ days, and memories scoped to
+  git branches that no longer exist. The agent is asked to tend the store when
+  convenient — thatch never deletes memories on its own.
+- **Write-time similarity warning.** Saving a memory that closely resembles an
+  existing one succeeds, but the response warns the agent and lists the
+  similar entries so it can merge them or record that they're distinct.
 - **Fact-extraction nudges.** Thatch buffers the session's recent tool calls
   (up to 20, per session). On your next message, the agent receives a summary
   payload and is prompted to save any durable facts it reveals. The agent does

@@ -51,6 +51,45 @@ describe("thatch_memory_remember", () => {
     expect(result).toContain("My Memory");
   });
 
+  test("warns when content resembles an existing memory", async () => {
+    // The mock model hashes the full content including the label heading, so
+    // "same body, different label" embeds orthogonally. Seed the existing
+    // entry with the exact vector the new save will produce, which is what
+    // a real model yields for near-identical content.
+    const newContent = "# Different Label\n\nThe staging DB lives on host-7";
+    db.remember(defaultStore, "Original", "The staging DB lives on host-7",
+      await model.passageEmbed(newContent), model.name);
+
+    const tool = createRememberTool(db, model, defaultStore);
+    const result = await tool.execute({
+      label: "Different Label",
+      content: "The staging DB lives on host-7",
+    });
+
+    expect(result).toContain("[saved]");
+    expect(result).toContain("semantically similar");
+    expect(result).toContain('"Original"');
+    expect(result).toContain("thatch_dedup_mark_checked");
+  });
+
+  test("does not warn for unrelated content", async () => {
+    const tool = createRememberTool(db, model, defaultStore);
+    await tool.execute({ label: "One", content: "The staging DB lives on host-7" });
+    const result = await tool.execute({ label: "Two", content: "Cats enjoy cardboard boxes" });
+
+    expect(result).toContain("[saved]");
+    expect(result).not.toContain("semantically similar");
+  });
+
+  test("does not warn against itself on overwrite", async () => {
+    const tool = createRememberTool(db, model, defaultStore);
+    await tool.execute({ label: "Self", content: "Same content" });
+    const result = await tool.execute({ label: "Self", content: "Same content", overwrite: true });
+
+    expect(result).toContain("[saved]");
+    expect(result).not.toContain("semantically similar");
+  });
+
   test("rejects duplicate label", async () => {
     const tool = createRememberTool(db, model, defaultStore);
 
@@ -288,6 +327,25 @@ describe("thatch_find_duplicates", () => {
     expect(result).toContain("Alpha");
     expect(result).toContain("Beta");
     expect(result).toContain("score:");
+  });
+
+  test("groups related pairs into one cluster", async () => {
+    const emb = new Float32Array(384).fill(0.5);
+    const other = new Float32Array(384).fill(-0.5).map((v, i) => (i % 2 === 0 ? 0.5 : -0.5));
+    db.remember(defaultStore, "Frag A", "# Frag A\n\nSame", emb, "mock");
+    db.remember(defaultStore, "Frag B", "# Frag B\n\nSame", emb, "mock");
+    db.remember(defaultStore, "Frag C", "# Frag C\n\nSame", emb, "mock");
+    db.remember(defaultStore, "Loner X", "# Loner X\n\nOther", new Float32Array(other), "mock");
+    db.remember(defaultStore, "Loner Y", "# Loner Y\n\nOther", new Float32Array(other), "mock");
+
+    const findDups = createFindDuplicatesTool(db, defaultStore);
+    const result = await findDups.execute({ threshold: 0.9 });
+
+    // Three mutually-similar fragments = one cluster of 3 (three pairs);
+    // the two loners form a separate cluster of 2.
+    expect(result).toContain("Cluster of 3:");
+    expect(result).toContain("Cluster of 2:");
+    expect((result as string).match(/Cluster of /g)?.length).toBe(2);
   });
 
   test("returns message when no duplicates found", async () => {

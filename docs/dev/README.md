@@ -44,7 +44,7 @@ bin/thatch                    → standalone CLI over the same db.ts (needs bun)
 | `experimental.session.compacting` | Appends re-familiarization context so a compacted session still knows thatch exists. |
 | `tool.execute.after` | Buffers every non-`thatch_*` tool call into the session's extraction buffer. This is a plugin hook, NOT a bus event — do not move it into the `event` handler; the event bus has no such event and it will silently never fire. |
 | `chat.message` | If the session has buffered interactions, flushes them and injects a synthetic text part carrying the extraction nudge + JSON payload. |
-| `event` (`session.created`) | Sends the session-start reminder via `client.session.prompt`. The session id is at `event.properties.info.id`. |
+| `event` (`session.created`) | Sends the session-start reminder via `client.session.prompt`, carrying the hygiene heartbeat (pending dedup pairs, stale count, orphaned branch memories) when any signal is non-zero. The session id is at `event.properties.info.id`. |
 | `dispose` | Closes the DB. |
 
 Hook failures are logged with a `[thatch]` prefix — never swallowed silently.
@@ -75,21 +75,26 @@ Two of these hooks were dead for weeks because failures were invisible.
 ```
 thatch_memory_remember(label, content)
   → model.passageEmbed("# label\n\ncontent") → Float32Array
+  → db.findSimilar(store, embedding) — write-time collision check (no telemetry)
   → db.remember(store, label, content, embedding, model.name, opts)
       overwrite:false → atomic INSERT (PK constraint rejects duplicates)
       overwrite:true  → upsert + clear stale dedup verdicts for that slug
-  → confirmation string
+  → confirmation string, plus a ⚠ warning naming ≥0.85-similar existing
+    memories — the save always proceeds; the agent decides how to reconcile
 
 thatch_memory_recall(query)
   → model.queryEmbed(query) → Float32Array
   → db.recall([repo, "global"], queryEmbedding, {branch?, limit})
       skips entries with mismatched embedding dimension
       cosine similarity, sort desc, top-N
+      stamps recall_count/last_recalled_at on returned rows (usage telemetry)
   → formatted results with scores
 
 dedup cycle (agent-driven)
-  → thatch_find_duplicates → pairs above threshold, minus checked pairs
-  → agent loads thatch-dedup-classifier skill, classifies each pair
+  → thatch_find_duplicates → pairs above threshold, minus checked pairs,
+    grouped into clusters (connected components; presentation-only)
+  → agent loads thatch-dedup-classifier skill; classifies pairs, consolidates
+    clusters of 3+ into one memory
   → merges/deletes via thatch_memory_remember(overwrite)/thatch_memory_forget
   → thatch_dedup_mark_checked records verdicts for surviving pairs
   (overwriting or forgetting an entry clears its verdicts → can re-flag)
@@ -98,6 +103,13 @@ extraction cycle (agent-driven)
   → tool.execute.after buffers non-thatch tool calls per session (max 20)
   → next chat.message flushes the buffer into a nudge part with JSON payload
   → agent loads thatch-fact-extractor skill, saves facts via thatch_memory_remember
+
+hygiene heartbeat (session start)
+  → hygieneReport(db, repo, worktree): pending dedup pairs; entries neither
+    updated nor recalled in 90+ days; memories scoped to branches that no
+    longer exist (skipped when worktree isn't a git repo)
+  → non-zero signals appended to the session-start reminder; the agent tends
+    the store when convenient — the plugin never deletes memories itself
 ```
 
 ## Database
@@ -106,8 +118,11 @@ extraction cycle (agent-driven)
   (default `~/.config/thatch/thatch.db`), WAL mode, 5s busy timeout.
 - Tables: `stores(name PK)`,
   `entries(slug, store, label, content, embedding BLOB, model, branch,
-  confidence, created_at, updated_at, PK(slug, store))`,
+  confidence, created_at, updated_at, recall_count, last_recalled_at,
+  PK(slug, store))`,
   `dedup_pairs(store, slug_a, slug_b, status, checked_at, PK(store, slug_a, slug_b))`.
+- `recall_count`/`last_recalled_at` are added to pre-existing databases by an
+  idempotent column migration at init (`PRAGMA table_info` + `ALTER TABLE`).
 - Embeddings are raw Float32Array bytes. Serialization honors
   `byteOffset`/`byteLength` — transformers.js can return views into larger
   tensor buffers, and serializing the whole backing buffer corrupts vectors.

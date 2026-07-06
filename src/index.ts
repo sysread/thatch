@@ -2,7 +2,7 @@ import { join } from "node:path";
 import type { Plugin } from "@opencode-ai/plugin";
 import { ThatchDB } from "./db";
 import { BgeEmbeddingModel } from "./embeddings";
-import { detectRepo } from "./git";
+import { detectRepo, listBranches } from "./git";
 import {
   createRememberTool,
   createRecallTool,
@@ -109,16 +109,25 @@ export const server: Plugin = async ({ client, worktree }) => {
       });
     },
 
-    // 5. Session-start reminder.
+    // 5. Session-start reminder, carrying the hygiene heartbeat. Hygiene is
+    // best-effort: a failure there must not cost the reminder itself.
     event: async ({ event }) => {
       if (event.type !== "session.created") return;
       const id = event.properties.info.id;
+
+      let hygiene: string | null = null;
+      try {
+        hygiene = await hygieneReport(db, repo, worktree);
+      } catch (err) {
+        console.error(`[thatch] hygiene report failed: ${err}`);
+      }
+
       try {
         await client.session.prompt({
           path: { id },
           body: {
             noReply: true,
-            parts: [{ type: "text", text: sessionStartReminder(repo) }],
+            parts: [{ type: "text", text: sessionStartReminder(repo, hygiene) }],
           },
         });
       } catch (err) {
@@ -131,3 +140,45 @@ export const server: Plugin = async ({ client, worktree }) => {
     },
   };
 };
+
+// ---------------------------------------------------------------------------
+// Hygiene heartbeat — counts that give the agent standing cause to tend the
+// store. Only non-zero signals are reported; a healthy store stays silent.
+// ---------------------------------------------------------------------------
+
+const STALE_DAYS = 90;
+
+export async function hygieneReport(
+  db: ThatchDB,
+  repo: string,
+  worktree: string,
+): Promise<string | null> {
+  const parts: string[] = [];
+
+  const dupes = db.findDuplicates(repo).length;
+  if (dupes > 0) {
+    parts.push(`${dupes} duplicate-candidate pair${dupes === 1 ? "" : "s"} pending review`);
+  }
+
+  const cutoff = new Date(Date.now() - STALE_DAYS * 86_400_000).toISOString();
+  const stale = db.staleEntryCount(repo, cutoff);
+  if (stale > 0) {
+    parts.push(`${stale} memor${stale === 1 ? "y" : "ies"} neither updated nor recalled in ${STALE_DAYS}+ days`);
+  }
+
+  // listBranches returns [] outside a git repo, which would make every
+  // branch-scoped memory look orphaned — skip the check in that case.
+  const scoped = db.branchesInStore(repo);
+  if (scoped.length > 0) {
+    const live = await listBranches(worktree);
+    if (live.length > 0) {
+      const orphaned = scoped.filter((b) => !live.includes(b));
+      const n = db.entryCountForBranches(repo, orphaned);
+      if (n > 0) {
+        parts.push(`${n} memor${n === 1 ? "y" : "ies"} scoped to deleted branches (${orphaned.join(", ")})`);
+      }
+    }
+  }
+
+  return parts.length > 0 ? `Store "${repo}": ${parts.join("; ")}.` : null;
+}

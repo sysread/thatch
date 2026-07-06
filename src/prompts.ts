@@ -69,10 +69,17 @@ to persist important decisions, patterns, and conventions encountered so far.
 Include context about what's been learned and decided when summarizing.`;
 }
 
-export function sessionStartReminder(repo: string): string {
-  return `[thatch] Before responding, use thatch to recall:
+export function sessionStartReminder(repo: string, hygiene?: string | null): string {
+  const base = `[thatch] Before responding, use thatch to recall:
 (1) user preferences and personality,
 (2) project architecture and conventions for "${repo}",
 (3) if on a non-main branch, branch-scoped context.
 Use thatch_store_list then thatch_memory_list to see what's available, then thatch_memory_recall as needed.`;
+
+  if (!hygiene) return base;
+
+  return `${base}
+
+[thatch hygiene] ${hygiene}
+When convenient this session (not before addressing the user's request), tend the store: run thatch_find_duplicates and consolidate clusters, review stale memories with thatch_memory_show and update or forget them, and forget memories scoped to deleted branches.`;
 }

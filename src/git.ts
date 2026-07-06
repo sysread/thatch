@@ -80,3 +80,22 @@ export async function detectRepo(cwd?: string): Promise<string> {
 
   return dir.split("/").pop() || "unknown";
 }
+
+/**
+ * Local branch names in the given directory's repository. Used to detect
+ * branch-scoped memories whose branch no longer exists. Returns [] outside
+ * a git repo — callers must treat that as "unknown", not "no branches",
+ * or every branch-scoped memory would look orphaned.
+ */
+export async function listBranches(cwd: string): Promise<string[]> {
+  // The format string is interpolated because Bun's shell parser rejects
+  // bare parentheses in template literals.
+  const fmt = "%(refname:short)";
+  try {
+    const out = await $`git for-each-ref --format=${fmt} refs/heads`.cwd(cwd).quiet();
+    if (out.exitCode !== 0) return [];
+    return out.stdout.toString().split("\n").map((s) => s.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}

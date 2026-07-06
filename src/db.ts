@@ -11,6 +11,15 @@ export interface MemoryRow {
   confidence: number | null;
   created_at: string;
   updated_at: string;
+  recall_count: number;
+  last_recalled_at: string | null;
+}
+
+/** A semantically-similar existing entry, surfaced at write time. */
+export interface SimilarEntry {
+  slug: string;
+  label: string;
+  score: number;
 }
 
 export interface DedupCandidate {
@@ -62,6 +71,8 @@ export class ThatchDB {
         confidence INTEGER,
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        recall_count INTEGER NOT NULL DEFAULT 0,
+        last_recalled_at TEXT,
         PRIMARY KEY (slug, store)
       )
     `);
@@ -78,6 +89,25 @@ export class ThatchDB {
     `);
 
     this.#db.run("INSERT OR IGNORE INTO stores (name) VALUES ('global')");
+
+    this.#migrateColumns();
+  }
+
+  // Databases created before recall telemetry lack these columns; the CREATE
+  // above only covers fresh files.
+  #migrateColumns(): void {
+    const existing = new Set(
+      (this.#db.query("PRAGMA table_info(entries)").all() as any[]).map((r) => r.name),
+    );
+    const wanted: [string, string][] = [
+      ["recall_count", "INTEGER NOT NULL DEFAULT 0"],
+      ["last_recalled_at", "TEXT"],
+    ];
+    for (const [col, decl] of wanted) {
+      if (!existing.has(col)) {
+        this.#db.run(`ALTER TABLE entries ADD COLUMN ${col} ${decl}`);
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -222,7 +252,7 @@ export class ThatchDB {
 
     const { sql, params }: SqlParams = (() => {
       const base = `
-        SELECT slug, store, label, content, embedding, model, branch, confidence, created_at, updated_at
+        SELECT slug, store, label, content, embedding, model, branch, confidence, created_at, updated_at, recall_count, last_recalled_at
         FROM entries
         WHERE store IN (${placeholders}) AND embedding IS NOT NULL
       `;
@@ -251,7 +281,53 @@ export class ThatchDB {
     });
 
     scored.sort((a, b) => b._score - a._score);
-    return scored.slice(0, limit);
+    const top = scored.slice(0, limit);
+
+    // Recall telemetry: retrieval is the "used recently" signal hygiene
+    // reporting keys on, so returned rows get stamped here.
+    if (top.length > 0) {
+      const now = new Date().toISOString();
+      const rowKeys = top.map(() => "(?, ?)").join(", ");
+      this.#db.run(
+        `UPDATE entries SET recall_count = recall_count + 1, last_recalled_at = ?
+         WHERE (store, slug) IN (VALUES ${rowKeys})`,
+        [now, ...top.flatMap((r) => [r.store, r.slug])] as any,
+      );
+    }
+
+    return top;
+  }
+
+  /**
+   * Entries in a store semantically close to the given embedding — the
+   * write-time collision check. Unlike recall(), this records no telemetry:
+   * it's the plugin looking, not the agent using.
+   */
+  findSimilar(
+    store: string,
+    embedding: Float32Array,
+    opts?: { threshold?: number; limit?: number; excludeSlug?: string },
+  ): SimilarEntry[] {
+    const threshold = opts?.threshold ?? 0.85;
+    const limit = opts?.limit ?? 3;
+
+    const rows = this.#db
+      .query("SELECT slug, label, embedding FROM entries WHERE store = ? AND embedding IS NOT NULL")
+      .all(store) as any[];
+
+    const hits: SimilarEntry[] = [];
+    for (const r of rows) {
+      if (r.slug === opts?.excludeSlug) continue;
+      const emb = blobToVector(r.embedding);
+      if (emb.length !== embedding.length) continue;
+      const score = cosineSimilarity(embedding, emb);
+      if (score >= threshold) {
+        hits.push({ slug: r.slug, label: r.label, score: Math.round(score * 1000) / 1000 });
+      }
+    }
+
+    hits.sort((a, b) => b.score - a.score);
+    return hits.slice(0, limit);
   }
 
   /** Lists all entries in a store, returning metadata without content. */
@@ -275,7 +351,7 @@ export class ThatchDB {
     const slug = this.slugify(label);
     return this.#db
       .query(
-        "SELECT slug, store, label, content, embedding, model, branch, confidence, created_at, updated_at FROM entries WHERE slug = ? AND store = ?",
+        "SELECT slug, store, label, content, embedding, model, branch, confidence, created_at, updated_at, recall_count, last_recalled_at FROM entries WHERE slug = ? AND store = ?",
       )
       .get(slug, store) as MemoryRow | null;
   }
@@ -343,6 +419,41 @@ export class ThatchDB {
       .query("SELECT slug_a, slug_b FROM dedup_pairs WHERE store = ?")
       .all(store) as any[];
     return new Set(rows.map((r: any) => [r.slug_a, r.slug_b].sort().join("|")));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Hygiene — signals for the session-start heartbeat. Staleness means
+  // neither written nor recalled since the cutoff; recall telemetry keeps
+  // actively-used old memories out of the count.
+  // ---------------------------------------------------------------------------
+
+  /** Entries neither updated nor recalled since the cutoff (ISO timestamp). */
+  staleEntryCount(store: string, cutoffIso: string): number {
+    const row = this.#db
+      .query(
+        `SELECT COUNT(*) AS n FROM entries
+         WHERE store = ? AND max(updated_at, COALESCE(last_recalled_at, updated_at)) < ?`,
+      )
+      .get(store, cutoffIso) as any;
+    return row?.n ?? 0;
+  }
+
+  /** Distinct branches that scoped memories reference in a store. */
+  branchesInStore(store: string): string[] {
+    return this.#db
+      .query("SELECT DISTINCT branch FROM entries WHERE store = ? AND branch IS NOT NULL ORDER BY branch")
+      .all(store)
+      .map((r: any) => r.branch);
+  }
+
+  /** Number of entries scoped to any of the given branches. */
+  entryCountForBranches(store: string, branches: string[]): number {
+    if (branches.length === 0) return 0;
+    const placeholders = branches.map(() => "?").join(", ");
+    const row = this.#db
+      .query(`SELECT COUNT(*) AS n FROM entries WHERE store = ? AND branch IN (${placeholders})`)
+      .get(store, ...branches) as any;
+    return row?.n ?? 0;
   }
 
   /** Records a pair as reviewed with its classification. */

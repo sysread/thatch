@@ -41,6 +41,11 @@ bun test --watch  # watch mode
 - `listEntries`, `showEntry`, `forgetEntry`
 - Dedup: `findDuplicates` thresholding, checked-pair suppression, verdict
   invalidation on overwrite and forget, dimension-mismatch pair skipping
+- `findSimilar`: threshold/ranking, self-exclusion, dimension skipping, no
+  telemetry side effects
+- Recall telemetry: returned rows (and only returned rows) stamped
+- Hygiene queries: stale counting with recall-refresh, branch listing/counts
+- Column migration: pre-telemetry databases gain the new columns on open
 
 ### `tests/git.test.ts`
 
@@ -51,6 +56,7 @@ bun test --watch  # watch mode
 
 - `detectRepo` against real temp git repos: HTTPS remote, SSH remote,
   no-`.git`-suffix remote, no-remote fallback, non-git-directory fallback
+- `listBranches`: local branches listed; empty outside a git repo
 
 ### `tests/embeddings.test.ts`
 
@@ -68,9 +74,11 @@ bun test --watch  # watch mode
   override, limit
 - `thatch_memory_list` / `show` / `forget`: found, not-found, store override
 - `thatch_store_list`
-- `thatch_find_duplicates`: surfaces similar pairs, no-match message, store
-  override, skips checked pairs
+- `thatch_find_duplicates`: surfaces similar pairs, cluster grouping,
+  no-match message, store override, skips checked pairs
 - `thatch_dedup_mark_checked`: records verdict, store override
+- Write-time collision warning: fires on similar content, silent for
+  unrelated content, never warns against itself on overwrite
 
 ### `tests/plugin.test.ts`
 
@@ -84,6 +92,14 @@ bun test --watch  # watch mode
 - `event` handler: calls `client.session.prompt` on `session.created` with
   correct session ID and nudge text; ignores non-`session.created` events
 - `sessionStartReminder`: includes store name and recall instructions
+
+### `tests/hygiene.test.ts`
+
+- `hygieneReport`: silent on a healthy store; counts duplicate candidates,
+  stale memories, and orphaned branch-scoped memories (against a real temp
+  git repo); skips the branch check outside a git repo
+- `sessionStartReminder` hygiene block: appended when present, omitted when
+  null, single-arg call unchanged
 
 ## Known gaps
 

@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { ThatchDB, cosineSimilarity } from "../src/db";
 
 let dbPath: string;
@@ -396,5 +397,145 @@ describe("dedup", () => {
     db.forgetEntry("s", "second");
     db.remember("s", "second", "content b again", embB, "m");
     expect(db.findDuplicates("s", 0.85).length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findSimilar (write-time collision check)
+// ---------------------------------------------------------------------------
+
+describe("findSimilar", () => {
+  const embA = new Float32Array([1, 0, 0, 0]);
+  const embNear = new Float32Array([0.999, 0.04, 0, 0]);
+  const embFar = new Float32Array([0, 1, 0, 0]);
+
+  test("returns entries above the threshold, ranked by score", () => {
+    db.remember("s", "near", "content", embA, "m");
+    db.remember("s", "far", "content", embFar, "m");
+
+    const hits = db.findSimilar("s", embNear);
+    expect(hits.length).toBe(1);
+    expect(hits[0].label).toBe("near");
+    expect(hits[0].score).toBeGreaterThanOrEqual(0.85);
+  });
+
+  test("excludes the given slug (the entry being overwritten)", () => {
+    db.remember("s", "self", "content", embA, "m");
+    const hits = db.findSimilar("s", embA, { excludeSlug: db.slugify("self") });
+    expect(hits).toEqual([]);
+  });
+
+  test("skips dimension-mismatched entries", () => {
+    db.remember("s", "other-space", "content", new Float32Array(8).fill(0.5), "m");
+    expect(db.findSimilar("s", embA)).toEqual([]);
+  });
+
+  test("records no recall telemetry", () => {
+    db.remember("s", "quiet", "content", embA, "m");
+    db.findSimilar("s", embA);
+    expect(db.showEntry("s", "quiet")?.recall_count).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// recall telemetry
+// ---------------------------------------------------------------------------
+
+describe("recall telemetry", () => {
+  test("recall stamps returned rows and only returned rows", () => {
+    const embA = new Float32Array([1, 0, 0, 0]);
+    const embB = new Float32Array([0.9, 0.1, 0, 0]);
+    const embC = new Float32Array([0, 0, 1, 0]);
+    db.remember("s", "hit-1", "content", embA, "m");
+    db.remember("s", "hit-2", "content", embB, "m");
+    db.remember("s", "miss", "content", embC, "m");
+
+    db.recall(["s"], embA, { limit: 2 });
+
+    expect(db.showEntry("s", "hit-1")?.recall_count).toBe(1);
+    expect(db.showEntry("s", "hit-2")?.recall_count).toBe(1);
+    expect(db.showEntry("s", "hit-1")?.last_recalled_at).toBeTruthy();
+    expect(db.showEntry("s", "miss")?.recall_count).toBe(0);
+    expect(db.showEntry("s", "miss")?.last_recalled_at).toBeNull();
+
+    db.recall(["s"], embA, { limit: 1 });
+    expect(db.showEntry("s", "hit-1")?.recall_count).toBe(2);
+    expect(db.showEntry("s", "hit-2")?.recall_count).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hygiene queries
+// ---------------------------------------------------------------------------
+
+describe("hygiene", () => {
+  const emb = new Float32Array([1, 0, 0, 0]);
+  const future = new Date(Date.now() + 86_400_000).toISOString();
+  const past = new Date(Date.now() - 86_400_000).toISOString();
+
+  test("staleEntryCount counts entries neither updated nor recalled since cutoff", () => {
+    db.remember("s", "old", "content", emb, "m");
+    expect(db.staleEntryCount("s", future)).toBe(1);
+    expect(db.staleEntryCount("s", past)).toBe(0);
+  });
+
+  test("a recall refreshes an otherwise-stale entry", () => {
+    db.remember("s", "used", "content", emb, "m");
+
+    // Backdate the write far past the cutoff, so only recall telemetry can
+    // keep the entry out of the stale count.
+    const raw = new Database(dbPath);
+    raw.run("UPDATE entries SET updated_at = '2000-01-01T00:00:00Z' WHERE slug = 'used'");
+    raw.close();
+
+    expect(db.staleEntryCount("s", past)).toBe(1);
+    db.recall(["s"], emb);
+    expect(db.staleEntryCount("s", past)).toBe(0);
+  });
+
+  test("branchesInStore lists distinct scoped branches", () => {
+    db.remember("s", "a", "content", emb, "m", { branch: "feature/x" });
+    db.remember("s", "b", "content", emb, "m", { branch: "feature/x" });
+    db.remember("s", "c", "content", emb, "m", { branch: "feature/y" });
+    db.remember("s", "d", "content", emb, "m");
+    expect(db.branchesInStore("s")).toEqual(["feature/x", "feature/y"]);
+  });
+
+  test("entryCountForBranches counts scoped entries; empty branch list is zero", () => {
+    db.remember("s", "a", "content", emb, "m", { branch: "feature/x" });
+    db.remember("s", "b", "content", emb, "m", { branch: "feature/x" });
+    db.remember("s", "c", "content", emb, "m", { branch: "feature/y" });
+    expect(db.entryCountForBranches("s", ["feature/x"])).toBe(2);
+    expect(db.entryCountForBranches("s", [])).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// schema migration
+// ---------------------------------------------------------------------------
+
+describe("migration", () => {
+  test("opening a pre-telemetry database adds the new columns", () => {
+    const oldPath = join(dbDir, "old.db");
+    const raw = new Database(oldPath, { create: true });
+    raw.run(`
+      CREATE TABLE entries (
+        slug TEXT NOT NULL, store TEXT NOT NULL, label TEXT NOT NULL,
+        content TEXT NOT NULL, embedding BLOB, model TEXT, branch TEXT,
+        confidence INTEGER,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        PRIMARY KEY (slug, store)
+      )
+    `);
+    raw.run("INSERT INTO entries (slug, store, label, content) VALUES ('a', 's', 'A', 'old content')");
+    raw.close();
+
+    const migrated = new ThatchDB(oldPath);
+    const entry = migrated.showEntry("s", "A");
+    expect(entry).not.toBeNull();
+    expect(entry!.recall_count).toBe(0);
+    expect(entry!.last_recalled_at).toBeNull();
+    migrated.close();
   });
 });
