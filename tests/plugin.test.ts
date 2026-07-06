@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { server } from "../src/index";
+import { sessionStartReminder } from "../src/prompts";
 
 let hooks: Awaited<ReturnType<typeof server>>;
 let dbDir: string;
@@ -148,5 +149,79 @@ describe("plugin entry", () => {
       "opencode", "skills", "thatch-fact-extractor", "SKILL.md",
     );
     expect(readFileSync(skillPath, "utf8")).toContain("thatch-fact-extractor");
+  });
+
+  test("event handler calls client.session.prompt on session.created", async () => {
+    let promptCalled = false;
+    let promptArgs: any = null;
+
+    const mockClient = {
+      session: {
+        prompt: async (args: any) => {
+          promptCalled = true;
+          promptArgs = args;
+        },
+      },
+    };
+
+    const testHooks = await server({ client: mockClient, worktree: "/tmp/test" } as any);
+
+    await testHooks.event!({
+      event: {
+        type: "session.created",
+        properties: { info: { id: "test-session-123" } },
+      },
+    } as any);
+
+    expect(promptCalled).toBe(true);
+    expect(promptArgs.path.id).toBe("test-session-123");
+    expect(promptArgs.body.noReply).toBe(true);
+    expect(promptArgs.body.parts[0].type).toBe("text");
+    expect(promptArgs.body.parts[0].text).toContain("thatch");
+
+    testHooks.dispose?.();
+  });
+
+  test("event handler ignores non-session.created events", async () => {
+    let promptCalled = false;
+
+    const mockClient = {
+      session: {
+        prompt: async () => {
+          promptCalled = true;
+        },
+      },
+    };
+
+    const testHooks = await server({ client: mockClient, worktree: "/tmp/test" } as any);
+
+    await testHooks.event!({
+      event: {
+        type: "session.updated",
+        properties: {},
+      },
+    } as any);
+
+    expect(promptCalled).toBe(false);
+
+    testHooks.dispose?.();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sessionStartReminder
+// ---------------------------------------------------------------------------
+
+describe("sessionStartReminder", () => {
+  test("includes store name and recall instructions", () => {
+    const reminder = sessionStartReminder("test-owner/test-repo");
+
+    expect(reminder).toContain("[thatch]");
+    expect(reminder).toContain("test-owner/test-repo");
+    expect(reminder).toContain("thatch_memory_recall");
+    expect(reminder).toContain("user preferences and personality");
+    expect(reminder).toContain("project architecture and conventions");
+    expect(reminder).toContain("thatch_store_list");
+    expect(reminder).toContain("thatch_memory_list");
   });
 });
