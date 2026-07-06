@@ -56,6 +56,9 @@ bun test --watch  # watch mode
 
 - `MockEmbeddingModel` contract: dims, loaded, determinism, query/passage
   equivalence, distinct texts → distinct near-orthogonal vectors, model name
+- `BgeEmbeddingModel` (with injected pipeline factory): lazy-load, loaded
+  state, concurrent load memoization, error retry, query prefix for
+  asymmetric search, passage has no prefix, model name tag, default model name
 
 ### `tests/tools.test.ts`
 
@@ -65,6 +68,9 @@ bun test --watch  # watch mode
   override, limit
 - `thatch_memory_list` / `show` / `forget`: found, not-found, store override
 - `thatch_store_list`
+- `thatch_find_duplicates`: surfaces similar pairs, no-match message, store
+  override, skips checked pairs
+- `thatch_dedup_mark_checked`: records verdict, store override
 
 ### `tests/plugin.test.ts`
 
@@ -75,14 +81,18 @@ bun test --watch  # watch mode
   the JSON payload, buffers are per-session, flush is one-shot, `thatch_*`
   tools are excluded from buffering
 - Skill files land under the redirected `XDG_CONFIG_HOME`
+- `event` handler: calls `client.session.prompt` on `session.created` with
+  correct session ID and nudge text; ignores non-`session.created` events
+- `sessionStartReminder`: includes store name and recall instructions
 
 ## Known gaps
 
-- `BgeEmbeddingModel` itself (lazy load memoization, query prefixing) is
+- `BgeEmbeddingModel`'s default `PipelineFactory` (the real HF import) is
   untested — exercising it means downloading the real model, which violates
-  the no-network rule. It is exercised indirectly by any real opencode use.
-- The `event`/`session.created` reminder path has no test (needs a fuller
-  opencode client mock).
+  the no-network rule. The lazy-load logic is tested with an injected mock
+  factory. The real model is exercised indirectly by any real opencode use.
+- The skill install failure path in `index.ts` has no test (would require
+  mocking `fs` to force a write error).
 - `bin/thatch` has no automated tests; it is a thin shell over `db.ts`.
 
 ## Use cases
