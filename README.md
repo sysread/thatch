@@ -51,7 +51,7 @@ thatch setup --claude
 1. Writes `.mcp.json` — registers the MCP server (Claude Code spawns `thatch mcp` as a stdio process)
 2. Appends instructions to `CLAUDE.md` — session startup, when to write, what to store
 3. Installs hooks in `.claude/settings.json` — `SessionStart` runs `thatch reminder` (recall nudge + hygiene), `UserPromptSubmit` reminds you to save new knowledge
-4. Installs skill files to `~/.claude/skills/` — `thatch-fact-extractor` and `thatch-dedup-classifier`
+4. Installs skill files to `~/.claude/skills/` — `thatch-fact-extractor`, `thatch-dedup-classifier`, and `thatch-project-primer`
 
 Restart Claude Code and thatch's tools are available as `mcp__thatch__*`.
 
@@ -100,6 +100,7 @@ thatch list   [store]            List memory labels in a store
 thatch show   <label> [store]    Display a memory by label
 thatch forget <label> [store]    Remove a memory by label
 thatch search <query> [store]    Semantic search (cosine similarity)
+thatch prime                     Prime project memory (runs via opencode or claude)
 thatch mcp                       Start the stdio MCP server (for Claude Code)
 thatch reminder                  Print session-start reminder (for hooks)
 thatch hygiene                   Print the hygiene report (standalone)
@@ -108,6 +109,29 @@ thatch setup --claude [--global] Install config + instructions + hooks + skills
 
 Stores default to the repo detected from `git remote`. Use `global` for the
 global store. Use `all` with `search` to search project + global together.
+
+### Priming a new project
+
+`thatch prime` bootstraps your project's memory store by having the agent
+investigate the codebase and write foundational memories:
+
+```bash
+cd /path/to/your/project
+thatch prime
+```
+
+This detects `opencode` or `claude` on your PATH and runs the
+`thatch-project-primer` skill, which guides the agent to:
+
+1. Recall any existing project memories
+2. Investigate docs, layout, architecture, commands, and conventions
+3. Write focused memories with clear labels
+4. Reconcile contradictions with existing knowledge
+5. Run dedup to check for overlap
+
+After priming, your agent has context about the project's purpose, structure,
+tech stack, development commands, and conventions — reducing the need to
+re-research these topics in future sessions.
 
 ## How it works
 
