@@ -18,7 +18,7 @@ Shared core
   ├── git.ts          → detect repo identity (store name)
   ├── hygiene.ts      → hygiene report (pending dedups, stale, orphaned branches)
   ├── prompts.ts      → system prompt, compaction, reminders, CLAUDE.md instructions
-  └── skills.ts       → SKILL.md content + installer
+  └── skills.ts       → SKILL.md content + installer (shared + opencode-only arrays)
 
 OpenCode plugin path
   ├── index.ts        → plugin entry: wires DB/model/extraction, registers tools + hooks
@@ -48,7 +48,7 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `embeddings.ts` | Lazy-load the embedding model. Expose `queryEmbed`/`passageEmbed` and the model `name` (stored as an informational tag). `MockEmbeddingModel` for tests. |
 | `extraction.ts` | Buffers non-thatch tool interactions per session and serializes them into the JSON payload the extraction nudge carries. (opencode-only — no MCP equivalent.) |
 | `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, Claude Code CLAUDE.md instructions, Claude Code hook text. |
-| `skills.ts` | `SKILL.md` content for `thatch-fact-extractor` and `thatch-dedup-classifier`, plus the installer. |
+| `skills.ts` | `SKILL.md` content for all thatch skills, plus the installer. Skills are split into `SHARED_SKILLS` (10 skills: fact-extractor, dedup-classifier, project-primer, 5 review specialists, review synthesizer, session reflection — work on both opencode and Claude Code) and `OPENCODE_ONLY_SKILLS` (1 skill: code-review coordinator — requires sub-agent support, not installed for Claude Code). `installSkills(dir, skills)` defaults to `SHARED_SKILLS`; the opencode plugin passes `[...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]`. |
 
 ## Plugin hooks
 
@@ -85,7 +85,10 @@ Two of these hooks were dead for weeks because failures were invisible.
 7. **Skills are plugin-owned files.** Installed to
    `$XDG_CONFIG_HOME/opencode/skills` (opencode) or `~/.claude/skills/`
    (Claude Code) — never into the worktree; drifted content is overwritten
-   on plugin init or re-running `thatch setup`.
+   on plugin init or re-running `thatch setup`. Skills are split into
+   `SHARED_SKILLS` (work on both hosts) and `OPENCODE_ONLY_SKILLS` (require
+   sub-agent support, not installed for Claude Code). The opencode plugin
+   installs both arrays; `thatch setup --claude` installs only shared.
 8. **Tool definitions are the single source of truth.** `tool-defs.ts` defines
    each tool once (name, zod schema, execute function). The opencode plugin
    wraps them in `tool()` with a `thatch_` prefix; the MCP server wraps them

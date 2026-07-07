@@ -155,6 +155,19 @@ describe("plugin entry", () => {
       "opencode", "skills", "thatch-project-primer", "SKILL.md",
     );
     expect(readFileSync(primerPath, "utf8")).toContain("thatch-project-primer");
+
+    // opencode installs both shared and opencode-only skills
+    const reviewPath = join(
+      process.env.XDG_CONFIG_HOME!,
+      "opencode", "skills", "thatch-review-pedantic", "SKILL.md",
+    );
+    expect(readFileSync(reviewPath, "utf8")).toContain("thatch-review-pedantic");
+
+    const coordinatorPath = join(
+      process.env.XDG_CONFIG_HOME!,
+      "opencode", "skills", "thatch-code-review", "SKILL.md",
+    );
+    expect(readFileSync(coordinatorPath, "utf8")).toContain("thatch-code-review");
   });
 
   test("event handler calls client.session.prompt on session.created", async () => {

@@ -82,13 +82,75 @@ Beyond the tools, thatch hooks into opencode itself:
 
 ## Skills
 
-On startup thatch installs two [skills] into your global opencode config
-(`~/.config/opencode/skills/`, or `$XDG_CONFIG_HOME/opencode/skills`):
+On startup thatch installs [skills] into your global opencode config
+(`~/.config/opencode/skills/`, or `$XDG_CONFIG_HOME/opencode/skills`).
+When using `thatch setup --claude`, skills are installed to `~/.claude/skills/`
+(or `$CLAUDE_CONFIG_DIR/skills/`).
+
+### Memory skills
 
 | Skill | Purpose |
 |-------|---------|
 | `thatch-fact-extractor` | Guides the agent through turning buffered tool interactions into memories. |
 | `thatch-dedup-classifier` | Guides the agent through classifying and resolving duplicate-candidate pairs. |
+| `thatch-project-primer` | Investigates a new project from multiple angles and writes foundational memories. |
+| `thatch-session-reflection` | End-of-session skill for recording what was learned about the project, user, tools, and self. |
+
+### Code review skills
+
+Five specialist review lenses, each a self-contained static-analysis pass:
+
+| Skill | Focus |
+|-------|-------|
+| `thatch-review-pedantic` | Mechanical correctness: spelling, naming, doc accuracy, specs, guidelines, stale artifacts. |
+| `thatch-review-acceptance` | Behavioral/product review: UX coherency, behavioral delta, integration effects, user assumptions. |
+| `thatch-review-state-flow` | Data flow and contracts: module boundaries, implicit state machines, error propagation, separation of concerns. |
+| `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth wall breaks, em dashes, hedging, filler. |
+| `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of the code's behavior? |
+| `thatch-review-synthesizer` | Verifies and synthesizes findings from multiple specialists into a single deduplicated, severity-grouped report. |
+
+### opencode-only skills
+
+| Skill | Purpose |
+|-------|---------|
+| `thatch-code-review` | Multi-agent review coordinator. Dispatches parallel sub-agents for triage, decomposition, specialist fan-out, and synthesis. Not available in Claude Code (requires sub-agent support). |
+
+### Host availability
+
+| Skill | opencode | Claude Code |
+|-------|----------|-------------|
+| Memory skills (4) | Yes | Yes |
+| Review specialists (5) | Yes | Yes |
+| Review synthesizer | Yes | Yes |
+| Code review coordinator | Yes | No (requires sub-agents) |
+
+### Using review skills
+
+For a **quick single-lens review**, load any specialist skill directly and
+point it at a branch or commit range:
+
+```
+Load thatch-review-pedantic and review the changes on this branch.
+```
+
+For a **full multi-specialist review on opencode**, load the coordinator:
+
+```
+Load thatch-code-review and review branch feature-x.
+```
+
+The coordinator will triage the change, dispatch parallel sub-agents (one per
+specialist lens), and synthesize a final report.
+
+For a **full review on Claude Code** (or without the coordinator), run each
+specialist in sequence, then synthesize:
+
+```
+1. Load thatch-review-pedantic, review branch feature-x, report findings.
+2. Load thatch-review-acceptance, review the same branch.
+3. ... repeat for state-flow, no-slop, breadcrumbs ...
+4. Load thatch-review-synthesizer, verify and aggregate all findings.
+```
 
 These files are plugin-owned: local edits are overwritten the next time the
 plugin initializes (this is how skill improvements ship with new versions).

@@ -173,11 +173,21 @@ describe("setupClaudeCode (project-local)", () => {
   test("installs skill files to ~/.claude/skills/", () => {
     const result = setupClaudeCode("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
-    expect(result.skills.length).toBe(3);
+    // Shared skills only — opencode-only skills (thatch-code-review) are not
+    // installed for Claude Code because they require sub-agent support.
+    expect(result.skills.length).toBe(10);
     const skillNames = result.skills.map((s) => s.name);
     expect(skillNames).toContain("thatch-fact-extractor");
     expect(skillNames).toContain("thatch-dedup-classifier");
     expect(skillNames).toContain("thatch-project-primer");
+    expect(skillNames).toContain("thatch-review-pedantic");
+    expect(skillNames).toContain("thatch-review-acceptance");
+    expect(skillNames).toContain("thatch-review-state-flow");
+    expect(skillNames).toContain("thatch-review-no-slop");
+    expect(skillNames).toContain("thatch-review-breadcrumbs");
+    expect(skillNames).toContain("thatch-review-synthesizer");
+    expect(skillNames).toContain("thatch-session-reflection");
+    expect(skillNames).not.toContain("thatch-code-review");
 
     for (const skill of result.skills) {
       expect(existsSync(skill.path)).toBe(true);

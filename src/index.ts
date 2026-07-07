@@ -10,7 +10,7 @@ import {
   sessionStartReminder,
 } from "./prompts";
 import { ExtractionPipeline } from "./extraction";
-import { installSkills } from "./skills";
+import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
 import { hygieneReport } from "./hygiene";
 
 // ---------------------------------------------------------------------------
@@ -34,7 +34,10 @@ export const server: Plugin = async ({ client, worktree }) => {
   // worktree would mutate the user's repo (untracked files in git status).
   // A failed install degrades the nudge workflow but must not kill the plugin.
   try {
-    installSkills(join(configHome, "opencode", "skills"));
+    installSkills(join(configHome, "opencode", "skills"), [
+      ...SHARED_SKILLS,
+      ...OPENCODE_ONLY_SKILLS,
+    ]);
   } catch (err) {
     console.error(`[thatch] skill install failed: ${err}`);
   }
