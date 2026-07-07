@@ -2,36 +2,52 @@
 
 ## Architecture
 
-Thatch is an opencode plugin — it runs inside opencode's Bun runtime. There is
-no background process and no server of its own: everything happens inside
-opencode's plugin hooks and tool dispatch.
+Thatch has two integration paths sharing a common core:
+
+1. **OpenCode plugin** — runs inside opencode's Bun runtime. Full access to
+   plugin hooks: system prompt injection, session events, tool buffering,
+   compaction context.
+2. **Claude Code MCP server** — runs as a stdio JSON-RPC process. Tools
+   exposed via MCP; session behavior driven by Claude Code hooks.
 
 ```
-opencode process
-  └── Bun runtime
-       ├── thatch plugin (src/index.ts)
-       │    ├── git.ts        → detect repo identity (store name)
-       │    ├── db.ts         → SQLite CRUD, cosine search, dedup verdicts
-       │    ├── embeddings.ts → embedding model via transformers.js
-       │    ├── tools.ts      → thatch_memory_* / thatch_store_* tools
-       │    ├── extraction.ts → per-session tool-interaction buffers
-       │    ├── prompts.ts    → system prompt / compaction / reminder text
-       │    └── skills.ts     → SKILL.md content + installer
-       └── LLM calls tools via opencode's tool dispatch
-bin/thatch                    → standalone CLI over the same db.ts (needs bun)
+Shared core
+  ├── tool-defs.ts    → single source of truth: zod schemas + execute logic
+  ├── db.ts           → SQLite CRUD, cosine search, dedup verdicts
+  ├── embeddings.ts   → embedding model via transformers.js
+  ├── git.ts          → detect repo identity (store name)
+  ├── hygiene.ts      → hygiene report (pending dedups, stale, orphaned branches)
+  ├── prompts.ts      → system prompt, compaction, reminders, CLAUDE.md instructions
+  └── skills.ts       → SKILL.md content + installer
+
+OpenCode plugin path
+  ├── index.ts        → plugin entry: wires DB/model/extraction, registers tools + hooks
+  └── tools.ts        → thin opencode tool() wrappers over tool-defs
+
+MCP server path
+  ├── mcp.ts          → stdio JSON-RPC server: z.toJSONSchema() for tools/list,
+  │                     z.object().parse() for validation, dispatches to tool-defs
+  └── setup.ts        → `thatch setup --claude`: writes .mcp.json, CLAUDE.md,
+                        settings.json hooks, installs skills
+
+bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygiene|setup
 ```
 
 ## Module responsibilities
 
 | Module | Responsibility |
 |--------|---------------|
-| `index.ts` | Plugin entry. Wires DB, model, extraction; registers tools and hooks; installs skills. |
+| `tool-defs.ts` | **Single source of truth** for all tools. Each tool has a name, description, zod schema (args), and execute function. Framework-agnostic — neither opencode nor MCP specific. |
+| `tools.ts` | Thin opencode wrappers. Imports tool-defs, wraps each in opencode's `tool()` with a `thatch_` prefix. |
+| `mcp.ts` | Stdio JSON-RPC 2.0 server. Compiles zod schemas to JSON Schema via `z.toJSONSchema()` for `tools/list`. Validates args via `z.object().parse()` in `tools/call`. All logging to stderr (stdout is the transport). |
+| `index.ts` | OpenCode plugin entry. Wires DB, model, extraction; registers tools and hooks; installs skills. |
+| `setup.ts` | `thatch setup --claude` installer. Writes .mcp.json, appends to CLAUDE.md (idempotent), installs hooks in settings.json, installs skills. |
+| `hygiene.ts` | Hygiene report: pending dedup pairs, stale count, orphaned branch memories. Shared by the plugin's session-start hook and the CLI's `thatch reminder` command. |
 | `git.ts` | Parse `owner/repo` from git remote. Worktree-safe fallback chain. |
 | `db.ts` | SQLite schema, CRUD for entries/stores, brute-force cosine search, dedup-pair verdict tracking. |
 | `embeddings.ts` | Lazy-load the embedding model. Expose `queryEmbed`/`passageEmbed` and the model `name` (stored as an informational tag). `MockEmbeddingModel` for tests. |
-| `tools.ts` | Factories for all agent-facing tools: `thatch_memory_*`, `thatch_store_*`, and the dedup pair `thatch_find_duplicates`/`thatch_dedup_mark_checked`. Each accepts an injected DB (plus model where embedding is needed). |
-| `extraction.ts` | Buffers non-thatch tool interactions per session and serializes them into the JSON payload the extraction nudge carries. |
-| `prompts.ts` | Text constants: system prompt, compaction context, session-start reminder. Tool lists here must match `index.ts` registrations. |
+| `extraction.ts` | Buffers non-thatch tool interactions per session and serializes them into the JSON payload the extraction nudge carries. (opencode-only — no MCP equivalent.) |
+| `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, Claude Code CLAUDE.md instructions, Claude Code hook text. |
 | `skills.ts` | `SKILL.md` content for `thatch-fact-extractor` and `thatch-dedup-classifier`, plus the installer. |
 
 ## Plugin hooks
@@ -67,8 +83,14 @@ Two of these hooks were dead for weeks because failures were invisible.
 5. **Store creation is implicit.** First `remember` to a new store creates it.
 6. **Default recall scope is repo + global.** The tool layer hardcodes this.
 7. **Skills are plugin-owned files.** Installed to
-   `$XDG_CONFIG_HOME/opencode/skills` (never into the worktree — that would
-   dirty user repos); drifted content is overwritten on plugin init.
+   `$XDG_CONFIG_HOME/opencode/skills` (opencode) or `~/.claude/skills/`
+   (Claude Code) — never into the worktree; drifted content is overwritten
+   on plugin init or re-running `thatch setup`.
+8. **Tool definitions are the single source of truth.** `tool-defs.ts` defines
+   each tool once (name, zod schema, execute function). The opencode plugin
+   wraps them in `tool()` with a `thatch_` prefix; the MCP server wraps them
+   in `z.object()` for validation and `z.toJSONSchema()` for the protocol.
+   Adding a tool means adding one entry to `TOOL_DEFS`.
 
 ## Data flow
 

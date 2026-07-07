@@ -45,11 +45,6 @@ export function installSkills(skillsDir: string): SkillFile[] {
 const FACT_EXTRACTOR = `---
 name: thatch-fact-extractor
 description: Extract durable project facts, user preferences, and environment knowledge from recent tool interactions. Use when thatch reports queued tool interactions needing extraction.
-license: MIT
-compatibility: opencode
-metadata:
-  audience: agent
-  workflow: thatch
 ---
 
 You are the Thatch Fact Extractor. Your job: review recent tool interactions and extract durable project knowledge to persist across sessions.
@@ -90,11 +85,6 @@ You will be given a JSON payload with:
 const DEDUP_CLASSIFIER = `---
 name: thatch-dedup-classifier
 description: Classify the relationship between two similar memory entries for deduplication. Use when thatch_find_duplicates identifies candidate pairs.
-license: MIT
-compatibility: opencode
-metadata:
-  audience: agent
-  workflow: thatch
 ---
 
 You are a memory deduplication classifier. Given similar memories surfaced by
