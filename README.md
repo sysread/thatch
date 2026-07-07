@@ -11,6 +11,24 @@ on your machine.
 
 ## Quick start
 
+### OpenCode
+
+```jsonc
+// opencode.jsonc
+{ "plugin": ["@jeffober/thatch"] }
+```
+
+On next start, OpenCode npm-installs thatch (putting the `thatch` CLI on your
+PATH as a side effect) and its tools are available immediately.
+
+**Self-hosting** (local development):
+
+```jsonc
+{ "plugin": ["./path/to/thatch/src/index.ts"] }
+```
+
+Or place the repo under `.opencode/plugins/` and OpenCode auto-loads it.
+
 ### Claude Code
 
 **Install thatch globally:**
@@ -57,36 +75,18 @@ When `thatch` is not on PATH, setup uses the absolute path to `bin/thatch` in
 the hooks and MCP config. When it is on PATH (npm global install), setup uses
 the bare `thatch` command so the config survives updates.
 
-### OpenCode
-
-```jsonc
-// opencode.jsonc
-{ "plugin": ["@jeffober/thatch"] }
-```
-
-On next start, OpenCode npm-installs thatch (putting the `thatch` CLI on your
-PATH as a side effect) and its tools are available immediately.
-
-**Self-hosting** (local development):
-
-```jsonc
-{ "plugin": ["./path/to/thatch/src/index.ts"] }
-```
-
-Or place the repo under `.opencode/plugins/` and OpenCode auto-loads it.
-
 ## Tools
 
-| Tool (MCP) | Tool (opencode) | What it does |
-|------------|-----------------|-------------|
-| `mcp__thatch__memory_remember` | `thatch_memory_remember` | Save a memory with an embedding for later recall |
-| `mcp__thatch__memory_recall` | `thatch_memory_recall` | Semantic search across project + global stores |
-| `mcp__thatch__memory_list` | `thatch_memory_list` | List labels and metadata in a store |
-| `mcp__thatch__memory_show` | `thatch_memory_show` | Read full content by exact label |
-| `mcp__thatch__memory_forget` | `thatch_memory_forget` | Delete a memory |
-| `mcp__thatch__store_list` | `thatch_store_list` | List all stores |
-| `mcp__thatch__find_duplicates` | `thatch_find_duplicates` | Surface pairs of suspiciously similar memories |
-| `mcp__thatch__dedup_mark_checked` | `thatch_dedup_mark_checked` | Record a reviewed pair so it stops being re-reported |
+| Tool (opencode) | Tool (MCP) | What it does |
+|------------------|------------|-------------|
+| `thatch_memory_remember` | `mcp__thatch__memory_remember` | Save a memory with an embedding for later recall |
+| `thatch_memory_recall` | `mcp__thatch__memory_recall` | Semantic search across project + global stores |
+| `thatch_memory_list` | `mcp__thatch__memory_list` | List labels and metadata in a store |
+| `thatch_memory_show` | `mcp__thatch__memory_show` | Read full content by exact label |
+| `thatch_memory_forget` | `mcp__thatch__memory_forget` | Delete a memory |
+| `thatch_store_list` | `mcp__thatch__store_list` | List all stores |
+| `thatch_find_duplicates` | `mcp__thatch__find_duplicates` | Surface pairs of suspiciously similar memories |
+| `thatch_dedup_mark_checked` | `mcp__thatch__dedup_mark_checked` | Record a reviewed pair so it stops being re-reported |
 
 ## CLI
 
