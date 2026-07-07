@@ -13,27 +13,49 @@ on your machine.
 
 ### Claude Code
 
-```bash
-# Install globally
-npm install -g @jeffober/thatch
+**Install thatch globally:**
 
-# Run setup in your project directory
+```bash
+npm install -g @jeffober/thatch
+```
+
+This puts the `thatch` binary on your PATH. It requires [Bun] to be installed
+(`curl -fsSL https://bun.sh/install | bash` if you don't have it).
+
+**Set up Claude Code in your project:**
+
+```bash
+cd /path/to/your/project
 thatch setup --claude
 ```
 
-That's it. `setup` writes `.mcp.json`, appends instructions to `CLAUDE.md`,
-installs SessionStart + UserPromptSubmit hooks, and installs skill files to
-`~/.claude/skills/`. Restart Claude Code and thatch's tools are available
-as `mcp__thatch__*`.
+`setup` does four things:
+1. Writes `.mcp.json` — registers the MCP server (Claude Code spawns `thatch mcp` as a stdio process)
+2. Appends instructions to `CLAUDE.md` — session startup, when to write, what to store
+3. Installs hooks in `.claude/settings.json` — `SessionStart` runs `thatch reminder` (recall nudge + hygiene), `UserPromptSubmit` reminds you to save new knowledge
+4. Installs skill files to `~/.claude/skills/` — `thatch-fact-extractor` and `thatch-dedup-classifier`
 
-For global installation (all projects):
+Restart Claude Code and thatch's tools are available as `mcp__thatch__*`.
+
+**Global setup** (all projects at once, no per-project config):
 
 ```bash
 thatch setup --claude --global
 ```
 
-Global setup writes to `~/.claude/CLAUDE.md` and `~/.claude/settings.json`,
-then prints the `claude mcp add` command to register the MCP server at user scope.
+This writes to `~/.claude/CLAUDE.md` and `~/.claude/settings.json`, then prints
+the `claude mcp add` command to register the MCP server at user scope.
+
+**Local development** (from a thatch repo checkout):
+
+```bash
+cd /path/to/thatch
+bun run bin/thatch setup --claude
+```
+
+When `thatch` is not on PATH, setup uses the absolute path to `bin/thatch` in
+the hooks and MCP config. When it is on PATH (npm global install), setup uses
+the bare `thatch` command so the config survives updates.
 
 ### OpenCode
 
@@ -42,8 +64,8 @@ then prints the `claude mcp add` command to register the MCP server at user scop
 { "plugin": ["@jeffober/thatch"] }
 ```
 
-On next start, OpenCode installs thatch and its tools are available
-immediately.
+On next start, OpenCode npm-installs thatch (putting the `thatch` CLI on your
+PATH as a side effect) and its tools are available immediately.
 
 **Self-hosting** (local development):
 
@@ -68,6 +90,10 @@ Or place the repo under `.opencode/plugins/` and OpenCode auto-loads it.
 
 ## CLI
 
+The `thatch` CLI ships with the package (installed to your npm global bin by
+`npm install -g`). It requires [Bun] on your PATH — the bin script uses
+`#!/usr/bin/env bun` and all internal modules depend on `bun:sqlite`.
+
 ```bash
 thatch stores                    List all stores
 thatch list   [store]            List memory labels in a store
@@ -80,7 +106,8 @@ thatch hygiene                   Print the hygiene report (standalone)
 thatch setup --claude [--global] Install config + instructions + hooks + skills
 ```
 
-Requires [Bun] on your PATH.
+Stores default to the repo detected from `git remote`. Use `global` for the
+global store. Use `all` with `search` to search project + global together.
 
 ## How it works
 

@@ -165,9 +165,12 @@ switch (command) {
       process.exit(1);
     }
 
-    // Resolve the absolute path to this binary.
-    // When installed globally via npm, process.argv[1] points at the bin script.
-    const thatchBin = resolve(process.argv[1] ?? process.execPath);
+    // Resolve the thatch binary path for hooks and MCP config.
+    // If `thatch` is on PATH (npm global install, opencode plugin install),
+    // use the bare name — it survives updates and works across machines.
+    // If not on PATH (local dev checkout), use the absolute path to this script.
+    const thatchOnPath = Bun.which("thatch");
+    const thatchBin = thatchOnPath ?? resolve(process.argv[1] ?? process.execPath);
     const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
 
     const result = setupClaudeCode(thatchBin, isGlobal, projectDir);
