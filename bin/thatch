@@ -25,6 +25,7 @@ function usage(): never {
   thatch mcp                       Start the stdio MCP server (for Claude Code)
   thatch reminder                  Print session-start reminder (for SessionStart hook)
   thatch hygiene                   Print the hygiene report (standalone)
+  thatch prime                     Print instructions for priming project memory
   thatch buffer-batch              Append a PostToolBatch payload to the queue (hook only)
   thatch flush-tools               Drain the queue + print an extraction nudge (hook only)
   thatch setup [--claude] [--global] [--force]
@@ -154,6 +155,25 @@ switch (command) {
     const worktree = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
     const hygiene = await hygieneReport(db, repo, worktree);
     console.log(hygiene ?? "Store is healthy.");
+    break;
+  }
+
+  case "prime": {
+    console.log(`To prime your project's memory store, load the thatch-project-primer skill in your agent session.
+
+The skill will guide the agent to:
+  1. Recall existing project memories
+  2. Investigate the codebase from multiple angles (docs, layout, architecture, commands, conventions)
+  3. Write foundational memories with clear labels
+  4. Reconcile contradictions with existing memories
+  5. Run dedup to check for overlap
+
+In opencode, the skill is available via the skill tool.
+In Claude Code, use: /skill thatch-project-primer
+
+The skill file is installed at:
+  opencode:    $XDG_CONFIG_HOME/opencode/skills/thatch-project-primer/SKILL.md
+  Claude Code: $CLAUDE_CONFIG_DIR/skills/thatch-project-primer/SKILL.md (default: ~/.claude/skills/)`);
     break;
   }
 

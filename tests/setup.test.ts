@@ -173,10 +173,11 @@ describe("setupClaudeCode (project-local)", () => {
   test("installs skill files to ~/.claude/skills/", () => {
     const result = setupClaudeCode("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
-    expect(result.skills.length).toBe(2);
+    expect(result.skills.length).toBe(3);
     const skillNames = result.skills.map((s) => s.name);
     expect(skillNames).toContain("thatch-fact-extractor");
     expect(skillNames).toContain("thatch-dedup-classifier");
+    expect(skillNames).toContain("thatch-project-primer");
 
     for (const skill of result.skills) {
       expect(existsSync(skill.path)).toBe(true);

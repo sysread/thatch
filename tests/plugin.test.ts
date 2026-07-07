@@ -149,6 +149,12 @@ describe("plugin entry", () => {
       "opencode", "skills", "thatch-fact-extractor", "SKILL.md",
     );
     expect(readFileSync(skillPath, "utf8")).toContain("thatch-fact-extractor");
+
+    const primerPath = join(
+      process.env.XDG_CONFIG_HOME!,
+      "opencode", "skills", "thatch-project-primer", "SKILL.md",
+    );
+    expect(readFileSync(primerPath, "utf8")).toContain("thatch-project-primer");
   });
 
   test("event handler calls client.session.prompt on session.created", async () => {
