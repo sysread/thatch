@@ -685,22 +685,24 @@ Assign final severity based on YOUR verification:
 
 ## Report format
 
+You MUST produce the full report structure below. Do not simplify or omit sections. Every confirmed finding must include all numbered fields. If a section has no entries, write "None" — do not skip the section.
+
 ### Scope
 - Branch/range reviewed
 - Design context (if provided)
 
 ### Confirmed findings
-For each finding, grouped by severity (BLOCKING > HIGH > MEDIUM > LOW):
+For each finding, grouped by severity (BLOCKING > HIGH > MEDIUM > LOW). Each finding MUST include all of these fields:
 1. **Severity** and **category** (from the specialist's taxonomy)
 2. **Source**: which specialist found it
 3. **Location**: file:line
 4. **Finding**: what the problem is
-5. **Evidence**: the code you read to confirm it
+5. **Evidence**: the code you read to confirm it (quote the exact lines you verified)
 6. **Trigger/Proof**: the workflow trigger, and for state/data/behavior issues the producer then transform then consumer chain you verified
 7. **Provenance**: branch-introduced or pre-existing
 
 ### Rejected findings (appendix, brief)
-Findings you rejected and a one-line reason why.
+Findings you rejected and a one-line reason why. Include the specialist and location for each.
 
 ### Pre-existing bugs (appendix, brief)
 Findings you verified as real but pre-existing, with a one-line note on the issue and its potential impact.
@@ -823,15 +825,15 @@ Points reflect *review complexity*, not implementation effort.
 
 Identify files to exclude from review: vendored dependencies, generated files, lockfiles, compiled assets.
 
-## Step 3: Partition (if >= 3 points)
+## Step 3: Partition (if > 3 points)
 
-For changes estimated at 3+ points, partition into review units of approximately 3 points each:
+For changes estimated at more than 3 points, partition into review units of approximately 3 points each:
 - Group files by logical component or feature, not by directory.
 - Each unit should be a self-contained briefing that a sub-agent can act on independently.
 - Prefer slightly larger units over splitting tightly coupled files across units.
 - For 5+ points, also plan an integration review unit that focuses on cross-component seams.
 
-For small changes (< 3 points), skip partitioning — a single review pass covering all specialists is sufficient.
+For changes estimated at 3 points or fewer, skip partitioning — dispatch one set of specialists covering the full scope. A single 3-point unit is not large enough to warrant decomposition.
 
 ## Step 4: Dispatch specialist sub-agents
 
