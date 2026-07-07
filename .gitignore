@@ -9,3 +9,5 @@ coverage/
 .opencode/
 .claude/
 .mcp.json
+opencode.json
+CLAUDE.md
