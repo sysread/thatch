@@ -5,6 +5,7 @@ coverage/
 *.db-wal
 *.db-shm
 .env
+.envrc
 .opencode/skills/
 .claude/
 .mcp.json
