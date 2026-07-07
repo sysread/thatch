@@ -8,18 +8,26 @@ import { claudeInstructions } from "../src/prompts";
 let projectDir: string;
 let fakeHome: string;
 let originalHome: string | undefined;
+let originalConfigDir: string | undefined;
 
 beforeEach(() => {
   projectDir = mkdtempSync(join(tmpdir(), "thatch-setup-project-"));
   fakeHome = mkdtempSync(join(tmpdir(), "thatch-setup-home-"));
   originalHome = process.env.HOME;
+  originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
   process.env.HOME = fakeHome;
-  // Clear XDG so setup uses our fake HOME
+  // Clear XDG and CLAUDE_CONFIG_DIR so each test starts at the default ~/.claude path.
   delete process.env.XDG_CONFIG_HOME;
+  delete process.env.CLAUDE_CONFIG_DIR;
 });
 
 afterEach(() => {
   process.env.HOME = originalHome;
+  if (originalConfigDir === undefined) {
+    delete process.env.CLAUDE_CONFIG_DIR;
+  } else {
+    process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
+  }
   rmSync(projectDir, { recursive: true, force: true });
   rmSync(fakeHome, { recursive: true, force: true });
 });
@@ -79,14 +87,29 @@ describe("setupClaudeCode (project-local)", () => {
     expect(existsSync(result.settings)).toBe(true);
     const settings = JSON.parse(readFileSync(result.settings, "utf8"));
     expect(settings.hooks.SessionStart).toBeDefined();
+    expect(settings.hooks.PostToolBatch).toBeDefined();
     expect(settings.hooks.UserPromptSubmit).toBeDefined();
 
     const sessionCmd = settings.hooks.SessionStart[0].hooks[0].command;
     expect(sessionCmd).toContain("thatch");
     expect(sessionCmd).toContain("reminder");
 
-    const promptCmd = settings.hooks.UserPromptSubmit[0].hooks[0].command;
-    expect(promptCmd).toContain("thatch");
+    const bufferCmd = settings.hooks.PostToolBatch[0].hooks[0].command;
+    expect(bufferCmd).toContain("thatch");
+    expect(bufferCmd).toContain("buffer-batch");
+
+    const flushCmd = settings.hooks.UserPromptSubmit[0].hooks[0].command;
+    expect(flushCmd).toContain("thatch");
+    expect(flushCmd).toContain("flush-tools");
+  });
+
+  test("UserPromptSubmit uses thatch flush-tools (not the legacy echo nudge)", () => {
+    setupClaudeCode("/usr/local/bin/thatch", false, projectDir, fakeHome);
+
+    const settings = JSON.parse(readFileSync(join(projectDir, ".claude", "settings.json"), "utf8"));
+    const cmd = settings.hooks.UserPromptSubmit[0].hooks[0].command as string;
+    expect(cmd).toContain("flush-tools");
+    expect(cmd).not.toMatch(/^\s*echo\s/);
   });
 
   test("preserves existing hooks when adding thatch hooks", () => {
@@ -118,6 +141,33 @@ describe("setupClaudeCode (project-local)", () => {
       g.hooks[0].command.includes("thatch"),
     );
     expect(thatchHooks.length).toBe(1);
+
+    // All three hook events remain idempotent on re-runs.
+    expect(settings.hooks.PostToolBatch.filter((g: any) =>
+      g.hooks[0].command.includes("thatch")).length).toBe(1);
+    expect(settings.hooks.UserPromptSubmit.filter((g: any) =>
+      g.hooks[0].command.includes("thatch")).length).toBe(1);
+  });
+
+  test("re-running setup replaces legacy echo thatch hook with flush-tools", () => {
+    // Simulate a pre-existing setup that used the old echo write-nudge.
+    const settingsPath = join(projectDir, ".claude", "settings.json");
+    mkdirSync(join(projectDir, ".claude"), { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify({
+      hooks: {
+        UserPromptSubmit: [
+          { hooks: [{ type: "command", command: "echo '[thatch] some legacy nudge'" }] },
+        ],
+      },
+    }));
+
+    setupClaudeCode("/usr/local/bin/thatch", false, projectDir, fakeHome);
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    const thatchHooks = settings.hooks.UserPromptSubmit.filter((g: any) =>
+      g.hooks[0].command.includes("thatch"),
+    );
+    expect(thatchHooks.length).toBe(1);
+    expect(thatchHooks[0].hooks[0].command).toContain("flush-tools");
   });
 
   test("installs skill files to ~/.claude/skills/", () => {
@@ -145,7 +195,7 @@ describe("setupClaudeCode (global)", () => {
   test("writes instructions to ~/.claude/CLAUDE.md", () => {
     const result = setupClaudeCode("/usr/local/bin/thatch", true, projectDir, fakeHome);
 
-    const expectedPath = join(fakeHome, "CLAUDE.md");
+    const expectedPath = join(fakeHome, ".claude", "CLAUDE.md");
     expect(result.claudeMd).toBe(expectedPath);
     expect(existsSync(expectedPath)).toBe(true);
     const content = readFileSync(expectedPath, "utf8");
@@ -195,5 +245,64 @@ describe("claudeInstructions content", () => {
     const text = claudeInstructions();
     expect(text).toContain("One signal is enough");
     expect(text).toContain("When to Write");
+  });
+});
+
+describe("CLAUDE_CONFIG_DIR override", () => {
+  test("global install writes settings + CLAUDE.md + skills under $CLAUDE_CONFIG_DIR", () => {
+    const customDir = mkdtempSync(join(tmpdir(), "thatch-custom-config-"));
+    process.env.CLAUDE_CONFIG_DIR = customDir;
+    try {
+      const result = setupClaudeCode("/usr/local/bin/thatch", true, projectDir, fakeHome);
+
+      expect(result.claudeMd).toBe(join(customDir, "CLAUDE.md"));
+      expect(result.settings).toBe(join(customDir, "settings.json"));
+      // skills are returned with absolute paths under the custom dir
+      for (const skill of result.skills) {
+        expect(skill.path.startsWith(customDir + "/")).toBe(true);
+      }
+      // Default ~/.claude paths must NOT be created under the fake home.
+      expect(existsSync(join(fakeHome, ".claude", "settings.json"))).toBe(false);
+      expect(existsSync(join(fakeHome, ".claude", "CLAUDE.md"))).toBe(false);
+      expect(existsSync(join(fakeHome, ".claude", "skills"))).toBe(false);
+      // The actual files MUST live under the custom config dir.
+      expect(existsSync(join(customDir, "settings.json"))).toBe(true);
+      expect(existsSync(join(customDir, "CLAUDE.md"))).toBe(true);
+      expect(existsSync(join(customDir, "skills"))).toBe(true);
+    } finally {
+      rmSync(customDir, { recursive: true, force: true });
+    }
+  });
+
+  test("project-local install keeps project paths but puts skills under $CLAUDE_CONFIG_DIR", () => {
+    const customDir = mkdtempSync(join(tmpdir(), "thatch-custom-config-"));
+    process.env.CLAUDE_CONFIG_DIR = customDir;
+    try {
+      const result = setupClaudeCode("/usr/local/bin/thatch", false, projectDir, fakeHome);
+
+      // Project-local: CLAUDE.md and settings stay in the project repo.
+      expect(result.claudeMd).toBe(join(projectDir, "CLAUDE.md"));
+      expect(result.settings).toBe(join(projectDir, ".claude", "settings.json"));
+      expect(existsSync(join(projectDir, "CLAUDE.md"))).toBe(true);
+      expect(existsSync(join(projectDir, ".claude", "settings.json"))).toBe(true);
+
+      // Skills always live under the Claude config dir — even for project-local.
+      for (const skill of result.skills) {
+        expect(skill.path.startsWith(customDir + "/")).toBe(true);
+      }
+      expect(existsSync(join(customDir, "skills"))).toBe(true);
+
+      // Default ~/.claude/skills must NOT exist in the fake home.
+      expect(existsSync(join(fakeHome, ".claude", "skills"))).toBe(false);
+    } finally {
+      rmSync(customDir, { recursive: true, force: true });
+    }
+  });
+
+  test("unset CLAUDE_CONFIG_DIR falls back to ~/.claude (the default)", () => {
+    const result = setupClaudeCode("/usr/local/bin/thatch", true, projectDir, fakeHome);
+
+    expect(result.claudeMd).toBe(join(fakeHome, ".claude", "CLAUDE.md"));
+    expect(result.settings).toBe(join(fakeHome, ".claude", "settings.json"));
   });
 });

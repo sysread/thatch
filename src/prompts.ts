@@ -189,3 +189,16 @@ When convenient this session (not before addressing the user's request), tend th
 export function claudeWriteNudge(): string {
   return `[thatch] After responding, check: did you learn new project knowledge, user preferences, or corrections worth persisting? If so, save to thatch.`;
 }
+
+/**
+ * The UserPromptSubmit hook stdout when `thatch flush-tools` drained buffered
+ * tool interactions. Mirrors the opencode plugin's in-process ExtractionPipeline
+ * nudge (see src/index.ts) so the thatch-fact-extractor skill receives the same
+ * JSON contract regardless of host. The skill picks the store from the
+ * payload's `projectStore` field and calls `mcp__thatch__memory_remember`.
+ */
+export function claudeExtractionNudge(count: number, payload: string): string {
+  return `[thatch] ${count} recent tool interaction${count === 1 ? "" : "s"} queued for fact extraction. ` +
+    `Load the thatch-fact-extractor skill, then use mcp__thatch__memory_remember ` +
+    `to save any new durable facts from this payload:\n${payload}`;
+}

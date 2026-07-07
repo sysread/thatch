@@ -25,6 +25,8 @@ function usage(): never {
   thatch mcp                       Start the stdio MCP server (for Claude Code)
   thatch reminder                  Print session-start reminder (for SessionStart hook)
   thatch hygiene                   Print the hygiene report (standalone)
+  thatch buffer-batch              Append a PostToolBatch payload to the queue (hook only)
+  thatch flush-tools               Drain the queue + print an extraction nudge (hook only)
   thatch setup [--claude] [--global] [--force]
                                    Install config + instructions + hooks + skills
 
@@ -182,7 +184,12 @@ switch (command) {
     }
     console.log(`  Instructions:  ${result.claudeMd}`);
     console.log(`  Hooks:         ${result.settings}`);
-    console.log(`  Skills:        ${result.skillsDir ?? "~/.claude/skills"} (${result.skills.length} files)`);
+    // Skills dir is not currently surfaced on SetupResult — derive it from
+    // the skills file paths (they all share the same parent directory).
+    const skillsDir = result.skills[0]?.path
+      ? result.skills[0].path.split("/").slice(0, -1).join("/")
+      : "(no skills installed)";
+    console.log(`  Skills:        ${skillsDir} (${result.skills.length} files)`);
     console.log();
     if (result.mcpAddCommand) {
       console.log("To register the MCP server globally, run:");
@@ -190,6 +197,60 @@ switch (command) {
       console.log();
     }
     console.log("Restart Claude Code for the changes to take effect.");
+    break;
+  }
+
+  case "buffer-batch": {
+    // PostToolBatch hook: append the batch's tool_calls to the session's
+    // JSONL queue. Silent on success — no stdout — so the next model call
+    // is not delayed waiting for an exit code-driven message.
+    try {
+      const raw = await Bun.stdin.text();
+      const data = JSON.parse(raw) as { session_id?: string; tool_calls?: unknown[] };
+      if (data.session_id && Array.isArray(data.tool_calls)) {
+        const { appendBatch } = await import("../src/extract-queue");
+        appendBatch(data.session_id, data.tool_calls as never);
+      }
+    } catch (err) {
+      console.error(`[thatch buffer-batch] failed: ${err}`);
+    }
+    break;
+  }
+
+  case "flush-tools": {
+    // UserPromptSubmit hook: drain the queue. With buffered interactions,
+    // print the extraction nudge carrying the payload so the agent can load
+    // the thatch-fact-extractor skill and persist durable facts. With an
+    // empty queue, fall back to the static write-nudge so the original
+    // workflow contract (a per-prompt "did you learn anything?" reminder)
+    // is preserved on conversational turns that did no tool use.
+    try {
+      const raw = await Bun.stdin.text();
+      const data = JSON.parse(raw) as { session_id?: string };
+
+      const { flushQueue } = await import("../src/extract-queue");
+      const { buildExtractionPayload } = await import("../src/extraction");
+      const { claudeExtractionNudge, claudeWriteNudge } = await import("../src/prompts");
+
+      let repo = "unknown";
+      try { repo = await detectRepo(); } catch {}
+
+      const interactions = data.session_id ? flushQueue(data.session_id) : [];
+      if (interactions.length > 0) {
+        console.log(claudeExtractionNudge(interactions.length, buildExtractionPayload(interactions, repo)));
+      } else {
+        console.log(claudeWriteNudge());
+      }
+    } catch (err) {
+      console.error(`[thatch flush-tools] failed: ${err}`);
+      try {
+        const { claudeWriteNudge } = await import("../src/prompts");
+        console.log(claudeWriteNudge());
+      } catch {
+        // If even the fallback import fails, do nothing — silent failure is
+        // preferable to blocking the user's prompt over an unrelated hook.
+      }
+    }
     break;
   }
 
