@@ -6,6 +6,6 @@ coverage/
 *.db-shm
 .env
 .envrc
-.opencode/skills/
+.opencode/
 .claude/
 .mcp.json
