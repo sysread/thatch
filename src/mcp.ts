@@ -3,6 +3,7 @@ import { ThatchDB } from "./db";
 import { BgeEmbeddingModel } from "./embeddings";
 import { detectRepo } from "./git";
 import { TOOL_DEFS, type CoreContext, type ToolDef } from "./tool-defs";
+import { SidebandServer, sidebandSocketPath } from "./sideband";
 
 // ---------------------------------------------------------------------------
 // JSON-RPC 2.0 types
@@ -79,6 +80,10 @@ function compileTools(): Map<string, CompiledTool> {
  * model loads lazily on the first tool call that needs it, so the server
  * starts instantly and only pays the ~34 MB download cost when a memory is
  * actually written or recalled.
+ *
+ * A Unix domain socket sideband is opened at startup so that one-shot hook
+ * processes (thatch flush-tools) can ask the warm MCP server to embed a
+ * prompt and search for matches without loading the model themselves.
  */
 export async function runMcpServer(): Promise<void> {
   const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
@@ -93,6 +98,19 @@ export async function runMcpServer(): Promise<void> {
   const model = new BgeEmbeddingModel(modelName);
   const ctx: CoreContext = { db, model, defaultStore: repo };
   const tools = compileTools();
+
+  // The sideband socket lets one-shot hook processes (flush-tools) ask the
+  // warm MCP server to embed a prompt and search for matches — without
+  // loading the ~34 MB model themselves. If the socket can't be opened
+  // (permissions, tmpdir issues), the MCP server still works; only the
+  // prompt-aware recall nudge degrades.
+  const sockPath = sidebandSocketPath(dbPath);
+  const sideband = new SidebandServer(sockPath, model, db);
+  try {
+    sideband.start();
+  } catch (err) {
+    console.error(`[thatch] sideband socket failed: ${err}`);
+  }
 
   // Read stdin line by line. Each line is a complete JSON-RPC message.
   const decoder = new TextDecoder();
@@ -123,6 +141,7 @@ export async function runMcpServer(): Promise<void> {
     }
   }
 
+  sideband.stop();
   db.close();
 }
 

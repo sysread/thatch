@@ -324,38 +324,67 @@ switch (command) {
   }
 
   case "flush-tools": {
-    // UserPromptSubmit (Claude Code) / beforeSubmitPrompt (Cursor) hook:
-    // drain the queue. With buffered interactions, print the extraction nudge
-    // carrying the payload so the agent can load the thatch-fact-extractor
-    // skill and persist durable facts. With an empty queue, fall back to the
-    // static write-nudge so the original workflow contract (a per-prompt
-    // "did you learn anything?" reminder) is preserved on conversational
-    // turns that did no tool use.
+    // UserPromptSubmit (Claude Code) / beforeSubmitPrompt (Cursor) hook.
+    // Three priority tiers:
+    //   1. Extraction nudge — buffered tool interactions are queued for fact
+    //      extraction (carries the JSON payload for thatch-fact-extractor).
+    //   2. Recall nudge — the user's prompt semantically matches existing
+    //      memories. Uses the sideband socket to ask the warm MCP server to
+    //      embed the prompt and search, avoiding a cold model load here.
+    //   3. Write nudge — static "did you learn anything?" fallback for
+    //      conversational turns with no tool use and no memory matches.
     // --json wraps output as { additional_context: "..." } for Cursor hooks.
     // Without --json, stdout is plain text (Claude Code style).
     const isJson = args.includes("--json");
     try {
       const raw = await Bun.stdin.text();
-      const data = JSON.parse(raw) as { session_id?: string; conversation_id?: string };
+      const data = JSON.parse(raw) as {
+        session_id?: string;
+        conversation_id?: string;
+        prompt?: string;
+        message?: string;
+        text?: string;
+        user_input?: string;
+        input?: string;
+      };
       const sessionID = data.session_id ?? data.conversation_id;
 
       const { flushQueue } = await import("../src/extract-queue");
       const { buildExtractionPayload } = await import("../src/extraction");
-      const { claudeExtractionNudge, claudeWriteNudge } = await import("../src/prompts");
+      const { claudeExtractionNudge, claudeWriteNudge, claudeRecallNudge } = await import("../src/prompts");
 
       let repo = "unknown";
       try { repo = await detectRepo(); } catch {}
 
+      // Tier 1: extraction nudge.
       const interactions = sessionID ? flushQueue(sessionID) : [];
-      const output = interactions.length > 0
-        ? claudeExtractionNudge(interactions.length, buildExtractionPayload(interactions, repo))
-        : claudeWriteNudge();
-
-      if (isJson) {
-        console.log(JSON.stringify({ additional_context: output }));
-      } else {
-        console.log(output);
+      if (interactions.length > 0) {
+        const output = claudeExtractionNudge(interactions.length, buildExtractionPayload(interactions, repo));
+        if (isJson) console.log(JSON.stringify({ additional_context: output }));
+        else console.log(output);
+        break;
       }
+
+      // Tier 2: recall nudge via sideband. The prompt text field name varies
+      // by host (Claude Code: "prompt", Cursor: undocumented). Try candidates.
+      const promptText = data.prompt ?? data.message ?? data.text ?? data.user_input ?? data.input;
+      if (promptText && promptText.length >= 10) {
+        const { sidebandMatch, sidebandSocketPath } = await import("../src/sideband");
+        const sockPath = sidebandSocketPath(dbPath);
+        const threshold = parseFloat(process.env.THATCH_RECALL_THRESHOLD ?? "0.55");
+        const matches = await sidebandMatch(sockPath, promptText, [repo, "global"], threshold, 5);
+        if (matches && matches.length > 0) {
+          const output = claudeRecallNudge(matches);
+          if (isJson) console.log(JSON.stringify({ additional_context: output }));
+          else console.log(output);
+          break;
+        }
+      }
+
+      // Tier 3: static write nudge.
+      const output = claudeWriteNudge();
+      if (isJson) console.log(JSON.stringify({ additional_context: output }));
+      else console.log(output);
     } catch (err) {
       console.error(`[thatch flush-tools] failed: ${err}`);
       try {

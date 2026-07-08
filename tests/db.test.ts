@@ -438,6 +438,51 @@ describe("findSimilar", () => {
 });
 
 // ---------------------------------------------------------------------------
+// search — cosine scoring without telemetry stamping
+// ---------------------------------------------------------------------------
+
+describe("search", () => {
+  const embA = new Float32Array([1, 0, 0, 0]);
+  const embB = new Float32Array([0.9, 0.1, 0, 0]);
+  const embC = new Float32Array([0, 0, 1, 0]);
+
+  test("returns same results as recall but without stamping telemetry", () => {
+    db.remember("s", "hit-1", "content", embA, "m");
+    db.remember("s", "hit-2", "content", embB, "m");
+    db.remember("s", "miss", "content", embC, "m");
+
+    const results = db.search(["s"], embA, { limit: 2 });
+    expect(results.length).toBe(2);
+    expect(results[0].label).toBe("hit-1");
+    expect(results[1].label).toBe("hit-2");
+
+    // No telemetry stamped — search is a "does anything match?" check, not
+    // an agent-initiated recall.
+    expect(db.showEntry("s", "hit-1")?.recall_count).toBe(0);
+    expect(db.showEntry("s", "hit-2")?.recall_count).toBe(0);
+    expect(db.showEntry("s", "hit-1")?.last_recalled_at).toBeNull();
+  });
+
+  test("recall still stamps after search was called", () => {
+    db.remember("s", "entry", "content", embA, "m");
+    db.search(["s"], embA);
+    expect(db.showEntry("s", "entry")?.recall_count).toBe(0);
+    db.recall(["s"], embA);
+    expect(db.showEntry("s", "entry")?.recall_count).toBe(1);
+  });
+
+  test("respects limit and branch filter", () => {
+    db.remember("s", "a", "content", embA, "m", { branch: "feature" });
+    db.remember("s", "b", "content", embB, "m", { branch: "other" });
+    // Branch filter includes project-wide (branch IS NULL) plus the
+    // specified branch, so "other" is excluded but "feature" matches.
+    const results = db.search(["s"], embA, { branch: "feature", limit: 5 });
+    expect(results.length).toBe(1);
+    expect(results[0].label).toBe("a");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // recall telemetry
 // ---------------------------------------------------------------------------
 

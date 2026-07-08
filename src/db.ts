@@ -234,9 +234,12 @@ export class ThatchDB {
   /**
    * Brute-force cosine similarity search across the given stores.
    * When branch is specified, includes project-wide (branch IS NULL) plus
-   * branch-specific entries.
+   * branch-specific entries. Does NOT stamp recall telemetry — the prompt-aware
+   * nudge uses this to check whether memories relate to a prompt without
+   * polluting recall_count/last_recalled_at (the agent hasn't actually read
+   * them yet, only the plugin has checked for relevance).
    */
-  recall(
+  search(
     stores: string[],
     queryEmbedding: Float32Array,
     opts?: { branch?: string; limit?: number },
@@ -281,10 +284,21 @@ export class ThatchDB {
     });
 
     scored.sort((a, b) => b._score - a._score);
-    const top = scored.slice(0, limit);
+    return scored.slice(0, limit);
+  }
 
-    // Recall telemetry: retrieval is the "used recently" signal hygiene
-    // reporting keys on, so returned rows get stamped here.
+  /**
+   * Semantic recall for agent-initiated searches. Delegates to search() for
+   * cosine scoring, then stamps recall telemetry — retrieval is the "used
+   * recently" signal hygiene reporting keys on.
+   */
+  recall(
+    stores: string[],
+    queryEmbedding: Float32Array,
+    opts?: { branch?: string; limit?: number },
+  ): (MemoryRow & { _score: number })[] {
+    const top = this.search(stores, queryEmbedding, opts);
+
     if (top.length > 0) {
       const now = new Date().toISOString();
       const rowKeys = top.map(() => "(?, ?)").join(", ");

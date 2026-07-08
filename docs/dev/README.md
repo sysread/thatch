@@ -13,11 +13,12 @@ Thatch has two integration paths sharing a common core:
 ```
 Shared core
   ├── tool-defs.ts    → single source of truth: zod schemas + execute logic
-  ├── db.ts           → SQLite CRUD, cosine search, dedup verdicts
+  ├── db.ts           → SQLite CRUD, cosine search (recall + search), dedup verdicts
   ├── embeddings.ts   → embedding model via transformers.js
   ├── git.ts          → detect repo identity (store name)
   ├── hygiene.ts      → hygiene report (pending dedups, stale, orphaned branches)
-  ├── prompts.ts      → system prompt, compaction, reminders, CLAUDE.md instructions
+  ├── prompts.ts      → system prompt, compaction, reminders, recall nudge, CLAUDE.md instructions
+  ├── sideband.ts     → Unix socket server + client: warm-model semantic match for hook processes
   └── skills.ts       → SKILL.md content + installer (shared + opencode-only arrays)
 
 OpenCode plugin path
@@ -26,7 +27,10 @@ OpenCode plugin path
 
 MCP server path
   ├── mcp.ts          → stdio JSON-RPC server: z.toJSONSchema() for tools/list,
-  │                     z.object().parse() for validation, dispatches to tool-defs
+  │                     z.object().parse() for validation, dispatches to tool-defs;
+  │                     opens sideband socket for warm-model match queries
+  ├── sideband.ts     → Unix socket: SidebandServer (embed + search via warm model)
+  │                     and sidebandMatch (thin client for hook processes)
   └── setup.ts        → `thatch setup --claude`: writes .mcp.json, CLAUDE.md,
                         settings.json hooks, installs skills
 
@@ -44,10 +48,11 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `setup.ts` | `thatch setup --claude` installer. Writes .mcp.json, appends to CLAUDE.md (idempotent), installs hooks in settings.json, installs skills. |
 | `hygiene.ts` | Hygiene report: pending dedup pairs, stale count, orphaned branch memories. Shared by the plugin's session-start hook and the CLI's `thatch reminder` command. |
 | `git.ts` | Parse `owner/repo` from git remote. Worktree-safe fallback chain. |
-| `db.ts` | SQLite schema, CRUD for entries/stores, brute-force cosine search, dedup-pair verdict tracking. |
+| `db.ts` | SQLite schema, CRUD for entries/stores, brute-force cosine search (`search` = pure scoring, `recall` = search + telemetry stamping), dedup-pair verdict tracking. |
 | `embeddings.ts` | Lazy-load the embedding model. Expose `queryEmbed`/`passageEmbed` and the model `name` (stored as an informational tag). `MockEmbeddingModel` for tests. |
 | `extraction.ts` | Buffers non-thatch tool interactions per session and serializes them into the JSON payload the extraction nudge carries. (opencode-only — no MCP equivalent.) |
-| `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, Claude Code CLAUDE.md instructions, Claude Code hook text. |
+| `sideband.ts` | Unix domain socket server + client. The MCP server (long-lived, warm model) runs `SidebandServer` so one-shot hook processes can ask it to embed a prompt and search for matches without loading the model themselves. Socket path is a hash of the DB path — both processes compute it independently. |
+| `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, prompt-aware recall nudge (`recallNudge` / `claudeRecallNudge`), Claude Code CLAUDE.md instructions, Cursor AGENTS.md instructions, Claude Code hook text. |
 | `skills.ts` | `SKILL.md` content for all thatch skills, plus the installer. Skills are split into `SHARED_SKILLS` (10 skills: fact-extractor, dedup-classifier, project-primer, 5 review specialists, review synthesizer, session reflection — work on both opencode and Claude Code) and `OPENCODE_ONLY_SKILLS` (1 skill: code-review coordinator — requires sub-agent support, not installed for Claude Code). `installSkills(dir, skills)` defaults to `SHARED_SKILLS`; the opencode plugin passes `[...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]`. |
 
 ## Plugin hooks
@@ -59,7 +64,7 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `experimental.chat.system.transform` | Appends the thatch system prompt (store names, usage rules). |
 | `experimental.session.compacting` | Appends re-familiarization context so a compacted session still knows thatch exists. |
 | `tool.execute.after` | Buffers every non-`thatch_*` tool call into the session's extraction buffer. This is a plugin hook, NOT a bus event — do not move it into the `event` handler; the event bus has no such event and it will silently never fire. |
-| `chat.message` | If the session has buffered interactions, flushes them and injects a synthetic text part carrying the extraction nudge + JSON payload. |
+| `chat.message` | Two priority tiers: (a) if extraction buffer has interactions, flushes them as a synthetic text part carrying the extraction nudge + JSON payload; (b) otherwise, embeds the user's prompt text with the in-process warm model, searches `db.search()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55). |
 | `event` (`session.created`) | Sends the session-start reminder via `client.session.prompt`, carrying the hygiene heartbeat (pending dedup pairs, stale count, orphaned branch memories) when any signal is non-zero. The session id is at `event.properties.info.id`. |
 | `dispose` | Closes the DB. |
 
@@ -128,6 +133,16 @@ extraction cycle (agent-driven)
   → tool.execute.after buffers non-thatch tool calls per session (max 20)
   → next chat.message flushes the buffer into a nudge part with JSON payload
   → agent loads thatch-fact-extractor skill, saves facts via thatch_memory_remember
+
+prompt-aware recall nudge (both paths)
+  → opencode: chat.message hook embeds prompt text with warm in-process model,
+    searches db.search([repo, global]), pushes nudge part if matches ≥ threshold
+  → Claude Code/Cursor: flush-tools connects to MCP server's sideband socket,
+    warm server embeds + searches, returns labels; hook prints nudge or falls
+    back to write nudge if socket unavailable or no matches
+  → threshold: THATCH_RECALL_THRESHOLD env (default 0.55) — lower than
+    findDuplicates' 0.85 because "relates to" is a weaker signal than "duplicate"
+  → no telemetry stamped: uses db.search(), not db.recall()
 
 hygiene heartbeat (session start)
   → hygieneReport(db, repo, worktree): pending dedup pairs; entries neither

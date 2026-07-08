@@ -20,6 +20,7 @@ This document maps the feature parity and documents the gaps.
 | **Session-start reminder** (recall nudge + hygiene heartbeat) | `session.created` event → `client.session.prompt` injects a synthetic message | `SessionStart` hook → `thatch reminder` command; stdout becomes context for Claude | **Full** |
 | **Compaction context** (re-familiarize after compaction) | `experimental.session.compacting` hook appends context to the compaction output | `PostCompact` hook — side-effects only, **cannot inject context** | **Gap** — CLAUDE.md persists through compaction, so the agent retains the usage instructions, but the dynamic "re-familiarization" nudge is lost |
 | **Extraction nudge** (buffer tool calls, inject JSON payload for fact extraction) | `tool.execute.after` buffers non-thatch tool calls; `chat.message` flushes the buffer as a synthetic text part with the JSON payload | No clean equivalent. `PostToolUse` fires per-call but can't buffer across calls. A file-based approach (write to temp, flush on `UserPromptSubmit`) was considered but rejected as fragile | **Gap** — the `thatch-fact-extractor` skill is installed but not automatically triggered. Agents can still load it manually when they notice tool interactions worth extracting |
+| **Prompt-aware recall nudge** (surface that prior memories relate to the user's prompt) | `chat.message` hook embeds the prompt text with the in-process warm model, searches `db.search()`, pushes a synthetic nudge part if matches exceed threshold | `UserPromptSubmit` / `beforeSubmitPrompt` hook (`thatch flush-tools`) connects to the MCP server's sideband socket; the warm MCP server embeds the prompt and searches; hook prints the nudge | **Full** — sideband socket gives cold hook processes access to the warm MCP server's model |
 | **Skills** (fact-extractor, dedup-classifier) | Installed to `$XDG_CONFIG_HOME/opencode/skills` at plugin init | Installed to `~/.claude/skills/` by `thatch setup` | **Full** — same SKILL.md format, different directory |
 | **Store detection** (repo identity from git remote) | `worktree` parameter from opencode plugin | `CLAUDE_PROJECT_DIR` environment variable (set by Claude Code for stdio MCP servers) | **Full** |
 
@@ -84,3 +85,44 @@ schemas; the MCP server wraps them in `z.object()` for validation and
 The `thatch setup` command generates CLAUDE.md instructions that reference
 both forms — the full `mcp__thatch__*` names for Claude Code, and bare names
 for readability.
+
+## Sideband socket architecture
+
+The prompt-aware recall nudge needs the embedding model to embed the user's
+prompt text. In opencode, the model is warm in-process — the `chat.message`
+hook calls `model.queryEmbed()` directly. In Claude Code/Cursor, hooks are
+one-shot `bun` spawns that can't reach the MCP server's in-memory model.
+
+Loading the ~34 MB model on every `UserPromptSubmit` would add ~300-700ms to
+every prompt in the critical path before the agent responds. The sideband
+socket eliminates this cost:
+
+```
+Claude Code session
+├── MCP server (long-lived, warm model)
+│   ├── stdio JSON-RPC (tool calls — existing)
+│   └── Unix socket sideband (embed + search for hooks — new)
+├── UserPromptSubmit hook → thatch flush-tools
+│   ├── reads extraction queue (existing)
+│   ├── connects to sideband socket (new)
+│   ├── sends prompt text
+│   ├── receives match labels + scores
+│   └── prints recall nudge or falls back to write nudge
+├── PostToolBatch hook → thatch buffer-batch (unchanged)
+└── SessionStart hook → thatch reminder (unchanged)
+```
+
+The socket path is derived from a SHA-256 hash of the DB path — both the MCP
+server and hook processes resolve the same DB path independently (from
+`THATCH_DB_PATH` or the default under `XDG_CONFIG_HOME`), so they arrive at
+the same socket path without out-of-band coordination.
+
+The protocol is newline-delimited JSON: one request per connection, one
+response. Requests are `{"method":"match","text":"...","stores":[...],
+"threshold":N,"limit":N}`. Responses are `{"ok":true,"matches":[...]}` or
+`{"ok":false,"error":"..."}`.
+
+Graceful degradation: if the socket isn't available (MCP server not running,
+old version, stale socket from a crash), `sidebandMatch` returns `null` and
+`flush-tools` falls back to the static write nudge. The recall nudge is
+best-effort — its absence never blocks the agent's workflow.

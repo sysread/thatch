@@ -275,3 +275,41 @@ AGENTS.md, speculative conclusions.
 "Remember X" — save immediately.
 "Forget X" — \`memory_recall\` to find it, then \`memory_forget\`.`;
 }
+
+// ---------------------------------------------------------------------------
+// Prompt-aware recall nudge — fires when the user's prompt semantically
+// matches existing memories. Injected via opencode's chat.message hook
+// (in-process, warm model) or via the sideband socket for Claude Code/Cursor
+// (flush-tools CLI subcommand).
+// ---------------------------------------------------------------------------
+
+export interface NudgeMatch {
+  label: string;
+  score: number;
+}
+
+/**
+ * The recall nudge for the opencode plugin path. Uses the thatch_ tool prefix
+ * since opencode discovers tools directly from the plugin registration.
+ */
+export function recallNudge(matches: NudgeMatch[]): string {
+  return formatRecallNudge(matches, "thatch_memory_recall");
+}
+
+/**
+ * The recall nudge for the Claude Code / Cursor hook path. Uses the bare tool
+ * name (memory_recall) since the mcp__thatch__ prefix is verbose and the
+ * CLAUDE.md / AGENTS.md instructions already establish the bare-name convention.
+ */
+export function claudeRecallNudge(matches: NudgeMatch[]): string {
+  return formatRecallNudge(matches, "memory_recall");
+}
+
+function formatRecallNudge(matches: NudgeMatch[], toolName: string): string {
+  const n = matches.length;
+  const word = n === 1 ? "memory" : "memories";
+  const verb = n === 1 ? "relates" : "relate";
+  const labels = matches.slice(0, 2).map((m) => `"${m.label}"`).join(", ");
+  const etc = n > 2 ? ", etc." : "";
+  return `[thatch] ${n} ${word} ${verb} to this prompt (${labels}${etc}). Use ${toolName} before responding.`;
+}

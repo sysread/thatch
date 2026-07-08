@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { server } from "../src/index";
-import { sessionStartReminder } from "../src/prompts";
+import { sessionStartReminder, recallNudge, claudeRecallNudge, type NudgeMatch } from "../src/prompts";
 
 let hooks: Awaited<ReturnType<typeof server>>;
 let dbDir: string;
@@ -13,6 +13,11 @@ beforeAll(async () => {
   process.env.THATCH_DB_PATH = join(dbDir, "test.db");
   // Redirect skill installation away from the real ~/.config.
   process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+  // Disable the prompt-aware recall nudge — it needs a loaded embedding model
+  // to embed the prompt text, which would require a network download. The
+  // recall nudge is tested via sideband.test.ts (socket round-trip) and
+  // db.test.ts (search logic) instead.
+  process.env.THATCH_RECALL_THRESHOLD = "1.0";
   const mockClient = {
     session: {
       prompt: async () => {},
@@ -26,6 +31,7 @@ afterAll(() => {
   rmSync(dbDir, { recursive: true, force: true });
   delete process.env.THATCH_DB_PATH;
   delete process.env.XDG_CONFIG_HOME;
+  delete process.env.THATCH_RECALL_THRESHOLD;
 });
 
 describe("plugin entry", () => {
@@ -242,5 +248,42 @@ describe("sessionStartReminder", () => {
     expect(reminder).toContain("project architecture and conventions");
     expect(reminder).toContain("thatch_store_list");
     expect(reminder).toContain("thatch_memory_list");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// recallNudge / claudeRecallNudge
+// ---------------------------------------------------------------------------
+
+describe("recallNudge (opencode)", () => {
+  test("single match uses singular form", () => {
+    const matches: NudgeMatch[] = [{ label: "Architecture", score: 0.72 }];
+    const nudge = recallNudge(matches);
+    expect(nudge).toContain("1 memory relates to this prompt");
+    expect(nudge).toContain('"Architecture"');
+    expect(nudge).toContain("thatch_memory_recall");
+  });
+
+  test("multiple matches use plural and show up to 2 labels", () => {
+    const matches: NudgeMatch[] = [
+      { label: "Architecture", score: 0.8 },
+      { label: "Module map", score: 0.7 },
+      { label: "Conventions", score: 0.65 },
+    ];
+    const nudge = recallNudge(matches);
+    expect(nudge).toContain("3 memories relate to this prompt");
+    expect(nudge).toContain('"Architecture"');
+    expect(nudge).toContain('"Module map"');
+    expect(nudge).toContain("etc.");
+    expect(nudge).not.toContain('"Conventions"');
+  });
+});
+
+describe("claudeRecallNudge (Claude Code / Cursor)", () => {
+  test("uses bare tool name without thatch_ prefix", () => {
+    const matches: NudgeMatch[] = [{ label: "Architecture", score: 0.72 }];
+    const nudge = claudeRecallNudge(matches);
+    expect(nudge).toContain("memory_recall");
+    expect(nudge).not.toContain("thatch_memory_recall");
   });
 });
