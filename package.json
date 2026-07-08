@@ -1,7 +1,7 @@
 {
   "name": "@jeffober/thatch",
   "version": "0.1.5",
-  "description": "Persistent memory for AI coding agents — local embeddings, SQLite stores, zero config. Works with OpenCode (as a plugin) and Claude Code (as an MCP server).",
+  "description": "Persistent memory for AI coding agents — local embeddings, SQLite stores, zero config. Works with OpenCode (as a plugin), Claude Code (as an MCP server), and Cursor (as an MCP server).",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -28,6 +28,7 @@
   "devDependencies": {
     "@opencode-ai/plugin": "^1.17.13",
     "@types/bun": "latest",
+    "markdownlint-cli2": "^0.23.0",
     "typescript": "^5.7.0"
   },
   "peerDependencies": {

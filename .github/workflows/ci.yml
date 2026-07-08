@@ -16,3 +16,4 @@ jobs:
           bun-version: latest
       - run: bun install
       - run: bun test
+      - run: bunx markdownlint-cli2

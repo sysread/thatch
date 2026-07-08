@@ -1,0 +1,15 @@
+{
+  "config": {
+    "MD013": false,
+    "MD032": false,
+    "MD036": false,
+    "MD060": false
+  },
+  "globs": ["README.md", "docs/**/*.md"],
+  "ignores": [
+    "docs/plans/**",
+    "node_modules",
+    ".git",
+    "dist"
+  ]
+}

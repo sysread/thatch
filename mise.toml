@@ -17,6 +17,14 @@ run = "bun test --coverage --coverage-reporter=text --coverage-reporter=lcov"
 description = "Run the thatch CLI (list, show, search, forget)"
 run = "bun run bin/thatch"
 
+[tasks.lint-md]
+description = "Lint markdown docs (README.md + docs/, excluding docs/plans)"
+run = "bunx markdownlint-cli2"
+
+[tasks.check]
+description = "Run tests and lint markdown docs"
+run = "bun test && bunx markdownlint-cli2"
+
 [tasks.release]
 description = "Bump version, commit, tag, and push (args: patch|minor|major)"
 run = "bin/release"
