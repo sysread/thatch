@@ -22,9 +22,9 @@ echo "  bump:    $v"
 echo "  next:    $next"
 echo
 
-echo "▸ running tests..."
-bun test
-echo "  ✓ tests passed"
+echo "▸ running checks (typecheck + tests + markdown lint)..."
+mise run check
+echo "  ✓ checks passed"
 echo
 
 echo "▸ bumping version..."
