@@ -17,13 +17,17 @@ run = "bun test --coverage --coverage-reporter=text --coverage-reporter=lcov"
 description = "Run the thatch CLI (list, show, search, forget)"
 run = "bun run bin/thatch"
 
+[tasks.typecheck]
+description = "Typecheck src + tests (tsconfig.check.json)"
+run = "bunx tsc -p tsconfig.check.json"
+
 [tasks.lint-md]
 description = "Lint markdown docs (README.md + docs/, excluding docs/plans)"
 run = "bunx markdownlint-cli2"
 
 [tasks.check]
-description = "Run tests and lint markdown docs"
-run = "bun test && bunx markdownlint-cli2"
+description = "Typecheck, run tests, and lint markdown docs"
+run = "bunx tsc -p tsconfig.check.json && bun test && bunx markdownlint-cli2"
 
 [tasks.release]
 description = "Bump version, commit, tag, and push (args: patch|minor|major)"

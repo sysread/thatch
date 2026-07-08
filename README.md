@@ -223,12 +223,12 @@ and is cached. No data leaves your machine.
 bun install        # deps
 bun test           # full suite: zero network, zero external deps
 bun test --watch   # watch mode
-mise run check     # bun test + markdownlint (the CI gate)
+mise run check     # typecheck + bun test + markdownlint (the CI gate)
 ```
 
 Tests never reach outside the sandbox: temp-directory SQLite files, mock
 embeddings, no network. `mise run check` is the full quality gate; `mise run
-lint-md` checks markdown alone.
+typecheck` or `mise run lint-md` run those alone.
 
 ## License
 

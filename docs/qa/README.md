@@ -24,13 +24,16 @@ network access and no writes outside temp directories.
 ```bash
 bun test          # all tests
 bun test --watch  # watch mode
-mise run check    # bun test + markdownlint (the CI gate)
-mise run lint-md  # markdownlint only
+mise run check       # typecheck + bun test + markdownlint (the CI gate)
+mise run typecheck   # tsc alone
+mise run lint-md     # markdownlint only
 ```
 
 `mise run check` is the canonical quality gate (also run by CI on push/PR to
-`main`). Markdownlint enforces structural correctness on `README.md` and `docs/`
-excluding `docs/plans/`; see `.markdownlint-cli2.jsonc` for rule config.
+`main`). Typecheck uses `tsconfig.check.json` (which includes the test files
+that the build's `tsconfig.json` excludes). Markdownlint enforces structural
+correctness on `README.md` and `docs/` excluding `docs/plans/`; see
+`.markdownlint-cli2.jsonc` for rule config.
 
 ## Test files and coverage
 

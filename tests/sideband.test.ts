@@ -8,7 +8,6 @@ import {
   SidebandServer,
   sidebandMatch,
   sidebandSocketPath,
-  type SidebandMatch,
 } from "../src/sideband";
 
 let dbDir: string;
@@ -109,7 +108,7 @@ describe("sidebandMatch failure modes", () => {
     // accepts the connection but doesn't write back.
     server.stop();
     const { createServer } = await import("node:net");
-    const slowServer = createServer((socket) => {
+    const slowServer = createServer(() => {
       // Accept but don't respond — let the client time out.
     });
     slowServer.listen(sockPath);
@@ -122,7 +121,7 @@ describe("sidebandMatch failure modes", () => {
 
   test("cleans up stale socket file on connection error", async () => {
     // Stop the real server, leave the socket file in place.
-    const { unlinkSync, existsSync } = await import("node:fs");
+    const { existsSync } = await import("node:fs");
     server.stop();
     // sideband stop() already removed the socket. Create a fake stale file.
     const { writeFileSync } = await import("node:fs");

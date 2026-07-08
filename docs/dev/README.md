@@ -192,7 +192,7 @@ hygiene heartbeat (session start)
 ```bash
 bun install        # deps
 bun test           # full suite; no network, no real config dirs
-mise run check     # bun test + markdownlint (the CI gate)
+mise run check     # typecheck + bun test + markdownlint (the CI gate)
 opencode           # self-hosts via .opencode/plugins/thatch.ts
 ```
 
@@ -200,7 +200,9 @@ The markdownlint gate lints `README.md` and `docs/` (excluding the historical
 `docs/plans/`) via `.markdownlint-cli2.jsonc`. It disables three rules that
 conflict with intentional house style (line length, table alignment, and the
 use-case template's bold-label + tight-list format). Run `mise run lint-md`
-alone to check docs without the test suite.
+alone to check docs without the test suite. Run `mise run typecheck` for
+`tsc` alone (uses `tsconfig.check.json`, which includes the test files that
+the build's `tsconfig.json` excludes).
 
 ## Release
 

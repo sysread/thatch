@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseGitUrl, detectRepo, listBranches } from "../src/git";
+import { detectRepo, listBranches } from "../src/git";
 
 let cwd: string;
 let origCwd: string;

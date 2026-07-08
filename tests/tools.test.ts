@@ -285,7 +285,7 @@ describe("thatch_find_duplicates", () => {
 
   test("groups related pairs into one cluster", async () => {
     const emb = new Float32Array(384).fill(0.5);
-    const other = new Float32Array(384).fill(-0.5).map((v, i) => (i % 2 === 0 ? 0.5 : -0.5));
+    const other = new Float32Array(384).fill(-0.5).map((_v, i) => (i % 2 === 0 ? 0.5 : -0.5));
     db.remember(defaultStore, "Frag A", "# Frag A\n\nSame", emb, "mock");
     db.remember(defaultStore, "Frag B", "# Frag B\n\nSame", emb, "mock");
     db.remember(defaultStore, "Frag C", "# Frag C\n\nSame", emb, "mock");
