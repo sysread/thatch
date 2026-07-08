@@ -24,7 +24,13 @@ network access and no writes outside temp directories.
 ```bash
 bun test          # all tests
 bun test --watch  # watch mode
+mise run check    # bun test + markdownlint (the CI gate)
+mise run lint-md  # markdownlint only
 ```
+
+`mise run check` is the canonical quality gate (also run by CI on push/PR to
+`main`). Markdownlint enforces structural correctness on `README.md` and `docs/`
+excluding `docs/plans/`; see `.markdownlint-cli2.jsonc` for rule config.
 
 ## Test files and coverage
 

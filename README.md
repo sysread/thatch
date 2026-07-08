@@ -5,7 +5,8 @@
 Persistent memory and operational methodology for AI coding agents — local
 embeddings, SQLite stores, zero config.
 
-Works with **OpenCode** (as a plugin) and **Claude Code** (as an MCP server).
+Works with **OpenCode** (as a plugin), **Claude Code** (as an MCP server), and
+**Cursor** (as an MCP server).
 Each session inherits the accumulated knowledge of every session before it —
 project architecture, conventions, gotchas, user preferences — so your agent
 starts with context instead of a blank slate. Stores are per-repo with a
@@ -222,10 +223,12 @@ and is cached. No data leaves your machine.
 bun install        # deps
 bun test           # full suite: zero network, zero external deps
 bun test --watch   # watch mode
+mise run check     # bun test + markdownlint (the CI gate)
 ```
 
 Tests never reach outside the sandbox: temp-directory SQLite files, mock
-embeddings, no network.
+embeddings, no network. `mise run check` is the full quality gate; `mise run
+lint-md` checks markdown alone.
 
 ## License
 
