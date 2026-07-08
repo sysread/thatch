@@ -54,7 +54,7 @@ const URL_PATTERNS: UrlPattern[] = [
  * 3. Fall back to the directory basename
  */
 export async function detectRepo(cwd?: string): Promise<string> {
-  const dir = cwd ?? process.cwd();
+  const dir = cwd ?? process.env.CURSOR_PROJECT_DIR ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
 
   try {
     const remote = await $`git remote get-url origin`.cwd(dir).quiet();

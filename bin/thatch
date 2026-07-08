@@ -7,7 +7,7 @@ import { detectRepo } from "../src/git";
 import { BgeEmbeddingModel } from "../src/embeddings";
 import { hygieneReport } from "../src/hygiene";
 import { claudeSessionStartReminder } from "../src/prompts";
-import { setupClaudeCode } from "../src/setup";
+import { setupClaudeCode, setupCursor } from "../src/setup";
 
 const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 const dbPath = process.env.THATCH_DB_PATH ?? join(configHome, "thatch", "thatch.db");
@@ -22,13 +22,14 @@ function usage(): never {
   thatch show   <label> [store]    Display a memory by label
   thatch forget <label> [store]    Remove a memory by label
   thatch search <query> [store]    Semantic search (cosine similarity)
-  thatch mcp                       Start the stdio MCP server (for Claude Code)
-  thatch reminder                  Print session-start reminder (for SessionStart hook)
+  thatch mcp                       Start the stdio MCP server (for Claude Code, Cursor, etc.)
+  thatch reminder [--json]         Print session-start reminder (for SessionStart hook)
   thatch hygiene                   Print the hygiene report (standalone)
-  thatch prime                     Prime project memory (runs the primer skill via opencode or claude)
-  thatch buffer-batch              Append a PostToolBatch payload to the queue (hook only)
-  thatch flush-tools               Drain the queue + print an extraction nudge (hook only)
-  thatch setup [--claude] [--global] [--force]
+  thatch prime                     Prime project memory (runs the primer skill via opencode, cursor, or claude)
+  thatch buffer-batch              Append a PostToolBatch payload to the queue (Claude Code hook only)
+  thatch buffer-tool               Append a single postToolUse interaction to the queue (Cursor hook only)
+  thatch flush-tools [--json]      Drain the queue + print an extraction nudge (hook only)
+  thatch setup --claude [--cursor] [--global]
                                    Install config + instructions + hooks + skills
 
 Stores default to the repo detected from git remote. Use "global" for the
@@ -42,6 +43,11 @@ async function defaultStore(): Promise<string> {
   } catch {
     return "unknown";
   }
+}
+
+/** Resolve the project directory from host-specific env vars or cwd. */
+function projectDir(): string {
+  return process.env.CURSOR_PROJECT_DIR ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
 }
 
 switch (command) {
@@ -138,21 +144,27 @@ switch (command) {
   }
 
   case "reminder": {
+    const isJson = args.includes("--json");
     const repo = await defaultStore();
-    const worktree = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+    const worktree = projectDir();
     let hygiene: string | null = null;
     try {
       hygiene = await hygieneReport(db, repo, worktree);
     } catch (err) {
       console.error(`[thatch] hygiene report failed: ${err}`);
     }
-    console.log(claudeSessionStartReminder(repo, hygiene));
+    const reminder = claudeSessionStartReminder(repo, hygiene);
+    if (isJson) {
+      console.log(JSON.stringify({ additional_context: reminder }));
+    } else {
+      console.log(reminder);
+    }
     break;
   }
 
   case "hygiene": {
     const repo = await defaultStore();
-    const worktree = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+    const worktree = projectDir();
     const hygiene = await hygieneReport(db, repo, worktree);
     console.log(hygiene ?? "Store is healthy.");
     break;
@@ -161,11 +173,21 @@ switch (command) {
   case "prime": {
     const primerPrompt = "Load the thatch-project-primer skill and follow its instructions to prime this project's memory store.";
     const opencodeBin = Bun.which("opencode");
+    const agentBin = Bun.which("agent");
     const claudeBin = Bun.which("claude");
 
     if (opencodeBin) {
       console.error("Priming project memory via opencode...");
       const proc = Bun.spawnSync([opencodeBin, "run", primerPrompt], {
+        stdout: "inherit",
+        stderr: "inherit",
+      });
+      process.exit(proc.exitCode ?? 1);
+    } else if (agentBin) {
+      // Cursor CLI: -p for non-interactive print mode, --approve-mcps to
+      // auto-approve the thatch MCP server (no interactive UI in -p mode).
+      console.error("Priming project memory via cursor agent...");
+      const proc = Bun.spawnSync([agentBin, "-p", primerPrompt, "--approve-mcps"], {
         stdout: "inherit",
         stderr: "inherit",
       });
@@ -178,7 +200,7 @@ switch (command) {
       });
       process.exit(proc.exitCode ?? 1);
     } else {
-      console.error("Error: neither 'opencode' nor 'claude' found on PATH.");
+      console.error("Error: none of 'opencode', 'agent', or 'claude' found on PATH.");
       console.error("Install one of them to use thatch prime.");
       process.exit(1);
     }
@@ -188,10 +210,11 @@ switch (command) {
   case "setup": {
     const isGlobal = args.includes("--global");
     const isClaude = args.includes("--claude");
+    const isCursor = args.includes("--cursor");
 
-    if (!isClaude) {
-      console.error("Currently only --claude is supported.");
-      console.error("Usage: thatch setup --claude [--global]");
+    if (!isClaude && !isCursor) {
+      console.error("Specify at least one host: --claude and/or --cursor.");
+      console.error("Usage: thatch setup --claude [--cursor] [--global]");
       process.exit(1);
     }
 
@@ -201,30 +224,47 @@ switch (command) {
     // If not on PATH (local dev checkout), use the absolute path to this script.
     const thatchOnPath = Bun.which("thatch");
     const thatchBin = thatchOnPath ?? resolve(process.argv[1] ?? process.execPath);
-    const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+    const dir = projectDir();
 
-    const result = setupClaudeCode(thatchBin, isGlobal, projectDir);
+    if (isClaude) {
+      const result = setupClaudeCode(thatchBin, isGlobal, dir);
 
-    console.log(`Thatch setup complete (${isGlobal ? "global" : "project-local"}).`);
-    console.log();
-    if (result.mcpConfig) {
-      console.log(`  MCP config:    ${result.mcpConfig}`);
-    }
-    console.log(`  Instructions:  ${result.claudeMd}`);
-    console.log(`  Hooks:         ${result.settings}`);
-    // Skills dir is not currently surfaced on SetupResult — derive it from
-    // the skills file paths (they all share the same parent directory).
-    const skillsDir = result.skills[0]?.path
-      ? result.skills[0].path.split("/").slice(0, -1).join("/")
-      : "(no skills installed)";
-    console.log(`  Skills:        ${skillsDir} (${result.skills.length} files)`);
-    console.log();
-    if (result.mcpAddCommand) {
-      console.log("To register the MCP server globally, run:");
-      console.log(`  ${result.mcpAddCommand}`);
+      console.log(`Thatch setup complete for Claude Code (${isGlobal ? "global" : "project-local"}).`);
       console.log();
+      if (result.mcpConfig) {
+        console.log(`  MCP config:    ${result.mcpConfig}`);
+      }
+      console.log(`  Instructions:  ${result.claudeMd}`);
+      console.log(`  Hooks:         ${result.settings}`);
+      const skillsDir = result.skills[0]?.path
+        ? result.skills[0].path.split("/").slice(0, -1).join("/")
+        : "(no skills installed)";
+      console.log(`  Skills:        ${skillsDir} (${result.skills.length} files)`);
+      console.log();
+      if (result.mcpAddCommand) {
+        console.log("To register the MCP server globally, run:");
+        console.log(`  ${result.mcpAddCommand}`);
+        console.log();
+      }
+      console.log("Restart Claude Code for the changes to take effect.");
     }
-    console.log("Restart Claude Code for the changes to take effect.");
+
+    if (isCursor) {
+      const result = setupCursor(thatchBin, isGlobal, dir);
+
+      console.log();
+      console.log(`Thatch setup complete for Cursor (${isGlobal ? "global" : "project-local"}).`);
+      console.log();
+      console.log(`  MCP config:    ${result.mcpConfig}`);
+      console.log(`  Instructions:  ${result.agentsMd}`);
+      console.log(`  Hooks:         ${result.hooks}`);
+      const skillsDir = result.skills[0]?.path
+        ? result.skills[0].path.split("/").slice(0, -1).join("/")
+        : "(no skills installed)";
+      console.log(`  Skills:        ${skillsDir} (${result.skills.length} files)`);
+      console.log();
+      console.log("Restart Cursor for the changes to take effect.");
+    }
     break;
   }
 
@@ -245,16 +285,59 @@ switch (command) {
     break;
   }
 
-  case "flush-tools": {
-    // UserPromptSubmit hook: drain the queue. With buffered interactions,
-    // print the extraction nudge carrying the payload so the agent can load
-    // the thatch-fact-extractor skill and persist durable facts. With an
-    // empty queue, fall back to the static write-nudge so the original
-    // workflow contract (a per-prompt "did you learn anything?" reminder)
-    // is preserved on conversational turns that did no tool use.
+  case "buffer-tool": {
+    // Cursor postToolUse hook: append a single tool interaction to the
+    // session's JSONL queue. Cursor fires postToolUse per-tool (no batch
+    // equivalent), so this receives one tool at a time. Silent on success.
+    // Session ID comes as `conversation_id` in Cursor (vs `session_id` in
+    // Claude Code). The tool result field name is not explicitly documented,
+    // so we try the most likely candidates.
     try {
       const raw = await Bun.stdin.text();
-      const data = JSON.parse(raw) as { session_id?: string };
+      const data = JSON.parse(raw) as {
+        conversation_id?: string;
+        session_id?: string;
+        tool_name?: string;
+        tool_input?: Record<string, unknown>;
+        tool_use_id?: string;
+        tool_result?: string | unknown[];
+        tool_response?: string | unknown[];
+        result_json?: string;
+        result?: string | unknown[];
+        output?: string;
+      };
+      const sessionID = data.conversation_id ?? data.session_id;
+      if (sessionID && data.tool_name) {
+        const { appendBatch } = await import("../src/extract-queue");
+        const response = data.tool_result ?? data.tool_response ?? data.result_json ?? data.result ?? data.output ?? "";
+        appendBatch(sessionID, [{
+          tool_name: data.tool_name,
+          tool_input: data.tool_input ?? {},
+          tool_use_id: data.tool_use_id,
+          tool_response: response,
+        }]);
+      }
+    } catch (err) {
+      console.error(`[thatch buffer-tool] failed: ${err}`);
+    }
+    break;
+  }
+
+  case "flush-tools": {
+    // UserPromptSubmit (Claude Code) / beforeSubmitPrompt (Cursor) hook:
+    // drain the queue. With buffered interactions, print the extraction nudge
+    // carrying the payload so the agent can load the thatch-fact-extractor
+    // skill and persist durable facts. With an empty queue, fall back to the
+    // static write-nudge so the original workflow contract (a per-prompt
+    // "did you learn anything?" reminder) is preserved on conversational
+    // turns that did no tool use.
+    // --json wraps output as { additional_context: "..." } for Cursor hooks.
+    // Without --json, stdout is plain text (Claude Code style).
+    const isJson = args.includes("--json");
+    try {
+      const raw = await Bun.stdin.text();
+      const data = JSON.parse(raw) as { session_id?: string; conversation_id?: string };
+      const sessionID = data.session_id ?? data.conversation_id;
 
       const { flushQueue } = await import("../src/extract-queue");
       const { buildExtractionPayload } = await import("../src/extraction");
@@ -263,17 +346,26 @@ switch (command) {
       let repo = "unknown";
       try { repo = await detectRepo(); } catch {}
 
-      const interactions = data.session_id ? flushQueue(data.session_id) : [];
-      if (interactions.length > 0) {
-        console.log(claudeExtractionNudge(interactions.length, buildExtractionPayload(interactions, repo)));
+      const interactions = sessionID ? flushQueue(sessionID) : [];
+      const output = interactions.length > 0
+        ? claudeExtractionNudge(interactions.length, buildExtractionPayload(interactions, repo))
+        : claudeWriteNudge();
+
+      if (isJson) {
+        console.log(JSON.stringify({ additional_context: output }));
       } else {
-        console.log(claudeWriteNudge());
+        console.log(output);
       }
     } catch (err) {
       console.error(`[thatch flush-tools] failed: ${err}`);
       try {
         const { claudeWriteNudge } = await import("../src/prompts");
-        console.log(claudeWriteNudge());
+        const fallback = claudeWriteNudge();
+        if (isJson) {
+          console.log(JSON.stringify({ additional_context: fallback }));
+        } else {
+          console.log(fallback);
+        }
       } catch {
         // If even the fallback import fails, do nothing — silent failure is
         // preferable to blocking the user's prompt over an unrelated hook.

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { claudeInstructions } from "./prompts";
+import { claudeInstructions, cursorInstructions } from "./prompts";
 import { installSkills, type SkillFile } from "./skills";
 
 // ---------------------------------------------------------------------------
@@ -91,17 +91,26 @@ function writeMcpConfig(path: string, thatchBin: string): void {
 // ---------------------------------------------------------------------------
 
 const THATCH_MARKER = "# Persistence\n\nThatch provides persistent memory across Claude Code sessions.";
+const THATCH_END_MARKER = '"Forget X" — `memory_recall` to find it, then `memory_forget`.';
+const CURSOR_MARKER = "# Persistence\n\nThatch provides persistent memory across Cursor sessions.";
+const CURSOR_END_MARKER = THATCH_END_MARKER;
 
-function appendInstructions(path: string): void {
-  const instructions = claudeInstructions() + "\n";
-
+/**
+ * Idempotently append (or replace) a block of instructions in a markdown file.
+ * The block is delimited by startMarker and endMarker so re-running setup
+ * updates drifted content without clobbering surrounding text.
+ */
+function appendBlock(
+  path: string,
+  instructions: string,
+  startMarker: string,
+  endMarker: string,
+): void {
   if (existsSync(path)) {
     const existing = readFileSync(path, "utf8");
-    if (existing.includes(THATCH_MARKER)) {
-      // Already has thatch instructions — replace the block.
-      const startIdx = existing.indexOf("# Persistence\n\nThatch provides persistent memory across Claude Code sessions.");
+    if (existing.includes(startMarker)) {
+      const startIdx = existing.indexOf(startMarker);
       if (startIdx >= 0) {
-        const endMarker = '"Forget X" — `memory_recall` to find it, then `memory_forget`.';
         const endIdx = existing.indexOf(endMarker, startIdx);
         if (endIdx >= 0) {
           const afterEnd = endIdx + endMarker.length;
@@ -120,6 +129,14 @@ function appendInstructions(path: string): void {
     mkdirSync(join(path, ".."), { recursive: true });
     writeFileSync(path, instructions);
   }
+}
+
+function appendInstructions(path: string): void {
+  appendBlock(path, claudeInstructions() + "\n", THATCH_MARKER, THATCH_END_MARKER);
+}
+
+function appendCursorInstructions(path: string): void {
+  appendBlock(path, cursorInstructions() + "\n", CURSOR_MARKER, CURSOR_END_MARKER);
 }
 
 // ---------------------------------------------------------------------------
@@ -255,5 +272,151 @@ export function setupClaudeCode(
     mcpAddCommand: global
       ? `claude mcp add --scope user thatch -- ${thatchBin} mcp`
       : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Cursor setup — .cursor/mcp.json, AGENTS.md, .cursor/hooks.json, skills
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the Cursor config directory. Cursor stores config under `~/.cursor`
+ * by default. No documented env override exists (unlike Claude Code's
+ * CLAUDE_CONFIG_DIR), but we honor a hypothetical CURSOR_CONFIG_DIR for
+ * symmetry and forward-compatibility.
+ */
+function cursorConfigDir(homeDir: string): string {
+  return process.env.CURSOR_CONFIG_DIR ?? join(homeDir, ".cursor");
+}
+
+interface CursorSetupPaths {
+  mcpConfigPath: string;
+  agentsMdPath: string;
+  hooksPath: string;
+  skillsDir: string;
+  global: boolean;
+}
+
+function resolveCursorPaths(global: boolean, projectDir: string, homeDir: string): CursorSetupPaths {
+  const configDir = cursorConfigDir(homeDir);
+  const skillsDir = join(configDir, "skills");
+
+  if (global) {
+    return {
+      // Cursor's global MCP config is a simple file — no equivalent of
+      // `claude mcp add --scope user`. Writing ~/.cursor/mcp.json is enough.
+      mcpConfigPath: join(configDir, "mcp.json"),
+      agentsMdPath: join(configDir, "AGENTS.md"),
+      hooksPath: join(configDir, "hooks.json"),
+      skillsDir,
+      global: true,
+    };
+  }
+
+  return {
+    mcpConfigPath: join(projectDir, ".cursor", "mcp.json"),
+    agentsMdPath: join(projectDir, "AGENTS.md"),
+    hooksPath: join(projectDir, ".cursor", "hooks.json"),
+    skillsDir,
+    global: false,
+  };
+}
+
+/**
+ * Cursor hooks use a flat format (no nesting, no `type` field):
+ * { "version": 1, "hooks": { "event": [{ "command": "..." }] } }
+ */
+interface CursorHooksJson {
+  version: number;
+  hooks: {
+    [event: string]: { command: string }[];
+  };
+  [key: string]: unknown;
+}
+
+function writeCursorHooks(path: string, thatchBin: string): void {
+  let config: CursorHooksJson = { version: 1, hooks: {} };
+  if (existsSync(path)) {
+    try {
+      config = JSON.parse(readFileSync(path, "utf8"));
+    } catch {
+      // Corrupt — start fresh.
+    }
+  }
+  if (!config.version) config.version = 1;
+  if (!config.hooks) config.hooks = {};
+
+  // --json makes reminder output { additional_context: "..." } which Cursor
+  // injects into the session. Without --json, stdout is plain text (Claude
+  // Code style) and Cursor would not parse it.
+  const sessionStartCmd = `${thatchBin} reminder --json`;
+  // postToolUse fires per-tool (Cursor has no PostToolBatch equivalent).
+  // Silent — no stdout — so the agent loop is not delayed.
+  const bufferCmd = `${thatchBin} buffer-tool`;
+  // beforeSubmitPrompt is Cursor's UserPromptSubmit equivalent. Drains the
+  // queue and prints the extraction nudge as JSON additional_context.
+  const flushCmd = `${thatchBin} flush-tools --json`;
+
+  config.hooks.sessionStart = replaceCursorThatchHooks(config.hooks.sessionStart ?? [], sessionStartCmd);
+  config.hooks.postToolUse = replaceCursorThatchHooks(config.hooks.postToolUse ?? [], bufferCmd);
+  config.hooks.beforeSubmitPrompt = replaceCursorThatchHooks(config.hooks.beforeSubmitPrompt ?? [], flushCmd);
+
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
+}
+
+function replaceCursorThatchHooks(
+  entries: { command: string }[],
+  command: string,
+): { command: string }[] {
+  const filtered = entries.filter((e) => !e.command?.includes("thatch"));
+  filtered.push({ command });
+  return filtered;
+}
+
+export interface CursorSetupResult {
+  mcpConfig: string;
+  agentsMd: string;
+  hooks: string;
+  skills: SkillFile[];
+  global: boolean;
+}
+
+/**
+ * Installs thatch into Cursor. Writes .cursor/mcp.json (or ~/.cursor/mcp.json
+ * for global), appends instructions to AGENTS.md, installs sessionStart +
+ * postToolUse + beforeSubmitPrompt hooks in .cursor/hooks.json, and installs
+ * skill files. All operations are idempotent.
+ *
+ * Cursor's global MCP config is a simple file write (unlike Claude Code which
+ * needs `claude mcp add --scope user`). Skills install to ~/.cursor/skills/
+ * (auto-discovered by Cursor, which also reads ~/.claude/skills/ for compat).
+ *
+ * @param thatchBin Absolute path to the thatch binary
+ * @param global Whether to install globally or project-locally
+ * @param projectDir The project directory (used for project-local installs)
+ * @param homeDir Home directory (defaults to os.homedir())
+ */
+export function setupCursor(
+  thatchBin: string,
+  global: boolean,
+  projectDir: string,
+  homeDir?: string,
+): CursorSetupResult {
+  const { homedir } = require("node:os");
+  const home = homeDir ?? homedir();
+  const paths = resolveCursorPaths(global, projectDir, home);
+
+  writeMcpConfig(paths.mcpConfigPath, thatchBin);
+  appendCursorInstructions(paths.agentsMdPath);
+  writeCursorHooks(paths.hooksPath, thatchBin);
+  const skills = installClaudeSkills(paths.skillsDir);
+
+  return {
+    mcpConfig: paths.mcpConfigPath,
+    agentsMd: paths.agentsMdPath,
+    hooks: paths.hooksPath,
+    skills,
+    global,
   };
 }
