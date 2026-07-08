@@ -2,15 +2,22 @@
 
 ## Architecture
 
-Thatch has two integration paths sharing a common core:
+Thatch has three integration paths sharing a common core:
 
 1. **OpenCode plugin** — runs inside opencode's Bun runtime. Full access to
    plugin hooks: system prompt injection, session events, tool buffering,
    compaction context.
 2. **Claude Code MCP server** — runs as a stdio JSON-RPC process. Tools
    exposed via MCP; session behavior driven by Claude Code hooks.
+3. **Cursor MCP server** — same stdio MCP server as Claude Code; session
+   behavior driven by Cursor hooks in a flat `hooks.json` format.
 
-```
+For feature parity and gaps across the three, see [mcp-parity.md](mcp-parity.md).
+For the concrete files and hook events each host writes, see
+[setup-and-hooks.md](setup-and-hooks.md). For non-obvious invariants, see
+[gotchas.md](gotchas.md). For the skill system, see [skills.md](skills.md).
+
+```text
 Shared core
   ├── tool-defs.ts    → single source of truth: zod schemas + execute logic
   ├── db.ts           → SQLite CRUD, cosine search (recall + search), dedup verdicts
@@ -31,10 +38,11 @@ MCP server path
   │                     opens sideband socket for warm-model match queries
   ├── sideband.ts     → Unix socket: SidebandServer (embed + search via warm model)
   │                     and sidebandMatch (thin client for hook processes)
-  └── setup.ts        → `thatch setup --claude`: writes .mcp.json, CLAUDE.md,
-                        settings.json hooks, installs skills
+  └── setup.ts        → `thatch setup --claude` / `--cursor`: writes .mcp.json,
+                        CLAUDE.md / AGENTS.md, settings/hooks JSON, installs skills
 
-bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygiene|setup
+bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygiene|
+                        prime|buffer-batch|buffer-tool|flush-tools|setup
 ```
 
 ## Module responsibilities
@@ -102,7 +110,7 @@ Two of these hooks were dead for weeks because failures were invisible.
 
 ## Data flow
 
-```
+```text
 thatch_memory_remember(label, content)
   → model.passageEmbed("# label\n\ncontent") → Float32Array
   → db.findSimilar(store, embedding) — write-time collision check (no telemetry)
@@ -193,5 +201,25 @@ opencode           # self-hosts via .opencode/plugins/thatch.ts
 mise run release patch|minor|major
 ```
 
-Bumps version, tags, pushes; GitHub Actions publishes to npm via OIDC trusted
-publishing (no tokens — see `.github/workflows/publish.yml`).
+`bin/release` runs the full flow:
+
+1. Runs `bun test` (aborts on failure — no broken releases).
+2. `npm version <bump> --no-git-tag-version` bumps `package.json`.
+3. Prompts to commit, tag (`v<next>`), and push; declining reverts
+   `package.json` and exits cleanly.
+4. On confirm: commits, tags `v<next>`, pushes commits and the tag.
+
+Publishing is tag-driven and **passwordless**. Pushing a `v*` tag triggers
+`.github/workflows/publish.yml`, which publishes to npm via **OIDC trusted
+publishing** — no stored npm token. The `id-token: write` permission lets npm
+authenticate through GitHub's OIDC exchange instead. Prerequisites:
+
+- A Trusted Publisher configured on npmjs.com for `@jeffober/thatch` pointing at
+  the `sysread/thatch` repo and this workflow file.
+- npm >= 11.5.1 (the OIDC exchange needs it). `publish.yml` installs
+  `setup-node@v4` (node 24) and `npm install -g npm@latest`; it deliberately
+  sets **no `registry-url`**, which would write a token-expecting `.npmrc` that
+  preempts the OIDC exchange.
+
+CI (`.github/workflows/ci.yml`) runs `bun test` on every push/PR to `main` —
+the never-merge-broken guard before a release.

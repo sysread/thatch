@@ -1,9 +1,13 @@
 # Thatch
 
-Persistent memory for opencode. Thatch gives your AI agent the ability to
-remember information across sessions using local embeddings and SQLite.
+Persistent memory for AI coding agents. Thatch gives your agent the ability to
+remember information across sessions using local embeddings and SQLite. It
+works with **OpenCode** (as a plugin), **Claude Code** (as an MCP server), and
+**Cursor** (as an MCP server).
 
 ## Installation
+
+### OpenCode
 
 Publish to npm and add thatch to your opencode config:
 
@@ -23,6 +27,36 @@ For local development before publishing, use a file path:
 ```
 
 Or place the thatch repo in `.opencode/plugins/` for auto-loading.
+
+### Claude Code
+
+Install the MCP server, hooks, instructions, and skills into Claude Code:
+
+```bash
+thatch setup --claude            # project-local (writes .mcp.json, CLAUDE.md, .claude/)
+thatch setup --claude --global   # user-scoped (~/.claude/)
+```
+
+`bun` must be on PATH (the thatch binary runs under bun). `setup` is idempotent
+— re-running it updates drifted content without clobbering unrelated config.
+For a global install, `setup` prints the `claude mcp add --scope user` command
+to run instead of writing a project `.mcp.json`.
+
+### Cursor
+
+```bash
+thatch setup --cursor            # project-local (.cursor/mcp.json, AGENTS.md, .cursor/hooks.json)
+thatch setup --cursor --global   # user-scoped (~/.cursor/)
+```
+
+Cursor has no `claude mcp add` equivalent — `setup` writes `~/.cursor/mcp.json`
+directly. Hook output is JSON-wrapped (`--json`) so Cursor injects it as
+`additional_context`.
+
+### Before running setup
+
+The `thatch` binary must resolve `bun` on PATH. Install from npm (`npm i -g
+@jeffober/thatch`) or from a checkout (`bun run bin/thatch`).
 
 ## How it works
 
@@ -84,8 +118,9 @@ Beyond the tools, thatch hooks into opencode itself:
 
 On startup thatch installs [skills] into your global opencode config
 (`~/.config/opencode/skills/`, or `$XDG_CONFIG_HOME/opencode/skills`).
-When using `thatch setup --claude`, skills are installed to `~/.claude/skills/`
-(or `$CLAUDE_CONFIG_DIR/skills/`).
+With `thatch setup --claude`, skills install to `~/.claude/skills/` (or
+`$CLAUDE_CONFIG_DIR/skills/`); with `thatch setup --cursor`, to
+`~/.cursor/skills/`.
 
 ### Memory skills
 
@@ -129,13 +164,13 @@ Five specialist review lenses, each a self-contained static-analysis pass:
 For a **quick single-lens review**, load any specialist skill directly and
 point it at a branch or commit range:
 
-```
+```text
 Load thatch-review-pedantic and review the changes on this branch.
 ```
 
 For a **full multi-specialist review on opencode**, load the coordinator:
 
-```
+```text
 Load thatch-code-review and review branch feature-x.
 ```
 
@@ -145,7 +180,7 @@ specialist lens), and synthesize a final report.
 For a **full review on Claude Code** (or without the coordinator), run each
 specialist in sequence, then synthesize:
 
-```
+```text
 1. Load thatch-review-pedantic, review branch feature-x, report findings.
 2. Load thatch-review-acceptance, review the same branch.
 3. ... repeat for state-flow, no-slop, breadcrumbs ...
