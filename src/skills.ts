@@ -649,25 +649,33 @@ For each finding from the specialists:
 
 3. **Determine provenance.** Is the finding a new issue introduced by this change, or a pre-existing problem? Note pre-existing bugs separately.
 
-4. **Check runtime model applicability.** Can the finding realistically manifest in normal usage given the application's runtime model? A finding that requires conditions impossible in the actual runtime context is not a real bug (e.g., state accumulation in a short-lived process, concurrency in single-threaded code).
+**Finding type determines which steps apply next.** Steps 4-6 apply to behavioral findings (from acceptance, state-flow). Mechanical findings (from pedantic, no-slop, breadcrumbs — docs, naming, style, comments, prose) skip steps 4-6 and use the mechanical verification criteria in step 4m instead.
 
-5. **Prove the causal chain** for any finding about state, data shape, cross-module contracts, or behavior:
+4. **Check runtime model applicability (behavioral findings only).** Can the finding realistically manifest in normal usage given the application's runtime model? A finding that requires conditions impossible in the actual runtime context is not a real bug (e.g., state accumulation in a short-lived process, concurrency in single-threaded code).
+
+5. **Prove the causal chain (behavioral findings only)** for any finding about state, data shape, cross-module contracts, or behavior:
    - Identify the authoritative producer or source of the state/data.
    - Identify the transforms between producer and consumer.
    - Identify the consumer or branch where failure occurs.
    - Identify the real entrypoint/workflow that exercises this chain.
    If the only way to trigger the issue is by manually fabricating invalid data/state or bypassing the real producers/guards, reject the finding. If the citation is real but you cannot prove the producer chain, classify as UNVERIFIABLE rather than CONFIRMED.
 
-6. **Verify intent.** If the specialist flagged behavior as a bug but the code appears to work as designed, check whether the behavior is intentional:
+6. **Verify intent (behavioral findings only).** If the specialist flagged behavior as a bug but the code appears to work as designed, check whether the behavior is intentional:
    - Read the callers of the cited code to see if the pattern makes sense in context.
    - Check git log or git blame on the cited file for commit messages explaining the decision.
    - Use thatch_memory_recall to search for documented rationale.
    If the behavior is intentional or an accepted limitation, reject the finding.
 
+4m. **Mechanical verification (pedantic, no-slop, breadcrumbs, docs, naming, style, comments).** For mechanical findings, verification means:
+   - The cited text exists at the cited location (already confirmed in step 2).
+   - The finding is branch-introduced or newly made relevant by the change. Pre-existing issues go in the pre-existing appendix, not rejected.
+   - The cited text violates the stated guideline, specialist taxonomy, or project norm. Identify the source of truth: the specific guideline, convention, or writing norm being violated.
+   Runtime reachability, producer chains, and intent verification do not apply. A mechanical finding is not a "bug" and does not need a "trigger scenario."
+
 7. **Classify:**
-   - **CONFIRMED**: The cited code matches, the claim is accurate, the bug is reachable through realistic usage, you proved the workflow/producer chain where applicable, and the behavior is not intentional.
-   - **REJECTED**: The citation is wrong, the claim is inaccurate, the bug cannot manifest in the actual runtime context, or the behavior is an intentional design decision (explain why briefly). Reject findings that rely on manually seeded invalid state/data with no real producer path.
-   - **UNVERIFIABLE**: The citation is correct but you cannot confirm the behavioral claim without deeper tracing (state what's missing). This is the default for plausible claims that lack a proven trigger path, producer chain, or authoritative source of truth.
+   - **CONFIRMED**: For behavioral findings: the cited code matches, the claim is accurate, the bug is reachable through realistic usage, you proved the workflow/producer chain where applicable, and the behavior is not intentional. For mechanical findings: the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy.
+   - **REJECTED**: For behavioral findings: the citation is wrong, the claim is inaccurate, the bug cannot manifest in the actual runtime context, or the behavior is an intentional design decision (explain why briefly). Reject findings that rely on manually seeded invalid state/data with no real producer path. For mechanical findings: the cited text does not exist, does not violate the stated guideline, is unchanged legacy outside the touched scope, or the finding duplicates another confirmed finding.
+   - **UNVERIFIABLE**: The citation is correct but you cannot confirm the claim without deeper tracing. This is the default for plausible behavioral claims that lack a proven trigger path, producer chain, or authoritative source of truth. Mechanical findings should rarely be UNVERIFIABLE — if the text exists and violates the guideline, it is CONFIRMED.
 
 ## Deduplication
 
@@ -686,6 +694,8 @@ Assign final severity based on YOUR verification:
 ## Report format
 
 You MUST produce the full report structure below. Do not simplify or omit sections. Every confirmed finding must include all numbered fields. If a section has no entries, write "None" — do not skip the section.
+
+Confirmed LOW findings are mandatory. Do not summarize them away or omit them for being non-functional. Pedantic, no-slop, breadcrumbs, docs, naming, style, and comment findings are first-class review findings when confirmed. Group them under LOW, but include every one.
 
 ### Scope
 - Branch/range reviewed
@@ -858,13 +868,15 @@ For the integration review unit (5+ points), dispatch a sub-agent focused on:
 
 After all sub-agents complete, load the thatch-review-synthesizer skill to verify findings, deduplicate across specialists, classify (CONFIRMED/REJECTED/UNVERIFIABLE), and produce the final severity-grouped report.
 
+Confirmed LOW findings are mandatory in the final report, including mechanical findings (pedantic, no-slop, breadcrumbs, docs, naming, style, comments). Do not omit them for being non-functional.
+
 Alternatively, perform the synthesis yourself:
 1. Read each finding's cited location to verify evidence accuracy.
 2. Deduplicate findings flagged by multiple specialists.
 3. Group findings by root cause where multiple findings stem from the same issue.
-4. Classify each as CONFIRMED, REJECTED, or UNVERIFIABLE based on citation verification, reachability, and intent verification.
+4. Classify each as CONFIRMED, REJECTED, or UNVERIFIABLE. For behavioral findings, apply citation verification, reachability, and intent verification. For mechanical findings, verify the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy.
 5. Calibrate severity (BLOCKING > HIGH > MEDIUM > LOW) based on your verification.
-6. Produce a final report grouped by severity, with coverage gaps noted.
+6. Produce a final report grouped by severity, with coverage gaps noted. Include every confirmed LOW finding.
 
 ## Specialist briefing template
 
