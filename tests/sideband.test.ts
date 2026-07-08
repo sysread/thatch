@@ -134,3 +134,18 @@ describe("sidebandMatch failure modes", () => {
     expect(existsSync(sockPath)).toBe(false);
   });
 });
+
+describe("SidebandServer path and stop", () => {
+  test("path getter returns the socket path", () => {
+    expect(server.path).toBe(sockPath);
+  });
+
+  test("stop is safe to call twice (catch for already-removed socket)", () => {
+    server.stop();
+    // Second call hits the catch block — socket file already gone.
+    server.stop();
+    // Re-create for afterEach cleanup.
+    server = new SidebandServer(sockPath, model, db);
+    server.start();
+  });
+});

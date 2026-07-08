@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendBatch, flushQueue, queueDir, type BatchToolCall } from "../src/extract-queue";
@@ -134,12 +134,27 @@ describe("appendBatch + flushQueue", () => {
     expect(parsed.interactions[0].tool).toBe("Read");
     expect(parsed.interactions[0].title).toBe("a.ts");
   });
+
+  test("skips corrupt JSON lines when reading the queue", () => {
+    const path = join(queueDir(), "corrupt.jsonl");
+    writeFileSync(path, '{"tool":"Read","sessionID":"s","args":{},"title":"a","output":"ok"}\n{not valid json}\n');
+    const out = flushQueue("corrupt");
+    expect(out.length).toBe(1);
+    expect(out[0].tool).toBe("Read");
+  });
 });
 
 describe("queueDir", () => {
   test("honors THATCH_QUEUE_DIR override", () => {
     process.env.THATCH_QUEUE_DIR = "/custom/queue";
     expect(queueDir()).toBe("/custom/queue");
+  });
+
+  test("falls back to XDG_CACHE_HOME when THATCH_QUEUE_DIR is unset", () => {
+    delete process.env.THATCH_QUEUE_DIR;
+    process.env.XDG_CACHE_HOME = "/custom/cache";
+    expect(queueDir()).toBe(join("/custom/cache", "thatch", "queue"));
+    delete process.env.XDG_CACHE_HOME;
   });
 });
 

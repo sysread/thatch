@@ -1,9 +1,44 @@
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll, mock } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Mock @huggingface/transformers so BgeEmbeddingModel can embed without
+// downloading a model. Produces the same hash-based vectors as
+// MockEmbeddingModel, stripping the QUERY_PREFIX so query and passage
+// embeddings for the same text produce identical vectors.
+const QUERY_PREFIX = "Represent this sentence for searching relevant passages: ";
+mock.module("@huggingface/transformers", () => ({
+  pipeline: async () => async (text: string, _opts: any) => {
+    const clean = text.startsWith(QUERY_PREFIX) ? text.slice(QUERY_PREFIX.length) : text;
+    let h = 0;
+    for (let i = 0; i < clean.length; i++) {
+      h = ((h << 5) - h) + clean.charCodeAt(i);
+      h |= 0;
+    }
+    h ^= 0x9e3779b9;
+    const vec = new Float32Array(384);
+    for (let i = 0; i < 384; i++) {
+      h ^= h << 13;
+      h ^= h >>> 17;
+      h ^= h << 5;
+      h |= 0;
+      vec[i] = h / 0x80000000;
+    }
+    return { data: vec };
+  },
+}));
+
 import { server } from "../src/index";
-import { sessionStartReminder, recallNudge, claudeRecallNudge, type NudgeMatch } from "../src/prompts";
+import {
+  sessionStartReminder,
+  recallNudge,
+  claudeRecallNudge,
+  claudeSessionStartReminder,
+  claudeWriteNudge,
+  claudeExtractionNudge,
+  type NudgeMatch,
+} from "../src/prompts";
 
 let hooks: Awaited<ReturnType<typeof server>>;
 let dbDir: string;
@@ -13,17 +48,27 @@ beforeAll(async () => {
   process.env.THATCH_DB_PATH = join(dbDir, "test.db");
   // Redirect skill installation away from the real ~/.config.
   process.env.XDG_CONFIG_HOME = join(dbDir, "config");
-  // Disable the prompt-aware recall nudge — it needs a loaded embedding model
-  // to embed the prompt text, which would require a network download. The
-  // recall nudge is tested via sideband.test.ts (socket round-trip) and
-  // db.test.ts (search logic) instead.
-  process.env.THATCH_RECALL_THRESHOLD = "1.0";
+  // RECALL_THRESHOLD is a module-level constant (0.55 default), read when
+  // index.ts is first imported. Setting the env var here can't change it,
+  // but 0.55 works: the hash-based mock scores ~1.0 for identical texts and
+  // near-orthogonal for different texts.
   const mockClient = {
     session: {
       prompt: async () => {},
     },
   };
   hooks = await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree" } as any);
+
+  // Store a memory so the recall nudge has something to match. Using the
+  // server's own tools ensures the embedding comes from the same (mocked)
+  // BgeEmbeddingModel that chat.message will use for the query. The tool
+  // embeds "# {label}\n\n{content}" — the recall nudge test prompt must
+  // match that full text for the hash-based mock to produce identical vectors.
+  await hooks.tool.thatch_memory_remember.execute({
+    label: "test-coverage",
+    content: "test coverage metrics and gaps",
+    store: "global",
+  });
 });
 
 afterAll(() => {
@@ -31,7 +76,6 @@ afterAll(() => {
   rmSync(dbDir, { recursive: true, force: true });
   delete process.env.THATCH_DB_PATH;
   delete process.env.XDG_CONFIG_HOME;
-  delete process.env.THATCH_RECALL_THRESHOLD;
 });
 
 describe("plugin entry", () => {
@@ -285,5 +329,125 @@ describe("claudeRecallNudge (Claude Code / Cursor)", () => {
     const nudge = claudeRecallNudge(matches);
     expect(nudge).toContain("memory_recall");
     expect(nudge).not.toContain("thatch_memory_recall");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// claudeSessionStartReminder / claudeWriteNudge / claudeExtractionNudge
+// ---------------------------------------------------------------------------
+
+describe("claudeSessionStartReminder", () => {
+  test("includes repo name and bare tool names (no thatch_ prefix)", () => {
+    const reminder = claudeSessionStartReminder("owner/repo");
+    expect(reminder).toContain("[thatch]");
+    expect(reminder).toContain("owner/repo");
+    expect(reminder).toContain("store_list");
+    expect(reminder).toContain("memory_list");
+    expect(reminder).toContain("memory_recall");
+    expect(reminder).not.toContain("thatch_store_list");
+    expect(reminder).not.toContain("thatch_memory_list");
+    expect(reminder).not.toContain("thatch_memory_recall");
+  });
+
+  test("without hygiene returns just the base text", () => {
+    const reminder = claudeSessionStartReminder("owner/repo");
+    expect(reminder).not.toContain("[thatch hygiene]");
+  });
+
+  test("with null hygiene returns just the base text", () => {
+    const reminder = claudeSessionStartReminder("owner/repo", null);
+    expect(reminder).not.toContain("[thatch hygiene]");
+  });
+
+  test("with hygiene appends the hygiene block with bare tool names", () => {
+    const reminder = claudeSessionStartReminder("owner/repo", "Store x: 2 duplicate-candidate pairs");
+    expect(reminder).toContain("[thatch hygiene]");
+    expect(reminder).toContain("Store x: 2 duplicate-candidate pairs");
+    expect(reminder).toContain("find_duplicates");
+    expect(reminder).toContain("memory_show");
+    expect(reminder).not.toContain("thatch_find_duplicates");
+    expect(reminder).not.toContain("thatch_memory_show");
+  });
+});
+
+describe("claudeWriteNudge", () => {
+  test("returns the after-responding check prompt", () => {
+    const nudge = claudeWriteNudge();
+    expect(nudge).toContain("[thatch]");
+    expect(nudge).toContain("After responding");
+    expect(nudge).toContain("save to thatch");
+  });
+});
+
+describe("claudeExtractionNudge", () => {
+  test("singular form for one interaction", () => {
+    const nudge = claudeExtractionNudge(1, '{"tool":"bash"}');
+    expect(nudge).toContain("1 recent tool interaction queued");
+    expect(nudge).not.toContain("interactions queued");
+    expect(nudge).toContain("thatch-fact-extractor");
+    expect(nudge).toContain("mcp__thatch__memory_remember");
+    expect(nudge).toContain('{"tool":"bash"}');
+  });
+
+  test("plural form for multiple interactions", () => {
+    const nudge = claudeExtractionNudge(3, '{"tool":"bash"}');
+    expect(nudge).toContain("3 recent tool interactions queued");
+    expect(nudge).toContain("thatch-fact-extractor");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Recall nudge (prompt-aware, via chat.message hook)
+// ---------------------------------------------------------------------------
+
+describe("recall nudge via chat.message", () => {
+  test("surfaces a recall nudge when prompt matches a stored memory", async () => {
+    // The tool embeds "# {label}\n\n{content}", so the prompt must match
+    // that full text for the hash-based mock to produce a matching vector.
+    const output: any = {
+      message: { id: "msg_recall_1" },
+      parts: [{ type: "text", text: "# test-coverage\n\ntest coverage metrics and gaps" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_recall", messageID: "msg_recall_1" } as any, output);
+    expect(output.parts.length).toBe(2);
+    expect(output.parts[1].type).toBe("text");
+    expect(output.parts[1].synthetic).toBe(true);
+    expect(output.parts[1].text).toContain("test-coverage");
+    expect(output.parts[1].text).toContain("thatch_memory_recall");
+  });
+
+  test("no nudge when prompt does not match any memory", async () => {
+    const output: any = {
+      message: { id: "msg_recall_2" },
+      parts: [{ type: "text", text: "completely unrelated cooking recipe ideas" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_no_match", messageID: "msg_recall_2" } as any, output);
+    expect(output.parts.length).toBe(1);
+  });
+
+  test("no nudge for short prompts even if content would match", async () => {
+    const output: any = {
+      message: { id: "msg_recall_3" },
+      parts: [{ type: "text", text: "ok" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_short", messageID: "msg_recall_3" } as any, output);
+    expect(output.parts.length).toBe(1);
+  });
+
+  test("extraction nudge takes priority over recall nudge", async () => {
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_priority", callID: "c1", args: { command: "ls" } },
+      { title: "list files", output: "file.txt", metadata: {} },
+    );
+
+    const output: any = {
+      message: { id: "msg_priority" },
+      parts: [{ type: "text", text: "test coverage metrics and gaps" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_priority", messageID: "msg_priority" } as any, output);
+    expect(output.parts.length).toBe(2);
+    expect(output.parts[1].synthetic).toBe(true);
+    expect(output.parts[1].text).toContain("thatch-fact-extractor");
+    expect(output.parts[1].text).not.toContain("test-coverage");
   });
 });
