@@ -64,11 +64,11 @@ beforeAll(async () => {
   // BgeEmbeddingModel that chat.message will use for the query. The tool
   // embeds "# {label}\n\n{content}" — the recall nudge test prompt must
   // match that full text for the hash-based mock to produce identical vectors.
-  await hooks.tool.thatch_memory_remember.execute({
+  await hooks.tool!.thatch_memory_remember.execute({
     label: "test-coverage",
     content: "test coverage metrics and gaps",
     store: "global",
-  });
+  } as any, {} as any);
 });
 
 afterAll(() => {
@@ -85,7 +85,7 @@ describe("plugin entry", () => {
 
   test("returns hooks with all expected tools", () => {
     expect(hooks.tool).toBeDefined();
-    const names = Object.keys(hooks.tool);
+    const names = Object.keys(hooks.tool!);
     expect(names.sort()).toEqual([
       "thatch_dedup_mark_checked",
       "thatch_find_duplicates",
@@ -116,26 +116,26 @@ describe("plugin entry", () => {
 
   test("system transform appends to system array", async () => {
     const output = { system: [] as string[] };
-    await hooks["experimental.chat.system.transform"]!({}, output);
+    await hooks["experimental.chat.system.transform"]!({} as any, output);
     expect(output.system.length).toBe(1);
     expect(output.system[0]).toContain("Thatch provides persistent memory");
   });
 
   test("chat.message prepends nudge when extraction is empty", async () => {
     const output: any = { parts: [{ type: "text", text: "hello" }] };
-    await hooks["chat.message"]!({}, output);
+    await hooks["chat.message"]!({} as any, output);
     expect(output.parts.length).toBe(1); // no nudge, buffer empty
   });
 
   test("compaction hook appends to context array", async () => {
     const output = { context: [] as string[] };
-    await hooks["experimental.session.compacting"]!({}, output);
+    await hooks["experimental.session.compacting"]!({} as any, output);
     expect(output.context.length).toBe(1);
     expect(output.context[0]).toContain("thatch_memory_recall");
   });
 
   test("each tool has description and execute", () => {
-    for (const [name, t] of Object.entries(hooks.tool)) {
+    for (const [name, t] of Object.entries(hooks.tool!)) {
       expect(t.description, `${name} missing description`).toBeTruthy();
       expect(typeof t.description).toBe("string");
       expect(typeof t.execute, `${name} missing execute`).toBe("function");
@@ -143,7 +143,7 @@ describe("plugin entry", () => {
   });
 
   test("each tool has args schema", () => {
-    for (const [name, t] of Object.entries(hooks.tool)) {
+    for (const [name, t] of Object.entries(hooks.tool!)) {
       expect(t.args, `${name} missing args`).toBeDefined();
     }
   });
