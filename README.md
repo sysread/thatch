@@ -2,12 +2,17 @@
 
 [![CI](https://github.com/sysread/thatch/actions/workflows/ci.yml/badge.svg)](https://github.com/sysread/thatch/actions/workflows/ci.yml)
 
-Persistent memory for AI coding agents — local embeddings, SQLite stores, zero config.
+Persistent memory and operational methodology for AI coding agents — local
+embeddings, SQLite stores, zero config.
 
 Works with **OpenCode** (as a plugin) and **Claude Code** (as an MCP server).
-Your AI agent can remember information across sessions. Stores are per-repo
-with a shared `global` store. No API keys, no cloud services — everything runs
-on your machine.
+Each session inherits the accumulated knowledge of every session before it —
+project architecture, conventions, gotchas, user preferences — so your agent
+starts with context instead of a blank slate. Stores are per-repo with a
+shared `global` store. On top of the memory layer, thatch ships a suite of
+skills that prime, maintain, and reflect on memory, plus a structured
+multi-agent code review framework. No API keys, no cloud services —
+everything runs on your machine.
 
 ## Quick start
 
@@ -51,7 +56,7 @@ thatch setup --claude
 1. Writes `.mcp.json` — registers the MCP server (Claude Code spawns `thatch mcp` as a stdio process)
 2. Appends instructions to `CLAUDE.md` — session startup, when to write, what to store
 3. Installs hooks in `.claude/settings.json` — `SessionStart` runs `thatch reminder` (recall nudge + hygiene), `UserPromptSubmit` reminds you to save new knowledge
-4. Installs skill files to `~/.claude/skills/` — `thatch-fact-extractor`, `thatch-dedup-classifier`, and `thatch-project-primer`
+4. Installs skill files to `~/.claude/skills/` — memory workflow skills (project primer, fact extractor, dedup classifier, session reflection) and code review skills (5 review specialists + synthesizer). See [Skills](#skills) below.
 
 Restart Claude Code and thatch's tools are available as `mcp__thatch__*`.
 
@@ -87,6 +92,38 @@ the bare `thatch` command so the config survives updates.
 | `thatch_store_list` | `mcp__thatch__store_list` | List all stores |
 | `thatch_find_duplicates` | `mcp__thatch__find_duplicates` | Surface pairs of suspiciously similar memories |
 | `thatch_dedup_mark_checked` | `mcp__thatch__dedup_mark_checked` | Record a reviewed pair so it stops being re-reported |
+
+## Skills
+
+Thatch ships skills that encode operational methodology — practices your
+agent follows to maintain its own memory and review code systematically.
+
+### Memory workflows
+
+| Skill | What it does |
+|-------|-------------|
+| `thatch-project-primer` | Bootstrap a project's memory store by investigating the codebase and writing foundational memories |
+| `thatch-fact-extractor` | Extract durable facts from recent tool interactions and persist them to memory |
+| `thatch-dedup-classifier` | Classify and consolidate similar memories surfaced by `thatch_find_duplicates` |
+| `thatch-session-reflection` | Record what was learned during a session — project facts, user preferences, tool tips |
+
+### Code review
+
+| Skill | What it does |
+|-------|-------------|
+| `thatch-review-pedantic` | Mechanical correctness — spelling, naming, doc accuracy, specs, stale artifacts |
+| `thatch-review-acceptance` | Behavioral and product review — UX coherency, behavioral delta, integration effects |
+| `thatch-review-state-flow` | Data flow and contracts — module boundaries, implicit state machines, error propagation |
+| `thatch-review-no-slop` | AI writing anti-pattern detection — change narration, fourth wall breaks, hedging |
+| `thatch-review-breadcrumbs` | Comment narrative — do comments form a coherent outline of the code's behavior? |
+| `thatch-review-synthesizer` | Verify specialist findings against actual code, deduplicate, produce severity-grouped report |
+| `thatch-code-review` | Multi-agent review coordinator — triage, partition, dispatch specialists in parallel (opencode only) |
+
+The five review specialists run independently and can be used standalone. The
+synthesizer verifies their findings against the actual code — reading each
+cited location to confirm the evidence matches — before producing a final
+report. The coordinator (opencode only) orchestrates the full pipeline by
+dispatching specialist sub-agents in parallel.
 
 ## CLI
 
@@ -141,6 +178,17 @@ Thatch auto-detects your repo identity from `git remote get-url origin`
 locally) and stored in `~/.config/thatch/thatch.db` (SQLite, WAL mode).
 Search is brute-force cosine similarity — fast enough for thousands of entries.
 
+### Memory capture
+
+Thatch doesn't call an LLM to extract facts. Instead, it buffers recent tool
+interactions and nudges the host agent to persist durable knowledge itself,
+using the `thatch-fact-extractor` skill. The agent's own model decides what's
+worth remembering — keeping thatch dependency-free and the agent in control.
+On OpenCode, the plugin hooks `tool.execute.after` and `chat.message` to
+buffer and flush. On Claude Code, `PostToolBatch` and `UserPromptSubmit`
+hooks drive a file-backed queue. Both paths produce the same payload for the
+fact-extractor skill.
+
 ## OpenCode vs Claude Code parity
 
 | Feature | OpenCode (plugin) | Claude Code (MCP + hooks) |
@@ -149,7 +197,7 @@ Search is brute-force cosine similarity — fast enough for thousands of entries
 | System prompt | Injected at runtime with repo name | Static CLAUDE.md (repo auto-detected by MCP server) |
 | Session-start reminder | `session.created` event | `SessionStart` hook → `thatch reminder` |
 | Compaction context | `experimental.session.compacting` hook | **Gap**: no equivalent (CLAUDE.md persists through compaction) |
-| Extraction nudge | `tool.execute.after` + `chat.message` | **Gap**: no cross-call buffering (hooks fire per-event) |
+| Extraction nudge | `tool.execute.after` + `chat.message` | `PostToolBatch` + `UserPromptSubmit` (file-backed queue) |
 | Skills | `$XDG_CONFIG_HOME/opencode/skills` | `~/.claude/skills/` |
 | Store detection | `worktree` param from plugin | `CLAUDE_PROJECT_DIR` env var |
 
