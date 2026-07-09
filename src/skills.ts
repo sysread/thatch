@@ -72,6 +72,8 @@ Identify the application's runtime model early: Is it a CLI tool (process exits 
 ## Reachability gate
 For every potential finding, you MUST describe a concrete scenario where a real user triggers the problem through normal usage. "The code allows this" is not sufficient — show how a user actually encounters it given the application's runtime model. If the only trigger requires conditions that cannot occur in actual usage, it is not a finding.
 
+Before claiming a value can hold a problematic state (NULL, orphaned, out-of-range, wrong-type), read the artifact that governs that state: the column definition, type declaration, FK/NOT NULL constraint, validation, or guard. Quote it in your finding. If a schema constraint, type, or guard makes the state unreachable, it is not a finding. "The join could drop rows" requires proving a droppable row can exist — cite the constraint that permits it.
+
 ## Intent verification
 Before flagging behavior as a bug, verify intent:
 1. **Trace callers.** Read every caller of the cited code. The behavior may be intentional given how the feature is actually used.
@@ -453,10 +455,12 @@ For each, walk through actual function calls, tracking data shape at each step.
 
 ### 4. Prove the producer chain
 For every finding about invalid state, missing data, shape mismatches, or cross-module behavior, trace the full causal chain:
-- Who produces the state or value?
+- Who produces the state or value? Cite the file:line that writes the problematic value.
 - Which functions transform it?
 - Which consumer or branch fails?
 - Which real entrypoint/workflow exercises that chain?
+
+The producer must be a specific file:line in current code that writes the problematic value. "Source deletion could orphan this" is not a producer; the file:line where a row is written with a dangling reference is. If no such write site exists in the codebase, the state is unreachable — do not report it.
 
 If you cannot identify a real producer in current code, or the only way to trigger the issue is by manually fabricating invalid state/data, do not report it as a real finding.
 
@@ -490,6 +494,10 @@ For each new module or significant change:
 - **DEAD_PATH**: Code path exists but cannot be reached given current callers/preconditions
 
 For each finding, cite both sides of any contract (file:line for caller and callee).
+
+## Worked non-finding (negative example)
+
+Example non-finding: "INNER JOIN on source_id silently drops rows whose source was deleted." Before reporting, read the FK: if source_id is NOT NULL with a foreign key and deletion cascades to children, an orphaned row cannot exist and the drop is unreachable. Reporting it anyway is the canonical reachability failure. The fix is not to switch to LEFT JOIN (which would add dead code for an impossible case) but to verify the constraint that governs the state.
 `;
 
 const REVIEW_NO_SLOP = `---
@@ -660,6 +668,8 @@ For each finding from the specialists:
    - Identify the real entrypoint/workflow that exercises this chain.
    If the only way to trigger the issue is by manually fabricating invalid data/state or bypassing the real producers/guards, reject the finding. If the citation is real but you cannot prove the producer chain, classify as UNVERIFIABLE rather than CONFIRMED.
 
+5a. **Verify governing constraints for data-shape findings.** For findings claiming a field can be NULL/missing/orphaned/malformed, locate and read the field's definition (schema migration, model, type declaration). If a NOT NULL, FK, enum, or type constraint forecloses the claimed state, REJECT and cite the constraint. Do not classify such a finding CONFIRMED without having read the governing definition.
+
 6. **Verify intent (behavioral findings only).** If the specialist flagged behavior as a bug but the code appears to work as designed, check whether the behavior is intentional:
    - Read the callers of the cited code to see if the pattern makes sense in context.
    - Check git log or git blame on the cited file for commit messages explaining the decision.
@@ -673,9 +683,9 @@ For each finding from the specialists:
    Runtime reachability, producer chains, and intent verification do not apply. A mechanical finding is not a "bug" and does not need a "trigger scenario."
 
 7. **Classify:**
-   - **CONFIRMED**: For behavioral findings: the cited code matches, the claim is accurate, the bug is reachable through realistic usage, you proved the workflow/producer chain where applicable, and the behavior is not intentional. For mechanical findings: the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy.
-   - **REJECTED**: For behavioral findings: the citation is wrong, the claim is inaccurate, the bug cannot manifest in the actual runtime context, or the behavior is an intentional design decision (explain why briefly). Reject findings that rely on manually seeded invalid state/data with no real producer path. For mechanical findings: the cited text does not exist, does not violate the stated guideline, is unchanged legacy outside the touched scope, or the finding duplicates another confirmed finding.
-   - **UNVERIFIABLE**: The citation is correct but you cannot confirm the claim without deeper tracing. This is the default for plausible behavioral claims that lack a proven trigger path, producer chain, or authoritative source of truth. Mechanical findings should rarely be UNVERIFIABLE — if the text exists and violates the guideline, it is CONFIRMED.
+   - **CONFIRMED**: For behavioral findings: the cited code matches, the claim is accurate, the bug is reachable through realistic usage, you proved the workflow/producer chain where applicable, the behavior is not intentional, and for data-shape findings you read and cited the governing constraint confirming the claimed state is reachable. For mechanical findings: the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy.
+   - **REJECTED**: For behavioral findings: the citation is wrong, the claim is inaccurate, the bug cannot manifest in the actual runtime context, the behavior is an intentional design decision (explain why briefly), or a governing constraint (NOT NULL, FK, type, guard) forecloses the claimed state. Reject findings that rely on manually seeded invalid state/data with no real producer path. For mechanical findings: the cited text does not exist, does not violate the stated guideline, is unchanged legacy outside the touched scope, or the finding duplicates another confirmed finding.
+   - **UNVERIFIABLE**: The citation is correct but you cannot confirm the claim without deeper tracing. This is the default for plausible behavioral claims that lack a proven trigger path, producer chain, or authoritative source of truth. A data-shape finding that lacks the governing-constraint citation is UNVERIFIABLE, not CONFIRMED. Mechanical findings should rarely be UNVERIFIABLE — if the text exists and violates the guideline, it is CONFIRMED.
 
 ## Deduplication
 
@@ -690,6 +700,8 @@ Assign final severity based on YOUR verification:
 - **HIGH**: A real bug that requires specific but realistic conditions. You verified the conditions are reachable from the cited location.
 - **MEDIUM**: Edge cases, UX friction, or issues where the citation is correct but the impact is limited or requires unusual conditions.
 - **LOW**: Mechanical issues (stale docs, guideline violations, naming) that don't affect correctness.
+
+A data-shape or reachability finding that lacks the governing-constraint citation (the schema, type, or guard definition you read to confirm the state is reachable) is capped at UNVERIFIABLE. It cannot be classified CONFIRMED or assigned a severity. This removes the path where a plausible-but-unchecked claim lands at MEDIUM.
 
 ## Report format
 
@@ -888,7 +900,7 @@ When dispatching each sub-agent, include in the prompt:
 - Any design context or specific concerns
 - Explicit scope boundaries ("your scope is X; do NOT review Y")
 - Instruction to produce markdown findings with: severity, category, file:line, finding, evidence, trigger scenario, reachability, source of truth, producer chain, provenance
-- Instruction to apply the reachability gate and intent verification before reporting
+- Instruction to apply the reachability gate (including reading and citing governing constraints for data-state claims) and intent verification before reporting
 `;
 
 // ---------------------------------------------------------------------------
