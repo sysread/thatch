@@ -25,9 +25,11 @@ jobs:
       # user-writable tool cache (the runner's stock node in /usr/local is
       # root-owned, so npm can't self-upgrade there). Deliberately NO
       # registry-url — it writes a token-expecting .npmrc that preempts
-      # the OIDC exchange.
+      # the OIDC exchange. Pin to npm@11: npm 12.0.0 shipped with a broken
+      # sigstore dependency that crashes provenance signing with
+      # "Cannot find module 'sigstore'".
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: npm install -g npm@latest
+      - run: npm install -g npm@11
       - run: npm publish --access public
