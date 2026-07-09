@@ -1,6 +1,6 @@
 {
   "name": "@jeffober/thatch",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Persistent memory for AI coding agents — local embeddings, SQLite stores, zero config. Works with OpenCode (as a plugin), Claude Code (as an MCP server), and Cursor (as an MCP server).",
   "type": "module",
   "main": "src/index.ts",
