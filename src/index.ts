@@ -41,6 +41,14 @@ export const server: Plugin = async ({ client, worktree }) => {
   const model = new BgeEmbeddingModel(modelName);
   const extraction = new ExtractionPipeline();
 
+  // Sessions currently being compacted. chat.message nudges are skipped while
+  // a session is in this set — the agent can't call tools during summary
+  // generation, so a recall or extraction nudge would cause a blocked-tool
+  // error. Cleared by experimental.compaction.autocontinue. If compaction
+  // fails, the entry leaks (graceful degradation: nudges stay off for that
+  // session, but no crash).
+  const compacting = new Set<string>();
+
   // Skills always install to the global opencode config — installing into the
   // worktree would mutate the user's repo (untracked files in git status).
   // A failed install degrades the nudge workflow but must not kill the plugin.
@@ -64,9 +72,18 @@ export const server: Plugin = async ({ client, worktree }) => {
       output.system.push(sys);
     },
 
-    // 2. Compaction context — re-familiarizes after compaction.
-    "experimental.session.compacting": async (_input, output) => {
+    // 2. Compaction context — re-familiarizes after compaction. The flag
+    //    suppresses chat.message nudges during summary generation (tool
+    //    calls are blocked there).
+    "experimental.session.compacting": async (input, output) => {
+      compacting.add(input.sessionID);
       output.context.push(compact);
+    },
+
+    // 2b. Clear the compacting flag after compaction succeeds so chat.message
+    //     nudges resume for the synthetic auto-continue turn and beyond.
+    "experimental.compaction.autocontinue": async (input) => {
+      compacting.delete(input.sessionID);
     },
 
     // 3. Tool buffering — feeds the extraction nudge. Thatch's own tools are
@@ -89,7 +106,12 @@ export const server: Plugin = async ({ client, worktree }) => {
     //   b. Recall nudge: the user's prompt semantically matches existing
     //      memories — surface that prior knowledge exists before the agent
     //      responds. Uses the in-process warm model (no sideband needed).
+    //
+    // Skipped during compaction: the agent can't call tools while generating
+    // a summary, so a nudge that says "use thatch_memory_recall" triggers a
+    // blocked-tool error.
     "chat.message": async (input, output) => {
+      if (compacting.has(input.sessionID)) return;
       if (extraction.pending(input.sessionID)) {
         const batch = extraction.flush(input.sessionID);
         const payload = extraction.buildPayload(batch, repo);

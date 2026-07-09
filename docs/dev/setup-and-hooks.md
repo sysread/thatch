@@ -17,9 +17,10 @@ The plugin entry (`src/index.ts`) registers these hooks in code:
 | Hook | Input | Output | Behavior |
 |------|-------|--------|----------|
 | `experimental.chat.system.transform` | `{}` | `{ system: string[] }` | Pushes the system prompt (store names, usage rules). |
-| `experimental.session.compacting` | `{}` | `{ context: string[] }` | Pushes re-familiarization context. |
+| `experimental.session.compacting` | `{ sessionID }` | `{ context: string[] }` | Marks the session as compacting, pushes re-familiarization context. |
+| `experimental.compaction.autocontinue` | `{ sessionID }` | `{ enabled: boolean }` | Clears the compacting flag so `chat.message` nudges resume post-compaction. |
 | `tool.execute.after` | `{ tool, sessionID, callID, args }` | `{ title, output, metadata }` | Buffers non-`thatch_` tool calls into the in-memory extraction ring buffer (max 20). |
-| `chat.message` | `{ sessionID, messageID }` | `{ message, parts }` | Two tiers: extraction nudge if pending, else prompt-aware recall nudge. |
+| `chat.message` | `{ sessionID, messageID }` | `{ message, parts }` | Two tiers: extraction nudge if pending, else prompt-aware recall nudge. Skipped while the session is compacting. |
 | `event` (`session.created`) | `{ event: { type, properties: { info: { id } } } }` | — | Calls `client.session.prompt` with the reminder + hygiene heartbeat. |
 | `dispose` | — | — | Closes the DB. |
 

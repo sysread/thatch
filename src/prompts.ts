@@ -64,9 +64,9 @@ CLAUDE.md or OPENCODE.md, speculative conclusions.
 
 export function compactionContext(repo: string): string {
   return `Thatch persistent memory is active with stores "${repo}" and "global".
-Use thatch_memory_recall to retrieve prior knowledge, thatch_memory_remember
-to persist important decisions, patterns, and conventions encountered so far.
-Include context about what's been learned and decided when summarizing.`;
+When summarizing, preserve context about what's been learned and decided
+this session — conventions, architectural decisions, and prior knowledge
+retrieved from memory. This ensures continuity after compaction.`;
 }
 
 export function sessionStartReminder(repo: string, hygiene?: string | null): string {

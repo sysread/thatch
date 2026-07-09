@@ -70,9 +70,10 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | Hook | What it does |
 |------|-------------|
 | `experimental.chat.system.transform` | Appends the thatch system prompt (store names, usage rules). |
-| `experimental.session.compacting` | Appends re-familiarization context so a compacted session still knows thatch exists. |
+| `experimental.session.compacting` | Marks the session as compacting and appends re-familiarization context so a compacted session still knows thatch exists. |
+| `experimental.compaction.autocontinue` | Clears the compacting flag so `chat.message` nudges resume. Without this, nudges that instruct tool calls would fire during summary generation where tools are blocked. |
 | `tool.execute.after` | Buffers every non-`thatch_*` tool call into the session's extraction buffer. This is a plugin hook, NOT a bus event — do not move it into the `event` handler; the event bus has no such event and it will silently never fire. |
-| `chat.message` | Two priority tiers: (a) if extraction buffer has interactions, flushes them as a synthetic text part carrying the extraction nudge + JSON payload; (b) otherwise, embeds the user's prompt text with the in-process warm model, searches `db.search()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55). |
+| `chat.message` | Two priority tiers: (a) if extraction buffer has interactions, flushes them as a synthetic text part carrying the extraction nudge + JSON payload; (b) otherwise, embeds the user's prompt text with the in-process warm model, searches `db.search()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55). Skipped entirely while the session is compacting (tool calls are blocked during summary generation). |
 | `event` (`session.created`) | Sends the session-start reminder via `client.session.prompt`, carrying the hygiene heartbeat (pending dedup pairs, stale count, orphaned branch memories) when any signal is non-zero. The session id is at `event.properties.info.id`. |
 | `dispose` | Closes the DB. |
 

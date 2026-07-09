@@ -110,6 +110,10 @@ describe("plugin entry", () => {
     expect(typeof hooks["experimental.session.compacting"]).toBe("function");
   });
 
+  test("has compaction autocontinue hook", () => {
+    expect(typeof hooks["experimental.compaction.autocontinue"]).toBe("function");
+  });
+
   test("has event hook", () => {
     expect(typeof hooks.event).toBe("function");
   });
@@ -127,11 +131,12 @@ describe("plugin entry", () => {
     expect(output.parts.length).toBe(1); // no nudge, buffer empty
   });
 
-  test("compaction hook appends to context array", async () => {
+  test("compaction hook appends context and marks session as compacting", async () => {
     const output = { context: [] as string[] };
-    await hooks["experimental.session.compacting"]!({} as any, output);
+    await hooks["experimental.session.compacting"]!({ sessionID: "ses_compact_1" } as any, output);
     expect(output.context.length).toBe(1);
-    expect(output.context[0]).toContain("thatch_memory_recall");
+    expect(output.context[0]).toContain("Thatch persistent memory");
+    expect(output.context[0]).not.toContain("thatch_memory_recall");
   });
 
   test("each tool has description and execute", () => {
@@ -449,5 +454,60 @@ describe("recall nudge via chat.message", () => {
     expect(output.parts[1].synthetic).toBe(true);
     expect(output.parts[1].text).toContain("thatch-fact-extractor");
     expect(output.parts[1].text).not.toContain("test-coverage");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Compaction guard — chat.message nudges suppressed during compaction
+// ---------------------------------------------------------------------------
+
+describe("compaction guard for chat.message", () => {
+  test("chat.message skips nudges while session is compacting", async () => {
+    await hooks["experimental.session.compacting"]!(
+      { sessionID: "ses_guard" } as any,
+      { context: [] as string[] },
+    );
+
+    const output: any = {
+      message: { id: "msg_guard_1" },
+      parts: [{ type: "text", text: "# test-coverage\n\ntest coverage metrics and gaps" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_guard", messageID: "msg_guard_1" } as any, output);
+    expect(output.parts.length).toBe(1);
+  });
+
+  test("autocontinue clears the flag and nudges resume", async () => {
+    await hooks["experimental.compaction.autocontinue"]!({ sessionID: "ses_guard" } as any, { enabled: true } as any);
+
+    const output: any = {
+      message: { id: "msg_guard_2" },
+      parts: [{ type: "text", text: "# test-coverage\n\ntest coverage metrics and gaps" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_guard", messageID: "msg_guard_2" } as any, output);
+    expect(output.parts.length).toBe(2);
+    expect(output.parts[1].synthetic).toBe(true);
+    expect(output.parts[1].text).toContain("test-coverage");
+  });
+
+  test("extraction nudge is also suppressed during compaction", async () => {
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_guard_ext", callID: "c1", args: { command: "ls" } },
+      { title: "list files", output: "file.txt", metadata: {} },
+    );
+
+    await hooks["experimental.session.compacting"]!(
+      { sessionID: "ses_guard_ext" } as any,
+      { context: [] as string[] },
+    );
+
+    const output: any = {
+      message: { id: "msg_guard_ext" },
+      parts: [{ type: "text", text: "anything" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_guard_ext", messageID: "msg_guard_ext" } as any, output);
+    expect(output.parts.length).toBe(1);
+
+    // Clean up so the buffer doesn't leak into other tests.
+    await hooks["experimental.compaction.autocontinue"]!({ sessionID: "ses_guard_ext" } as any, { enabled: true } as any);
   });
 });
