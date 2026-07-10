@@ -22,6 +22,27 @@ echo "  bump:    $v"
 echo "  next:    $next"
 echo
 
+# Pre-flight: verify the current version is published on npm before allowing a
+# new release. A tagged-but-unpublished version means the prior publish failed;
+# stacking another release on top hides the gap and complicates recovery.
+if git rev-parse -q --verify "refs/tags/v$curr" >/dev/null 2>&1; then
+  pub_status=$(npm view "@jeffober/thatch@$curr" version 2>&1 || true)
+  if ! echo "$pub_status" | grep -q "^$curr$"; then
+    if echo "$pub_status" | grep -q "E404"; then
+      echo "ERROR: v$curr is tagged but not published to npm."
+      echo "  The previous release failed. Check: gh run view --workflow=publish.yml"
+      echo "  Fix the workflow, delete and re-tag v$curr, push, then re-run this release."
+      echo "  To re-tag: git tag -d v$curr && git tag v$curr <commit> && git push origin :refs/tags/v$curr && git push origin v$curr"
+      exit 1
+    else
+      echo "WARN: npm registry check failed (not a 404 — may be a network issue or npm outage):"
+      echo "  $pub_status"
+      echo "  Proceeding anyway. Verify v$curr is published before relying on this."
+      echo
+    fi
+  fi
+fi
+
 echo "▸ running checks (typecheck + tests + markdown lint)..."
 mise run check
 echo "  ✓ checks passed"
