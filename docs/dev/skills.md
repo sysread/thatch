@@ -21,9 +21,9 @@ description: Extract durable project facts ... Use when ...
 - `description` drives when the agent loads the skill (both opencode and
   Cursor auto-discover skills and use the description for relevance).
 
-## The 11 skills
+## The 12 skills
 
-**Shared (10)** — installed everywhere; no sub-agents required:
+**Shared (11)** — installed everywhere; no sub-agents required:
 
 | Skill | Role |
 |-------|------|
@@ -36,13 +36,14 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth-wall breaks, em dashes, filler. |
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of behavior? |
 | `thatch-review-synthesizer` | Verify specialist findings against code, dedupe, classify, calibrate severity. |
+| `thatch-review-context` | Gather project/feature context (PR descriptions, git archaeology, ticket references, memory) before fan-out. Prevents false positives about intentionally deferred work. |
 | `thatch-session-reflection` | End-of-session memory recording (project, user, tools, self). |
 
 **opencode-only (1)** — the coordinator needs sub-agent support:
 
 | Skill | Role |
 |-------|------|
-| `thatch-code-review` | Resolve review target, estimate complexity, partition, dispatch the 5 specialists in parallel, synthesize. |
+| `thatch-code-review` | Resolve review target, gather context, estimate complexity, partition, dispatch the 5 specialists in parallel, synthesize. |
 
 ## REVIEW_COMMON
 
@@ -57,6 +58,12 @@ The five review specialists share a framework interpolated via `${REVIEW_COMMON}
   trigger; "the code allows this" is not enough.
 - **Intent verification** — trace callers, check git history, and `thatch_memory_recall`
   for design rationale before flagging a behavior as a bug.
+- **Project context awareness** — if a context brief is provided (from the
+  coordinator or from loading `thatch-review-context`), use it to avoid false
+  positives about intentionally deferred work.
+- **TODO ($ticket) markers** — recognize `TODO ($TICKET-ID): ...` as legitimate
+  breadcrumbs for deferred work, not stale artifacts. Flag only if the referenced
+  ticket is closed or merged.
 - **Output format** — `[SEVERITY] [CATEGORY] file:line` with finding, evidence
   (quoted), trigger, reachability, source of truth, producer chain, provenance.
 
@@ -66,7 +73,7 @@ The synthesizer reuses the same verification rigor but has its own structure
 ## The two arrays
 
 ```ts
-const SHARED_SKILLS: SkillDef[] = [ /* 10 skills above */ ];
+const SHARED_SKILLS: SkillDef[] = [ /* 11 skills above */ ];
 const OPENCODE_ONLY_SKILLS: SkillDef[] = [ /* code-review coordinator */ ];
 ```
 
@@ -100,8 +107,8 @@ and `--cursor` pass only the shared set.
 ## Memory review skills in practice
 
 - **Quick single lens**: load any specialist directly and point it at a branch.
-- **Full review on opencode**: load `thatch-code-review` — it dispatches all 5
-  specialists in parallel, then synthesizes.
+- **Full review on opencode**: load `thatch-code-review` — it gathers project context, dispatches all 5
+  specialists in parallel (with context injected into each briefing), then synthesizes.
 - **Full review on Claude Code/Cursor**: run each specialist in sequence, then
   run `thatch-review-synthesizer` to verify and aggregate.
 

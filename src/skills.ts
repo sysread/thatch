@@ -82,6 +82,18 @@ Before flagging behavior as a bug, verify intent:
 
 If any of these reveals the behavior is intentional, it is not a finding. If you cannot determine intent after all three steps, you may report it — but note that you could not confirm whether the behavior is intentional.
 
+## Project context awareness
+If your briefing includes a project context brief (from the coordinator or from loading thatch-review-context), use it to calibrate your findings:
+- **Deferred work** listed in the brief is intentionally excluded from this PR. Do not flag the absence of deferred pieces as bugs, inconsistencies, or missing functionality.
+- **Dependencies** in the brief tell you whether base-branch behavior is expected to be present or not. Do not assert that base-branch behavior exists without verifying it landed.
+- **Relevant constraints** may explain why code is structured a certain way. Consider them before flagging design choices.
+
+## TODO ($ticket) markers
+Code may contain \`TODO ($TICKET-ID): description\` comments that mark intentionally deferred work: temporary code, placeholders for future tickets, or planned cleanups. These are legitimate breadcrumbs, not stale artifacts.
+- Do NOT flag a TODO ($ticket) marker as a stale artifact if the ticket it references is still open or future work.
+- DO flag it if you can verify the referenced ticket is closed or merged (the TODO is now stale).
+- If your briefing includes a context brief that lists the deferred work, use it to determine whether the ticket is still pending.
+
 ## Output format
 Produce findings as markdown. For each finding:
 
@@ -734,6 +746,122 @@ Note which files or areas were NOT covered by any specialist.
 `;
 
 // ---------------------------------------------------------------------------
+// Review context builder — gathers project/feature context before fan-out
+// ---------------------------------------------------------------------------
+
+const REVIEW_CONTEXT = `---
+name: thatch-review-context
+description: Gather project and feature context before a code review. Investigates PR descriptions, git history, ticket references, docs, and memory to build a context brief that prevents false positives about intentionally deferred work. Use before dispatching review specialists or running a solo review.
+---
+
+You are a review context builder. Your job is to gather project context that gives reviewers the background they need to avoid false positives about intentionally deferred work, incomplete features, and multi-ticket dependencies.
+
+## Why this matters
+
+A specialist reviewer without project context will flag missing pieces of a feature as bugs or inconsistencies. If the PR is one ticket in a multi-ticket effort, the "missing" piece may be scheduled for the next ticket. Context prevents these false positives.
+
+## Sources to investigate
+
+Work through these sources in order. Not every source will yield information for every change. Skip sources that produce nothing rather than forcing a narrative.
+
+### 1. PR description
+If reviewing a PR, read the description:
+- \`gh pr view N --json title,body,labels,milestone\` (or the local branch's PR if detected)
+- Extract: stated scope, what is intentionally excluded, ticket references, linked PRs
+
+### 2. Branch name
+Branch names often contain ticket identifiers. Look for patterns:
+- \`user/ticket-123\`, \`user/plat-122\`, \`feature/PROJ-456\`
+- Extract the ticket ID and use it to search other sources
+
+### 3. Git archaeology
+- \`git log --oneline merge-base..HEAD\` — commit messages may reference tickets, describe scope, or mention future work
+- \`git log --all --oneline --grep="TICKET-ID"\` — find related commits on other branches
+- \`git log -S "TODO (TICKET"\` — find TODO markers that reference this or related tickets
+- \`git branch -a\` — other branches may show planned or in-progress related work
+
+### 4. TODO ($ticket) markers in the diff
+Scan the diff for TODO markers that reference ticket identifiers:
+- Pattern: \`TODO ($TICKET-ID): description\`
+- Example: \`// TODO (PLAT-123): replace this temporary flag with the real config loader\`
+- Example: \`// TODO (PLAT-124): this fallback will be removed when the new API lands\`
+- These mark intentionally deferred work: cleanups, temporary code, or pieces to be introduced later
+- Each marker tells a reviewer "this is known and scheduled, not missing"
+- Extract the ticket IDs and note what is deferred
+
+### 5. Thatch memories (RAG)
+Call \`thatch_memory_recall\` with queries like:
+- The feature or project name (if known from the PR or branch)
+- The ticket identifier
+- "feature status" or "milestone" or "roadmap"
+- Any architectural decisions or design docs related to the changed area
+
+### 6. Project documentation
+- README, docs/, design docs, ADRs
+- CONTRIBUTING.md or equivalent for conventions
+- Any roadmap, milestone, or project plan documents
+
+### 7. Issue tracker (if accessible)
+If ticket IDs were found:
+- \`gh issue list --search "TICKET-ID"\` or \`gh issue view N\`
+- Look for milestone assignments, dependencies, and blocking relationships
+- Check for epic or parent issues that describe the overall feature
+
+## Context brief format
+
+Produce a structured brief:
+
+### Project context
+- What larger initiative or feature this change is part of
+- The ticket or milestone this PR implements
+
+### This change's scope
+- What this PR is scoped to deliver (from PR description, commit messages, diff analysis)
+- What is explicitly excluded or deferred
+
+### Deferred work
+List each deferred piece:
+- What is deferred
+- Which ticket will deliver it (if known)
+- Any TODO ($ticket) markers in the code that annotate it
+
+### Dependencies
+- What other tickets or PRs this depends on (must merge first)
+- What tickets or PRs depend on this (are blocked by it)
+- Whether base branches have landed (for stacked PRs)
+
+### Relevant constraints
+- Design decisions or architectural constraints from memories or docs
+- Conventions that reviewers should be aware of
+
+## If context is sparse
+
+Not every PR will have rich context. If you find minimal context:
+- State what you looked for and what you found
+- Note that the change appears to be standalone (no multi-ticket dependencies detected)
+- Flag any TODO ($ticket) markers in the diff even if you could not resolve the ticket
+
+## The TODO ($ticket) convention
+
+When code is intentionally temporary or incomplete because work is split across tickets, mark it with a TODO that references the ticket that will resolve it:
+
+\`\`\`
+// TODO ($TICKET-ID): description of what will be done or removed here
+\`\`\`
+
+Examples:
+- \`// TODO (PLAT-123): replace this temporary flag with the real config loader\`
+- \`// TODO (PLAT-124): this fallback will be removed when the new API lands\`
+- \`# TODO (INFRA-456): delete this compatibility shim once all callers migrate\`
+
+These markers serve as breadcrumbs for reviewers (human and LLM) who lack project context:
+- They signal "this is known and scheduled, not a bug or oversight"
+- They link the code to the ticket that will resolve it
+- They should NOT be flagged as stale artifacts (the work is not yet completed)
+- They SHOULD be flagged if the referenced ticket is closed or merged (the TODO is now stale)
+`;
+
+// ---------------------------------------------------------------------------
 // Session reflection — end-of-session memory recording guidance
 // ---------------------------------------------------------------------------
 
@@ -833,7 +961,22 @@ Fetch any refs not locally reachable so branches and PRs that were never checked
 
 Run git diff --stat on the resolved range and git log --oneline to understand the change.
 
-## Step 2: Estimate complexity
+## Step 2: Gather project context
+
+Load the thatch-review-context skill and follow its methodology to build a context brief for this change. Investigate:
+- PR description (if a PR was specified or detected via the branch)
+- Branch name for ticket identifiers
+- Git log for commit messages referencing tickets or describing scope
+- TODO ($ticket) markers in the diff
+- thatch_memory_recall for feature/project status, design decisions, ticket dependencies
+- Project docs, READMEs, design docs
+- Issue tracker (gh issue/view) if ticket IDs are found
+
+Produce the context brief in the format the skill prescribes (project context, this change's scope, deferred work, dependencies, relevant constraints).
+
+If context is sparse (no PR description, no ticket references, no relevant memories), note that the change appears standalone. Even a sparse brief is valuable: it tells specialists you looked and found nothing, so they do not need to repeat the search.
+
+## Step 3: Estimate complexity
 
 Estimate the review effort in scrum points (1-13 scale):
 - **1**: Trivial — typo fix, config tweak, single-line change.
@@ -847,7 +990,7 @@ Points reflect *review complexity*, not implementation effort.
 
 Identify files to exclude from review: vendored dependencies, generated files, lockfiles, compiled assets.
 
-## Step 3: Partition (if > 3 points)
+## Step 4: Partition (if > 3 points)
 
 For changes estimated at more than 3 points, partition into review units of approximately 3 points each:
 - Group files by logical component or feature, not by directory.
@@ -857,7 +1000,7 @@ For changes estimated at more than 3 points, partition into review units of appr
 
 For changes estimated at 3 points or fewer, skip partitioning — dispatch one set of specialists covering the full scope. A single 3-point unit is not large enough to warrant decomposition.
 
-## Step 4: Dispatch specialist sub-agents
+## Step 5: Dispatch specialist sub-agents
 
 For each review unit, dispatch sub-agents using the Task tool. Each sub-agent runs one specialist lens on one review unit. The five specialists are:
 
@@ -876,7 +1019,7 @@ For the integration review unit (5+ points), dispatch a sub-agent focused on:
 - Boundary correctness — race conditions, ordering dependencies, shared state issues at boundaries.
 - Top-level coherence — does the overall change make sense as a unit?
 
-## Step 5: Synthesize
+## Step 6: Synthesize
 
 After all sub-agents complete, load the thatch-review-synthesizer skill to verify findings, deduplicate across specialists, classify (CONFIRMED/REJECTED/UNVERIFIABLE), and produce the final severity-grouped report.
 
@@ -897,10 +1040,12 @@ When dispatching each sub-agent, include in the prompt:
 - The specific files in this unit's scope
 - The specialist focus (from the five specialists above)
 - The diff stat for this unit's files
+- **The project context brief** from Step 2, filtered to what is relevant to this unit's scope. Explicitly list any deferred work that falls within this unit's files, and call out TODO ($ticket) markers the specialists should recognize as intentional.
 - Any design context or specific concerns
 - Explicit scope boundaries ("your scope is X; do NOT review Y")
 - Instruction to produce markdown findings with: severity, category, file:line, finding, evidence, trigger scenario, reachability, source of truth, producer chain, provenance
 - Instruction to apply the reachability gate (including reading and citing governing constraints for data-state claims) and intent verification before reporting
+- Instruction to respect the project context brief: do not flag deferred work as bugs or inconsistencies, and recognize TODO ($ticket) markers as intentional breadcrumbs
 `;
 
 // ---------------------------------------------------------------------------
@@ -918,6 +1063,7 @@ const SHARED_SKILLS: SkillDef[] = [
   { name: "thatch-review-no-slop", content: REVIEW_NO_SLOP },
   { name: "thatch-review-breadcrumbs", content: REVIEW_BREADCRUMBS },
   { name: "thatch-review-synthesizer", content: REVIEW_SYNTHESIZER },
+  { name: "thatch-review-context", content: REVIEW_CONTEXT },
   { name: "thatch-session-reflection", content: SESSION_REFLECTION },
 ];
 
