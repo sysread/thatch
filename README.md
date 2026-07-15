@@ -2,18 +2,23 @@
 
 [![CI](https://github.com/sysread/thatch/actions/workflows/ci.yml/badge.svg)](https://github.com/sysread/thatch/actions/workflows/ci.yml)
 
-Persistent memory and operational methodology for AI coding agents — local
-embeddings, SQLite stores, zero config.
+## Synopsis
+
+Persistent memory and useful dev skills for AI coding agents that requires zero
+manual config.
 
 Works with **OpenCode** (as a plugin), **Claude Code** (as an MCP server), and
 **Cursor** (as an MCP server).
+
 Each session inherits the accumulated knowledge of every session before it —
 project architecture, conventions, gotchas, user preferences — so your agent
-starts with context instead of a blank slate. Stores are per-repo with a
-shared `global` store. On top of the memory layer, thatch ships a suite of
-skills that prime, maintain, and reflect on memory, plus a structured
-multi-agent code review framework. No API keys, no cloud services —
-everything runs on your machine.
+starts with context instead of a blank slate. Stores are per-repo with a shared
+`global` store.
+
+On top of the memory layer, thatch ships a suite of skills for managing memories,
+performing in-depth, structured code reviews, and researching your code base.
+
+No API keys, no cloud services; everything runs on your machine.
 
 ## Quick start
 
