@@ -21,9 +21,9 @@ description: Extract durable project facts ... Use when ...
 - `description` drives when the agent loads the skill (both opencode and
   Cursor auto-discover skills and use the description for relevance).
 
-## The 12 skills
+## The 13 skills
 
-**Shared (11)** — installed everywhere; no sub-agents required:
+**Shared (12)** — installed everywhere; no sub-agents required:
 
 | Skill | Role |
 |-------|------|
@@ -37,13 +37,14 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of behavior? |
 | `thatch-review-synthesizer` | Verify specialist findings against code, dedupe, classify, calibrate severity. |
 | `thatch-review-context` | Gather project/feature context (PR descriptions, git archaeology, ticket references, memory) before fan-out. Prevents false positives about intentionally deferred work. |
+| `thatch-workflow-research` | Research code workflows/features affected by a change or planned change. Reads code flows, comments, git history, memories, docs. Produces a guide to the code for reviewers or planners. |
 | `thatch-session-reflection` | End-of-session memory recording (project, user, tools, self). |
 
 **opencode-only (1)** — the coordinator needs sub-agent support:
 
 | Skill | Role |
 |-------|------|
-| `thatch-code-review` | Resolve review target, gather context, estimate complexity, partition, dispatch the 5 specialists in parallel, synthesize. |
+| `thatch-code-review` | Resolve review target, gather project context, research affected workflows, estimate complexity, partition, dispatch the 5 specialists in parallel, synthesize. |
 
 ## REVIEW_COMMON
 
@@ -61,6 +62,10 @@ The five review specialists share a framework interpolated via `${REVIEW_COMMON}
 - **Project context awareness** — if a context brief is provided (from the
   coordinator or from loading `thatch-review-context`), use it to avoid false
   positives about intentionally deferred work.
+- **Workflow context awareness** — if a workflow guide is provided (from the
+  coordinator or from loading `thatch-workflow-research`), use it to understand
+  the purpose and evolution of the code, distinguishing intentional behavior
+  and long-standing design decisions from new issues.
 - **TODO ($ticket) markers** — recognize `TODO ($TICKET-ID): ...` as legitimate
   breadcrumbs for deferred work, not stale artifacts. Flag only if the referenced
   ticket is closed or merged.
@@ -73,7 +78,7 @@ The synthesizer reuses the same verification rigor but has its own structure
 ## The two arrays
 
 ```ts
-const SHARED_SKILLS: SkillDef[] = [ /* 11 skills above */ ];
+const SHARED_SKILLS: SkillDef[] = [ /* 12 skills above */ ];
 const OPENCODE_ONLY_SKILLS: SkillDef[] = [ /* code-review coordinator */ ];
 ```
 
@@ -107,8 +112,7 @@ and `--cursor` pass only the shared set.
 ## Memory review skills in practice
 
 - **Quick single lens**: load any specialist directly and point it at a branch.
-- **Full review on opencode**: load `thatch-code-review` — it gathers project context, dispatches all 5
-  specialists in parallel (with context injected into each briefing), then synthesizes.
+- **Full review on opencode**: load `thatch-code-review` — it gathers project context, researches affected workflows, dispatches all 5 specialists in parallel (with both the context brief and workflow guide injected into each briefing), then synthesizes.
 - **Full review on Claude Code/Cursor**: run each specialist in sequence, then
   run `thatch-review-synthesizer` to verify and aggregate.
 
