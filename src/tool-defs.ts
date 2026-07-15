@@ -40,6 +40,7 @@ function formatEntry(
   let meta = `[${entry.store}]`;
   if (entry.branch) meta += ` branch:${entry.branch}`;
   if (entry.confidence) meta += ` confidence:${entry.confidence}`;
+  if (entry.archived) meta += " archived:true";
   parts.push(meta, "", entry.content);
   return parts.join("\n");
 }
@@ -48,6 +49,7 @@ function formatRecallResult(entry: any): string {
   let meta = `store:${entry.store}`;
   if (entry.branch) meta += ` branch:${entry.branch}`;
   if (entry.confidence) meta += ` confidence:${entry.confidence}`;
+  if (entry.archived) meta += " archived:true";
   const score = entry._score.toFixed(3);
   return `[${meta}] [score:${score}]\n${entry.content}`;
 }
@@ -118,6 +120,11 @@ const rememberDef: ToolDef = {
     overwrite: z.boolean().optional().describe(
       "Set to true to replace an existing memory with the same label.",
     ),
+    archived: z.boolean().optional().describe(
+      "Mark this memory as a stable, long-term record that should not trigger hygiene nudges. " +
+      "When updating an already-archived memory, this param is REQUIRED — " +
+      "pass archived: true to keep it archived, or archived: false to unarchive.",
+    ),
   },
   async execute(args, ctx) {
     const store = (args.store as string) || ctx.defaultStore;
@@ -125,9 +132,6 @@ const rememberDef: ToolDef = {
     const content = `# ${label}\n\n${args.content as string}`;
     const embedding = await ctx.model.passageEmbed(content);
 
-    // Write-time collision check: the embedding is already computed, so
-    // scanning the store is nearly free. The save proceeds regardless —
-    // the agent decides whether and how to reconcile.
     const similar = ctx.db.findSimilar(store, embedding, {
       excludeSlug: ctx.db.slugify(label),
     });
@@ -136,6 +140,7 @@ const rememberDef: ToolDef = {
       branch: args.branch as string | undefined,
       confidence: args.confidence as number | undefined,
       overwrite: args.overwrite as boolean | undefined,
+      archived: args.archived as boolean | undefined,
     });
 
     if (!result.ok) return result.error;
@@ -172,6 +177,9 @@ const recallDef: ToolDef = {
     limit: z.number().int().min(1).max(20).optional().describe(
       "Maximum number of results. Default 10.",
     ),
+    includeArchived: z.boolean().optional().describe(
+      "Include archived memories in results. Default false — archived memories are excluded.",
+    ),
   },
   async execute(args, ctx) {
     const stores = args.store
@@ -183,6 +191,7 @@ const recallDef: ToolDef = {
     const results = ctx.db.recall(stores, queryEmbedding, {
       branch: args.branch as string | undefined,
       limit,
+      includeArchived: args.includeArchived as boolean | undefined,
     });
 
     if (results.length === 0) return "No matching memories found.";
@@ -212,6 +221,7 @@ const listDef: ToolDef = {
         let line = `[${store}] ${e.label}`;
         if (e.branch) line += ` (branch:${e.branch})`;
         if (e.confidence) line += ` (c:${e.confidence})`;
+        if (e.archived) line += " (archived)";
         line += ` (${e.updated_at})`;
         return line;
       })

@@ -91,6 +91,55 @@ describe("tool-defs execute functions", () => {
     const result = await def.execute({ threshold: 0.9 }, ctx);
     expect(result).toContain("No duplicate candidates");
   });
+
+  test("memory_remember returns error updating archived entry without archived param", async () => {
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    await remember.execute({ label: "ArchTest", content: "Orig", archived: true }, ctx);
+    const result = await remember.execute({
+      label: "ArchTest", content: "Updated", overwrite: true,
+    }, ctx);
+    expect(result).toContain("archived");
+  });
+
+  test("memory_remember retains archived status when updating", async () => {
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    await remember.execute({ label: "ArchTest", content: "Orig", archived: true }, ctx);
+    await remember.execute({
+      label: "ArchTest", content: "Updated", overwrite: true, archived: true,
+    }, ctx);
+    const show = TOOL_DEFS.find((t) => t.name === "memory_show")!;
+    const entry = await show.execute({ label: "ArchTest" }, ctx);
+    expect(entry).toContain("archived:true");
+  });
+
+  test("memory_recall excludes archived by default", async () => {
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const recall = TOOL_DEFS.find((t) => t.name === "memory_recall")!;
+    await remember.execute({ label: "Active", content: "Active content" }, ctx);
+    await remember.execute({ label: "Archived", content: "Archived content", archived: true }, ctx);
+    const result = await recall.execute({ query: "content" }, ctx);
+    expect(result).toContain("Active");
+    expect(result).not.toContain("Archived");
+  });
+
+  test("memory_recall includeArchived surfaces archived", async () => {
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const recall = TOOL_DEFS.find((t) => t.name === "memory_recall")!;
+    await remember.execute({ label: "Active", content: "Active content" }, ctx);
+    await remember.execute({ label: "Archived", content: "Archived content", archived: true }, ctx);
+    const result = await recall.execute({ query: "content", includeArchived: true }, ctx);
+    expect(result).toContain("Archived");
+  });
+
+  test("memory_list shows archived status", async () => {
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const list = TOOL_DEFS.find((t) => t.name === "memory_list")!;
+    await remember.execute({ label: "Normal", content: "Content" }, ctx);
+    await remember.execute({ label: "Old", content: "Old", archived: true }, ctx);
+    const result = await list.execute({}, ctx);
+    expect(result).not.toContain("Normal (archived)");
+    expect(result).toContain("Old (archived)");
+  });
 });
 
 describe("tool-defs validation", () => {

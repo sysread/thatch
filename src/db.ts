@@ -9,6 +9,7 @@ export interface MemoryRow {
   model: string | null;
   branch: string | null;
   confidence: number | null;
+  archived: boolean;
   created_at: string;
   updated_at: string;
   recall_count: number;
@@ -69,6 +70,7 @@ export class ThatchDB {
         model     TEXT,
         branch    TEXT,
         confidence INTEGER,
+        archived  INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         recall_count INTEGER NOT NULL DEFAULT 0,
@@ -102,6 +104,7 @@ export class ThatchDB {
     const wanted: [string, string][] = [
       ["recall_count", "INTEGER NOT NULL DEFAULT 0"],
       ["last_recalled_at", "TEXT"],
+      ["archived", "INTEGER NOT NULL DEFAULT 0"],
     ];
     for (const [col, decl] of wanted) {
       if (!existing.has(col)) {
@@ -170,27 +173,23 @@ export class ThatchDB {
     content: string,
     embedding: Float32Array,
     model: string,
-    opts?: { branch?: string; confidence?: number; overwrite?: boolean },
+    opts?: { branch?: string; confidence?: number; overwrite?: boolean; archived?: boolean },
   ): { ok: true } | { ok: false; error: string } {
     const slug = this.slugify(label);
     this.ensureStore(store);
 
-    // The embedding may be a view into a larger buffer (transformers.js tensor
-    // output); serialize exactly the view's bytes, not the whole backing buffer.
     const blob = new Uint8Array(embedding.buffer, embedding.byteOffset, embedding.byteLength);
     const branch = opts?.branch ?? null;
     const confidence = opts?.confidence ?? null;
+    const archived = opts?.archived === true ? 1 : (opts?.archived === false ? 0 : null);
     const now = new Date().toISOString();
-    const params = [slug, store, label, content, blob, model, branch, confidence, now, now];
 
     if (!opts?.overwrite) {
-      // Plain INSERT so the PK constraint enforces no-clobber atomically —
-      // a check-then-upsert would race against concurrent sessions.
       try {
         this.#db.run(
-          `INSERT INTO entries (slug, store, label, content, embedding, model, branch, confidence, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          params as any,
+          `INSERT INTO entries (slug, store, label, content, embedding, model, branch, confidence, archived, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [slug, store, label, content, blob, model, branch, confidence, archived ?? 0, now, now] as any,
         );
         return { ok: true };
       } catch (err: any) {
@@ -205,10 +204,25 @@ export class ThatchDB {
       }
     }
 
+    const existing = this.#db
+      .query("SELECT archived FROM entries WHERE slug = ? AND store = ?")
+      .get(slug, store) as { archived: number } | null;
+
+    if (existing && existing.archived && opts?.archived === undefined) {
+      return {
+        ok: false,
+        error: `"${label}" is archived. Pass archived: true to keep it archived, or archived: false to unarchive it.`,
+      };
+    }
+
+    // archived column for upsert: the INSERT VALUES always needs a non-null
+    // value (NOT NULL constraint), so use archived ?? 0. To preserve the
+    // existing value when the caller doesn't specify archived, the UPDATE
+    // clause accepts a nullable extra param: NULL means "keep existing."
     this.#db.run(
       `
-      INSERT INTO entries (slug, store, label, content, embedding, model, branch, confidence, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO entries (slug, store, label, content, embedding, model, branch, confidence, archived, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(slug, store) DO UPDATE SET
         label = excluded.label,
         content = excluded.content,
@@ -216,13 +230,12 @@ export class ThatchDB {
         model = excluded.model,
         branch = COALESCE(excluded.branch, entries.branch),
         confidence = COALESCE(excluded.confidence, entries.confidence),
+        archived = COALESCE(?, entries.archived),
         updated_at = excluded.updated_at
       `,
-      params as any,
+      [slug, store, label, content, blob, model, branch, confidence, archived ?? 0, now, now, archived] as any,
     );
 
-    // Content changed, so prior dedup verdicts involving this entry are stale;
-    // clear them so findDuplicates can re-flag the pair.
     this.#db.run(
       "DELETE FROM dedup_pairs WHERE store = ? AND (slug_a = ? OR slug_b = ?)",
       [store, slug, slug],
@@ -242,22 +255,25 @@ export class ThatchDB {
   search(
     stores: string[],
     queryEmbedding: Float32Array,
-    opts?: { branch?: string; limit?: number },
+    opts?: { branch?: string; limit?: number; includeArchived?: boolean },
   ): (MemoryRow & { _score: number })[] {
     if (stores.length === 0) return [];
 
     const limit = opts?.limit ?? 10;
     const branch = opts?.branch;
+    const includeArchived = opts?.includeArchived ?? false;
 
     const placeholders = stores.map(() => "?").join(", ");
 
     interface SqlParams { sql: string; params: any[] }
 
     const { sql, params }: SqlParams = (() => {
+      const clauses = ["store IN (" + placeholders + ")", "embedding IS NOT NULL"];
+      if (!includeArchived) clauses.push("archived = 0");
       const base = `
-        SELECT slug, store, label, content, embedding, model, branch, confidence, created_at, updated_at, recall_count, last_recalled_at
+        SELECT slug, store, label, content, embedding, model, branch, confidence, archived, created_at, updated_at, recall_count, last_recalled_at
         FROM entries
-        WHERE store IN (${placeholders}) AND embedding IS NOT NULL
+        WHERE ${clauses.join(" AND ")}
       `;
 
       if (branch) {
@@ -278,6 +294,7 @@ export class ThatchDB {
     // rather than ranked. Dimension is the discriminator — model tags are
     // informational only.
     const scored = rows.flatMap((row) => {
+      row.archived = !!row.archived;
       const emb = blobToVector(row.embedding!);
       if (emb.length !== queryEmbedding.length) return [];
       return [{ ...row, embedding: row.embedding, _score: cosineSimilarity(queryEmbedding, emb) }];
@@ -295,7 +312,7 @@ export class ThatchDB {
   recall(
     stores: string[],
     queryEmbedding: Float32Array,
-    opts?: { branch?: string; limit?: number },
+    opts?: { branch?: string; limit?: number; includeArchived?: boolean },
   ): (MemoryRow & { _score: number })[] {
     const top = this.search(stores, queryEmbedding, opts);
 
@@ -326,7 +343,7 @@ export class ThatchDB {
     const limit = opts?.limit ?? 3;
 
     const rows = this.#db
-      .query("SELECT slug, label, embedding FROM entries WHERE store = ? AND embedding IS NOT NULL")
+      .query("SELECT slug, label, embedding FROM entries WHERE store = ? AND archived = 0 AND embedding IS NOT NULL")
       .all(store) as any[];
 
     const hits: SimilarEntry[] = [];
@@ -345,10 +362,10 @@ export class ThatchDB {
   }
 
   /** Lists all entries in a store, returning metadata without content. */
-  listEntries(store: string): { slug: string; label: string; branch: string | null; confidence: number | null; updated_at: string }[] {
+  listEntries(store: string): { slug: string; label: string; branch: string | null; confidence: number | null; archived: boolean; updated_at: string }[] {
     return this.#db
       .query(
-        "SELECT slug, label, branch, confidence, updated_at FROM entries WHERE store = ? ORDER BY label",
+        "SELECT slug, label, branch, confidence, archived, updated_at FROM entries WHERE store = ? ORDER BY label",
       )
       .all(store)
       .map((r: any) => ({
@@ -356,6 +373,7 @@ export class ThatchDB {
         label: r.label,
         branch: r.branch,
         confidence: r.confidence,
+        archived: !!r.archived,
         updated_at: r.updated_at,
       }));
   }
@@ -363,11 +381,14 @@ export class ThatchDB {
   /** Full content of a single entry by label. */
   showEntry(store: string, label: string): MemoryRow | null {
     const slug = this.slugify(label);
-    return this.#db
+    const row = this.#db
       .query(
-        "SELECT slug, store, label, content, embedding, model, branch, confidence, created_at, updated_at, recall_count, last_recalled_at FROM entries WHERE slug = ? AND store = ?",
+        "SELECT slug, store, label, content, embedding, model, branch, confidence, archived, created_at, updated_at, recall_count, last_recalled_at FROM entries WHERE slug = ? AND store = ?",
       )
-      .get(slug, store) as MemoryRow | null;
+      .get(slug, store) as Record<string, unknown> | null;
+    if (!row) return null;
+    row.archived = !!row.archived;
+    return row as unknown as MemoryRow;
   }
 
   forgetEntry(store: string, label: string): boolean {
@@ -386,7 +407,7 @@ export class ThatchDB {
   findDuplicates(store: string, threshold = 0.85): DedupCandidate[] {
     const rows = this.#db
       .query(
-        "SELECT slug, label, content, embedding FROM entries WHERE store = ? AND embedding IS NOT NULL ORDER BY slug",
+        "SELECT slug, label, content, embedding FROM entries WHERE store = ? AND archived = 0 AND embedding IS NOT NULL ORDER BY slug",
       )
       .all(store) as any[];
 
@@ -446,7 +467,7 @@ export class ThatchDB {
     const row = this.#db
       .query(
         `SELECT COUNT(*) AS n FROM entries
-         WHERE store = ? AND max(updated_at, COALESCE(last_recalled_at, updated_at)) < ?`,
+         WHERE store = ? AND archived = 0 AND max(updated_at, COALESCE(last_recalled_at, updated_at)) < ?`,
       )
       .get(store, cutoffIso) as any;
     return row?.n ?? 0;
@@ -465,7 +486,7 @@ export class ThatchDB {
     if (branches.length === 0) return 0;
     const placeholders = branches.map(() => "?").join(", ");
     const row = this.#db
-      .query(`SELECT COUNT(*) AS n FROM entries WHERE store = ? AND branch IN (${placeholders})`)
+      .query(`SELECT COUNT(*) AS n FROM entries WHERE store = ? AND archived = 0 AND branch IN (${placeholders})`)
       .get(store, ...branches) as any;
     return row?.n ?? 0;
   }

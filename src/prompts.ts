@@ -69,6 +69,25 @@ new project knowledge, conventions, architectural decisions, investigation resul
 Session-specific context, incomplete/unverified info, anything already in
 CLAUDE.md or OPENCODE.md, speculative conclusions.
 
+## Archived Memories
+
+Memories can be marked \`archived\` — a flag for stable, long-term historical
+records that should not trigger hygiene nudges (stale, orphaned, duplicate).
+Archived memories are excluded from search/recall results by default; pass
+\`includeArchived: true\` to surface them for archaeological dives.
+
+When a branch is merged or about to be deleted, consolidate its branch-scoped
+memories into a single archived memory scoped to that same branch (preserving
+provenance). Capture intent, design decisions, review back-and-forth, PR
+number, unexpected pivots — the kind of git-archaeology context that explains
+_why_ the code looks the way it does a year from now. Then memory_forget the
+originals. The archived record outlives the branch. Future sessions searching
+with \`includeArchived: true\` can pull it up when investigating ambiguous code.
+
+Updating an archived memory requires passing \`archived\` explicitly — omit it
+and the tool returns an error. Pass \`archived: true\` to keep it archived,
+\`archived: false\` to unarchive.
+
 ## Explicit Requests
 
 "Remember X" — save immediately.
@@ -94,7 +113,7 @@ Use thatch_store_list then thatch_memory_list to see what's available, then that
   return `${base}
 
 [thatch hygiene] ${hygiene}
-When convenient this session (not before addressing the user's request), tend the store: run thatch_find_duplicates and consolidate clusters, review stale memories with thatch_memory_show and update or forget them, and forget memories scoped to deleted branches.`;
+When convenient this session (not before addressing the user's request), tend the store: run thatch_find_duplicates and consolidate clusters, review stale memories with thatch_memory_show and update or forget them, and for memories scoped to deleted branches, consolidate them into an archived historical record before forgetting the originals.`;
 }
 
 /**
@@ -181,6 +200,25 @@ new project knowledge, conventions, architectural decisions, investigation resul
 Session-specific context, incomplete/unverified info, anything already in
 CLAUDE.md, speculative conclusions.
 
+## Archived Memories
+
+Memories can be marked \`archived\` — a flag for stable, long-term historical
+records that should not trigger hygiene nudges (stale, orphaned, duplicate).
+Archived memories are excluded from search/recall results by default; pass
+\`includeArchived: true\` to surface them for archaeological dives.
+
+When a branch is merged or about to be deleted, consolidate its branch-scoped
+memories into a single archived memory scoped to that same branch (preserving
+provenance). Capture intent, design decisions, review back-and-forth, PR
+number, unexpected pivots — the kind of git-archaeology context that explains
+_why_ the code looks the way it does a year from now. Then memory_forget the
+originals. The archived record outlives the branch. Future sessions searching
+with \`includeArchived: true\` can pull it up when investigating ambiguous code.
+
+Updating an archived memory requires passing \`archived\` explicitly — omit it
+and the tool returns an error. Pass \`archived: true\` to keep it archived,
+\`archived: false\` to unarchive.
+
 ## Explicit Requests
 
 "Remember X" — save immediately.
@@ -205,7 +243,7 @@ Use store_list then memory_list to see what's available, then memory_recall as n
   return `${base}
 
 [thatch hygiene] ${hygiene}
-When convenient this session (not before addressing the user's request), tend the store: run find_duplicates and consolidate clusters, review stale memories with memory_show and update or forget them, and forget memories scoped to deleted branches.`;
+When convenient this session (not before addressing the user's request), tend the store: run find_duplicates and consolidate clusters, review stale memories with memory_show and update or forget them, and for memories scoped to deleted branches, consolidate them into an archived historical record before forgetting the originals.`;
 }
 
 /**
@@ -308,6 +346,25 @@ new project knowledge, conventions, architectural decisions, investigation resul
 
 Session-specific context, incomplete/unverified info, anything already in
 AGENTS.md, speculative conclusions.
+
+## Archived Memories
+
+Memories can be marked \`archived\` — a flag for stable, long-term historical
+records that should not trigger hygiene nudges (stale, orphaned, duplicate).
+Archived memories are excluded from search/recall results by default; pass
+\`includeArchived: true\` to surface them for archaeological dives.
+
+When a branch is merged or about to be deleted, consolidate its branch-scoped
+memories into a single archived memory scoped to that same branch (preserving
+provenance). Capture intent, design decisions, review back-and-forth, PR
+number, unexpected pivots — the kind of git-archaeology context that explains
+_why_ the code looks the way it does a year from now. Then memory_forget the
+originals. The archived record outlives the branch. Future sessions searching
+with \`includeArchived: true\` can pull it up when investigating ambiguous code.
+
+Updating an archived memory requires passing \`archived\` explicitly — omit it
+and the tool returns an error. Pass \`archived: true\` to keep it archived,
+\`archived: false\` to unarchive.
 
 ## Explicit Requests
 

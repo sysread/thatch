@@ -169,6 +169,54 @@ describe("remember", () => {
     expect((result as any).error).toContain("already exists");
   });
 
+  test("new entry defaults archived to false", () => {
+    db.remember("s", "label", "content", emb, "m");
+    const entry = db.showEntry("s", "label");
+    expect(entry?.archived).toBe(false);
+  });
+
+  test("can create an entry with archived: true", () => {
+    db.remember("s", "label", "content", emb, "m", { archived: true });
+    const entry = db.showEntry("s", "label");
+    expect(entry?.archived).toBe(true);
+  });
+
+  test("updating a non-archived entry preserves archived=false when omitted", () => {
+    db.remember("s", "label", "original", emb, "m");
+    db.remember("s", "label", "updated", emb, "m", { overwrite: true });
+    const entry = db.showEntry("s", "label");
+    expect(entry?.archived).toBe(false);
+    expect(entry?.content).toBe("updated");
+  });
+
+  test("updating a non-archived entry can set archived: true", () => {
+    db.remember("s", "label", "original", emb, "m");
+    db.remember("s", "label", "updated", emb, "m", { overwrite: true, archived: true });
+    const entry = db.showEntry("s", "label");
+    expect(entry?.archived).toBe(true);
+  });
+
+  test("updating an archived entry requires archived param", () => {
+    db.remember("s", "label", "original", emb, "m", { archived: true });
+    const result = db.remember("s", "label", "updated", emb, "m", { overwrite: true });
+    expect(result.ok).toBe(false);
+    expect((result as any).error).toContain("archived");
+  });
+
+  test("updating an archived entry with archived: true keeps it archived", () => {
+    db.remember("s", "label", "original", emb, "m", { archived: true });
+    db.remember("s", "label", "updated", emb, "m", { overwrite: true, archived: true });
+    const entry = db.showEntry("s", "label");
+    expect(entry?.archived).toBe(true);
+  });
+
+  test("updating an archived entry with archived: false unarchives it", () => {
+    db.remember("s", "label", "original", emb, "m", { archived: true });
+    db.remember("s", "label", "updated", emb, "m", { overwrite: true, archived: false });
+    const entry = db.showEntry("s", "label");
+    expect(entry?.archived).toBe(false);
+  });
+
   test("overwrites when overwrite: true", () => {
     db.remember("s", "label", "original", emb, "m");
     const result = db.remember("s", "label", "updated", emb, "m", { overwrite: true });
@@ -275,6 +323,26 @@ describe("recall", () => {
     expect(labels).toContain("global-entry");
     expect(labels).toContain("branch-entry");
     expect(labels).not.toContain("other-entry");
+  });
+
+  test("excludes archived memories by default", () => {
+    const emb = new Float32Array(4).fill(0.25);
+    db.remember("s", "active", "active", emb, "m");
+    db.remember("s", "archived", "archived", emb, "m", { archived: true });
+
+    const results = db.recall(["s"], emb);
+    expect(results.map((r) => r.label)).toEqual(["active"]);
+  });
+
+  test("includeArchived: true surfaces archived memories", () => {
+    const emb = new Float32Array(4).fill(0.25);
+    db.remember("s", "active", "active", emb, "m");
+    db.remember("s", "archived", "archived", emb, "m", { archived: true });
+
+    const results = db.recall(["s"], emb, { includeArchived: true });
+    expect(results.length).toBe(2);
+    const labels = results.map((r) => r.label).sort();
+    expect(labels).toEqual(["active", "archived"]);
   });
 });
 
@@ -430,6 +498,18 @@ describe("findSimilar", () => {
     expect(db.findSimilar("s", embA)).toEqual([]);
   });
 
+  test("excludes archived entries from similarity check", () => {
+    db.remember("s", "archived-near", "content", embA, "m", { archived: true });
+    const hits = db.findSimilar("s", embNear);
+    expect(hits).toEqual([]);
+  });
+
+  test("archived entries excluded from dedup", () => {
+    db.remember("s", "first", "content a", embA, "m");
+    db.remember("s", "near-first", "content near", embNear, "m", { archived: true });
+    expect(db.findDuplicates("s", 0.85)).toEqual([]);
+  });
+
   test("records no recall telemetry", () => {
     db.remember("s", "quiet", "content", embA, "m");
     db.findSimilar("s", embA);
@@ -474,11 +554,25 @@ describe("search", () => {
   test("respects limit and branch filter", () => {
     db.remember("s", "a", "content", embA, "m", { branch: "feature" });
     db.remember("s", "b", "content", embB, "m", { branch: "other" });
-    // Branch filter includes project-wide (branch IS NULL) plus the
-    // specified branch, so "other" is excluded but "feature" matches.
     const results = db.search(["s"], embA, { branch: "feature", limit: 5 });
     expect(results.length).toBe(1);
     expect(results[0].label).toBe("a");
+  });
+
+  test("search excludes archived by default", () => {
+    db.remember("s", "active", "content", embA, "m");
+    db.remember("s", "archived", "content", embB, "m", { archived: true });
+
+    const results = db.search(["s"], embA);
+    expect(results.map((r) => r.label)).toEqual(["active"]);
+  });
+
+  test("search includeArchived: true surfaces archived", () => {
+    db.remember("s", "active", "content", embA, "m");
+    db.remember("s", "archived", "content", embB, "m", { archived: true });
+
+    const results = db.search(["s"], embA, { includeArchived: true });
+    expect(results.length).toBe(2);
   });
 });
 
@@ -553,6 +647,18 @@ describe("hygiene", () => {
     expect(db.entryCountForBranches("s", ["feature/x"])).toBe(2);
     expect(db.entryCountForBranches("s", [])).toBe(0);
   });
+
+  test("staleEntryCount excludes archived entries", () => {
+    db.remember("s", "active", "content", emb, "m");
+    db.remember("s", "archived", "content", emb, "m", { archived: true });
+    expect(db.staleEntryCount("s", future)).toBe(1);
+  });
+
+  test("entryCountForBranches excludes archived entries", () => {
+    db.remember("s", "a", "content", emb, "m", { branch: "feature/x" });
+    db.remember("s", "b", "content", emb, "m", { branch: "feature/x", archived: true });
+    expect(db.entryCountForBranches("s", ["feature/x"])).toBe(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -581,6 +687,7 @@ describe("migration", () => {
     expect(entry).not.toBeNull();
     expect(entry!.recall_count).toBe(0);
     expect(entry!.last_recalled_at).toBeNull();
+    expect(entry!.archived).toBe(false);
     migrated.close();
   });
 });
