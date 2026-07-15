@@ -27,6 +27,19 @@ WIP, PR status). Unscoped memories are project-wide and always included in searc
 Before diving into code, thatch_memory_recall with a query relevant to the area
 you're working in. Prior sessions may have already investigated it.
 
+## Skills
+
+Thatch ships skills for code review, project investigation, and memory
+workflows. The host auto-discovers them, but reach for them proactively:
+
+- \`thatch-code-review\` — full multi-agent code review (dispatches 5 specialists + synthesizer). Requires sub-agent support.
+- \`thatch-workflow-research\` — research code workflows affected by a change or planned change, before reviewing or planning.
+- \`thatch-review-context\` — gather project context (PRs, tickets, TODOs, deferred work) before a review.
+- \`thatch-project-primer\` — investigate a new project and write foundational memories.
+- \`thatch-session-reflection\` — record what you learned at end of session.
+- \`thatch-fact-extractor\` — extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
+- \`thatch-dedup-classifier\` — resolve duplicate memory pairs from \`thatch_find_duplicates\`.
+
 ## When to Write
 
 **One signal is enough.** Do not wait for confirmation.
@@ -125,6 +138,19 @@ WIP, PR status). Unscoped memories are project-wide and always included in searc
 
 Before diving into code, \`memory_recall\` with a query relevant to the area
 you're working in. Prior sessions may have already investigated it.
+
+## Skills
+
+Thatch ships skills for code review, project investigation, and memory
+workflows. The host auto-discovers them, but reach for them proactively:
+
+- \`thatch-workflow-research\` — research code workflows affected by a change or planned change, before reviewing or planning.
+- \`thatch-review-context\` — gather project context (PRs, tickets, TODOs, deferred work) before a review.
+- \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-no-slop\` / \`-breadcrumbs\` — five specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
+- \`thatch-project-primer\` — investigate a new project and write foundational memories.
+- \`thatch-session-reflection\` — record what you learned at end of session.
+- \`thatch-fact-extractor\` — extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
+- \`thatch-dedup-classifier\` — resolve duplicate memory pairs from \`find_duplicates\`.
 
 ## When to Write
 
@@ -240,6 +266,19 @@ WIP, PR status). Unscoped memories are project-wide and always included in searc
 
 Before diving into code, \`memory_recall\` with a query relevant to the area
 you're working in. Prior sessions may have already investigated it.
+
+## Skills
+
+Thatch ships skills for code review, project investigation, and memory
+workflows. The host auto-discovers them, but reach for them proactively:
+
+- \`thatch-workflow-research\` — research code workflows affected by a change or planned change, before reviewing or planning.
+- \`thatch-review-context\` — gather project context (PRs, tickets, TODOs, deferred work) before a review.
+- \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-no-slop\` / \`-breadcrumbs\` — five specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
+- \`thatch-project-primer\` — investigate a new project and write foundational memories.
+- \`thatch-session-reflection\` — record what you learned at end of session.
+- \`thatch-fact-extractor\` — extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
+- \`thatch-dedup-classifier\` — resolve duplicate memory pairs from \`find_duplicates\`.
 
 ## When to Write
 
