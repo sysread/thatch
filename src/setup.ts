@@ -415,8 +415,120 @@ export function setupCursor(
   return {
     mcpConfig: paths.mcpConfigPath,
     agentsMd: paths.agentsMdPath,
-    hooks: paths.hooksPath,
-    skills,
-    global,
+     hooks: paths.hooksPath,
+     skills,
+     global,
+   };
+}
+
+// ---------------------------------------------------------------------------
+// Setup detection — check whether setup was completed for the current host
+// ---------------------------------------------------------------------------
+
+export type HostKind = "claude" | "cursor";
+
+export type SetupStatus =
+  | { status: "installed"; scope: "local" | "global"; host: HostKind }
+  | { status: "not-installed"; host: HostKind; message: string }
+  | { status: "markers-broken"; host: HostKind; file: string; message: string };
+
+type FileCheck = "installed" | "absent" | "broken";
+
+function checkInstructionsFile(path: string, startMarker: string, endMarker: string): FileCheck {
+  if (!existsSync(path)) return "absent";
+  const content = readFileSync(path, "utf8");
+  const startIdx = content.indexOf(startMarker);
+  if (startIdx === -1) return "absent";
+  const endIdx = content.indexOf(endMarker, startIdx);
+  if (endIdx === -1) return "broken";
+  return "installed";
+}
+
+/**
+ * Detects the host from env vars (CURSOR_PROJECT_DIR for Cursor,
+ * CLAUDE_PROJECT_DIR for Claude Code) and checks whether `thatch setup` was
+ * run for that host. Checks local instructions (in the project dir) first,
+ * then global (in the config dir). Returns null if the host cannot be
+ * determined (neither env var is set — e.g. manual `thatch mcp` invocation).
+ */
+export function checkSetup(projectDir: string, homeDir?: string): SetupStatus | null {
+  const home = homeDir ?? process.env.HOME ?? "/tmp";
+  const isCursor = !!process.env.CURSOR_PROJECT_DIR;
+  const isClaude = !!process.env.CLAUDE_PROJECT_DIR && !isCursor;
+  if (!isCursor && !isClaude) return null;
+
+  const host: HostKind = isCursor ? "cursor" : "claude";
+
+  if (host === "claude") {
+    return checkClaudeSetup(projectDir, home);
+  }
+  return checkCursorSetup(projectDir, home);
+}
+
+function checkClaudeSetup(projectDir: string, home: string): SetupStatus {
+  const configDir = claudeConfigDir(home);
+
+  const localMd = join(projectDir, "CLAUDE.md");
+  const localCheck = checkInstructionsFile(localMd, THATCH_MARKER, THATCH_END_MARKER);
+  if (localCheck === "installed") return { status: "installed", scope: "local", host: "claude" };
+  if (localCheck === "broken") {
+    return {
+      status: "markers-broken",
+      host: "claude",
+      file: localMd,
+      message: `Thatch's instructions in ${localMd} have corrupted markers: the start marker was found but the end marker is missing. This usually happens when the file was edited externally and the thatch block was partially modified. Tell the user to fix this by running: thatch setup --claude. If that doesn't resolve it, they may need to manually remove the corrupted thatch block from ${localMd} and re-run setup.`,
+    };
+  }
+
+  const globalMd = join(configDir, "CLAUDE.md");
+  const globalCheck = checkInstructionsFile(globalMd, THATCH_MARKER, THATCH_END_MARKER);
+  if (globalCheck === "installed") return { status: "installed", scope: "global", host: "claude" };
+  if (globalCheck === "broken") {
+    return {
+      status: "markers-broken",
+      host: "claude",
+      file: globalMd,
+      message: `Thatch's instructions in ${globalMd} have corrupted markers: the start marker was found but the end marker is missing. This usually happens when the file was edited externally and the thatch block was partially modified. Tell the user to fix this by running: thatch setup --claude --global. If that doesn't resolve it, they may need to manually remove the corrupted thatch block from ${globalMd} and re-run setup.`,
+    };
+  }
+
+  return {
+    status: "not-installed",
+    host: "claude",
+    message: "Thatch is running as an MCP server but has not been set up for Claude Code. The instructions that tell you how to use thatch's memory tools are missing from CLAUDE.md. Tell the user to run: thatch setup --claude",
+  };
+}
+
+function checkCursorSetup(projectDir: string, home: string): SetupStatus {
+  const configDir = cursorConfigDir(home);
+
+  const localMd = join(projectDir, "AGENTS.md");
+  const localCheck = checkInstructionsFile(localMd, CURSOR_MARKER, CURSOR_END_MARKER);
+  if (localCheck === "installed") return { status: "installed", scope: "local", host: "cursor" };
+  if (localCheck === "broken") {
+    return {
+      status: "markers-broken",
+      host: "cursor",
+      file: localMd,
+      message: `Thatch's instructions in ${localMd} have corrupted markers: the start marker was found but the end marker is missing. This usually happens when the file was edited externally and the thatch block was partially modified. Tell the user to fix this by running: thatch setup --cursor. If that doesn't resolve it, they may need to manually remove the corrupted thatch block from ${localMd} and re-run setup.`,
+    };
+  }
+
+  const globalMd = join(configDir, "AGENTS.md");
+  const globalCheck = checkInstructionsFile(globalMd, CURSOR_MARKER, CURSOR_END_MARKER);
+  if (globalCheck === "installed") return { status: "installed", scope: "global", host: "cursor" };
+  if (globalCheck === "broken") {
+    return {
+      status: "markers-broken",
+      host: "cursor",
+      file: globalMd,
+      message: `Thatch's instructions in ${globalMd} have corrupted markers: the start marker was found but the end marker is missing. This usually happens when the file was edited externally and the thatch block was partially modified. Tell the user to fix this by running: thatch setup --cursor --global. If that doesn't resolve it, they may need to manually remove the corrupted thatch block from ${globalMd} and re-run setup.`,
+    };
+  }
+
+  return {
+    status: "not-installed",
+    host: "cursor",
+    message: "Thatch is running as an MCP server but has not been set up for Cursor. The instructions that tell you how to use thatch's memory tools are missing from AGENTS.md. Tell the user to run: thatch setup --cursor",
   };
 }

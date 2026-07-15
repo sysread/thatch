@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setupClaudeCode, setupCursor } from "../src/setup";
+import { setupClaudeCode, setupCursor, checkSetup } from "../src/setup";
 import { claudeInstructions, cursorInstructions } from "../src/prompts";
 
 let projectDir: string;
@@ -10,6 +10,8 @@ let fakeHome: string;
 let originalHome: string | undefined;
 let originalConfigDir: string | undefined;
 let originalCursorConfigDir: string | undefined;
+let originalClaudeProjectDir: string | undefined;
+let originalCursorProjectDir: string | undefined;
 
 beforeEach(() => {
   projectDir = mkdtempSync(join(tmpdir(), "thatch-setup-project-"));
@@ -17,11 +19,15 @@ beforeEach(() => {
   originalHome = process.env.HOME;
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
   originalCursorConfigDir = process.env.CURSOR_CONFIG_DIR;
+  originalClaudeProjectDir = process.env.CLAUDE_PROJECT_DIR;
+  originalCursorProjectDir = process.env.CURSOR_PROJECT_DIR;
   process.env.HOME = fakeHome;
   // Clear XDG and config dir overrides so each test starts at defaults.
   delete process.env.XDG_CONFIG_HOME;
   delete process.env.CLAUDE_CONFIG_DIR;
   delete process.env.CURSOR_CONFIG_DIR;
+  delete process.env.CLAUDE_PROJECT_DIR;
+  delete process.env.CURSOR_PROJECT_DIR;
 });
 
 afterEach(() => {
@@ -35,6 +41,16 @@ afterEach(() => {
     delete process.env.CURSOR_CONFIG_DIR;
   } else {
     process.env.CURSOR_CONFIG_DIR = originalCursorConfigDir;
+  }
+  if (originalClaudeProjectDir === undefined) {
+    delete process.env.CLAUDE_PROJECT_DIR;
+  } else {
+    process.env.CLAUDE_PROJECT_DIR = originalClaudeProjectDir;
+  }
+  if (originalCursorProjectDir === undefined) {
+    delete process.env.CURSOR_PROJECT_DIR;
+  } else {
+    process.env.CURSOR_PROJECT_DIR = originalCursorProjectDir;
   }
   rmSync(projectDir, { recursive: true, force: true });
   rmSync(fakeHome, { recursive: true, force: true });
@@ -545,5 +561,103 @@ describe("cursorInstructions content", () => {
     expect(text).toContain("Session Startup");
     expect(text).toContain("user preferences and personality");
     expect(text).toContain("project architecture and conventions");
+  });
+});
+
+describe("checkSetup", () => {
+  test("returns null when neither CURSOR_PROJECT_DIR nor CLAUDE_PROJECT_DIR is set", () => {
+    const result = checkSetup(projectDir, fakeHome);
+    expect(result).toBe(null);
+  });
+
+  test("detects local Claude Code install", () => {
+    process.env.CLAUDE_PROJECT_DIR = projectDir;
+    setupClaudeCode("/usr/local/bin/thatch", false, projectDir, fakeHome);
+
+    const result: any = checkSetup(projectDir, fakeHome);
+    expect(result?.status).toBe("installed");
+    expect(result?.scope).toBe("local");
+    expect(result?.host).toBe("claude");
+  });
+
+  test("detects global Claude Code install", () => {
+    process.env.CLAUDE_PROJECT_DIR = projectDir;
+    setupClaudeCode("/usr/local/bin/thatch", true, projectDir, fakeHome);
+
+    const result: any = checkSetup(projectDir, fakeHome);
+    expect(result?.status).toBe("installed");
+    expect(result?.scope).toBe("global");
+    expect(result?.host).toBe("claude");
+  });
+
+  test("detects not-installed for Claude Code", () => {
+    process.env.CLAUDE_PROJECT_DIR = projectDir;
+
+    const result: any = checkSetup(projectDir, fakeHome);
+    expect(result?.status).toBe("not-installed");
+    expect(result?.host).toBe("claude");
+    expect(result?.message).toContain("thatch setup --claude");
+  });
+
+  test("detects markers-broken for Claude Code (local)", () => {
+    process.env.CLAUDE_PROJECT_DIR = projectDir;
+    const broken = "# Persistence\n\nThatch provides persistent memory across Claude Code sessions.\n\nSome user content without the end marker.\n";
+    writeFileSync(join(projectDir, "CLAUDE.md"), broken);
+
+    const result: any = checkSetup(projectDir, fakeHome);
+    expect(result?.status).toBe("markers-broken");
+    expect(result?.host).toBe("claude");
+    expect(result?.message).toContain("thatch setup --claude");
+  });
+
+  test("local takes priority over global for Claude Code", () => {
+    process.env.CLAUDE_PROJECT_DIR = projectDir;
+    setupClaudeCode("/usr/local/bin/thatch", true, projectDir, fakeHome);
+    setupClaudeCode("/usr/local/bin/thatch", false, projectDir, fakeHome);
+
+    const result: any = checkSetup(projectDir, fakeHome);
+    expect(result?.status).toBe("installed");
+    expect(result?.scope).toBe("local");
+  });
+
+  test("detects local Cursor install", () => {
+    process.env.CURSOR_PROJECT_DIR = projectDir;
+    setupCursor("/usr/local/bin/thatch", false, projectDir, fakeHome);
+
+    const result: any = checkSetup(projectDir, fakeHome);
+    expect(result?.status).toBe("installed");
+    expect(result?.scope).toBe("local");
+    expect(result?.host).toBe("cursor");
+  });
+
+  test("detects not-installed for Cursor", () => {
+    process.env.CURSOR_PROJECT_DIR = projectDir;
+
+    const result: any = checkSetup(projectDir, fakeHome);
+    expect(result?.status).toBe("not-installed");
+    expect(result?.host).toBe("cursor");
+    expect(result?.message).toContain("thatch setup --cursor");
+  });
+
+  test("detects markers-broken for Cursor (global)", () => {
+    process.env.CURSOR_PROJECT_DIR = projectDir;
+    const configDir = join(fakeHome, ".cursor");
+    mkdirSync(configDir, { recursive: true });
+    const broken = "# Persistence\n\nThatch provides persistent memory across Cursor sessions.\n\nTruncated without end marker.\n";
+    writeFileSync(join(configDir, "AGENTS.md"), broken);
+
+    const result: any = checkSetup(projectDir, fakeHome);
+    expect(result?.status).toBe("markers-broken");
+    expect(result?.host).toBe("cursor");
+    expect(result?.message).toContain("thatch setup --cursor --global");
+  });
+
+  test("Cursor takes priority over Claude Code when both env vars are set", () => {
+    process.env.CLAUDE_PROJECT_DIR = projectDir;
+    process.env.CURSOR_PROJECT_DIR = projectDir;
+    setupCursor("/usr/local/bin/thatch", false, projectDir, fakeHome);
+
+    const result: any = checkSetup(projectDir, fakeHome);
+    expect(result?.host).toBe("cursor");
   });
 });

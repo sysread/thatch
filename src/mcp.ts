@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ThatchDB } from "./db";
 import { BgeEmbeddingModel } from "./embeddings";
 import { detectRepo } from "./git";
+import { checkSetup } from "./setup";
 import { TOOL_DEFS, type CoreContext, type ToolDef } from "./tool-defs";
 import { SidebandServer, sidebandSocketPath } from "./sideband";
 
@@ -99,6 +100,17 @@ export async function runMcpServer(): Promise<void> {
   const ctx: CoreContext = { db, model, defaultStore: repo };
   const tools = compileTools();
 
+  // Check whether `thatch setup` was run for the current host. If not, or if
+  // markers are broken, surface a warning on the first tools/call response so
+  // the agent can tell the user to run setup. Also emit to stderr for
+  // visibility in host debug logs.
+  let setupWarning: string | null = null;
+  const setupStatus = checkSetup(projectDir);
+  if (setupStatus && setupStatus.status !== "installed") {
+    setupWarning = setupStatus.message;
+    console.error(`[thatch] ${setupWarning}`);
+  }
+
   // The sideband socket lets one-shot hook processes (flush-tools) ask the
   // warm MCP server to embed a prompt and search for matches — without
   // loading the ~34 MB model themselves. If the socket can't be opened
@@ -137,6 +149,17 @@ export async function runMcpServer(): Promise<void> {
       const isNotification = req.id === null || req.id === undefined;
       const res = await dispatch(req, tools, ctx);
       if (res === null || isNotification) continue;
+
+      // Surface the setup warning on the first tools/call response so the
+      // agent sees it and can notify the user. Cleared after one surfacing.
+      if (setupWarning && req.method === "tools/call" && !res.error) {
+        const content = res.result?.content;
+        if (Array.isArray(content) && content[0]?.text != null) {
+          content[0].text = `[thatch] ${setupWarning}\n\n${content[0].text}`;
+        }
+        setupWarning = null;
+      }
+
       send(res);
     }
   }
