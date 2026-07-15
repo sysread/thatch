@@ -26,6 +26,7 @@ file/IPC/CLI contracts ready to graduate into `bun:test` integration tests.
 | [UC-015](UC-015-env-override-matrix.md) | `THATCH_DB_PATH`, `XDG_CONFIG_HOME`, `CLAUDE_CONFIG_DIR`, `THATCH_QUEUE_DIR`, `THATCH_RECALL_THRESHOLD`, `THATCH_MODEL` |
 | [UC-016](UC-016-concurrent-session-isolation.md) | Per-session extraction isolation (in-memory + file queue); shared stateless sideband |
 | [UC-017](UC-017-buffer-tool-vs-buffer-batch.md) | `buffer-batch` (Claude, `tool_calls[]`+`session_id`) vs `buffer-tool` (Cursor, single+`conversation_id`) |
+| [UC-018](UC-018-mcp-startup-setup-detection.md) | MCP startup detects missing/broken setup instructions and warns the agent |
 
 ## Template
 

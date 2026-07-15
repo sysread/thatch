@@ -114,6 +114,17 @@ Beyond the tools, thatch hooks into opencode itself:
 - **Compaction context.** When opencode compacts a long session, thatch injects
   a reminder so the summarized session still knows memory tools exist.
 
+### Setup detection (Claude Code and Cursor)
+
+When the MCP server starts (Claude Code or Cursor), it checks whether
+`thatch setup` was run for the current host by looking for the instruction
+markers in `CLAUDE.md` (Claude Code) or `AGENTS.md` (Cursor). It checks local
+first (in the project directory), then global (in the config directory). If
+setup was never run, or if the instruction markers are broken (e.g. the file
+was edited externally and the thatch block was partially modified), the server
+emits a warning to stderr and prepends it to the first tool response so the
+agent can tell the user to run `thatch setup`.
+
 ## Skills
 
 On startup thatch installs [skills] into your global opencode config
@@ -143,6 +154,8 @@ Five specialist review lenses, each a self-contained static-analysis pass:
 | `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth wall breaks, em dashes, hedging, filler. |
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of the code's behavior? |
 | `thatch-review-synthesizer` | Verifies and synthesizes findings from multiple specialists into a single deduplicated, severity-grouped report. |
+| `thatch-review-context` | Gathers project context (PR descriptions, git archaeology, ticket references, memory) before a review. Prevents false positives about intentionally deferred work. |
+| `thatch-workflow-research` | Researches code workflows and features affected by a change or planned change. Reads code flows, comments, git history, and produces a guide for reviewers or planners. |
 
 ### opencode-only skills
 
@@ -152,12 +165,13 @@ Five specialist review lenses, each a self-contained static-analysis pass:
 
 ### Host availability
 
-| Skill | opencode | Claude Code |
-|-------|----------|-------------|
-| Memory skills (4) | Yes | Yes |
-| Review specialists (5) | Yes | Yes |
-| Review synthesizer | Yes | Yes |
-| Code review coordinator | Yes | No (requires sub-agents) |
+| Skill | opencode | Claude Code | Cursor |
+|-------|----------|-------------|--------|
+| Memory skills (4) | Yes | Yes | Yes |
+| Review specialists (5) | Yes | Yes | Yes |
+| Review synthesizer | Yes | Yes | Yes |
+| Review context + workflow research | Yes | Yes | Yes |
+| Code review coordinator | Yes | No (requires sub-agents) | No (requires sub-agents) |
 
 ### Using review skills
 

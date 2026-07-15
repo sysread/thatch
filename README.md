@@ -118,6 +118,8 @@ agent follows to maintain its own memory and review code systematically.
 | `thatch-review-no-slop` | AI writing anti-pattern detection — change narration, fourth wall breaks, hedging |
 | `thatch-review-breadcrumbs` | Comment narrative — do comments form a coherent outline of the code's behavior? |
 | `thatch-review-synthesizer` | Verify specialist findings against actual code, deduplicate, produce severity-grouped report |
+| `thatch-review-context` | Gather project/feature context (PRs, tickets, TODOs, deferred work) before a review |
+| `thatch-workflow-research` | Research code workflows affected by a change or planned change, before reviewing or planning |
 | `thatch-code-review` | Multi-agent review coordinator — triage, partition, dispatch specialists in parallel (opencode only) |
 
 The five review specialists run independently and can be used standalone. The
@@ -142,7 +144,7 @@ thatch prime                     Prime project memory (runs via opencode or clau
 thatch mcp                       Start the stdio MCP server (for Claude Code)
 thatch reminder                  Print session-start reminder (for hooks)
 thatch hygiene                   Print the hygiene report (standalone)
-thatch setup --claude [--global] Install config + instructions + hooks + skills
+thatch setup --claude [--cursor] [--global] Install config + instructions + hooks + skills
 ```
 
 Stores default to the repo detected from `git remote`. Use `global` for the
@@ -190,17 +192,18 @@ buffer and flush. On Claude Code, `PostToolBatch` and `UserPromptSubmit`
 hooks drive a file-backed queue. Both paths produce the same payload for the
 fact-extractor skill.
 
-## OpenCode vs Claude Code parity
+## OpenCode vs Claude Code vs Cursor parity
 
-| Feature | OpenCode (plugin) | Claude Code (MCP + hooks) |
-|---------|-------------------|--------------------------|
-| Tools | Plugin tool registration | MCP `tools/list` + `tools/call` |
-| System prompt | Injected at runtime with repo name | Static CLAUDE.md (repo auto-detected by MCP server) |
-| Session-start reminder | `session.created` event | `SessionStart` hook → `thatch reminder` |
-| Compaction context | `experimental.session.compacting` hook | **Gap**: no equivalent (CLAUDE.md persists through compaction) |
-| Extraction nudge | `tool.execute.after` + `chat.message` | `PostToolBatch` + `UserPromptSubmit` (file-backed queue) |
-| Skills | `$XDG_CONFIG_HOME/opencode/skills` | `~/.claude/skills/` |
-| Store detection | `worktree` param from plugin | `CLAUDE_PROJECT_DIR` env var |
+| Feature | OpenCode (plugin) | Claude Code (MCP + hooks) | Cursor (MCP + hooks) |
+|---------|-------------------|--------------------------|---------------------|
+| Tools | Plugin tool registration | MCP `tools/list` + `tools/call` | MCP `tools/list` + `tools/call` |
+| System prompt | Injected at runtime with repo name | Static CLAUDE.md (repo auto-detected by MCP server) | Static AGENTS.md (repo auto-detected at startup) |
+| Session-start reminder | `session.created` event | `SessionStart` hook → `thatch reminder` | `sessionStart` hook → `thatch reminder --json` |
+| Compaction context | `experimental.session.compacting` hook | **Gap**: no equivalent (CLAUDE.md persists) | **Gap**: no equivalent |
+| Extraction nudge | `tool.execute.after` + `chat.message` | `PostToolBatch` + `UserPromptSubmit` (file-backed queue) | `postToolUse` + `beforeSubmitPrompt` (file-backed queue) |
+| Setup detection at startup | n/a (plugin auto-installs) | `checkSetup` in MCP server: detects missing/broken instructions | Same as Claude Code |
+| Skills | 13 (shared + coordinator) | 12 (shared only) | 12 (shared only) |
+| Store detection | `worktree` param from plugin | `CLAUDE_PROJECT_DIR` env var | `CURSOR_PROJECT_DIR` then `CLAUDE_PROJECT_DIR` |
 
 See [docs/dev/mcp-parity.md](docs/dev/mcp-parity.md) for the full analysis.
 

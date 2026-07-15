@@ -17,12 +17,12 @@
   appends a thatch block to `CLAUDE.md` bracketed by start/end markers (replaced, not
   duplicated, on re-run), writes `.claude/settings.json` hooks (`SessionStart` -> `thatch reminder`,
   `PostToolBatch` -> `thatch buffer-batch`, `UserPromptSubmit` -> `thatch flush-tools`), and installs
-  **10 shared skills** (no code-review coordinator) to `$CLAUDE_CONFIG_DIR/skills/` — user-scoped
+  **12 shared skills** (no code-review coordinator) to `$CLAUDE_CONFIG_DIR/skills/` — user-scoped
   even in project-local mode.
 - `--cursor` project-local writes `.cursor/mcp.json`, appends to `AGENTS.md`, writes
   `.cursor/hooks.json` in the **flat format** (`{version:1, hooks:{...}}`): `sessionStart` ->
   `thatch reminder --json`, `postToolUse` -> `thatch buffer-tool`, `beforeSubmitPrompt` ->
-  `thatch flush-tools --json`; and installs 10 shared skills to `~/.cursor/skills/`.
+  `thatch flush-tools --json`; and installs 12 shared skills to `~/.cursor/skills/`.
 - Re-run is idempotent: instructions are not duplicated, thatch hooks are replaced (not appended),
   and non-thatch hooks are preserved. A legacy `thatch echo` hook is replaced with `flush-tools`.
 - `--global` (Claude) writes `~/.claude/CLAUDE.md` + `~/.claude/settings.json` but **no project

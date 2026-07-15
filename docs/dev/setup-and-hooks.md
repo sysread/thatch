@@ -132,3 +132,39 @@ All setup operations are idempotent:
 `thatch setup` resolves `<bin>` from PATH, falling back to the absolute path of
 the running script. This is baked into every installed hook command, so the
 hooks keep working after the session that ran setup ends.
+
+## Setup detection at MCP startup
+
+When the MCP server starts (`thatch mcp`, spawned by Claude Code or Cursor),
+it calls `checkSetup` (`src/setup.ts`) to verify that `thatch setup` was run
+for the current host. This catches two failure modes that would otherwise leave
+the agent without usage instructions:
+
+### Host detection
+
+The host is determined from env vars set by the host process:
+
+- `CURSOR_PROJECT_DIR` set → Cursor
+- `CLAUDE_PROJECT_DIR` set (and Cursor not) → Claude Code
+- Neither set → returns `null` (no check — manual `thatch mcp` invocation)
+
+Cursor takes priority because Cursor also sets `CLAUDE_PROJECT_DIR` as an alias.
+
+### What it checks
+
+`checkSetup` looks for the instruction markers (start and end) in the host's
+instructions file — `CLAUDE.md` for Claude Code, `AGENTS.md` for Cursor. It
+checks local (in the project directory) first, then global (in the config
+directory). Local takes priority.
+
+### Three outcomes
+
+| Outcome | Condition | Action |
+|---------|-----------|--------|
+| **installed** | Markers found in local or global instructions file | No warning — setup is complete |
+| **not-installed** | No instructions file with markers found anywhere | Warning to stderr + prepended to first `tools/call` response: "Tell the user to run `thatch setup --<host>`" |
+| **markers-broken** | Start marker found but end marker missing (file edited externally) | Warning with the specific file path and fix instructions: run `thatch setup`, or manually remove the corrupted block and re-run |
+
+The warning is cleared after the first `tools/call` response so it surfaces
+once, not on every tool call. The message instructs the LLM to notify the user
+with the specific `thatch setup` command to run.
