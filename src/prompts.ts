@@ -32,7 +32,7 @@ you're working in. Prior sessions may have already investigated it.
 Thatch ships skills for code review, project investigation, and memory
 workflows. The host auto-discovers them, but reach for them proactively:
 
-- \`thatch-code-review\` — full multi-agent code review (dispatches 5 specialists + synthesizer). Requires sub-agent support.
+- \`thatch-code-review\` — full multi-agent code review (dispatches 6 specialists + synthesizer). Requires sub-agent support.
 - \`thatch-workflow-research\` — research code workflows affected by a change or planned change, before reviewing or planning.
 - \`thatch-review-context\` — gather project context (PRs, tickets, TODOs, deferred work) before a review.
 - \`thatch-project-primer\` — investigate a new project and write foundational memories.
@@ -165,7 +165,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 
 - \`thatch-workflow-research\` — research code workflows affected by a change or planned change, before reviewing or planning.
 - \`thatch-review-context\` — gather project context (PRs, tickets, TODOs, deferred work) before a review.
-- \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-no-slop\` / \`-breadcrumbs\` — five specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
+- \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-no-slop\` / \`-breadcrumbs\` / \`-mark-and-sweep\` — six specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
 - \`thatch-project-primer\` — investigate a new project and write foundational memories.
 - \`thatch-session-reflection\` — record what you learned at end of session.
 - \`thatch-fact-extractor\` — extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
@@ -312,7 +312,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 
 - \`thatch-workflow-research\` — research code workflows affected by a change or planned change, before reviewing or planning.
 - \`thatch-review-context\` — gather project context (PRs, tickets, TODOs, deferred work) before a review.
-- \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-no-slop\` / \`-breadcrumbs\` — five specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
+- \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-no-slop\` / \`-breadcrumbs\` / \`-mark-and-sweep\` — six specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
 - \`thatch-project-primer\` — investigate a new project and write foundational memories.
 - \`thatch-session-reflection\` — record what you learned at end of session.
 - \`thatch-fact-extractor\` — extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).

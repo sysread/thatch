@@ -21,9 +21,9 @@ description: Extract durable project facts ... Use when ...
 - `description` drives when the agent loads the skill (both opencode and
   Cursor auto-discover skills and use the description for relevance).
 
-## The 13 skills
+## The 14 skills
 
-**Shared (12)** — installed everywhere; no sub-agents required:
+**Shared (13)** — installed everywhere; no sub-agents required:
 
 | Skill | Role |
 |-------|------|
@@ -35,6 +35,7 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-state-flow` | Data flow and contracts: module boundaries, implicit FSMs, error propagation. |
 | `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth-wall breaks, em dashes, filler. |
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of behavior? |
+| `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
 | `thatch-review-synthesizer` | Verify specialist findings against code, dedupe, classify, calibrate severity. |
 | `thatch-review-context` | Gather project/feature context (PR descriptions, git archaeology, ticket references, memory) before fan-out. Prevents false positives about intentionally deferred work. |
 | `thatch-workflow-research` | Research code workflows/features affected by a change or planned change. Reads code flows, comments, git history, memories, docs. Produces a guide to the code for reviewers or planners. |
@@ -44,11 +45,11 @@ description: Extract durable project facts ... Use when ...
 
 | Skill | Role |
 |-------|------|
-| `thatch-code-review` | Resolve review target, gather project context, research affected workflows, estimate complexity, partition, dispatch the 5 specialists in parallel, synthesize. |
+| `thatch-code-review` | Resolve review target, gather project context, research affected workflows, estimate complexity, partition, dispatch the 6 specialists in parallel, synthesize. |
 
 ## REVIEW_COMMON
 
-The five review specialists share a framework interpolated via `${REVIEW_COMMON}`:
+The six review specialists share a framework interpolated via `${REVIEW_COMMON}`:
 
 - **Static analysis only** — no running tests/linters/compilers.
 - **Scope gathering** — resolve the git range, `git diff --stat`, read changed
@@ -78,7 +79,7 @@ The synthesizer reuses the same verification rigor but has its own structure
 ## The two arrays
 
 ```ts
-const SHARED_SKILLS: SkillDef[] = [ /* 12 skills above */ ];
+const SHARED_SKILLS: SkillDef[] = [ /* 13 skills above */ ];
 const OPENCODE_ONLY_SKILLS: SkillDef[] = [ /* code-review coordinator */ ];
 ```
 
@@ -112,7 +113,7 @@ and `--cursor` pass only the shared set.
 ## Memory review skills in practice
 
 - **Quick single lens**: load any specialist directly and point it at a branch.
-- **Full review on opencode**: load `thatch-code-review` — it gathers project context, researches affected workflows, dispatches all 5 specialists in parallel (with both the context brief and workflow guide injected into each briefing), then synthesizes.
+- **Full review on opencode**: load `thatch-code-review` — it gathers project context, researches affected workflows, dispatches all 6 specialists in parallel (with both the context brief and workflow guide injected into each briefing), then synthesizes.
 - **Full review on Claude Code/Cursor**: run each specialist in sequence, then
   run `thatch-review-synthesizer` to verify and aggregate.
 
