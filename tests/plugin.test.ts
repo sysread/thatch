@@ -197,6 +197,20 @@ describe("plugin entry", () => {
     expect(output.parts.length).toBe(0);
   });
 
+  test("skill and task meta-tools are not buffered (feedback loop prevention)", async () => {
+    await hooks["tool.execute.after"]!(
+      { tool: "skill", sessionID: "ses_d", callID: "c3", args: { name: "thatch-fact-extractor" } },
+      { title: "load skill", output: "loaded", metadata: {} },
+    );
+    await hooks["tool.execute.after"]!(
+      { tool: "task", sessionID: "ses_d", callID: "c4", args: { description: "extract" } },
+      { title: "dispatch", output: "done", metadata: {} },
+    );
+    const output: any = { message: { id: "msg_4" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_d" } as any, output);
+    expect(output.parts.length).toBe(0);
+  });
+
   test("installs skill files under the redirected config home", async () => {
     const { readFileSync } = await import("node:fs");
     const skillPath = join(

@@ -37,11 +37,15 @@ function queuePath(sessionID: string): string {
 }
 
 /**
- * Buffer a batch of tool calls for later extraction. Filters out thatch's own
- * MCP tools (mcp__thatch__*) to avoid self-echo — extracting facts from memory
- * operations would just write the store back into the store. Each surviving
- * call is mapped to a ToolInteraction (title synthesized since Claude Code
- * doesn't supply one) and appended as one JSON line.
+ * Buffer a batch of tool calls for later extraction. Filters out:
+ * - thatch's own MCP tools (mcp__thatch__*) to avoid self-echo — extracting
+ *   facts from memory operations would just write the store back into itself.
+ * - skill/task/agent meta-tools — these orchestrate agent behavior (loading
+ *   skills, dispatching sub-agents) and buffering them creates a feedback
+ *   loop where the extraction nudge triggers a skill load, which gets
+ *   buffered, which triggers another nudge on the next turn.
+ * Each surviving call is mapped to a ToolInteraction (title synthesized since
+ * Claude Code doesn't supply one) and appended as one JSON line.
  */
 export function appendBatch(sessionID: string, toolCalls: BatchToolCall[]): void {
   const dir = queueDir();
@@ -50,7 +54,9 @@ export function appendBatch(sessionID: string, toolCalls: BatchToolCall[]): void
   const existing = readQueueFile(path);
   const additions: ToolInteraction[] = [];
   for (const tc of toolCalls) {
-    if (tc.tool_name.startsWith("mcp__thatch__")) continue;
+    const lower = tc.tool_name.toLowerCase();
+    if (lower.startsWith("mcp__thatch__")) continue;
+    if (lower === "skill" || lower === "task" || lower === "agent") continue;
     const response = typeof tc.tool_response === "string"
       ? tc.tool_response
       : JSON.stringify(tc.tool_response).slice(0, 500);

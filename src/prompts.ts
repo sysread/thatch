@@ -263,9 +263,10 @@ export function claudeWriteNudge(): string {
  */
 export function claudeExtractionNudge(count: number, payload: string): string {
   return `[thatch] ${count} recent tool interaction${count === 1 ? "" : "s"} queued for fact extraction. ` +
-    `Run the thatch-fact-extractor skill in a background sub-agent or task ` +
-    `if your harness supports it; otherwise run it inline. ` +
-    `Use mcp__thatch__memory_remember to save any new durable facts from this payload:\n${payload}`;
+    `Dispatch a background sub-agent or task to run the thatch-fact-extractor skill ` +
+    `on this payload — do not let extraction delay your response to the user. ` +
+    `If your harness has no sub-agent capability, run the skill inline after addressing the user's request. ` +
+    `Use mcp__thatch__memory_remember to save durable facts from this payload:\n${payload}`;
 }
 
 /**

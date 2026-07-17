@@ -86,11 +86,14 @@ export const server: Plugin = async ({ client, worktree }) => {
       compacting.delete(input.sessionID);
     },
 
-    // 3. Tool buffering — feeds the extraction nudge. Thatch's own tools are
-    // excluded: extracting facts from memory operations would just echo the
-    // store back into itself.
+    // 3. Tool buffering — feeds the extraction nudge. Excluded tools:
+    //    - thatch_*: extracting facts from memory ops would echo the store
+    //    - skill/task: meta-tools that orchestrate agent behavior (loading
+    //      skills, dispatching sub-agents). Buffering them creates a feedback
+    //      loop — the nudge triggers a skill load, which gets buffered, which
+    //      triggers another nudge on the next turn.
     "tool.execute.after": async (input, output) => {
-      if (input.tool.startsWith("thatch_")) return;
+      if (input.tool.startsWith("thatch_") || input.tool === "skill" || input.tool === "task") return;
       extraction.push({
         tool: input.tool,
         sessionID: input.sessionID,
@@ -117,9 +120,10 @@ export const server: Plugin = async ({ client, worktree }) => {
         const payload = extraction.buildPayload(batch, repo);
         const text =
           `[thatch] ${batch.length} recent tool interactions are queued for fact extraction. ` +
-          `Run the thatch-fact-extractor skill in a background sub-agent or task ` +
-          `if your harness supports it; otherwise run it inline. ` +
-          `Use thatch_memory_remember to save any new durable facts from this payload:\n${payload}`;
+          `Dispatch a background sub-agent or task to run the thatch-fact-extractor skill ` +
+          `on this payload — do not let extraction delay your response to the user. ` +
+          `If your harness has no sub-agent capability, run the skill inline after addressing the user's request. ` +
+          `Use thatch_memory_remember to save durable facts from this payload:\n${payload}`;
 
         output.parts.push({
           id: `prt_thatch_${Math.random().toString(36).slice(2)}`,

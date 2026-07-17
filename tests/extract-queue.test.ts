@@ -61,6 +61,19 @@ describe("appendBatch + flushQueue", () => {
     expect(out.map((ix) => ix.tool)).toEqual(["Read", "Bash"]);
   });
 
+  test("filters out skill/task/agent meta-tools (feedback loop prevention)", () => {
+    appendBatch("session-1", [
+      call("Read", { file_path: "/a" }, "a"),
+      call("Skill", { name: "thatch-fact-extractor" }, "loaded"),
+      call("Task", { description: "extract" }, "done"),
+      call("Agent", { prompt: "extract" }, "done"),
+      call("Bash", { command: "ls" }, "file1\n"),
+    ]);
+    const out = flushQueue("session-1");
+    expect(out.length).toBe(2);
+    expect(out.map((ix) => ix.tool)).toEqual(["Read", "Bash"]);
+  });
+
   test("appends across multiple PostToolBatch invocations", () => {
     appendBatch("s", [call("Read", { file_path: "/a" }, "a")]);
     appendBatch("s", [call("Bash", { command: "ls" }, "file1")]);
