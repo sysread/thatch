@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendBatch, flushQueue, queueDir, type BatchToolCall } from "../src/extract-queue";
+import { appendBatch, flushQueue, queueDir, getMissedCount, incrementMissedCount, resetMissedCount, type BatchToolCall } from "../src/extract-queue";
 import { buildExtractionPayload } from "../src/extraction";
 
 let dir: string;
@@ -177,5 +177,35 @@ describe("safe session ids", () => {
     expect(existsSync(join(queueDir(), "weird_session_id.jsonl"))).toBe(true);
     const out = flushQueue("weird/session id");
     expect(out.length).toBe(1);
+  });
+});
+
+describe("missed-nudge counter", () => {
+  test("starts at 0 for a new session", () => {
+    expect(getMissedCount("fresh-session")).toBe(0);
+  });
+
+  test("increments and persists across calls", () => {
+    incrementMissedCount("inc-session");
+    expect(getMissedCount("inc-session")).toBe(1);
+    incrementMissedCount("inc-session");
+    expect(getMissedCount("inc-session")).toBe(2);
+  });
+
+  test("reset deletes the counter file", () => {
+    incrementMissedCount("reset-session");
+    expect(getMissedCount("reset-session")).toBe(1);
+    resetMissedCount("reset-session");
+    expect(getMissedCount("reset-session")).toBe(0);
+  });
+
+  test("appendBatch resets counter when memory_remember is in the batch", () => {
+    incrementMissedCount("echo-session");
+    expect(getMissedCount("echo-session")).toBe(1);
+    appendBatch("echo-session", [
+      call("mcp__thatch__memory_remember", { label: "x" }, "ok"),
+      call("Read", { file_path: "/a" }, "a"),
+    ]);
+    expect(getMissedCount("echo-session")).toBe(0);
   });
 });

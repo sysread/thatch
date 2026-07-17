@@ -9,6 +9,7 @@ import {
   compactionContext,
   sessionStartReminder,
   recallNudge,
+  extractionNudge,
   type NudgeMatch,
 } from "./prompts";
 import { ExtractionPipeline } from "./extraction";
@@ -48,6 +49,12 @@ export const server: Plugin = async ({ client, worktree }) => {
   // fails, the entry leaks (graceful degradation: nudges stay off for that
   // session, but no crash).
   const compacting = new Set<string>();
+
+  // Per-session count of consecutive extraction nudges delivered without any
+  // memory_remember call in between. Drives nudge escalation: the agent gets
+  // a couple of polite chances, then the tone shifts to directive, then to
+  // all-caps shouting. Reset to 0 whenever the agent writes a memory.
+  const missedNudges = new Map<string, number>();
 
   // Skills always install to the global opencode config — installing into the
   // worktree would mutate the user's repo (untracked files in git status).
@@ -92,7 +99,12 @@ export const server: Plugin = async ({ client, worktree }) => {
     //      skills, dispatching sub-agents). Buffering them creates a feedback
     //      loop — the nudge triggers a skill load, which gets buffered, which
     //      triggers another nudge on the next turn.
+    //    Memory writes reset the missed-nudge escalation counter.
     "tool.execute.after": async (input, output) => {
+      if (input.tool === "thatch_memory_remember") {
+        missedNudges.delete(input.sessionID);
+        return;
+      }
       if (input.tool.startsWith("thatch_") || input.tool === "skill" || input.tool === "task") return;
       extraction.push({
         tool: input.tool,
@@ -118,12 +130,9 @@ export const server: Plugin = async ({ client, worktree }) => {
       if (extraction.pending(input.sessionID)) {
         const batch = extraction.flush(input.sessionID);
         const payload = extraction.buildPayload(batch, repo);
-        const text =
-          `[thatch] ${batch.length} recent tool interactions are queued for fact extraction. ` +
-          `Dispatch a background sub-agent or task to run the thatch-fact-extractor skill ` +
-          `on this payload — do not let extraction delay your response to the user. ` +
-          `If your harness has no sub-agent capability, run the skill inline after addressing the user's request. ` +
-          `Use thatch_memory_remember to save durable facts from this payload:\n${payload}`;
+        const missed = missedNudges.get(input.sessionID) ?? 0;
+        const text = extractionNudge(batch.length, missed, "thatch_memory_remember", payload);
+        missedNudges.set(input.sessionID, missed + 1);
 
         output.parts.push({
           id: `prt_thatch_${Math.random().toString(36).slice(2)}`,

@@ -37,6 +37,7 @@ import {
   claudeSessionStartReminder,
   claudeWriteNudge,
   claudeExtractionNudge,
+  extractionNudge,
   type NudgeMatch,
 } from "../src/prompts";
 
@@ -209,6 +210,52 @@ describe("plugin entry", () => {
     const output: any = { message: { id: "msg_4" }, parts: [] };
     await hooks["chat.message"]!({ sessionID: "ses_d" } as any, output);
     expect(output.parts.length).toBe(0);
+  });
+
+  test("extraction nudge escalates with consecutive misses and resets on memory write", async () => {
+    // First nudge: tier 0 (polite)
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_esc", callID: "e1", args: { command: "ls" } },
+      { title: "list", output: "file.txt", metadata: {} },
+    );
+    const out1: any = { message: { id: "msg_e1" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_esc", messageID: "msg_e1" } as any, out1);
+    expect(out1.parts[0].text).toContain("Dispatch a background sub-agent");
+    expect(out1.parts[0].text).not.toContain("YOU HAVE NOT");
+
+    // Second nudge without compliance: still tier 0 (missedCount was 0, now 1)
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_esc", callID: "e2", args: { command: "pwd" } },
+      { title: "pwd", output: "/tmp", metadata: {} },
+    );
+    const out2: any = { message: { id: "msg_e2" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_esc", messageID: "msg_e2" } as any, out2);
+    expect(out2.parts[0].text).toContain("Dispatch a background sub-agent");
+
+    // Third nudge without compliance: tier 1 (missedCount was 1, now 2)
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_esc", callID: "e3", args: { command: "echo" } },
+      { title: "echo", output: "hi", metadata: {} },
+    );
+    const out3: any = { message: { id: "msg_e3" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_esc", messageID: "msg_e3" } as any, out3);
+    expect(out3.parts[0].text).toContain("YOU HAVE NOT PROCESSED");
+
+    // Agent writes a memory: counter resets
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_memory_remember", sessionID: "ses_esc", callID: "e4", args: {} },
+      { title: "save", output: "[saved]", metadata: {} },
+    );
+
+    // Next nudge: back to tier 0
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_esc", callID: "e5", args: { command: "date" } },
+      { title: "date", output: "2026-07-17", metadata: {} },
+    );
+    const out4: any = { message: { id: "msg_e5" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_esc", messageID: "msg_e5" } as any, out4);
+    expect(out4.parts[0].text).toContain("Dispatch a background sub-agent");
+    expect(out4.parts[0].text).not.toContain("YOU HAVE NOT");
   });
 
   test("installs skill files under the redirected config home", async () => {
@@ -412,6 +459,41 @@ describe("claudeExtractionNudge", () => {
     const nudge = claudeExtractionNudge(3, '{"tool":"bash"}');
     expect(nudge).toContain("3 recent tool interactions queued");
     expect(nudge).toContain("thatch-fact-extractor");
+  });
+});
+
+describe("extractionNudge escalation", () => {
+  const payload = '{"tool":"bash"}';
+  const tool = "thatch_memory_remember";
+
+  test("tier 0 (missedCount 0-1): polite, mentions background sub-agent", () => {
+    const nudge = extractionNudge(3, 0, tool, payload);
+    expect(nudge).toContain("Dispatch a background sub-agent");
+    expect(nudge).not.toContain("YOU HAVE NOT");
+    expect(nudge).not.toContain("IGNORING");
+  });
+
+  test("tier 1 (missedCount 2): directive prefix, no shouting", () => {
+    const nudge = extractionNudge(3, 2, tool, payload);
+    expect(nudge).toContain("YOU HAVE NOT PROCESSED");
+    expect(nudge).not.toContain("IGNORING");
+  });
+
+  test("tier 2 (missedCount 3+): all caps, harsh", () => {
+    const nudge = extractionNudge(3, 3, tool, payload);
+    expect(nudge).toContain("IGNORING EXTRACTION INSTRUCTIONS");
+    expect(nudge).toContain("INSTALLED THIS PLUGIN FOR A REASON");
+  });
+
+  test("tier 2 escalates further with higher counts", () => {
+    const nudge = extractionNudge(5, 10, tool, payload);
+    expect(nudge).toContain("IGNORING");
+  });
+
+  test("all tiers include the payload", () => {
+    for (const missed of [0, 2, 3]) {
+      expect(extractionNudge(1, missed, tool, payload)).toContain(payload);
+    }
   });
 });
 

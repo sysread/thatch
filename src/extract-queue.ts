@@ -44,6 +44,7 @@ function queuePath(sessionID: string): string {
  *   skills, dispatching sub-agents) and buffering them creates a feedback
  *   loop where the extraction nudge triggers a skill load, which gets
  *   buffered, which triggers another nudge on the next turn.
+ * Memory writes reset the missed-nudge escalation counter.
  * Each surviving call is mapped to a ToolInteraction (title synthesized since
  * Claude Code doesn't supply one) and appended as one JSON line.
  */
@@ -55,6 +56,9 @@ export function appendBatch(sessionID: string, toolCalls: BatchToolCall[]): void
   const additions: ToolInteraction[] = [];
   for (const tc of toolCalls) {
     const lower = tc.tool_name.toLowerCase();
+    if (lower === "mcp__thatch__memory_remember") {
+      resetMissedCount(sessionID);
+    }
     if (lower.startsWith("mcp__thatch__")) continue;
     if (lower === "skill" || lower === "task" || lower === "agent") continue;
     const response = typeof tc.tool_response === "string"
@@ -104,4 +108,33 @@ function readQueueFile(path: string): ToolInteraction[] {
       }
     })
     .filter((ix): ix is ToolInteraction => ix !== null);
+}
+
+// ---------------------------------------------------------------------------
+// Missed-nudge counter — file-backed per-session escalation state. Tracks
+// consecutive extraction nudges delivered without any memory_remember call.
+// Reset by appendBatch when the agent writes a memory. Read and incremented
+// by flush-tools when the nudge is delivered.
+// ---------------------------------------------------------------------------
+
+function countPath(sessionID: string): string {
+  return join(queueDir(), `${safeName(sessionID)}.count`);
+}
+
+export function resetMissedCount(sessionID: string): void {
+  try { unlinkSync(countPath(sessionID)); } catch { /* not present is fine */ }
+}
+
+export function getMissedCount(sessionID: string): number {
+  try {
+    return parseInt(readFileSync(countPath(sessionID), "utf8"), 10) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function incrementMissedCount(sessionID: string): void {
+  const next = getMissedCount(sessionID) + 1;
+  mkdirSync(queueDir(), { recursive: true });
+  writeFileSync(countPath(sessionID), String(next));
 }

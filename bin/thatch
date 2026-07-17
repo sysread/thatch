@@ -349,9 +349,9 @@ switch (command) {
       };
       const sessionID = data.session_id ?? data.conversation_id;
 
-      const { flushQueue } = await import("../src/extract-queue");
+      const { flushQueue, getMissedCount, incrementMissedCount } = await import("../src/extract-queue");
       const { buildExtractionPayload } = await import("../src/extraction");
-      const { claudeExtractionNudge, claudeWriteNudge, claudeRecallNudge } = await import("../src/prompts");
+      const { extractionNudge, claudeWriteNudge, claudeRecallNudge } = await import("../src/prompts");
 
       let repo = "unknown";
       try { repo = await detectRepo(); } catch {}
@@ -359,7 +359,9 @@ switch (command) {
       // Tier 1: extraction nudge.
       const interactions = sessionID ? flushQueue(sessionID) : [];
       if (interactions.length > 0) {
-        const output = claudeExtractionNudge(interactions.length, buildExtractionPayload(interactions, repo));
+        const missed = sessionID ? getMissedCount(sessionID) : 0;
+        if (sessionID) incrementMissedCount(sessionID);
+        const output = extractionNudge(interactions.length, missed, "mcp__thatch__memory_remember", buildExtractionPayload(interactions, repo));
         if (isJson) console.log(JSON.stringify({ additional_context: output }));
         else console.log(output);
         break;

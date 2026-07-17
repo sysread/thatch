@@ -255,18 +255,46 @@ export function claudeWriteNudge(): string {
 }
 
 /**
- * The UserPromptSubmit hook stdout when `thatch flush-tools` drained buffered
- * tool interactions. Mirrors the opencode plugin's in-process ExtractionPipeline
- * nudge (see src/index.ts) so the thatch-fact-extractor skill receives the same
- * JSON contract regardless of host. The skill picks the store from the
- * payload's `projectStore` field and calls `mcp__thatch__memory_remember`.
+ * Extraction nudge with escalation. Both the opencode plugin (src/index.ts)
+ * and the Claude Code/Cursor CLI (bin/thatch flush-tools) call this with
+ * their respective tool name prefix. The missedCount parameter tracks
+ * consecutive nudges delivered without any memory_remember call in between,
+ * escalating the tone from polite to insistent to shouting.
  */
-export function claudeExtractionNudge(count: number, payload: string): string {
-  return `[thatch] ${count} recent tool interaction${count === 1 ? "" : "s"} queued for fact extraction. ` +
+export function extractionNudge(
+  count: number,
+  missedCount: number,
+  toolName: string,
+  payload: string,
+): string {
+  const plural = count === 1 ? "" : "s";
+  if (missedCount >= 3) {
+    return `[thatch] YOU ARE IGNORING EXTRACTION INSTRUCTIONS. ` +
+      `${count} TOOL INTERACTION${plural.toUpperCase()} ARE QUEUED AND YOU HAVE NOT PROCESSED ANY OF THEM. ` +
+      `THE USER INSTALLED THIS PLUGIN FOR A REASON. ` +
+      `DISPATCH A SUB-AGENT NOW TO RUN THE thatch-fact-extractor SKILL ` +
+      `AND USE ${toolName.toUpperCase()} TO SAVE DURABLE FACTS FROM THIS PAYLOAD:\n${payload}`;
+  }
+  if (missedCount >= 2) {
+    return `[thatch] YOU HAVE NOT PROCESSED YOUR PREVIOUS EXTRACTION PAYLOAD${plural.toUpperCase()}. ` +
+      `${count} more tool interaction${plural} are now queued. ` +
+      `Dispatch a background sub-agent or task to run the thatch-fact-extractor skill on this payload. ` +
+      `Use ${toolName} to save durable facts from this payload:\n${payload}`;
+  }
+  return `[thatch] ${count} recent tool interaction${plural} queued for fact extraction. ` +
     `Dispatch a background sub-agent or task to run the thatch-fact-extractor skill ` +
     `on this payload — do not let extraction delay your response to the user. ` +
     `If your harness has no sub-agent capability, run the skill inline after addressing the user's request. ` +
-    `Use mcp__thatch__memory_remember to save durable facts from this payload:\n${payload}`;
+    `Use ${toolName} to save durable facts from this payload:\n${payload}`;
+}
+
+/**
+ * Backwards-compatible wrapper for the Claude Code/Cursor CLI path.
+ * Maintained for any external callers; bin/thatch should use extractionNudge
+ * directly with a missedCount from extract-queue.ts.
+ */
+export function claudeExtractionNudge(count: number, payload: string): string {
+  return extractionNudge(count, 0, "mcp__thatch__memory_remember", payload);
 }
 
 /**
