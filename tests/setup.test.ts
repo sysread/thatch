@@ -1,9 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { setupClaudeCode, setupCursor, checkSetup } from "../src/setup";
 import { claudeInstructions, cursorInstructions } from "../src/prompts";
+import { SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "../src/skills";
 
 let projectDir: string;
 let fakeHome: string;
@@ -219,7 +220,13 @@ describe("setupClaudeCode (project-local)", () => {
     for (const skill of result.skills) {
       expect(existsSync(skill.path)).toBe(true);
       const content = readFileSync(skill.path, "utf8");
-      expect(content).toContain("name: thatch-");
+      // Syntax check: YAML frontmatter with name/description (not content fidelity)
+      expect(content.trimStart().startsWith("---")).toBe(true);
+      expect(content).toContain("\nname: thatch-");
+      expect(content).toContain("description:");
+      // Frontmatter closes with second ---
+      const frontEnd = content.indexOf("\n---", 3);
+      expect(frontEnd).toBeGreaterThan(3);
     }
   });
 });
@@ -661,5 +668,34 @@ describe("checkSetup", () => {
 
     const result: any = checkSetup(projectDir, fakeHome);
     expect(result?.host).toBe("cursor");
+  });
+});
+
+describe("skill artifact registry parity", () => {
+  const artifactsDir = join(dirname(new URL(import.meta.url).pathname), "..", "artifacts", "skills");
+
+  test("every .md file in artifacts/skills/ is registered (except common.md)", () => {
+    const files = readdirSync(artifactsDir)
+      .filter((f) => f.endsWith(".md") && f !== "common.md")
+      .map((f) => f.replace(/\.md$/, ""));
+    const registered = [...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS].map((s) => s.name);
+    for (const file of files) {
+      expect(registered).toContain(file);
+    }
+  });
+
+  test("every registered skill has a .md file in artifacts/skills/", () => {
+    const files = readdirSync(artifactsDir)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => f.replace(/\.md$/, ""));
+    for (const skill of [...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]) {
+      expect(files).toContain(skill.name);
+    }
+  });
+
+  test("loaded skill content has no backslash-backtick escape artifacts", () => {
+    for (const skill of [...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]) {
+      expect(skill.content).not.toContain("\\`");
+    }
   });
 });

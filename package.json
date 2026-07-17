@@ -15,7 +15,8 @@
   "files": [
     "src",
     "docs",
-    "bin"
+    "bin",
+    "artifacts"
   ],
   "scripts": {
     "test": "bun test",

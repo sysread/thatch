@@ -1,7 +1,7 @@
 # Skills
 
 Thatch installs SKILL.md files that give the agent task-specific workflows. All
-skill content is defined in `src/skills.ts` and installed to a host-specific
+skill content lives in `artifacts/skills/*.md` and is loaded by `src/skills.ts` and installed to a host-specific
 directory. See `mcp-parity.md` for which skills each host gets.
 
 ## Skill file format
@@ -102,13 +102,10 @@ and `--cursor` pass only the shared set.
 
 ## Adding a skill
 
-1. Write the `SKILL.md` content as a template literal in `src/skills.ts`.
-   Interpolate `${REVIEW_COMMON}` if it's a review specialist.
-2. Add a `{ name, content }` entry to `SHARED_SKILLS` (or `OPENCODE_ONLY_SKILLS`
-   if it needs sub-agents).
-3. If the skill name appears in a tool's expected workflow (e.g. the extraction
-   nudge references `thatch-fact-extractor`), update that prompt in `src/prompts.ts`.
-4. The opencode plugin and `thatch setup` pick it up automatically on next init.
+1. Write `artifacts/skills/thatch-<name>.md` with YAML frontmatter. If it's a review specialist, include `${REVIEW_COMMON}` (interpolated from `artifacts/skills/common.md`).
+2. Add the skill name to the `names` array in `loadSharedSkills()` (or `loadOpencodeOnlySkills()` if sub-agents are needed). The loader in `src/skills.ts` reads `.md` files at init.
+3. If the skill name appears in a tool's workflow (e.g. `thatch-fact-extractor`), update `src/prompts.ts`.
+4. Run `mise run check` — tests verify counts; `installSkills` picks up new files on next init.
 
 ## Memory review skills in practice
 
