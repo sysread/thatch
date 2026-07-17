@@ -100,10 +100,20 @@ export class ExtractionPipeline {
     this.#buffers.set(interaction.sessionID, buf.slice(-this.#maxBuffer));
   }
 
+  /** Returns the session's buffered interactions without clearing them. */
+  peek(sessionID: string): ToolInteraction[] {
+    return this.#buffers.get(sessionID) ?? [];
+  }
+
+  /** Clears the session's buffer. Called when the agent writes a memory. */
+  consume(sessionID: string): void {
+    this.#buffers.delete(sessionID);
+  }
+
   /** Returns the session's buffered interactions and clears them. */
   flush(sessionID: string): ToolInteraction[] {
-    const batch = this.#buffers.get(sessionID) ?? [];
-    this.#buffers.delete(sessionID);
+    const batch = this.peek(sessionID);
+    this.consume(sessionID);
     return batch;
   }
 

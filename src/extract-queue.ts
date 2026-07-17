@@ -58,6 +58,8 @@ export function appendBatch(sessionID: string, toolCalls: BatchToolCall[]): void
     const lower = tc.tool_name.toLowerCase();
     if (lower === "mcp__thatch__memory_remember") {
       resetMissedCount(sessionID);
+      consumeQueue(sessionID);
+      existing.length = 0;
     }
     if (lower.startsWith("mcp__thatch__")) continue;
     if (lower === "skill" || lower === "task" || lower === "agent") continue;
@@ -80,8 +82,8 @@ export function appendBatch(sessionID: string, toolCalls: BatchToolCall[]): void
   writeFileSync(path, all.map((ix) => JSON.stringify(ix)).join("\n") + "\n");
 }
 
-/** Read and delete a session's queue. Returns the buffered interactions in order. */
-export function flushQueue(sessionID: string): ToolInteraction[] {
+/** Read a session's queued interactions without removing them. */
+export function peekQueue(sessionID: string): ToolInteraction[] {
   let path: string;
   try {
     path = queuePath(sessionID);
@@ -89,8 +91,18 @@ export function flushQueue(sessionID: string): ToolInteraction[] {
     return [];
   }
   if (!existsSync(path)) return [];
-  const interactions = readQueueFile(path);
-  unlinkSync(path);
+  return readQueueFile(path);
+}
+
+/** Delete a session's queue file. Called when the agent writes a memory. */
+export function consumeQueue(sessionID: string): void {
+  try { unlinkSync(queuePath(sessionID)); } catch { /* not present is fine */ }
+}
+
+/** Read and delete a session's queue. Returns the buffered interactions in order. */
+export function flushQueue(sessionID: string): ToolInteraction[] {
+  const interactions = peekQueue(sessionID);
+  consumeQueue(sessionID);
   return interactions;
 }
 

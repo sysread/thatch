@@ -182,10 +182,23 @@ describe("plugin entry", () => {
     expect(output.parts[0].text).toContain("thatch-fact-extractor");
     expect(output.parts[0].text).toContain('"tool":"bash"');
 
-    // The buffer was flushed — no repeat nudge.
+    // The buffer is NOT drained — it persists until the agent calls
+    // memory_remember. A second chat.message delivers the same nudge again
+    // (now at escalation tier 1 since missedCount incremented).
     const output2: any = { message: { id: "msg_2" }, parts: [] };
     await hooks["chat.message"]!({ sessionID: "ses_a" } as any, output2);
-    expect(output2.parts.length).toBe(0);
+    expect(output2.parts.length).toBe(1);
+    expect(output2.parts[0].text).toContain("thatch-fact-extractor");
+    expect(output2.parts[0].text).toContain('"tool":"bash"');
+
+    // After the agent writes a memory, the buffer is consumed.
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_memory_remember", sessionID: "ses_a", callID: "c1b", args: {} },
+      { title: "save", output: "[saved]", metadata: {} },
+    );
+    const output3: any = { message: { id: "msg_3" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_a" } as any, output3);
+    expect(output3.parts.length).toBe(0);
   });
 
   test("thatch's own tools are not buffered for extraction", async () => {

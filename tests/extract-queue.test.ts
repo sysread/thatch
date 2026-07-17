@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendBatch, flushQueue, queueDir, getMissedCount, incrementMissedCount, resetMissedCount, type BatchToolCall } from "../src/extract-queue";
+import { appendBatch, flushQueue, peekQueue, consumeQueue, queueDir, getMissedCount, incrementMissedCount, resetMissedCount, type BatchToolCall } from "../src/extract-queue";
 import { buildExtractionPayload } from "../src/extraction";
 
 let dir: string;
@@ -199,13 +199,54 @@ describe("missed-nudge counter", () => {
     expect(getMissedCount("reset-session")).toBe(0);
   });
 
-  test("appendBatch resets counter when memory_remember is in the batch", () => {
+  test("appendBatch resets counter and consumes queue when memory_remember is in the batch", () => {
     incrementMissedCount("echo-session");
     expect(getMissedCount("echo-session")).toBe(1);
     appendBatch("echo-session", [
-      call("mcp__thatch__memory_remember", { label: "x" }, "ok"),
       call("Read", { file_path: "/a" }, "a"),
     ]);
+    expect(peekQueue("echo-session").length).toBe(1);
+    appendBatch("echo-session", [
+      call("mcp__thatch__memory_remember", { label: "x" }, "ok"),
+    ]);
     expect(getMissedCount("echo-session")).toBe(0);
+    expect(peekQueue("echo-session").length).toBe(0);
+  });
+});
+
+describe("peekQueue + consumeQueue", () => {
+  test("peek returns interactions without deleting", () => {
+    appendBatch("peek-s", [call("Read", { file_path: "/a" }, "a")]);
+    const first = peekQueue("peek-s");
+    expect(first.length).toBe(1);
+    // Second peek sees the same data — not consumed
+    const second = peekQueue("peek-s");
+    expect(second.length).toBe(1);
+  });
+
+  test("consume deletes the queue file", () => {
+    appendBatch("consume-s", [call("Read", { file_path: "/a" }, "a")]);
+    const path = join(queueDir(), "consume-s.jsonl");
+    expect(existsSync(path)).toBe(true);
+    consumeQueue("consume-s");
+    expect(existsSync(path)).toBe(false);
+  });
+
+  test("peek after consume returns empty", () => {
+    appendBatch("pc-s", [call("Read", { file_path: "/a" }, "a")]);
+    consumeQueue("pc-s");
+    expect(peekQueue("pc-s")).toEqual([]);
+  });
+
+  test("ignored nudge accumulates — peek sees old + new interactions", () => {
+    appendBatch("accum-s", [call("Read", { file_path: "/a" }, "a")]);
+    // Nudge fires (peek, no consume) — agent ignores it
+    expect(peekQueue("accum-s").length).toBe(1);
+    // More tool calls arrive
+    appendBatch("accum-s", [call("Bash", { command: "ls" }, "file1")]);
+    // Next peek sees both old and new
+    const all = peekQueue("accum-s");
+    expect(all.length).toBe(2);
+    expect(all.map((ix) => ix.tool)).toEqual(["Read", "Bash"]);
   });
 });

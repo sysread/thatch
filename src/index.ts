@@ -99,9 +99,13 @@ export const server: Plugin = async ({ client, worktree }) => {
     //      skills, dispatching sub-agents). Buffering them creates a feedback
     //      loop — the nudge triggers a skill load, which gets buffered, which
     //      triggers another nudge on the next turn.
-    //    Memory writes reset the missed-nudge escalation counter.
+    //    Memory writes consume the buffer and reset the missed-nudge counter.
+    //    The buffer is NOT drained on nudge delivery — it persists until the
+    //    agent writes a memory, so ignored nudges accumulate and the payload
+    //    grows with each missed cycle.
     "tool.execute.after": async (input, output) => {
       if (input.tool === "thatch_memory_remember") {
+        extraction.consume(input.sessionID);
         missedNudges.delete(input.sessionID);
         return;
       }
@@ -128,7 +132,7 @@ export const server: Plugin = async ({ client, worktree }) => {
     "chat.message": async (input, output) => {
       if (compacting.has(input.sessionID)) return;
       if (extraction.pending(input.sessionID)) {
-        const batch = extraction.flush(input.sessionID);
+        const batch = extraction.peek(input.sessionID);
         const payload = extraction.buildPayload(batch, repo);
         const missed = missedNudges.get(input.sessionID) ?? 0;
         const text = extractionNudge(batch.length, missed, "thatch_memory_remember", payload);

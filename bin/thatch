@@ -349,15 +349,17 @@ switch (command) {
       };
       const sessionID = data.session_id ?? data.conversation_id;
 
-      const { flushQueue, getMissedCount, incrementMissedCount } = await import("../src/extract-queue");
+      const { peekQueue, getMissedCount, incrementMissedCount } = await import("../src/extract-queue");
       const { buildExtractionPayload } = await import("../src/extraction");
       const { extractionNudge, claudeWriteNudge, claudeRecallNudge } = await import("../src/prompts");
 
       let repo = "unknown";
       try { repo = await detectRepo(); } catch {}
 
-      // Tier 1: extraction nudge.
-      const interactions = sessionID ? flushQueue(sessionID) : [];
+      // Tier 1: extraction nudge. Peek (don't drain) — the queue persists
+      // until the agent calls memory_remember, which triggers consumeQueue.
+      // If the agent ignores the nudge, the payload grows on the next flush.
+      const interactions = sessionID ? peekQueue(sessionID) : [];
       if (interactions.length > 0) {
         const missed = sessionID ? getMissedCount(sessionID) : 0;
         if (sessionID) incrementMissedCount(sessionID);
