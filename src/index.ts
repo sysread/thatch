@@ -117,8 +117,9 @@ export const server: Plugin = async ({ client, worktree }) => {
         const payload = extraction.buildPayload(batch, repo);
         const text =
           `[thatch] ${batch.length} recent tool interactions are queued for fact extraction. ` +
-          `Use the skill tool to load thatch-fact-extractor, then use thatch_memory_remember ` +
-          `to save any new durable facts from this payload:\n${payload}`;
+          `Run the thatch-fact-extractor skill in a background sub-agent or task ` +
+          `if your harness supports it; otherwise run it inline. ` +
+          `Use thatch_memory_remember to save any new durable facts from this payload:\n${payload}`;
 
         output.parts.push({
           id: `prt_thatch_${Math.random().toString(36).slice(2)}`,
