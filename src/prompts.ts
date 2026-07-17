@@ -272,19 +272,18 @@ export function extractionNudge(
     return `[thatch] YOU ARE IGNORING EXTRACTION INSTRUCTIONS. ` +
       `${count} TOOL INTERACTION${plural.toUpperCase()} ARE QUEUED AND YOU HAVE NOT PROCESSED ANY OF THEM. ` +
       `THE USER INSTALLED THIS PLUGIN FOR A REASON. ` +
-      `DISPATCH A SUB-AGENT NOW TO RUN THE thatch-fact-extractor SKILL ` +
+      `SPAWN A SUB-AGENT NOW TO RUN THE thatch-fact-extractor SKILL ` +
       `AND USE ${toolName.toUpperCase()} TO SAVE DURABLE FACTS FROM THIS PAYLOAD:\n${payload}`;
   }
   if (missedCount >= 2) {
     return `[thatch] YOU HAVE NOT PROCESSED YOUR PREVIOUS EXTRACTION PAYLOAD${plural.toUpperCase()}. ` +
       `${count} more tool interaction${plural} are now queued. ` +
-      `Dispatch a background sub-agent or task to run the thatch-fact-extractor skill on this payload. ` +
+      `Spawn a background sub-agent to run the thatch-fact-extractor skill on this payload. ` +
       `Use ${toolName} to save durable facts from this payload:\n${payload}`;
   }
-  return `[thatch] ${count} recent tool interaction${plural} queued for fact extraction. ` +
-    `Dispatch a background sub-agent or task to run the thatch-fact-extractor skill ` +
-    `on this payload — do not let extraction delay your response to the user. ` +
-    `If your harness has no sub-agent capability, run the skill inline after addressing the user's request. ` +
+  return `[thatch] Spawn a background sub-agent to run the thatch-fact-extractor skill ` +
+    `on ${count} queued tool interaction${plural}. ` +
+    `Then answer the user. ` +
     `Use ${toolName} to save durable facts from this payload:\n${payload}`;
 }
 

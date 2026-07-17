@@ -220,7 +220,7 @@ describe("plugin entry", () => {
     );
     const out1: any = { message: { id: "msg_e1" }, parts: [] };
     await hooks["chat.message"]!({ sessionID: "ses_esc", messageID: "msg_e1" } as any, out1);
-    expect(out1.parts[0].text).toContain("Dispatch a background sub-agent");
+    expect(out1.parts[0].text).toContain("Spawn a background sub-agent");
     expect(out1.parts[0].text).not.toContain("YOU HAVE NOT");
 
     // Second nudge without compliance: still tier 0 (missedCount was 0, now 1)
@@ -230,7 +230,7 @@ describe("plugin entry", () => {
     );
     const out2: any = { message: { id: "msg_e2" }, parts: [] };
     await hooks["chat.message"]!({ sessionID: "ses_esc", messageID: "msg_e2" } as any, out2);
-    expect(out2.parts[0].text).toContain("Dispatch a background sub-agent");
+    expect(out2.parts[0].text).toContain("Spawn a background sub-agent");
 
     // Third nudge without compliance: tier 1 (missedCount was 1, now 2)
     await hooks["tool.execute.after"]!(
@@ -254,7 +254,7 @@ describe("plugin entry", () => {
     );
     const out4: any = { message: { id: "msg_e5" }, parts: [] };
     await hooks["chat.message"]!({ sessionID: "ses_esc", messageID: "msg_e5" } as any, out4);
-    expect(out4.parts[0].text).toContain("Dispatch a background sub-agent");
+    expect(out4.parts[0].text).toContain("Spawn a background sub-agent");
     expect(out4.parts[0].text).not.toContain("YOU HAVE NOT");
   });
 
@@ -448,8 +448,8 @@ describe("claudeWriteNudge", () => {
 describe("claudeExtractionNudge", () => {
   test("singular form for one interaction", () => {
     const nudge = claudeExtractionNudge(1, '{"tool":"bash"}');
-    expect(nudge).toContain("1 recent tool interaction queued");
-    expect(nudge).not.toContain("interactions queued");
+    expect(nudge).toContain("1 queued tool interaction");
+    expect(nudge).not.toContain("interactions");
     expect(nudge).toContain("thatch-fact-extractor");
     expect(nudge).toContain("mcp__thatch__memory_remember");
     expect(nudge).toContain('{"tool":"bash"}');
@@ -457,7 +457,7 @@ describe("claudeExtractionNudge", () => {
 
   test("plural form for multiple interactions", () => {
     const nudge = claudeExtractionNudge(3, '{"tool":"bash"}');
-    expect(nudge).toContain("3 recent tool interactions queued");
+    expect(nudge).toContain("3 queued tool interactions");
     expect(nudge).toContain("thatch-fact-extractor");
   });
 });
@@ -466,11 +466,13 @@ describe("extractionNudge escalation", () => {
   const payload = '{"tool":"bash"}';
   const tool = "thatch_memory_remember";
 
-  test("tier 0 (missedCount 0-1): polite, mentions background sub-agent", () => {
+  test("tier 0 (missedCount 0-1): leads with verb, mentions background sub-agent", () => {
     const nudge = extractionNudge(3, 0, tool, payload);
-    expect(nudge).toContain("Dispatch a background sub-agent");
+    expect(nudge).toContain("Spawn a background sub-agent");
+    expect(nudge).toContain("Then answer the user");
     expect(nudge).not.toContain("YOU HAVE NOT");
     expect(nudge).not.toContain("IGNORING");
+    expect(nudge).not.toContain("if your harness");
   });
 
   test("tier 1 (missedCount 2): directive prefix, no shouting", () => {
