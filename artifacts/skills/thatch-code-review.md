@@ -18,6 +18,12 @@ Identify what to review:
 - If a git range was specified (A..B form), use it directly.
 - If no target was specified, review the current branch against its base, resolving the base from `origin/main` (or the appropriate remote tracking ref) after fetching.
 
+Also detect whether the current branch has a **connected PR/MR** even when none was specified — this is what enables follow-up-round detection in Step 2. Inspect `git remote -v` to recognize the VCS host (github.com → GitHub/`gh`; gitlab.* → GitLab/`glab`; bitbucket.org → Bitbucket Cloud; dev.azure.com → Azure DevOps). Then probe for an open PR/MR on the current branch using the matching CLI or REST API:
+- GitHub: `gh pr view --head <branch> --json number,headRefOid,baseRefOid`
+- GitLab: `glab mr list --source-branch <branch>`
+- Other providers: equivalent detection via their CLI or REST API.
+- If you cannot detect or cannot interact with the VCS (no CLI, no REST access), treat the change as a **local-branch review** and proceed with the existing procedure. A local-branch review is not a defect — it just means there is no prior-comments register to build.
+
 Also fetch any refs not locally reachable so branches and PRs that were never checked out can be reviewed (e.g. `git fetch origin <branch>` for a PR head).
 
 Run git diff --stat on the resolved range and git log --oneline to understand the change.
@@ -32,8 +38,9 @@ Load the thatch-review-context skill and follow its methodology to build a conte
 - thatch_memory_recall for feature/project status, design decisions, ticket dependencies
 - Project docs, READMEs, design docs
 - Issue tracker (gh issue/view) if ticket IDs are found
+- **Prior review comments** — if Step 1 detected a connected PR/MR, fetch ALL prior review comments on it (see source #8 in the review-context skill) and build the prior-comments register with a preliminary addressed-check status per comment. This is what distinguishes a **follow-up round** (register non-empty) from the **first round** (register empty or PR has no prior reviews). If Step 1 found no connected PR/MR, the brief explicitly states `Local-branch review — no prior-comment fetch`.
 
-Produce the context brief in the format the skill prescribes (project context, this change's scope, deferred work, dependencies, relevant constraints).
+Produce the context brief in the format the skill prescribes (project context, this change's scope, deferred work, dependencies, relevant constraints, and the prior review comments section when present).
 
 If context is sparse (no PR description, no ticket references, no relevant memories), note that the change appears standalone. Even a sparse brief is valuable: it tells specialists you looked and found nothing, so they do not need to repeat the search.
 
@@ -101,13 +108,16 @@ After all sub-agents complete, load the thatch-review-synthesizer skill to verif
 
 Confirmed LOW findings are mandatory in the final report, including mechanical findings (pedantic, no-slop, breadcrumbs, docs, naming, style, comments). Do not omit them for being non-functional.
 
+**Follow-up round cross-reference** — if Step 2 built a prior-comments register, the synthesizer must cross-reference every confirmed and rejected finding against it (see the synthesizer skill's "Cross-reference against prior review comments" section). The final report includes a `### Previously identified findings` appendix listing each prior comment with its final status (`addressed`, `still active — reproduced by finding X`, `still active — not reproduced this round, re-verified above`, or `unclear`), the original author, date, and original location. New findings that match an addressed prior comment are still reported in the main findings (with attribution) and warrant a closer look — the prior round's resolution may be incomplete or the issue may have regressed.
+
 Alternatively, perform the synthesis yourself:
 1. Read each finding's cited location to verify evidence accuracy.
 2. Deduplicate findings flagged by multiple specialists.
 3. Group findings by root cause where multiple findings stem from the same issue.
 4. Classify each as CONFIRMED, REJECTED, or UNVERIFIABLE. For behavioral findings, apply citation verification, reachability, and intent verification. For mechanical findings, verify the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy.
-5. Calibrate severity (BLOCKING > HIGH > MEDIUM > LOW) based on your verification.
-6. Produce a final report grouped by severity, with coverage gaps noted. Include every confirmed LOW finding.
+5. Cross-reference against the prior-comments register if one was built in Step 2: tag matching findings `Provenance: previously identified by @author, PR #N, DATE` and produce the `### Previously identified findings` appendix per the synthesizer skill.
+6. Calibrate severity (BLOCKING > HIGH > MEDIUM > LOW) based on your verification.
+7. Produce a final report grouped by severity, with coverage gaps noted. Include every confirmed LOW finding.
 
 ## Specialist briefing template
 
@@ -118,6 +128,7 @@ When dispatching each sub-agent, include in the prompt:
 - The diff stat for this unit's files
 - **The project context brief** from Step 2, filtered to what is relevant to this unit's scope. Explicitly list any deferred work that falls within this unit's files, and call out TODO ($ticket) markers the specialists should recognize as intentional.
 - **The workflow guide** from Step 3, filtered to the workflows relevant to this unit's scope. Use it to understand the purpose and evolution of the code before flagging issues. It provides the code-level context (flows, contracts, history, constraints) that prevents false positives about intentional behavior and long-standing design decisions.
+- **The prior review comments register** from Step 2 when present — the list of issues other reviewers already raised, with each comment's current-HEAD location and preliminary status. This is a **hint list, not a finding list**: it saves specialists the work of treating an already-identified issue as newly discovered. Specialists still produce their own findings normally. For any finding that matches a prior comment, set `Provenance` to `previously identified by @author, PR #N, DATE` in addition to the branch-introduced / pre-existing classification — the synthesizer does the final cross-reference and dedup.
 - Any design context or specific concerns
 - Explicit scope boundaries ("your scope is X; do NOT review Y")
 - Instruction to produce markdown findings with: severity, category, file:line, finding, evidence, trigger scenario, reachability, source of truth, producer chain, provenance

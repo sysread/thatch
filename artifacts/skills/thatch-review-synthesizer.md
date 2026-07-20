@@ -54,6 +54,26 @@ The same issue may be flagged by multiple specialists when it spans category bou
 
 Multiple findings may stem from the same underlying issue (e.g., a contract mismatch causes errors in 3 call sites). Group these under the root cause.
 
+## Cross-reference against prior review comments
+
+If your input includes a **prior-comments register** (built by the coordinator via `thatch-review-context` source #8 — prior review comments retrieved from the PR/MR's review history), cross-reference every confirmed and rejected finding against it so the final report does not present already-identified issues as fresh discoveries.
+
+For each new finding:
+1. **Search for a matching prior comment** by location and semantic claim. Match if both hold:
+   - The finding's cited file:line falls within (or has moved to) the prior comment's referenced location in current HEAD, AND
+   - The finding's core claim restates the prior comment's semantic claim (the same code-level issue, even if worded differently or covering a slightly wider scope).
+2. **If a match is found**, tag the finding's `Provenance` field as `previously identified by @author, PR #N, DATE` in addition to its branch-introduced / pre-existing classification. Do not drop the finding. Keep it in the main findings (with attribution) so the user sees what still needs attention this round.
+
+For each entry in the prior-comments register, finalize its status using both the register's preliminary verdict and this round's findings:
+- **`addressed`** — the register's preliminary status was `addressed` AND no new finding reproduces the comment. Re-read the cited current-HEAD location to confirm the issue is gone; if you find the issue persists, override to `still active — not reproduced this round, re-verified above`.
+- **`still active — reproduced by finding X`** — a new finding this round matches the prior comment. Cite the finding's severity and source specialist.
+- **`still active — not reproduced this round, re-verified above`** — no new finding matches, but you re-read the code and the issue described in the prior comment still persists. Include a one-line quote from current HEAD as evidence.
+- **`unclear`** — the original line is unlocatable in current HEAD, the file is gone, or substantive change makes the comparison impossible. State which.
+
+New findings that match a prior comment tagged `addressed` (preliminary) are still reported — they may indicate the resolution was incomplete or that the issue regressed. Note this in the finding's `Provenance` field so the user investigates.
+
+When the VCS resolve flag (GitLab `resolved`, GitHub `isResolved`) disagrees with the code-state verdict (e.g., thread marked resolved in the UI but the bug persists), trust the code state and call out the disagreement in the appendix entry.
+
 ## Severity calibration
 
 Assign final severity based on YOUR verification:
@@ -82,13 +102,27 @@ For each finding, grouped by severity (BLOCKING > HIGH > MEDIUM > LOW). Each fin
 4. **Finding**: what the problem is
 5. **Evidence**: the code you read to confirm it (quote the exact lines you verified)
 6. **Trigger/Proof**: the workflow trigger, and for state/data/behavior issues the producer then transform then consumer chain you verified
-7. **Provenance**: branch-introduced or pre-existing
+7. **Provenance**: branch-introduced or pre-existing. If the finding matches a prior review comment, append `; previously identified by @author, PR #N, DATE` to this field. For findings matching an `addressed` prior comment, also add a one-line note on why the finding persists so the user can investigate whether the prior resolution is incomplete or the issue has regressed.
 
 ### Rejected findings (appendix, brief)
 Findings you rejected and a one-line reason why. Include the specialist and location for each.
 
 ### Pre-existing bugs (appendix, brief)
 Findings you verified as real but pre-existing, with a one-line note on the issue and its potential impact.
+
+### Previously identified findings (appendix — only when a prior-comments register was provided)
+List every entry from the prior-comments register here. For each entry, produce a one-block record:
+1. **Author and date** of the original comment
+2. **Original location** (`file:line @ commit-SHA`, or `summary review`) and **current HEAD location** (`file:line`) if locatable
+3. **Claim**: one-sentence paraphrase of what the prior reviewer raised
+4. **Final status**: one of
+   - `addressed` — issue confirmed gone in current HEAD
+   - `still active — reproduced by finding X` — with the cross-referenced finding's severity and source specialist
+   - `still active — not reproduced this round, re-verified above` — with a one-line quote from current HEAD as evidence
+   - `unclear` — with the reason (file gone, line unlocatable, etc.)
+5. **VCS resolve flag** if applicable, and any disagreement with the code-state verdict (e.g., thread marked resolved in the UI but the bug persists) — trust the code state and surface the disagreement.
+
+If no prior-comments register was provided (local-branch review or first round on the PR/MR), state `None — no prior review comments to cross-reference` and move on.
 
 ### Coverage gaps
 Note which files or areas were NOT covered by any specialist.

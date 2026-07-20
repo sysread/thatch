@@ -36,8 +36,8 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth-wall breaks, em dashes, filler. |
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of behavior? |
 | `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
-| `thatch-review-synthesizer` | Verify specialist findings against code, dedupe, classify, calibrate severity. |
-| `thatch-review-context` | Gather project/feature context (PR descriptions, git archaeology, ticket references, memory) before fan-out. Prevents false positives about intentionally deferred work. |
+| `thatch-review-synthesizer` | Verify specialist findings against code, dedupe, classify, calibrate severity. Cross-references findings against prior review comments when a follow-up round register is provided; produces a Previously identified appendix. |
+| `thatch-review-context` | Gather project/feature context (PR descriptions, git archaeology, ticket references, memory) before fan-out. Prevents false positives about intentionally deferred work. Also fetches prior review comments on a connected PR/MR for follow-up-round detection and builds a register with preliminary addressed-check status per comment. |
 | `thatch-workflow-research` | Research code workflows/features affected by a change or planned change. Reads code flows, comments, git history, memories, docs. Produces a guide to the code for reviewers or planners. |
 | `thatch-session-reflection` | End-of-session memory recording (project, user, tools, self). |
 
@@ -45,7 +45,7 @@ description: Extract durable project facts ... Use when ...
 
 | Skill | Role |
 |-------|------|
-| `thatch-code-review` | Resolve review target, gather project context, research affected workflows, estimate complexity, partition, dispatch the 6 specialists in parallel, synthesize. |
+| `thatch-code-review` | Resolve review target (incl. VCS detection and connected PR/MR lookup for follow-up round detection), gather project context, research affected workflows, estimate complexity, partition, dispatch the 6 specialists in parallel, synthesize (incl. cross-referencing findings against prior review comments). |
 
 ## REVIEW_COMMON
 

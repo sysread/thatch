@@ -56,6 +56,62 @@ If ticket IDs were found:
 - Look for milestone assignments, dependencies, and blocking relationships
 - Check for epic or parent issues that describe the overall feature
 
+### 8. Prior review comments (follow-up round detection)
+
+If the change under review has a connected PR/MR on the upstream remote, fetch all prior review comments so this review does not duplicate already-identified issues. Any prior review activity on the PR/MR means **this is a follow-up round**, not the first review. If no PR/MR is connected, this is a **local-branch review** — skip this source entirely; the existing review procedure applies.
+
+#### Detect the VCS provider
+
+`git remote -v` lists remotes and URLs. Parse the upstream URL:
+- `github.com` → GitHub (`gh`)
+- `gitlab.*` → GitLab (`glab`)
+- `bitbucket.org` → Bitbucket Cloud
+- `dev.azure.com` → Azure DevOps
+- Unknown host or no upstream → local-branch review, skip this source.
+
+If the matching CLI tool (`gh`, `glab`, etc.) is not on PATH and you cannot call the provider's REST API via available HTTP tools, skip this source — the missing integration is not a finding.
+
+#### Detect the connected PR/MR
+
+Use the current branch name (without remote or merge-base prefix) to look up an open PR/MR:
+- **GitHub**: `gh pr view --head <branch> --json number,title,state,headRefName,baseRefName,headRefOid,baseRefOid`. Fallback: `gh api repos/{owner}/{repo}/pulls --jq ".[] | select(.head.ref==\"<branch>\")"`.
+- **GitLab**: `glab mr list --source-branch <branch>`.
+- **Bitbucket Cloud**: REST `https://api.bitbucket.org/2.0/repositories/<owner>/<slug>/pullrequests?q=source.branch.name="<branch>"` (no widely-adopted CLI; call via available HTTP tool).
+- **Azure DevOps**: `az repos pr list --source-branch <branch> --org <org-url> -r <project>`.
+
+If a PR/MR is found and has zero prior review comments/reviews by other users, treat this as the first round on this PR/MR — skip the addressed-check, but still record the PR/MR identity in the brief for reference.
+
+#### Fetch ALL prior review comments
+
+Pull review threads and summaries regardless of resolved state — the goal is to see everything that has been raised, not just unresolved threads.
+- **GitHub**: `gh api repos/{owner}/{repo}/pulls/{N}/reviews` (review summaries: body, user, state, submitted_at) AND `gh api repos/{owner}/{repo}/pulls/{N}/comments` (inline file:line comments with `path`, `line`, `original_line`, `commit_id`, `body`, `user`).
+- **GitLab**: `glab api projects/:id/merge_requests/:iid/discussions` returns discussion threads with anchored positions; threads expose `resolved` and `resolved_by` (use as a supplementary addressed signal).
+- **Bitbucket Cloud**: REST `activities` endpoint for the PR.
+- **Azure DevOps**: REST `threads` endpoint for the PR.
+
+#### Build the prior-comments register
+
+For each prior comment, record:
+- Author, submitted date
+- Original commit SHA, file, line range (or `summary` for non-inline review)
+- Comment body (quoted)
+- The semantic claim raised (what the reviewer said was wrong — paraphrase the core issue, one sentence)
+- VCS resolve state if available (GitLab `resolved`/`resolved_by`; GitHub `isResolved` via GraphQL if accessible)
+
+#### Addressed-check methodology
+
+For each comment, attempt to determine whether it has been addressed in the **current HEAD** under review:
+1. **Locate the original code location.** If the file was deleted, mark `unclear`. If the file was renamed, follow it with `git log --diff-filter=R -- <path>`.
+2. **Anchor to current HEAD.** Read the cited line plus 3-5 lines of context at the original commit (`git show <comment-SHA>:<file>`). Find the equivalent region in the current HEAD file by matching the surrounding text (search for unique tokens from that region). Determine the new line range.
+3. **Judge the issue.** Read the code at the new location. Does the issue the comment described still exist, or has it been fixed, refactored away, or otherwise made moot by changes in this change's commit range?
+4. **Tag preliminary status:**
+   - `addressed` — the code at the equivalent location no longer exhibits the issue, or the referenced structure was refactored away in a way that resolves the comment.
+   - `still active` — the issue persists at the equivalent location.
+   - `unclear` — file gone, line unlocatable, or the substantive change makes comparison impossible.
+5. **VCS resolve signal as a supplement, not a substitute.** If the VCS exposes a resolved flag (GitLab `resolved: true`, GitHub `isResolved` via GraphQL), record it as supporting evidence. When the resolved flag disagrees with the code-state verdict, trust the code state — a thread can be marked resolved in the UI while the bug persists, and an unresolved thread may already have been fixed by a later commit. Note both signals in the register so the synthesizer can weigh them.
+
+The register produced here is a **preliminary** classification. The synthesizer produces the final cross-reference, including any prelim-status overrides when new findings from the specialist round reproduce or refute a prior comment.
+
 ## Context brief format
 
 Produce a structured brief:
@@ -82,6 +138,19 @@ List each deferred piece:
 ### Relevant constraints
 - Design decisions or architectural constraints from memories or docs
 - Conventions that reviewers should be aware of
+
+### Prior review comments (only when the change has a connected PR/MR with prior reviews)
+
+List the prior-comments register (one entry per prior comment):
+- Author and submitted date
+- Original location (`file:line @ commit-SHA`, or `summary review`) and current HEAD location (`file:line`) if locatable
+- The semantic claim raised (one-sentence paraphrase)
+- Preliminary status: `addressed` / `still active` / `unclear` — with the code-state evidence (a short quote from the current HEAD that supports the verdict)
+- VCS resolve flag if applicable (and any disagreement with the code-state verdict)
+
+If context gathering found a connected PR/MR but no prior reviews by other users, state `First round on PR #N — no prior comments to register`.
+
+If context gathering found no connected PR/MR (local-branch review), state `Local-branch review — no prior-comment fetch`. This is not a gap; the existing review procedure applies.
 
 ## If context is sparse
 
