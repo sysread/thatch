@@ -10,13 +10,15 @@ This entire review is a static analysis exercise. Do NOT run tests, linters, com
 
 ## Step 1: Resolve the review target
 
-Identify what to review:
-- If a branch was specified, identify the base branch (usually main or master), compute the merge-base, and review the range merge-base..HEAD.
-- If a PR number was specified, use gh pr view to resolve the head and base, fetch both refs, and review merge-base..head.
-- If a git range was specified (A..B form), use it directly.
-- If no target was specified, review the current branch against its base.
+First, run `git fetch origin` (NOT `git pull` — fetch updates remote-tracking refs without touching the working tree or current branch). This refreshes `origin/main` and other remote-tracking refs to their true remote state. Local branches (e.g. `main`) only advance on checkout/pull and may be stale on a long-lived feature checkout, so resolve the base against the remote tracking ref, not the local branch.
 
-Fetch any refs not locally reachable so branches and PRs that were never checked out can be reviewed.
+Identify what to review:
+- If a branch was specified, identify the base branch (usually main or master), compute the merge-base against the remote tracking ref (e.g. `git merge-base HEAD origin/main`), and review the range merge-base..HEAD.
+- If a PR number was specified, use `gh pr view` to resolve the head and base, fetch both refs, and review merge-base..head.
+- If a git range was specified (A..B form), use it directly.
+- If no target was specified, review the current branch against its base, resolving the base from `origin/main` (or the appropriate remote tracking ref) after fetching.
+
+Also fetch any refs not locally reachable so branches and PRs that were never checked out can be reviewed (e.g. `git fetch origin <branch>` for a PR head).
 
 Run git diff --stat on the resolved range and git log --oneline to understand the change.
 
