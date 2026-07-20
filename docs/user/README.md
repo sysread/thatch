@@ -20,6 +20,17 @@ Publish to npm and add thatch to your opencode config:
 
 OpenCode installs the plugin and its dependencies automatically on next start.
 
+Set this environment variable so the extraction nudge can dispatch the
+fact-extractor as a **background** sub-agent instead of blocking your turn:
+
+```bash
+export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
+```
+
+Without it, opencode hides the task tool's `background` parameter and the
+extraction nudge runs synchronously. Put it in your shell rc, `mise.toml`
+`[env]`, or `.envrc`.
+
 For local development before publishing, use a file path:
 
 ```jsonc

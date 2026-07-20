@@ -268,20 +268,32 @@ export function extractionNudge(
   payload: string,
 ): string {
   const plural = count === 1 ? "" : "s";
+  // opencode's task tool has a `background` parameter (requires
+  // OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true) that launches the sub-agent
+  // asynchronously — the call returns immediately and the session is notified
+  // on completion. Naming the parameter gives the model a direct hit on the tool
+  // schema it sees. MCP hosts (Claude Code, Cursor) keep generic sub-agent
+  // wording because their background mechanisms differ and are not exposed as a
+  // per-call parameter in the same way.
+  const isOpencode = toolName.startsWith("thatch_");
+  const dispatch = isOpencode
+    ? "Dispatch a task with background: true"
+    : "Spawn a background sub-agent";
+
   if (missedCount >= 3) {
     return `[thatch] YOU ARE IGNORING EXTRACTION INSTRUCTIONS. ` +
       `${count} TOOL INTERACTION${plural.toUpperCase()} ARE QUEUED AND YOU HAVE NOT PROCESSED ANY OF THEM. ` +
       `THE USER INSTALLED THIS PLUGIN FOR A REASON. ` +
-      `SPAWN A SUB-AGENT NOW TO RUN THE thatch-fact-extractor SKILL ` +
+      `${dispatch.toUpperCase()} NOW TO RUN THE thatch-fact-extractor SKILL ` +
       `AND USE ${toolName.toUpperCase()} TO SAVE DURABLE FACTS FROM THIS PAYLOAD:\n${payload}`;
   }
   if (missedCount >= 2) {
     return `[thatch] YOU HAVE NOT PROCESSED YOUR PREVIOUS EXTRACTION PAYLOAD${plural.toUpperCase()}. ` +
       `${count} more tool interaction${plural} are now queued. ` +
-      `Spawn a background sub-agent to run the thatch-fact-extractor skill on this payload. ` +
+      `${dispatch} to run the thatch-fact-extractor skill on this payload. ` +
       `Use ${toolName} to save durable facts from this payload:\n${payload}`;
   }
-  return `[thatch] Spawn a background sub-agent to run the thatch-fact-extractor skill ` +
+  return `[thatch] ${dispatch} to run the thatch-fact-extractor skill ` +
     `on ${count} queued tool interaction${plural}. ` +
     `Then answer the user. ` +
     `Use ${toolName} to save durable facts from this payload:\n${payload}`;

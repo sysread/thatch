@@ -1,3 +1,10 @@
+[env]
+# Enable opencode background sub-agents (task tool background:true parameter).
+# Gated behind an experimental flag in opencode; without this, the task tool
+# strips the `background` parameter from its schema entirely, forcing
+# synchronous sub-agent dispatch. Also set in bashrc for global coverage.
+OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS = "true"
+
 [tools]
 bun = "1.3.14"
 

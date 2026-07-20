@@ -32,6 +32,17 @@ No API keys, no cloud services; everything runs on your machine.
 On next start, OpenCode npm-installs thatch (putting the `thatch` CLI on your
 PATH as a side effect) and its tools are available immediately.
 
+Set this environment variable so the extraction nudge can run the fact-extractor
+as a **background** sub-agent instead of blocking your turn:
+
+```bash
+export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
+```
+
+Without it, opencode hides the task tool's `background` parameter and every
+extraction nudge runs synchronously. Put it in your shell rc, `mise.toml`
+`[env]`, or `.envrc`.
+
 **Self-hosting** (local development):
 
 ```jsonc
