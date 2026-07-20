@@ -56,6 +56,14 @@ export const server: Plugin = async ({ client, worktree }) => {
   // all-caps shouting. Reset to 0 whenever the agent writes a memory.
   const missedNudges = new Map<string, number>();
 
+  // Parent-child session mapping for cross-session buffer drain. opencode
+  // creates real child sessions with their own IDs for sub-agents; without
+  // this map, a memory_remember call in a child (e.g. a background
+  // fact-extractor task) drains the child's empty buffer but leaves the
+  // parent's buffer untouched, causing the nudge to replay indefinitely.
+  // Populated from session.created events that carry a parentID.
+  const childToParent = new Map<string, string>();
+
   // Skills always install to the global opencode config — installing into the
   // worktree would mutate the user's repo (untracked files in git status).
   // A failed install degrades the nudge workflow but must not kill the plugin.
@@ -103,8 +111,34 @@ export const server: Plugin = async ({ client, worktree }) => {
     //    The buffer is NOT drained on nudge delivery — it persists until the
     //    agent writes a memory, so ignored nudges accumulate and the payload
     //    grows with each missed cycle.
+    //
+    //    Fix A: a memory_remember call in a child session (sub-agent) also
+    //    drains the parent's buffer. Without this, dispatching the
+    //    fact-extractor as a background task writes memories in the child
+    //    but never clears the parent's queue — the nudge replays every turn.
+    //
+    //    Fix C: thatch_extraction_done is an explicit acknowledgment tool the
+    //    model calls in the parent session after dispatching. Belt-and-
+    //    suspenders for fix A: covers the case where the sub-agent errors out
+    //    or the host doesn't expose parent-child session relationships.
     "tool.execute.after": async (input, output) => {
       if (input.tool === "thatch_memory_remember") {
+        extraction.consume(input.sessionID);
+        missedNudges.delete(input.sessionID);
+        // Fix A: if this is a child session, also drain the parent so the
+        // parent's extraction nudge stops replaying after a sub-agent writes
+        // memories on its behalf.
+        const parentID = childToParent.get(input.sessionID);
+        if (parentID) {
+          extraction.consume(parentID);
+          missedNudges.delete(parentID);
+        }
+        return;
+      }
+      // Fix C: explicit acknowledgment tool drains the buffer without
+      // requiring a memory write. The model calls this after dispatching
+      // the fact-extractor to a sub-agent.
+      if (input.tool === "thatch_extraction_done") {
         extraction.consume(input.sessionID);
         missedNudges.delete(input.sessionID);
         return;
@@ -183,7 +217,22 @@ export const server: Plugin = async ({ client, worktree }) => {
 
     // 5. Session-start reminder, carrying the hygiene heartbeat. Hygiene is
     // best-effort: a failure there must not cost the reminder itself.
+    //
+    // Also tracks parent-child session relationships for fix A (cross-session
+    // buffer drain). session.created with a parentID records the mapping;
+    // session.deleted cleans it up to avoid unbounded growth.
     event: async ({ event }) => {
+      if (event.type === "session.created") {
+        const info = event.properties.info;
+        if (info.parentID) {
+          childToParent.set(info.id, info.parentID);
+        }
+      }
+      if (event.type === "session.deleted") {
+        childToParent.delete(event.properties.info.id);
+        return;
+      }
+
       if (event.type !== "session.created") return;
       const id = event.properties.info.id;
 

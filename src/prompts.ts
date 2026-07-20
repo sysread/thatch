@@ -136,7 +136,7 @@ Tools are prefixed in Claude Code: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__memory_recall\`, \`mcp__thatch__memory_list\`,
 \`mcp__thatch__memory_show\`, \`mcp__thatch__memory_forget\`,
 \`mcp__thatch__store_list\`, \`mcp__thatch__find_duplicates\`,
-\`mcp__thatch__dedup_mark_checked\`.
+\`mcp__thatch__dedup_mark_checked\`, \`mcp__thatch__extraction_done\`.
 Bare names used below for readability.
 
 ## Stores
@@ -279,22 +279,27 @@ export function extractionNudge(
   const dispatch = isOpencode
     ? "Dispatch a task with background: true"
     : "Spawn a background sub-agent";
+  const drainTool = isOpencode ? "thatch_extraction_done" : "mcp__thatch__extraction_done";
+  const acknowledge = `After dispatching, call ${drainTool} to acknowledge.`;
 
   if (missedCount >= 3) {
     return `[thatch] YOU ARE IGNORING EXTRACTION INSTRUCTIONS. ` +
       `${count} TOOL INTERACTION${plural.toUpperCase()} ARE QUEUED AND YOU HAVE NOT PROCESSED ANY OF THEM. ` +
       `THE USER INSTALLED THIS PLUGIN FOR A REASON. ` +
-      `${dispatch.toUpperCase()} NOW TO RUN THE thatch-fact-extractor SKILL ` +
-      `AND USE ${toolName.toUpperCase()} TO SAVE DURABLE FACTS FROM THIS PAYLOAD:\n${payload}`;
+      `${dispatch.toUpperCase()} NOW TO RUN THE thatch-fact-extractor SKILL. ` +
+      `${acknowledge.toUpperCase()} ` +
+      `USE ${toolName.toUpperCase()} TO SAVE DURABLE FACTS FROM THIS PAYLOAD:\n${payload}`;
   }
   if (missedCount >= 2) {
     return `[thatch] YOU HAVE NOT PROCESSED YOUR PREVIOUS EXTRACTION PAYLOAD${plural.toUpperCase()}. ` +
       `${count} more tool interaction${plural} are now queued. ` +
       `${dispatch} to run the thatch-fact-extractor skill on this payload. ` +
+      `${acknowledge} ` +
       `Use ${toolName} to save durable facts from this payload:\n${payload}`;
   }
   return `[thatch] ${dispatch} to run the thatch-fact-extractor skill ` +
     `on ${count} queued tool interaction${plural}. ` +
+    `${acknowledge} ` +
     `Then answer the user. ` +
     `Use ${toolName} to save durable facts from this payload:\n${payload}`;
 }
@@ -324,7 +329,7 @@ Tools are prefixed in Cursor: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__memory_recall\`, \`mcp__thatch__memory_list\`,
 \`mcp__thatch__memory_show\`, \`mcp__thatch__memory_forget\`,
 \`mcp__thatch__store_list\`, \`mcp__thatch__find_duplicates\`,
-\`mcp__thatch__dedup_mark_checked\`.
+\`mcp__thatch__dedup_mark_checked\`, \`mcp__thatch__extraction_done\`.
 Bare names used below for readability.
 
 ## Stores

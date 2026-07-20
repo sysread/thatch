@@ -56,7 +56,7 @@ export function appendBatch(sessionID: string, toolCalls: BatchToolCall[]): void
   const additions: ToolInteraction[] = [];
   for (const tc of toolCalls) {
     const lower = tc.tool_name.toLowerCase();
-    if (lower === "mcp__thatch__memory_remember") {
+    if (lower === "mcp__thatch__memory_remember" || lower === "mcp__thatch__extraction_done") {
       resetMissedCount(sessionID);
       consumeQueue(sessionID);
       existing.length = 0;

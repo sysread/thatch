@@ -28,8 +28,8 @@ afterEach(() => {
 });
 
 describe("TOOL_DEFS", () => {
-  test("exports all 8 tools", () => {
-    expect(TOOL_DEFS.length).toBe(8);
+  test("exports all 9 tools", () => {
+    expect(TOOL_DEFS.length).toBe(9);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -40,6 +40,7 @@ describe("TOOL_DEFS", () => {
       "store_list",
       "find_duplicates",
       "dedup_mark_checked",
+      "extraction_done",
     ]);
   });
 

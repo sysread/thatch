@@ -89,6 +89,7 @@ describe("plugin entry", () => {
     const names = Object.keys(hooks.tool!);
     expect(names.sort()).toEqual([
       "thatch_dedup_mark_checked",
+      "thatch_extraction_done",
       "thatch_find_duplicates",
       "thatch_memory_forget",
       "thatch_memory_list",
@@ -269,6 +270,61 @@ describe("plugin entry", () => {
     await hooks["chat.message"]!({ sessionID: "ses_esc", messageID: "msg_e5" } as any, out4);
     expect(out4.parts[0].text).toContain("Dispatch a task with background: true");
     expect(out4.parts[0].text).not.toContain("YOU HAVE NOT");
+  });
+
+  test("fix A: memory_remember in a child session drains the parent's buffer", async () => {
+    // Simulate a sub-agent child session being created with a parentID
+    await hooks.event!({ event: {
+      type: "session.created",
+      properties: { info: { id: "ses_child_fixa", parentID: "ses_parent_fixa" } } } as any,
+    });
+
+    // Buffer tool interactions in the PARENT session
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_parent_fixa", callID: "fa1", args: { command: "ls" } },
+      { title: "list", output: "file.txt", metadata: {} },
+    );
+
+    // Parent should have a pending nudge
+    const parentOut: any = { message: { id: "msg_fa0" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_parent_fixa", messageID: "msg_fa0" } as any, parentOut);
+    expect(parentOut.parts.length).toBe(1);
+    expect(parentOut.parts[0].text).toContain("Dispatch a task with background: true");
+
+    // Child session writes a memory (as a sub-agent would)
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_memory_remember", sessionID: "ses_child_fixa", callID: "fa2", args: {} },
+      { title: "save", output: "[saved]", metadata: {} },
+    );
+
+    // Parent's buffer should now be drained — no nudge on next chat.message
+    const parentOut2: any = { message: { id: "msg_fa1" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_parent_fixa", messageID: "msg_fa1" } as any, parentOut2);
+    expect(parentOut2.parts.length).toBe(0);
+  });
+
+  test("fix C: thatch_extraction_done drains the buffer without a memory write", async () => {
+    // Buffer tool interactions
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_fixc", callID: "fc1", args: { command: "ls" } },
+      { title: "list", output: "file.txt", metadata: {} },
+    );
+
+    // Should have a pending nudge
+    const out1: any = { message: { id: "msg_fc0" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_fixc", messageID: "msg_fc0" } as any, out1);
+    expect(out1.parts.length).toBe(1);
+
+    // Agent calls extraction_done to acknowledge
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_extraction_done", sessionID: "ses_fixc", callID: "fc2", args: {} },
+      { title: "ack", output: "[acknowledged]", metadata: {} },
+    );
+
+    // Buffer should be drained — no nudge on next chat.message
+    const out2: any = { message: { id: "msg_fc1" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_fixc", messageID: "msg_fc1" } as any, out2);
+    expect(out2.parts.length).toBe(0);
   });
 
   test("installs skill files under the redirected config home", async () => {
@@ -482,6 +538,7 @@ describe("extractionNudge escalation", () => {
   test("tier 0 (missedCount 0-1): leads with verb, mentions background dispatch", () => {
     const nudge = extractionNudge(3, 0, tool, payload);
     expect(nudge).toContain("Dispatch a task with background: true");
+    expect(nudge).toContain("thatch_extraction_done");
     expect(nudge).toContain("Then answer the user");
     expect(nudge).not.toContain("YOU HAVE NOT");
     expect(nudge).not.toContain("IGNORING");
@@ -492,6 +549,7 @@ describe("extractionNudge escalation", () => {
     const nudge = extractionNudge(3, 0, "mcp__thatch__memory_remember", payload);
     expect(nudge).toContain("Spawn a background sub-agent");
     expect(nudge).not.toContain("background: true");
+    expect(nudge).toContain("mcp__thatch__extraction_done");
   });
 
   test("tier 1 (missedCount 2): directive prefix, no shouting", () => {

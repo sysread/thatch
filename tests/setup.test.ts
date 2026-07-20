@@ -277,6 +277,7 @@ describe("claudeInstructions content", () => {
     expect(text).toContain("mcp__thatch__store_list");
     expect(text).toContain("mcp__thatch__find_duplicates");
     expect(text).toContain("mcp__thatch__dedup_mark_checked");
+    expect(text).toContain("mcp__thatch__extraction_done");
   });
 
   test("includes session startup instructions", () => {
@@ -551,6 +552,7 @@ describe("cursorInstructions content", () => {
     expect(text).toContain("mcp__thatch__store_list");
     expect(text).toContain("mcp__thatch__find_duplicates");
     expect(text).toContain("mcp__thatch__dedup_mark_checked");
+    expect(text).toContain("mcp__thatch__extraction_done");
   });
 
   test("references Cursor (not Claude Code)", () => {

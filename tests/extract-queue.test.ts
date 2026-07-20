@@ -212,6 +212,20 @@ describe("missed-nudge counter", () => {
     expect(getMissedCount("echo-session")).toBe(0);
     expect(peekQueue("echo-session").length).toBe(0);
   });
+
+  test("appendBatch drains queue when extraction_done is in the batch", () => {
+    incrementMissedCount("drain-session");
+    expect(getMissedCount("drain-session")).toBe(1);
+    appendBatch("drain-session", [
+      call("Read", { file_path: "/a" }, "a"),
+    ]);
+    expect(peekQueue("drain-session").length).toBe(1);
+    appendBatch("drain-session", [
+      call("mcp__thatch__extraction_done", {}, "ok"),
+    ]);
+    expect(getMissedCount("drain-session")).toBe(0);
+    expect(peekQueue("drain-session").length).toBe(0);
+  });
 });
 
 describe("peekQueue + consumeQueue", () => {

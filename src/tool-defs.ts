@@ -341,6 +341,33 @@ const markCheckedDef: ToolDef = {
 };
 
 /**
+ * Acknowledge that the extraction nudge has been handled. Drains the
+ * extraction buffer so the nudge does not replay on the next turn.
+ *
+ * The actual draining happens in the host's post-tool hook
+ * (tool.execute.after for opencode, PostToolBatch/appendBatch for MCP) —
+ * this tool's execute function is a no-op confirmation. The tool exists so
+ * the model can call it in the parent session after dispatching the
+ * fact-extractor to a sub-agent, giving the hook a recognizable tool name
+ * to key on. Without it, the buffer only drains when a memory_remember
+ * call lands in the same session (or a tracked child session), which fails
+ * if the sub-agent errors out or the host doesn't expose parent-child
+ * session relationships.
+ */
+const extractionDoneDef: ToolDef = {
+  name: "extraction_done",
+  description:
+    "Acknowledge that the extraction nudge has been dispatched to a sub-agent. " +
+    "Drains the extraction buffer so the nudge does not replay. " +
+    "Call this in the parent session after dispatching a background task " +
+    "to run the thatch-fact-extractor skill.",
+  args: {},
+  async execute() {
+    return "[acknowledged] extraction buffer drained";
+  },
+};
+
+/**
  * All tool definitions, in the order they should be presented to the agent.
  * The opencode plugin wraps each in `tool()`; the MCP server exposes them
  * via `tools/list` and dispatches `tools/call` to their execute functions.
@@ -354,4 +381,5 @@ export const TOOL_DEFS: ToolDef[] = [
   listStoresDef,
   findDuplicatesDef,
   markCheckedDef,
+  extractionDoneDef,
 ];
