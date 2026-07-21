@@ -35,6 +35,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-code-review\` — full multi-agent code review (dispatches 6 specialists + synthesizer). Requires sub-agent support.
 - \`thatch-workflow-research\` — research code workflows affected by a change or planned change, before reviewing or planning.
 - \`thatch-change-walkthrough\` — explain a change to the user as a teaching walkthrough: how the affected workflows behave today, then how the change modifies them, with file:line citations and analogies.
+- \`thatch-code-walkthrough\` — explain a feature, module, or workflow to the user as a teaching walkthrough: researches how it works at the resolved code state (optionally a branch or PR), teaches it with file:line citations and analogies, and lists the key files.
 - \`thatch-review-context\` — gather project context (PRs, tickets, TODOs, deferred work) before a review.
 - \`thatch-project-primer\` — investigate a new project and write foundational memories.
 - \`thatch-session-reflection\` — record what you learned at end of session.
@@ -166,6 +167,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 
 - \`thatch-workflow-research\` — research code workflows affected by a change or planned change, before reviewing or planning.
 - \`thatch-change-walkthrough\` — explain a change to the user as a teaching walkthrough: how the affected workflows behave today, then how the change modifies them, with file:line citations and analogies.
+- \`thatch-code-walkthrough\` — explain a feature, module, or workflow to the user as a teaching walkthrough: researches how it works at the resolved code state (optionally a branch or PR), teaches it with file:line citations and analogies, and lists the key files.
 - \`thatch-review-context\` — gather project context (PRs, tickets, TODOs, deferred work) before a review.
 - \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-no-slop\` / \`-breadcrumbs\` / \`-mark-and-sweep\` — six specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
 - \`thatch-project-primer\` — investigate a new project and write foundational memories.
@@ -360,6 +362,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 
 - \`thatch-workflow-research\` — research code workflows affected by a change or planned change, before reviewing or planning.
 - \`thatch-change-walkthrough\` — explain a change to the user as a teaching walkthrough: how the affected workflows behave today, then how the change modifies them, with file:line citations and analogies.
+- \`thatch-code-walkthrough\` — explain a feature, module, or workflow to the user as a teaching walkthrough: researches how it works at the resolved code state (optionally a branch or PR), teaches it with file:line citations and analogies, and lists the key files.
 - \`thatch-review-context\` — gather project context (PRs, tickets, TODOs, deferred work) before a review.
 - \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-no-slop\` / \`-breadcrumbs\` / \`-mark-and-sweep\` — six specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
 - \`thatch-project-primer\` — investigate a new project and write foundational memories.

@@ -200,7 +200,7 @@ describe("setupClaudeCode (project-local)", () => {
 
     // Shared skills only — opencode-only skills (thatch-code-review) are not
     // installed for Claude Code because they require sub-agent support.
-    expect(result.skills.length).toBe(14);
+    expect(result.skills.length).toBe(15);
     const skillNames = result.skills.map((s) => s.name);
     expect(skillNames).toContain("thatch-fact-extractor");
     expect(skillNames).toContain("thatch-dedup-classifier");
@@ -215,6 +215,7 @@ describe("setupClaudeCode (project-local)", () => {
     expect(skillNames).toContain("thatch-review-context");
     expect(skillNames).toContain("thatch-workflow-research");
     expect(skillNames).toContain("thatch-change-walkthrough");
+    expect(skillNames).toContain("thatch-code-walkthrough");
     expect(skillNames).toContain("thatch-session-reflection");
     expect(skillNames).not.toContain("thatch-code-review");
 
@@ -482,13 +483,14 @@ describe("setupCursor (project-local)", () => {
   test("installs skill files to ~/.cursor/skills/", () => {
     const result = setupCursor("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
-    expect(result.skills.length).toBe(14);
+    expect(result.skills.length).toBe(15);
     const skillNames = result.skills.map((s) => s.name);
     expect(skillNames).toContain("thatch-fact-extractor");
     expect(skillNames).toContain("thatch-dedup-classifier");
     expect(skillNames).toContain("thatch-project-primer");
     expect(skillNames).toContain("thatch-review-mark-and-sweep");
     expect(skillNames).toContain("thatch-change-walkthrough");
+    expect(skillNames).toContain("thatch-code-walkthrough");
     expect(skillNames).not.toContain("thatch-code-review");
 
     for (const skill of result.skills) {
