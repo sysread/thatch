@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
+import yaml from "yaml";
 import { setupClaudeCode, setupCursor, checkSetup } from "../src/setup";
 import { claudeInstructions, cursorInstructions } from "../src/prompts";
 import { SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "../src/skills";
@@ -728,6 +729,33 @@ describe("skill artifact registry parity", () => {
       const isReviewSpecialist = REVIEW_SPECIALISTS.has(skill.name);
       const hasInterpolatedBody = skill.content.includes(REVIEW_COMMON_BODY);
       expect(hasInterpolatedBody).toBe(isReviewSpecialist);
+    }
+  });
+
+  test("every skill frontmatter parses as strict YAML with name and description", () => {
+    // opencode discovers skills by parsing the YAML frontmatter of each
+    // SKILL.md. If the parse fails (or yields a mapping without `name`
+    // or `description`), opencode filters the skill out of available_skills
+    // entirely, so it is invisible to the LLM and can never be loaded.
+    //
+    // The most common way to break parsing is a `: ` (colon-space) appearing
+    // mid-description in an unquoted scalar: bun's strict YAML parser
+    // interprets it as a nested mapping key separator and throws
+    // "Nested mappings are not allowed in compact mappings". Fix by wrapping
+    // the description in single quotes (single-quoted YAML strings tolerate
+    // colons, backticks, and double-quotes inline; only apostrophes need
+    // doubling, and our descriptions don't have any).
+    //
+    // Using the yaml package directly (matching bun's strict parser opencode
+    // is presumed to use) catches this class of bug at `mise run check` time.
+    for (const skill of [...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]) {
+      const fmMatch = skill.content.match(/^---\n([\s\S]*?)\n---/);
+      expect(fmMatch).not.toBeNull();
+      const parsed = yaml.parse(fmMatch![1]) as Record<string, unknown>;
+      expect(typeof parsed.name).toBe("string");
+      expect(parsed.name).toBe(skill.name);
+      expect(typeof parsed.description).toBe("string");
+      expect((parsed.description as string).length).toBeGreaterThan(0);
     }
   });
 });

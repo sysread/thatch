@@ -30,7 +30,8 @@
     "@opencode-ai/plugin": "^1.17.13",
     "@types/bun": "latest",
     "markdownlint-cli2": "^0.23.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "yaml": "^2.7.0"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": "^1.17.0"
