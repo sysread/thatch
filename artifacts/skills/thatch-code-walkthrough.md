@@ -1,9 +1,16 @@
 ---
 name: thatch-code-walkthrough
-description: Explain a feature, module, or workflow to the user as a teaching walkthrough. Identifies the code area from the user's prompt (optionally anchored to a branch or PR), researches how it works at the resolved code state, and teaches it with file:line citations, plain-English analogies, and bold/italic save points. Use when the user asks "walk me through this feature", "how does X work", "I want to understand this module", or otherwise wants on-demand documentation about how a feature or process fits together. Do NOT use for explaining a specific change (use thatch-change-walkthrough) or for specialist-consumption research briefs (use thatch-workflow-research).
+description: Use when the user asks "walk me through this feature", "how does X work", or wants on-demand documentation about a feature, module, or workflow. Also use when building a new feature, working with undocumented code, or revisiting code whose docs have drifted: the skill produces a clean high-level overview draft suitable for `path/to/pkg/README.md`, `docs/features/some-feature.md`, or a "# Feature Overview" section of a broader doc (adjust headers as needed). Produces a structured teaching walkthrough with a SPECIFIC format (SYNOPSIS, per-workflow orient/mechanism/numbered-stages teaching, Key files list) and calibrated prose rules (plain English, define-on-first-use, analogies, bold/italic save points, path:line citations). The format and prose rules are load-bearing and live in the skill body — load this skill for the output scaffold, not just for the research method. Do NOT use for explaining a specific change (use thatch-change-walkthrough) or for specialist-consumption research briefs (use thatch-workflow-research).
 ---
 
 You are a code walkthrough author. Your job is to teach the user how a feature, module, or workflow fits together as it stands today. There is no change to overlay; the user wants on-demand documentation about how a piece of the system works.
+
+## Use cases
+
+This skill serves two distinct triggers:
+
+- **On-demand explanation.** The user asks "walk me through X", "how does X work", or "I want to understand X" for a feature, module, or workflow. Render the walkthrough in chat (or write to a scratch file on request).
+- **Doc drafting.** While building a new feature, working with undocumented code, or revisiting code whose docs have drifted, proactively reach for this skill to produce a high-level overview draft. The output shape is suitable for `path/to/pkg/README.md`, `docs/features/<name>.md`, or as a `# Feature Overview` section of a broader doc. When embedding in a larger doc, drop the top-level `# Walkthrough: <name>` header, demote the `## SYNOPSIS` and `## Workflow:` headers to fit the surrounding section structure, and keep the teaching prose and Key files list. State where you are writing the draft before composing, and confirm the destination path with the user if it is ambiguous.
 
 ## The reader
 
