@@ -39,6 +39,7 @@ function loadSharedSkills(): SkillDef[] {
     "thatch-review-synthesizer",
     "thatch-review-context",
     "thatch-workflow-research",
+    "thatch-change-walkthrough",
     "thatch-session-reflection",
   ];
   return names.map((name) => ({ name, content: loadSkillFile(name) }));

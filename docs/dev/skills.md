@@ -21,9 +21,9 @@ description: Extract durable project facts ... Use when ...
 - `description` drives when the agent loads the skill (both opencode and
   Cursor auto-discover skills and use the description for relevance).
 
-## The 14 skills
+## The 15 skills
 
-**Shared (13)** — installed everywhere; no sub-agents required:
+**Shared (14)** — installed everywhere; no sub-agents required:
 
 | Skill | Role |
 |-------|------|
@@ -39,6 +39,7 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-synthesizer` | Verify specialist findings against code, dedupe, classify, calibrate severity. Cross-references findings against prior review comments when a follow-up round register is provided; produces a Previously identified appendix. |
 | `thatch-review-context` | Gather project/feature context (PR descriptions, git archaeology, ticket references, memory) before fan-out. Prevents false positives about intentionally deferred work. Also fetches prior review comments on a connected PR/MR for follow-up-round detection and builds a register with preliminary addressed-check status per comment. |
 | `thatch-workflow-research` | Research code workflows/features affected by a change or planned change. Reads code flows, comments, git history, memories, docs. Produces a guide to the code for reviewers or planners. |
+| `thatch-change-walkthrough` | Explain a change to the user as a teaching walkthrough: resolve the delta, research each affected workflow at the merge-base, teach current behavior, then overlay the modifications with file:line citations and analogies. |
 | `thatch-session-reflection` | End-of-session memory recording (project, user, tools, self). |
 
 **opencode-only (1)** — the coordinator needs sub-agent support:
@@ -79,7 +80,7 @@ The synthesizer reuses the same verification rigor but has its own structure
 ## The two arrays
 
 ```ts
-const SHARED_SKILLS: SkillDef[] = [ /* 13 skills above */ ];
+const SHARED_SKILLS: SkillDef[] = [ /* 14 skills above */ ];
 const OPENCODE_ONLY_SKILLS: SkillDef[] = [ /* code-review coordinator */ ];
 ```
 
