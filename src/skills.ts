@@ -16,11 +16,14 @@ function loadSkillFile(name: string): string {
   const artifactsDir = join(__dirname, "..", "artifacts", "skills");
   const filePath = join(artifactsDir, name + ".md");
   const raw = readFileSync(filePath, "utf8");
-  // Interpolate REVIEW_COMMON
-  if (raw.includes("${REVIEW_COMMON}")) {
+  // Interpolate REVIEW_COMMON only when it appears on its own line (the
+  // directive form used by review specialist skills). Inline mentions in
+  // other skills (e.g. as examples in prose) are content, not directives,
+  // and must not be interpolated.
+  if (/^[ \t]*\$\{REVIEW_COMMON\}[ \t]*$/m.test(raw)) {
     const commonPath = join(artifactsDir, "common.md");
     const commonContent = readFileSync(commonPath, "utf8");
-    return raw.replace(/\$\{REVIEW_COMMON\}/g, commonContent);
+    return raw.replace(/^[ \t]*\$\{REVIEW_COMMON\}[ \t]*$/gm, commonContent);
   }
   return raw;
 }

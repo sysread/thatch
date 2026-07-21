@@ -704,4 +704,30 @@ describe("skill artifact registry parity", () => {
       expect(skill.content).not.toContain("\\`");
     }
   });
+
+  test("REVIEW_COMMON is interpolated only into review specialist skills", () => {
+    // The loader interpolates `${REVIEW_COMMON}` when it appears on its own
+    // line (the directive form used by the six review specialists). Inline
+    // mentions of the token in other skills (e.g. as prose examples) must
+    // NOT trigger interpolation — that would splice the review framework
+    // into the middle of an unrelated skill body and corrupt the content.
+    // The synthesizer and code-review coordinator include some of the same
+    // section headers (e.g. "## Static analysis only") as hardcoded content,
+    // so the marker must be a phrase unique to common.md.
+    const REVIEW_SPECIALISTS = new Set([
+      "thatch-review-pedantic",
+      "thatch-review-acceptance",
+      "thatch-review-state-flow",
+      "thatch-review-no-slop",
+      "thatch-review-breadcrumbs",
+      "thatch-review-mark-and-sweep",
+    ]);
+    const REVIEW_COMMON_BODY =
+      "For every potential finding, you MUST describe a concrete scenario";
+    for (const skill of [...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]) {
+      const isReviewSpecialist = REVIEW_SPECIALISTS.has(skill.name);
+      const hasInterpolatedBody = skill.content.includes(REVIEW_COMMON_BODY);
+      expect(hasInterpolatedBody).toBe(isReviewSpecialist);
+    }
+  });
 });
