@@ -17,9 +17,10 @@
 **Expected**
 - `buffer-tool` normalizes `conversation_id` to a safe session file name and appends exactly one
   interaction per call; thatch's own `mcp__thatch__*` tools never enter the queue (no self-echo).
-- `flush-tools` drains the queue first (extraction tier): prints the JSON payload wrapped for
-  Cursor as `additional_context`, and **deletes the queue file** so the next call carries no
-  repeat payload unless new tool activity happened.
+- `flush-tools` peeks the queue first (extraction tier): prints the JSON payload wrapped for
+  Cursor as `additional_context`. The queue is **not** deleted — it persists until the agent
+  writes a memory or calls `thatch_extraction_done`, so ignored nudges repeat and escalate
+  (polite to insistent to ALL-CAPS) on subsequent calls.
 - With the queue empty and the sideband socket live, a semantically matching prompt yields a
   recall nudge using the bare `memory_recall` tool name; below `THATCH_RECALL_THRESHOLD`
   (default 0.55), no nudge.

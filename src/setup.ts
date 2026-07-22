@@ -173,7 +173,7 @@ function writeHooks(path: string, thatchBin: string): void {
   // (see src/extract-queue.ts). No stdout — the next model call must not block
   // on a payload that should be invisible to the agent until UserPromptSubmit.
   const bufferCmd = `${thatchBin} buffer-batch`;
-  // UserPromptSubmit drains the queue. With buffered interactions, it prints
+  // UserPromptSubmit peeks the queue. With buffered interactions, it prints
   // the extraction nudge carrying the JSON payload; with an empty queue, it
   // falls back to the static write-nudge. Either output is transcript-visible
   // since UserPromptSubmit adds stdout to context.

@@ -34,7 +34,7 @@ const INTERNAL_ERROR = -32603;
 // ---------------------------------------------------------------------------
 
 const SERVER_NAME = "thatch";
-const SERVER_VERSION = "0.1.2";
+const SERVER_VERSION = "0.1.16";
 
 /**
  * MCP capabilities declared in the initialize response. Thatch is a tools-only

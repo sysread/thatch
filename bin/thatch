@@ -28,7 +28,7 @@ function usage(): never {
   thatch prime                     Prime project memory (runs the primer skill via opencode, cursor, or claude)
   thatch buffer-batch              Append a PostToolBatch payload to the queue (Claude Code hook only)
   thatch buffer-tool               Append a single postToolUse interaction to the queue (Cursor hook only)
-  thatch flush-tools [--json]      Drain the queue + print an extraction nudge (hook only)
+  thatch flush-tools [--json]      Peek the queue + print an extraction nudge (hook only)
   thatch setup --claude [--cursor] [--global]
                                    Install config + instructions + hooks + skills
 

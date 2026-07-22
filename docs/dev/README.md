@@ -30,7 +30,8 @@ Shared core
 
 OpenCode plugin path
   ├── index.ts        → plugin entry: wires DB/model/extraction, registers tools + hooks
-  └── tools.ts        → thin opencode tool() wrappers over tool-defs
+  ├── tools.ts        → thin opencode tool() wrappers over tool-defs
+  └── extraction.ts   → in-memory ring buffer + shared payload builders
 
 MCP server path
   ├── mcp.ts          → stdio JSON-RPC server: z.toJSONSchema() for tools/list,
@@ -38,6 +39,7 @@ MCP server path
   │                     opens sideband socket for warm-model match queries
   ├── sideband.ts     → Unix socket: SidebandServer (embed + search via warm model)
   │                     and sidebandMatch (thin client for hook processes)
+  ├── extract-queue.ts → file-backed JSONL queue (Claude Code + Cursor hooks)
   └── setup.ts        → `thatch setup --claude` / `--cursor`: writes .mcp.json,
                         CLAUDE.md / AGENTS.md, settings/hooks JSON, installs skills
 
@@ -58,7 +60,8 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `git.ts` | Parse `owner/repo` from git remote. Worktree-safe fallback chain. |
 | `db.ts` | SQLite schema, CRUD for entries/stores, brute-force cosine search (`search` = pure scoring, `recall` = search + telemetry stamping), dedup-pair verdict tracking. |
 | `embeddings.ts` | Lazy-load the embedding model. Expose `queryEmbed`/`passageEmbed` and the model `name` (stored as an informational tag). `MockEmbeddingModel` for tests. |
-| `extraction.ts` | Buffers non-thatch tool interactions per session and serializes them into the JSON payload the extraction nudge carries. (opencode-only — no MCP equivalent.) |
+| `extraction.ts` | Per-session in-memory ring buffer (cap 20) that buffers non-thatch tool interactions and serializes them into the JSON payload the extraction nudge carries. The in-memory pipeline is opencode-only, but the payload builders (`buildExtractionPayload`, `deriveTitle`) are shared by both paths — `extract-queue.ts` imports `deriveTitle`, `bin/thatch` imports `buildExtractionPayload`. `summarizeArgs` is used internally by `buildExtractionPayload`. |
+| `extract-queue.ts` | File-backed per-session JSONL queue (caps 20, oldest dropped). Shared by the Claude Code and Cursor hook paths, which fire one-shot per event with no cross-call state. This is the MCP-side equivalent of `extraction.ts`. |
 | `sideband.ts` | Unix domain socket server + client. The MCP server (long-lived, warm model) runs `SidebandServer` so one-shot hook processes can ask it to embed a prompt and search for matches without loading the model themselves. Socket path is a hash of the DB path — both processes compute it independently. |
 | `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, prompt-aware recall nudge (`recallNudge` / `claudeRecallNudge`), Claude Code CLAUDE.md instructions, Cursor AGENTS.md instructions, Claude Code hook text. |
 | `skills.ts` | `SKILL.md` content for all thatch skills, plus the installer. Skills are split into `SHARED_SKILLS` (18 skills: fact-extractor, dedup-classifier, project-primer, 6 review specialists, review synthesizer, review context, workflow research, change walkthrough, code walkthrough, session reflection, pr-description, ticket-description, split-overlarge-pr — work on both opencode and Claude Code) and `OPENCODE_ONLY_SKILLS` (1 skill: code-review coordinator — requires sub-agent support, not installed for Claude Code). `installSkills(dir, skills)` defaults to `SHARED_SKILLS`; the opencode plugin passes `[...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]`. |
@@ -72,8 +75,8 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `experimental.chat.system.transform` | Appends the thatch system prompt (store names, usage rules). |
 | `experimental.session.compacting` | Marks the session as compacting and appends re-familiarization context so a compacted session still knows thatch exists. |
 | `experimental.compaction.autocontinue` | Clears the compacting flag so `chat.message` nudges resume. Without this, nudges that instruct tool calls would fire during summary generation where tools are blocked. |
-| `tool.execute.after` | Buffers every non-`thatch_*` tool call into the session's extraction buffer. This is a plugin hook, NOT a bus event — do not move it into the `event` handler; the event bus has no such event and it will silently never fire. |
-| `chat.message` | Two priority tiers: (a) if extraction buffer has interactions, flushes them as a synthetic text part carrying the extraction nudge + JSON payload; (b) otherwise, embeds the user's prompt text with the in-process warm model, searches `db.search()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55). Skipped entirely while the session is compacting (tool calls are blocked during summary generation). |
+| `tool.execute.after` | Buffers every non-`thatch_*`, non-`skill`, non-`task` tool call into the session's extraction buffer. (Skill/task are excluded — buffering them creates a feedback loop where the nudge triggers a skill load, which gets buffered, which triggers another nudge.) Memory writes (`thatch_memory_remember`) and `thatch_extraction_done` drain the buffer and reset the missed-nudge counter. This is a plugin hook, NOT a bus event — do not move it into the `event` handler; the event bus has no such event and it will silently never fire. |
+| `chat.message` | Two priority tiers: (a) if extraction buffer has interactions, **peeks** the buffer (does NOT drain it) and injects a synthetic text part carrying the extraction nudge + JSON payload — the buffer persists until the agent writes a memory or calls `thatch_extraction_done`, so ignored nudges repeat and escalate (polite → insistent → ALL-CAPS) via the `missedNudges` counter; (b) otherwise, embeds the user's prompt text with the in-process warm model, searches `db.search()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55). Skipped entirely while the session is compacting (tool calls are blocked during summary generation). |
 | `event` (`session.created`) | Sends the session-start reminder via `client.session.prompt`, carrying the hygiene heartbeat (pending dedup pairs, stale count, orphaned branch memories) when any signal is non-zero. The session id is at `event.properties.info.id`. |
 | `dispose` | Closes the DB. |
 
@@ -108,6 +111,16 @@ Two of these hooks were dead for weeks because failures were invisible.
    wraps them in `tool()` with a `thatch_` prefix; the MCP server wraps them
    in `z.object()` for validation and `z.toJSONSchema()` for the protocol.
    Adding a tool means adding one entry to `TOOL_DEFS`.
+9. **Proactive save is prompt-instructed, not hook-driven.** All three system
+   prompts include a "Before Responding" section instructing the agent to
+   check for durable knowledge (via `thatch_memory_recall` for dedup, then
+   `thatch_memory_remember`) before composing a final response after
+   substantial work. No plugin hook fires between generation and response
+   delivery, so the only viable path is prompt instruction. The existing
+   `chat.message` extraction nudge stays as a fallback for the false-negative
+   case (agent forgot to save, next user turn arrives with buffer still
+   pending). This is an experiment — model reliability on meta-instructions
+   is uncertain.
 
 ## Data flow
 
@@ -139,8 +152,14 @@ dedup cycle (agent-driven)
   (overwriting or forgetting an entry clears its verdicts → can re-flag)
 
 extraction cycle (agent-driven)
-  → tool.execute.after buffers non-thatch tool calls per session (max 20)
-  → next chat.message flushes the buffer into a nudge part with JSON payload
+  → tool.execute.after buffers non-thatch, non-skill, non-task tool calls
+    per session (max 20)
+  → next chat.message peeks the buffer (does NOT drain it) and injects a
+    nudge part with JSON payload; missed nudges escalate (polite → insistent
+    → ALL-CAPS) via the missedNudges counter
+  → drain: thatch_memory_remember in the session (or a child sub-agent via
+    the childToParent Map) OR thatch_extraction_done — both clear the buffer
+    and reset the missed-nudge counter
   → agent loads thatch-fact-extractor skill, saves facts via thatch_memory_remember
 
 prompt-aware recall nudge (both paths)
@@ -167,11 +186,14 @@ hygiene heartbeat (session start)
   (default `~/.config/thatch/thatch.db`), WAL mode, 5s busy timeout.
 - Tables: `stores(name PK)`,
   `entries(slug, store, label, content, embedding BLOB, model, branch,
-  confidence, created_at, updated_at, recall_count, last_recalled_at,
-  PK(slug, store))`,
+  confidence, archived, created_at, updated_at, recall_count,
+  last_recalled_at, PK(slug, store))`,
   `dedup_pairs(store, slug_a, slug_b, status, checked_at, PK(store, slug_a, slug_b))`.
-- `recall_count`/`last_recalled_at` are added to pre-existing databases by an
-  idempotent column migration at init (`PRAGMA table_info` + `ALTER TABLE`).
+- `recall_count`, `last_recalled_at`, and `archived` are added to pre-existing
+  databases by an idempotent column migration at init (`PRAGMA table_info` +
+  `ALTER TABLE`). The `archived` column is `INTEGER NOT NULL DEFAULT 0` (0 =
+  live, 1 = archived); search, dedup, and staleness queries all exclude
+  archived entries by default.
 - Embeddings are raw Float32Array bytes. Serialization honors
   `byteOffset`/`byteLength` — transformers.js can return views into larger
   tensor buffers, and serializing the whole backing buffer corrupts vectors.
@@ -194,7 +216,7 @@ hygiene heartbeat (session start)
 bun install        # deps
 bun test           # full suite; no network, no real config dirs
 mise run check     # typecheck + bun test + markdownlint (the CI gate)
-opencode           # self-hosts via .opencode/plugins/thatch.ts
+opencode           # self-host via opencode.json plugin path (see root README)
 ```
 
 The markdownlint gate lints `README.md` and `docs/` (excluding the historical
@@ -227,9 +249,11 @@ authenticate through GitHub's OIDC exchange instead. Prerequisites:
 - A Trusted Publisher configured on npmjs.com for `@jeffober/thatch` pointing at
   the `sysread/thatch` repo and this workflow file.
 - npm >= 11.5.1 (the OIDC exchange needs it). `publish.yml` installs
-  `setup-node@v4` (node 24) and `npm install -g npm@latest`; it deliberately
-  sets **no `registry-url`**, which would write a token-expecting `.npmrc` that
-  preempts the OIDC exchange.
+  `setup-node@v4` (node 24) and `npm install -g npm@11` — npm 12 shipped a
+  sigstore bug that broke OIDC publishing; the pin prevents it. The workflow
+  deliberately sets **no `registry-url`**, which would write a
+  token-expecting `.npmrc` that preempts the OIDC exchange.
 
-CI (`.github/workflows/ci.yml`) runs `bun test` on every push/PR to `main` —
-the never-merge-broken guard before a release.
+CI (`.github/workflows/ci.yml`) runs `tsc` (typecheck), `bun test`, and
+`markdownlint-cli2` on every push/PR to `main` — the never-merge-broken
+guard before a release.

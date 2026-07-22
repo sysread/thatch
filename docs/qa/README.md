@@ -91,7 +91,7 @@ correctness on `README.md` and `docs/` excluding `docs/plans/`; see
 
 ### `tests/plugin.test.ts`
 
-- `server` export shape: all eight tools, every hook present, tools carry
+- `server` export shape: all nine tools, every hook present, tools carry
   description/args/execute
 - System transform and compaction hooks append their text
 - `tool.execute.after` → `chat.message` extraction round-trip: nudge carries

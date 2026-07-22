@@ -73,8 +73,8 @@ thatch setup --claude
 `setup` does four things:
 1. Writes `.mcp.json` — registers the MCP server (Claude Code spawns `thatch mcp` as a stdio process)
 2. Appends instructions to `CLAUDE.md` — session startup, when to write, what to store
-3. Installs hooks in `.claude/settings.json` — `SessionStart` runs `thatch reminder` (recall nudge + hygiene), `UserPromptSubmit` reminds you to save new knowledge
-4. Installs skill files to `~/.claude/skills/` — memory workflow skills (project primer, fact extractor, dedup classifier, session reflection) and code review skills (5 review specialists + synthesizer). See [Skills](#skills) below.
+3. Installs hooks in `.claude/settings.json` — `SessionStart` runs `thatch reminder` (recall nudge + hygiene), `PostToolBatch` feeds the extraction queue, `UserPromptSubmit` peeks the queue and nudges you to save new knowledge
+4. Installs skill files to `~/.claude/skills/` — memory workflow skills (project primer, fact extractor, dedup classifier, session reflection), code review skills (6 review specialists + synthesizer + context + workflow research), walkthrough skills, and writing skills. See [Skills](#skills) below.
 
 Restart Claude Code and thatch's tools are available as `mcp__thatch__*`.
 
@@ -110,6 +110,7 @@ the bare `thatch` command so the config survives updates.
 | `thatch_store_list` | `mcp__thatch__store_list` | List all stores |
 | `thatch_find_duplicates` | `mcp__thatch__find_duplicates` | Surface pairs of suspiciously similar memories |
 | `thatch_dedup_mark_checked` | `mcp__thatch__dedup_mark_checked` | Record a reviewed pair so it stops being re-reported |
+| `thatch_extraction_done` | `mcp__thatch__extraction_done` | Acknowledge extraction nudge was dispatched to a sub-agent; drains the buffer |
 
 ## Skills
 
@@ -134,12 +135,28 @@ agent follows to maintain its own memory and review code systematically.
 | `thatch-review-state-flow` | Data flow and contracts — module boundaries, implicit state machines, error propagation |
 | `thatch-review-no-slop` | AI writing anti-pattern detection — change narration, fourth wall breaks, hedging |
 | `thatch-review-breadcrumbs` | Comment narrative — do comments form a coherent outline of the code's behavior? |
+| `thatch-review-mark-and-sweep` | Mechanical change completeness — whole-repo sweep for stragglers after renames, flag removals, API substitutions |
 | `thatch-review-synthesizer` | Verify specialist findings against actual code, deduplicate, produce severity-grouped report |
 | `thatch-review-context` | Gather project/feature context (PRs, tickets, TODOs, deferred work) before a review |
 | `thatch-workflow-research` | Research code workflows affected by a change or planned change, before reviewing or planning |
-| `thatch-code-review` | Multi-agent review coordinator — triage, partition, dispatch specialists in parallel (opencode only) |
+| `thatch-change-walkthrough` | Explain a change as a teaching walkthrough with file:line citations |
+| `thatch-code-walkthrough` | Explain a feature, module, or workflow as a teaching walkthrough; also drafts high-level docs |
 
-The five review specialists run independently and can be used standalone. The
+### Writing
+
+| Skill | What it does |
+|-------|-------------|
+| `pr-description` | Draft PR descriptions using instructional-design scaffolding with bold/italic emphasis for scanning |
+| `ticket-description` | Draft ticket or issue descriptions (Linear or Jira) with instructional-design scaffolding |
+| `split-overlarge-pr` | Split already-completed work from an overlarge PR into human-reviewable, release-safe PRs |
+
+### opencode-only
+
+| Skill | What it does |
+|-------|-------------|
+| `thatch-code-review` | Multi-agent review coordinator — triage, partition, dispatch specialists in parallel |
+
+The six review specialists run independently and can be used standalone. The
 synthesizer verifies their findings against the actual code — reading each
 cited location to confirm the evidence matches — before producing a final
 report. The coordinator (opencode only) orchestrates the full pipeline by
@@ -157,10 +174,13 @@ thatch list   [store]            List memory labels in a store
 thatch show   <label> [store]    Display a memory by label
 thatch forget <label> [store]    Remove a memory by label
 thatch search <query> [store]    Semantic search (cosine similarity)
-thatch prime                     Prime project memory (runs via opencode or claude)
-thatch mcp                       Start the stdio MCP server (for Claude Code)
-thatch reminder                  Print session-start reminder (for hooks)
+thatch prime                     Prime project memory (runs via opencode, Cursor, or claude)
+thatch mcp                       Start the stdio MCP server (for Claude Code and Cursor)
+thatch reminder [--json]         Print session-start reminder (for hooks)
 thatch hygiene                   Print the hygiene report (standalone)
+thatch buffer-batch              Append Claude Code PostToolBatch output to extraction queue
+thatch buffer-tool               Append Cursor postToolUse output to extraction queue
+thatch flush-tools [--json]      Peek extraction queue; print extraction + recall nudges
 thatch setup --claude [--cursor] [--global] Install config + instructions + hooks + skills
 ```
 
@@ -177,7 +197,7 @@ cd /path/to/your/project
 thatch prime
 ```
 
-This detects `opencode` or `claude` on your PATH and runs the
+This detects `opencode`, Cursor, or `claude` on your PATH and runs the
 `thatch-project-primer` skill, which guides the agent to:
 
 1. Recall any existing project memories
@@ -205,9 +225,10 @@ interactions and nudges the host agent to persist durable knowledge itself,
 using the `thatch-fact-extractor` skill. The agent's own model decides what's
 worth remembering — keeping thatch dependency-free and the agent in control.
 On OpenCode, the plugin hooks `tool.execute.after` and `chat.message` to
-buffer and flush. On Claude Code, `PostToolBatch` and `UserPromptSubmit`
-hooks drive a file-backed queue. Both paths produce the same payload for the
-fact-extractor skill.
+buffer and peek (the buffer persists until the agent writes a memory). On
+Claude Code, `PostToolBatch` and `UserPromptSubmit` hooks drive a file-backed
+queue with the same peek-not-drain semantics. Both paths produce the same
+payload for the fact-extractor skill.
 
 ## OpenCode vs Claude Code vs Cursor parity
 
@@ -219,7 +240,7 @@ fact-extractor skill.
 | Compaction context | `experimental.session.compacting` hook | **Gap**: no equivalent (CLAUDE.md persists) | **Gap**: no equivalent |
 | Extraction nudge | `tool.execute.after` + `chat.message` | `PostToolBatch` + `UserPromptSubmit` (file-backed queue) | `postToolUse` + `beforeSubmitPrompt` (file-backed queue) |
 | Setup detection at startup | n/a (plugin auto-installs) | `checkSetup` in MCP server: detects missing/broken instructions | Same as Claude Code |
-| Skills | 13 (shared + coordinator) | 12 (shared only) | 12 (shared only) |
+| Skills | 19 (18 shared + coordinator) | 18 (shared only) | 18 (shared only) |
 | Store detection | `worktree` param from plugin | `CLAUDE_PROJECT_DIR` env var | `CURSOR_PROJECT_DIR` then `CLAUDE_PROJECT_DIR` |
 
 See [docs/dev/mcp-parity.md](docs/dev/mcp-parity.md) for the full analysis.

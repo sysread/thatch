@@ -112,22 +112,22 @@ export const server: Plugin = async ({ client, worktree }) => {
     //    agent writes a memory, so ignored nudges accumulate and the payload
     //    grows with each missed cycle.
     //
-    //    Fix A: a memory_remember call in a child session (sub-agent) also
-    //    drains the parent's buffer. Without this, dispatching the
-    //    fact-extractor as a background task writes memories in the child
-    //    but never clears the parent's queue — the nudge replays every turn.
+    //    A memory_remember call in a child session (sub-agent) also drains
+    //    the parent's buffer. Without this, dispatching the fact-extractor as
+    //    a background task writes memories in the child but never clears the
+    //    parent's queue — the nudge replays every turn.
     //
-    //    Fix C: thatch_extraction_done is an explicit acknowledgment tool the
-    //    model calls in the parent session after dispatching. Belt-and-
-    //    suspenders for fix A: covers the case where the sub-agent errors out
-    //    or the host doesn't expose parent-child session relationships.
+    //    thatch_extraction_done is an explicit acknowledgment tool the model
+    //    calls in the parent session after dispatching. Covers the case where
+    //    the sub-agent errors out or the host doesn't expose parent-child
+    //    session relationships.
     "tool.execute.after": async (input, output) => {
       if (input.tool === "thatch_memory_remember") {
         extraction.consume(input.sessionID);
         missedNudges.delete(input.sessionID);
-        // Fix A: if this is a child session, also drain the parent so the
-        // parent's extraction nudge stops replaying after a sub-agent writes
-        // memories on its behalf.
+        // If this is a child session, also drain the parent so the parent's
+        // extraction nudge stops replaying after a sub-agent writes memories
+        // on its behalf.
         const parentID = childToParent.get(input.sessionID);
         if (parentID) {
           extraction.consume(parentID);
@@ -135,9 +135,9 @@ export const server: Plugin = async ({ client, worktree }) => {
         }
         return;
       }
-      // Fix C: explicit acknowledgment tool drains the buffer without
-      // requiring a memory write. The model calls this after dispatching
-      // the fact-extractor to a sub-agent.
+      // Explicit acknowledgment tool drains the buffer without requiring a
+      // memory write. The model calls this after dispatching the
+      // fact-extractor to a sub-agent.
       if (input.tool === "thatch_extraction_done") {
         extraction.consume(input.sessionID);
         missedNudges.delete(input.sessionID);

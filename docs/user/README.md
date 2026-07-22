@@ -102,6 +102,12 @@ Stores are created automatically — no setup required.
 | `thatch_find_duplicates` | Surface pairs of memories with suspiciously similar content. |
 | `thatch_dedup_mark_checked` | Record the verdict for a reviewed pair so it stops being re-reported. |
 
+### Extraction tools
+
+| Tool | What it does |
+|------|-------------|
+| `thatch_extraction_done` | Acknowledge that the extraction nudge was dispatched to a sub-agent. Drains the buffer so the nudge does not replay. Called after dispatching a background task to run the fact-extractor skill. |
+
 ## Automatic behaviors
 
 Beyond the tools, thatch hooks into opencode itself:
@@ -120,8 +126,11 @@ Beyond the tools, thatch hooks into opencode itself:
   similar entries so it can merge them or record that they're distinct.
 - **Fact-extraction nudges.** Thatch buffers the session's recent tool calls
   (up to 20, per session). On your next message, the agent receives a summary
-  payload and is prompted to save any durable facts it reveals. The agent does
-  the writing — thatch never saves memories on its own.
+  payload and is prompted to save any durable facts it reveals. The nudge
+  repeats and escalates (polite to insistent to ALL-CAPS) each turn it's
+  ignored — the buffer drains only when the agent writes a memory or
+  acknowledges via `thatch_extraction_done`. The agent does the writing —
+  thatch never saves memories on its own.
 - **Compaction context.** When opencode compacts a long session, thatch injects
   a reminder so the summarized session still knows memory tools exist.
 
@@ -221,7 +230,7 @@ specialist in sequence, then synthesize:
 ```text
 1. Load thatch-review-pedantic, review branch feature-x, report findings.
 2. Load thatch-review-acceptance, review the same branch.
-3. ... repeat for state-flow, no-slop, breadcrumbs ...
+3. ... repeat for state-flow, no-slop, breadcrumbs, mark-and-sweep ...
 4. Load thatch-review-synthesizer, verify and aggregate all findings.
 ```
 

@@ -35,6 +35,15 @@ here first. These are the things that have already cost time.
 - **`overwrite: true` clears stale dedup verdicts** for that slug. Forgetting an
   entry clears all verdicts involving it. Both make a pair eligible for
   re-reporting by `find_duplicates`. This is intended.
+- **Archived memories are excluded by default.** `search`, `findDuplicates`,
+  and `staleEntryCount` all filter `WHERE archived = 0`. To search archived
+  memories, pass `includeArchived: true` to `thatch_memory_recall`. To archive
+  a memory, write it with `archived: true`; to unarchive, `archived: false`.
+- **Updating an archived memory requires explicit `archived` param.** If the
+  entry is already archived and a `remember` call omits the `archived` param,
+  the tool returns an error (`db.ts:211`). Pass `archived: true` to keep it
+  archived or `archived: false` to unarchive. This guard prevents accidental
+  unarchival via an unrelated content update.
 
 ## Hooks (opencode)
 
@@ -42,11 +51,29 @@ here first. These are the things that have already cost time.
   the hook object returned by `server`. Moving it into the `event` handler
   (where `session.created` lives) silently never fires it — the event bus has
   no such event. This was dead for weeks because the failure was invisible.
+- **`tool.execute.after` excludes `skill` and `task` tools**, not just
+  `thatch_*`. Buffering them creates a feedback loop: the nudge triggers a
+  skill load, which gets buffered, which triggers another nudge on the next
+  turn.
 - **Hook failures are logged with a `[thatch]` prefix and never swallowed.** Two
   hooks were dead for weeks before failures were made visible. If you add a
   hook, log on failure.
 - **`chat.message` has two priority tiers**: extraction nudge first (returns
   early), then the prompt-aware recall nudge. Don't run both in one turn.
+- **The extraction nudge peeks, never flushes.** The buffer is NOT drained
+  on nudge delivery (`index.ts:169` — `peek()` call). It persists until the
+  agent writes a memory or calls `thatch_extraction_done`. Ignored nudges
+  accumulate; the `missedNudges` counter escalates the tone (polite at 0-1
+  misses, insistent at 2, ALL-CAPS at 3+). The counter resets when the
+  buffer drains.
+- **A child sub-agent's `thatch_memory_remember` drains the parent's buffer**
+  via the `childToParent` Map (`index.ts:65` declaration, `index.ts:131`
+  lookup). Without this, dispatching the fact-extractor as a background task
+  would write memories in the child but never clear the parent's queue — the
+  nudge would replay every turn. `thatch_extraction_done` is the
+  belt-and-suspenders explicit acknowledgment: it drains the buffer without
+  requiring a memory write (covers cases where the sub-agent errors out or the
+  host doesn't expose parent-child session relationships).
 
 ## Hooks (Claude Code / Cursor)
 

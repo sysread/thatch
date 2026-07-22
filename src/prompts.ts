@@ -6,7 +6,8 @@ knowledge so future sessions can build on what you've already learned.
 
 Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
        thatch_memory_show, thatch_memory_forget, thatch_store_list,
-       thatch_find_duplicates, thatch_dedup_mark_checked
+       thatch_find_duplicates, thatch_dedup_mark_checked,
+       thatch_extraction_done
 
 ## Stores
 

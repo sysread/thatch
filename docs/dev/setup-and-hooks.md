@@ -19,7 +19,7 @@ The plugin entry (`src/index.ts`) registers these hooks in code:
 | `experimental.chat.system.transform` | `{}` | `{ system: string[] }` | Pushes the system prompt (store names, usage rules). |
 | `experimental.session.compacting` | `{ sessionID }` | `{ context: string[] }` | Marks the session as compacting, pushes re-familiarization context. |
 | `experimental.compaction.autocontinue` | `{ sessionID }` | `{ enabled: boolean }` | Clears the compacting flag so `chat.message` nudges resume post-compaction. |
-| `tool.execute.after` | `{ tool, sessionID, callID, args }` | `{ title, output, metadata }` | Buffers non-`thatch_` tool calls into the in-memory extraction ring buffer (max 20). |
+| `tool.execute.after` | `{ tool, sessionID, callID, args }` | `{ title, output, metadata }` | Buffers non-`thatch_`, non-`skill`, non-`task` tool calls into the in-memory extraction ring buffer (max 20). |
 | `chat.message` | `{ sessionID, messageID }` | `{ message, parts }` | Two tiers: extraction nudge if pending, else prompt-aware recall nudge. Skipped while the session is compacting. |
 | `event` (`session.created`) | `{ event: { type, properties: { info: { id } } } }` | — | Calls `client.session.prompt` with the reminder + hygiene heartbeat. |
 | `dispose` | — | — | Closes the DB. |
@@ -60,10 +60,10 @@ in the repo; only skills are user-scoped.
 |-------|---------|--------|------|
 | `SessionStart` | `thatch reminder` | plain text to stdout (becomes context) | Recall instructions + hygiene heartbeat |
 | `PostToolBatch` | `thatch buffer-batch` | **silent** (no stdout) | Appends a batch of tool calls to the file-backed JSONL queue |
-| `UserPromptSubmit` | `thatch flush-tools` | nudge text to stdout | Drains queue (extraction nudge), else recall nudge via sideband, else write nudge |
+| `UserPromptSubmit` | `thatch flush-tools` | nudge text to stdout | Peeks queue (extraction nudge), else recall nudge via sideband, else write nudge |
 
 `PostToolBatch` is silent so the agent loop is not delayed; the buffered
-content is invisible until `UserPromptSubmit` flushes it.
+content is invisible until `UserPromptSubmit` peeks it.
 
 ## Cursor (MCP server + hooks)
 
@@ -100,7 +100,7 @@ is honored for symmetry and forward-compatibility. Cursor has no equivalent of
 |-------|---------|--------|------|
 | `sessionStart` | `thatch reminder --json` | `{ additional_context: "..." }` | Recall + heartbeat, JSON-wrapped for Cursor |
 | `postToolUse` | `thatch buffer-tool` | **silent** | Appends a **single** tool call to the file-backed queue |
-| `beforeSubmitPrompt` | `thatch flush-tools --json` | JSON `additional_context` | Drains queue, else recall via sideband, else write nudge |
+| `beforeSubmitPrompt` | `thatch flush-tools --json` | JSON `additional_context` | Peeks queue, else recall via sideband, else write nudge |
 
 Differences from Claude Code:
 

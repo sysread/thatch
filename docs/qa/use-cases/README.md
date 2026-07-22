@@ -14,7 +14,7 @@ file/IPC/CLI contracts ready to graduate into `bun:test` integration tests.
 | [UC-003](UC-003-extraction-nudge.md) | Tool buffering → extraction nudge → agent-driven fact saving |
 | [UC-004](UC-004-cli-inspection.md) | CLI commands, arg validation, env overrides |
 | [UC-005](UC-005-setup-install.md) | `thatch setup --claude`/`--cursor`, project-local + `--global`, idempotent re-run, legacy hook migration |
-| [UC-006](UC-006-cursor-hook-lifecycle.md) | Cursor hook lifecycle: `buffer-tool` (`conversation_id`), `flush-tools --json`, queue drain |
+| [UC-006](UC-006-cursor-hook-lifecycle.md) | Cursor hook lifecycle: `buffer-tool` (`conversation_id`), `flush-tools --json`, queue peek |
 | [UC-007](UC-007-recall-nudge.md) | Prompt-aware recall nudge — opencode in-process + Claude/Cursor sideband paths; no telemetry |
 | [UC-008](UC-008-hygiene-heartbeat.md) | Hygiene heartbeat: stale 90d, orphaned branches, pending dedup; advisory, agent-driven |
 | [UC-009](UC-009-flush-tools-tiers.md) | `flush-tools` three-tier priority (extraction > recall > write) + sideband degradation |
@@ -27,6 +27,8 @@ file/IPC/CLI contracts ready to graduate into `bun:test` integration tests.
 | [UC-016](UC-016-concurrent-session-isolation.md) | Per-session extraction isolation (in-memory + file queue); shared stateless sideband |
 | [UC-017](UC-017-buffer-tool-vs-buffer-batch.md) | `buffer-batch` (Claude, `tool_calls[]`+`session_id`) vs `buffer-tool` (Cursor, single+`conversation_id`) |
 | [UC-018](UC-018-mcp-startup-setup-detection.md) | MCP startup detects missing/broken setup instructions and warns the agent |
+| [UC-019](UC-019-archived-memory-lifecycle.md) | Archive, search exclusion, update guard, unarchive |
+| [UC-020](UC-020-extraction-escalation.md) | Nudge escalation (polite → insistent → ALL-CAPS), buffer persistence, `extraction_done` drain |
 
 ## Template
 

@@ -24,9 +24,10 @@
   no nudge from session A's buffered interaction; session B's message only sees
   its own buffer. The in-memory `ExtractionPipeline` and the file-backed queue are
   both keyed by session ID.
-- `flush-tools` for session A drains only A's queue file and deletes it; a second
-  flush for A is empty. Session B's queue file is untouched and drains on its own
-  flush.
+- `flush-tools` for session A peeks only A's queue file (does not delete it); a
+  second flush for A returns the same content with an escalated missed-nudge
+  counter (the queue persists until a memory write or `extraction_done`). Session
+  B's queue file is untouched and is peeked on its own flush.
 - The sideband socket is **shared** (one warm MCP server) but **stateless per
   query**: each request embeds a fresh prompt and returns its own matches. Two
   concurrent match requests do not interfere.
