@@ -7,8 +7,8 @@
 Persistent memory and useful dev skills for AI coding agents that requires zero
 manual config.
 
-Works with **OpenCode** (as a plugin), **Claude Code** (as an MCP server), and
-**Cursor** (as a local `stdio` MCP server).
+Works with **OpenCode** (as a plugin), **Claude Code** (as a local `stdio` MCP
+server), and **Cursor** (as a local `stdio` MCP server).
 
 Each session inherits the accumulated knowledge of every session before it —
 project architecture, conventions, gotchas, user preferences — so your agent
