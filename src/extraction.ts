@@ -110,6 +110,26 @@ export class ExtractionPipeline {
     this.#buffers.delete(sessionID);
   }
 
+  /**
+   * Remove entries that were in the snapshot (by reference identity), keeping
+   * any that arrived after the snapshot was taken. Used by the child-parent
+   * drain: when a sub-agent writes a memory, only the entries present at
+   * dispatch time should be drained — not the entire buffer, which may now
+   * contain interleaved-turn entries the parent accumulated while the
+   * sub-agent was running.
+   */
+  consumeSnapshot(sessionID: string, snapshot: ToolInteraction[]): void {
+    const buf = this.#buffers.get(sessionID);
+    if (!buf) return;
+    const old = new Set(snapshot);
+    const remaining = buf.filter((ix) => !old.has(ix));
+    if (remaining.length === 0) {
+      this.#buffers.delete(sessionID);
+    } else {
+      this.#buffers.set(sessionID, remaining);
+    }
+  }
+
   pending(sessionID: string): boolean {
     return (this.#buffers.get(sessionID)?.length ?? 0) > 0;
   }

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { ExtractionPipeline } from "../src/extraction";
+import { ExtractionPipeline, type ToolInteraction } from "../src/extraction";
 
 describe("ExtractionPipeline", () => {
   test("constructor creates an empty pipeline", () => {
@@ -158,5 +158,96 @@ describe("ExtractionPipeline", () => {
 
     expect(parsed.interactions[0].output.length).toBeLessThan(600);
     expect(parsed.interactions[0].output).toContain("...");
+  });
+});
+
+describe("ExtractionPipeline.consumeSnapshot", () => {
+  function pushN(pipeline: ExtractionPipeline, session: string, n: number): ToolInteraction[] {
+    const entries: ToolInteraction[] = [];
+    for (let i = 0; i < n; i++) {
+      const ix: ToolInteraction = {
+        tool: "bash",
+        sessionID: session,
+        args: { command: `cmd-${i}` },
+        title: `title-${i}`,
+        output: `output-${i}`,
+      };
+      entries.push(ix);
+      pipeline.push(ix);
+    }
+    return entries;
+  }
+
+  test("removes only snapshot entries, preserving interleaved-turn entries", () => {
+    const pipeline = new ExtractionPipeline();
+    const session = "parent";
+
+    // Parent accumulates 3 entries before dispatching a sub-agent
+    pushN(pipeline, session, 3);
+
+    // Snapshot at dispatch time (same references as the buffer entries)
+    const snapshot = [...pipeline.peek(session)];
+    expect(snapshot.length).toBe(3);
+
+    // Parent makes 2 more tool calls while sub-agent runs (interleaved turn)
+    const post = pushN(pipeline, session, 2);
+    expect(pipeline.peek(session).length).toBe(5);
+
+    // Sub-agent writes a memory — drain only the snapshot entries
+    pipeline.consumeSnapshot(session, snapshot);
+
+    const remaining = pipeline.peek(session);
+    expect(remaining.length).toBe(2);
+    expect(remaining[0]).toBe(post[0]);
+    expect(remaining[1]).toBe(post[1]);
+    expect(pipeline.pending(session)).toBe(true);
+  });
+
+  test("empty snapshot is a no-op (all entries preserved)", () => {
+    const pipeline = new ExtractionPipeline();
+    const session = "parent";
+
+    pushN(pipeline, session, 3);
+    pipeline.consumeSnapshot(session, []);
+
+    expect(pipeline.peek(session).length).toBe(3);
+    expect(pipeline.pending(session)).toBe(true);
+  });
+
+  test("full snapshot clears the buffer (equivalent to consume)", () => {
+    const pipeline = new ExtractionPipeline();
+    const session = "parent";
+
+    pushN(pipeline, session, 3);
+    const snapshot = [...pipeline.peek(session)];
+    pipeline.consumeSnapshot(session, snapshot);
+
+    expect(pipeline.pending(session)).toBe(false);
+  });
+
+  test("unknown session is a no-op", () => {
+    const pipeline = new ExtractionPipeline();
+    pipeline.consumeSnapshot("nonexistent", []);
+    expect(pipeline.pending("nonexistent")).toBe(false);
+  });
+
+  test("handles buffer cap eviction (evicted entries simply not found)", () => {
+    const pipeline = new ExtractionPipeline();
+    const session = "parent";
+
+    // Push 18 entries, take snapshot
+    pushN(pipeline, session, 18);
+    const snapshot = [...pipeline.peek(session)];
+
+    // Push 10 more — cap at 20 means 8 oldest entries are dropped
+    const post = pushN(pipeline, session, 10);
+    expect(pipeline.peek(session).length).toBe(20);
+
+    // Drain the snapshot — surviving old entries removed, new entries kept
+    pipeline.consumeSnapshot(session, snapshot);
+
+    const remaining = pipeline.peek(session);
+    expect(remaining.length).toBe(10);
+    expect(remaining.every((ix) => post.includes(ix))).toBe(true);
   });
 });

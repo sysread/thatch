@@ -12,7 +12,7 @@ import {
   extractionNudge,
   type NudgeMatch,
 } from "./prompts";
-import { ExtractionPipeline } from "./extraction";
+import { ExtractionPipeline, type ToolInteraction } from "./extraction";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
 import { hygieneReport } from "./hygiene";
 
@@ -64,6 +64,14 @@ export const server: Plugin = async ({ client, worktree }) => {
   // Populated from session.created events that carry a parentID.
   const childToParent = new Map<string, string>();
 
+  // Snapshot of the parent's buffer at the moment each child was dispatched.
+  // When the child writes a memory, consumeSnapshot drains only these entries
+  // (by reference identity), preserving interleaved-turn entries that arrived
+  // while the sub-agent was running. Without this, the child's memory_remember
+  // would drain the parent's ENTIRE buffer — silently dropping facts from
+  // any tool calls the parent made concurrenly with the sub-agent.
+  const parentSnapshots = new Map<string, ToolInteraction[]>();
+
   // Skills always install to the global opencode config — installing into the
   // worktree would mutate the user's repo (untracked files in git status).
   // A failed install degrades the nudge workflow but must not kill the plugin.
@@ -113,9 +121,11 @@ export const server: Plugin = async ({ client, worktree }) => {
     //    grows with each missed cycle.
     //
     //    A memory_remember call in a child session (sub-agent) also drains
-    //    the parent's buffer. Without this, dispatching the fact-extractor as
-    //    a background task writes memories in the child but never clears the
-    //    parent's queue — the nudge replays every turn.
+    //    the parent's buffer — but only the entries that existed at dispatch
+    //    time (the snapshot). Entries from interleaved turns survive so their
+    //    facts aren't silently dropped. Without this, dispatching the
+    //    fact-extractor as a background task writes memories in the child but
+    //    never clears the parent's queue — the nudge replays every turn.
     //
     //    thatch_extraction_done is an explicit acknowledgment tool the model
     //    calls in the parent session after dispatching. Covers the case where
@@ -125,12 +135,19 @@ export const server: Plugin = async ({ client, worktree }) => {
       if (input.tool === "thatch_memory_remember") {
         extraction.consume(input.sessionID);
         missedNudges.delete(input.sessionID);
-        // If this is a child session, also drain the parent so the parent's
-        // extraction nudge stops replaying after a sub-agent writes memories
-        // on its behalf.
+        // If this is a child session, drain only the parent's snapshot entries
+        // (those present at dispatch time). Interleaved-turn entries survive.
+        // If no snapshot was recorded (e.g. session.created event never
+        // arrived), fall back to draining the entire parent buffer.
         const parentID = childToParent.get(input.sessionID);
         if (parentID) {
-          extraction.consume(parentID);
+          const snapshot = parentSnapshots.get(input.sessionID);
+          if (snapshot) {
+            extraction.consumeSnapshot(parentID, snapshot);
+            parentSnapshots.delete(input.sessionID);
+          } else {
+            extraction.consume(parentID);
+          }
           missedNudges.delete(parentID);
         }
         return;
@@ -218,18 +235,23 @@ export const server: Plugin = async ({ client, worktree }) => {
     // 5. Session-start reminder, carrying the hygiene heartbeat. Hygiene is
     // best-effort: a failure there must not cost the reminder itself.
     //
-    // Also tracks parent-child session relationships for fix A (cross-session
-    // buffer drain). session.created with a parentID records the mapping;
-    // session.deleted cleans it up to avoid unbounded growth.
+    // Also tracks parent-child session relationships for cross-session buffer
+    // drain. session.created with a parentID records the mapping AND
+    // snapshots the parent's current buffer — so the child's later
+    // memory_remember drains only those snapshot entries, not the parent's
+    // entire buffer (which may have grown from interleaved turns).
+    // session.deleted cleans both maps to avoid unbounded growth.
     event: async ({ event }) => {
       if (event.type === "session.created") {
         const info = event.properties.info;
         if (info.parentID) {
           childToParent.set(info.id, info.parentID);
+          parentSnapshots.set(info.id, [...extraction.peek(info.parentID)]);
         }
       }
       if (event.type === "session.deleted") {
         childToParent.delete(event.properties.info.id);
+        parentSnapshots.delete(event.properties.info.id);
         return;
       }
 

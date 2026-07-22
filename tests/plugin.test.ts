@@ -272,18 +272,19 @@ describe("plugin entry", () => {
     expect(out4.parts[0].text).not.toContain("YOU HAVE NOT");
   });
 
-  test("fix A: memory_remember in a child session drains the parent's buffer", async () => {
-    // Simulate a sub-agent child session being created with a parentID
+  test("fix A: child memory_remember drains parent's pre-dispatch entries", async () => {
+    // Step 1: Buffer tool interactions in the PARENT session BEFORE dispatch
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_parent_fixa", callID: "fa0", args: { command: "ls" } },
+      { title: "list", output: "file.txt", metadata: {} },
+    );
+
+    // Step 2: Simulate a sub-agent child session being created (dispatch).
+    // The snapshot captures the parent's current buffer at this point.
     await hooks.event!({ event: {
       type: "session.created",
       properties: { info: { id: "ses_child_fixa", parentID: "ses_parent_fixa" } } } as any,
     });
-
-    // Buffer tool interactions in the PARENT session
-    await hooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_parent_fixa", callID: "fa1", args: { command: "ls" } },
-      { title: "list", output: "file.txt", metadata: {} },
-    );
 
     // Parent should have a pending nudge
     const parentOut: any = { message: { id: "msg_fa0" }, parts: [] };
@@ -291,16 +292,48 @@ describe("plugin entry", () => {
     expect(parentOut.parts.length).toBe(1);
     expect(parentOut.parts[0].text).toContain("Dispatch a task with background: true");
 
-    // Child session writes a memory (as a sub-agent would)
+    // Step 3: Child session writes a memory (as a sub-agent would)
     await hooks["tool.execute.after"]!(
-      { tool: "thatch_memory_remember", sessionID: "ses_child_fixa", callID: "fa2", args: {} },
+      { tool: "thatch_memory_remember", sessionID: "ses_child_fixa", callID: "fa1", args: {} },
       { title: "save", output: "[saved]", metadata: {} },
     );
 
-    // Parent's buffer should now be drained — no nudge on next chat.message
+    // Parent's pre-dispatch entries should be drained — no nudge on next chat.message
     const parentOut2: any = { message: { id: "msg_fa1" }, parts: [] };
     await hooks["chat.message"]!({ sessionID: "ses_parent_fixa", messageID: "msg_fa1" } as any, parentOut2);
     expect(parentOut2.parts.length).toBe(0);
+  });
+
+  test("fix A: child drain preserves interleaved-turn entries in parent buffer", async () => {
+    // Buffer tool calls in parent BEFORE dispatch
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_parent_interleave", callID: "iv0", args: { command: "git status" } },
+      { title: "status", output: "clean", metadata: {} },
+    );
+
+    // Dispatch sub-agent — snapshot captures the parent's current buffer
+    await hooks.event!({ event: {
+      type: "session.created",
+      properties: { info: { id: "ses_child_interleave", parentID: "ses_parent_interleave" } } } as any,
+    });
+
+    // While sub-agent runs, parent makes more tool calls (interleaved turn)
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_parent_interleave", callID: "iv1", args: { command: "git log" } },
+      { title: "log", output: "history", metadata: {} },
+    );
+
+    // Sub-agent writes a memory — drains only snapshot entries
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_memory_remember", sessionID: "ses_child_interleave", callID: "iv2", args: {} },
+      { title: "save", output: "[saved]", metadata: {} },
+    );
+
+    // Parent should still have a pending nudge for the interleaved entry
+    const parentOut: any = { message: { id: "msg_iv1" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_parent_interleave", messageID: "msg_iv1" } as any, parentOut);
+    expect(parentOut.parts.length).toBe(1);
+    expect(parentOut.parts[0].text).toContain("Dispatch a task with background: true");
   });
 
   test("fix C: thatch_extraction_done drains the buffer without a memory write", async () => {
