@@ -248,7 +248,7 @@ export const server: Plugin = async ({ client, worktree }) => {
           path: { id },
           body: {
             noReply: true,
-            parts: [{ type: "text", text: sessionStartReminder(repo, hygiene) }],
+            parts: [{ type: "text", text: sessionStartReminder(repo, hygiene), synthetic: true }],
           },
         });
       } catch (err) {
