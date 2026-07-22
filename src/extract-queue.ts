@@ -99,13 +99,6 @@ export function consumeQueue(sessionID: string): void {
   try { unlinkSync(queuePath(sessionID)); } catch { /* not present is fine */ }
 }
 
-/** Read and delete a session's queue. Returns the buffered interactions in order. */
-export function flushQueue(sessionID: string): ToolInteraction[] {
-  const interactions = peekQueue(sessionID);
-  consumeQueue(sessionID);
-  return interactions;
-}
-
 function readQueueFile(path: string): ToolInteraction[] {
   if (!existsSync(path)) return [];
   const text = readFileSync(path, "utf8").trim();

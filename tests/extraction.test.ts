@@ -19,7 +19,7 @@ describe("ExtractionPipeline", () => {
     expect(pipeline.pending("session-1")).toBe(true);
   });
 
-  test("flush returns interactions and clears buffer", () => {
+  test("peek returns interactions and consume clears buffer", () => {
     const pipeline = new ExtractionPipeline();
     pipeline.push({
       tool: "bash",
@@ -29,15 +29,18 @@ describe("ExtractionPipeline", () => {
       output: "output",
     });
 
-    const batch = pipeline.flush("session-1");
+    const batch = pipeline.peek("session-1");
     expect(batch.length).toBe(1);
     expect(batch[0].tool).toBe("bash");
+    expect(pipeline.pending("session-1")).toBe(true);
+
+    pipeline.consume("session-1");
     expect(pipeline.pending("session-1")).toBe(false);
   });
 
-  test("flush returns empty array for unknown session", () => {
+  test("peek returns empty array for unknown session", () => {
     const pipeline = new ExtractionPipeline();
-    const batch = pipeline.flush("unknown");
+    const batch = pipeline.peek("unknown");
     expect(batch.length).toBe(0);
   });
 
@@ -89,8 +92,9 @@ describe("ExtractionPipeline", () => {
     expect(pipeline.pending("session-a")).toBe(true);
     expect(pipeline.pending("session-b")).toBe(true);
 
-    const batchA = pipeline.flush("session-a");
+    const batchA = pipeline.peek("session-a");
     expect(batchA.length).toBe(1);
+    pipeline.consume("session-a");
     expect(pipeline.pending("session-a")).toBe(false);
     expect(pipeline.pending("session-b")).toBe(true);
   });
@@ -109,7 +113,7 @@ describe("ExtractionPipeline", () => {
       });
     }
 
-    const batch = pipeline.flush("session-1");
+    const batch = pipeline.peek("session-1");
     expect(batch.length).toBe(20); // capped at max
     expect(batch[0].args.command).toBe("cmd-5"); // oldest 5 dropped
   });

@@ -110,13 +110,6 @@ export class ExtractionPipeline {
     this.#buffers.delete(sessionID);
   }
 
-  /** Returns the session's buffered interactions and clears them. */
-  flush(sessionID: string): ToolInteraction[] {
-    const batch = this.peek(sessionID);
-    this.consume(sessionID);
-    return batch;
-  }
-
   pending(sessionID: string): boolean {
     return (this.#buffers.get(sessionID)?.length ?? 0) > 0;
   }

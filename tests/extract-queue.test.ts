@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendBatch, flushQueue, peekQueue, consumeQueue, queueDir, getMissedCount, incrementMissedCount, resetMissedCount, type BatchToolCall } from "../src/extract-queue";
+import { appendBatch, peekQueue, consumeQueue, queueDir, getMissedCount, incrementMissedCount, resetMissedCount, type BatchToolCall } from "../src/extract-queue";
 import { buildExtractionPayload } from "../src/extraction";
 
 let dir: string;
@@ -32,16 +32,16 @@ function call(
   return { tool_name: name, tool_input: input, tool_use_id: id, tool_response: response };
 }
 
-describe("appendBatch + flushQueue", () => {
-  test("empty flush returns no interactions", () => {
-    expect(flushQueue("session-1")).toEqual([]);
+describe("appendBatch + peekQueue", () => {
+  test("empty peek returns no interactions", () => {
+    expect(peekQueue("session-1")).toEqual([]);
   });
 
   test("round-trip a single batch", () => {
     appendBatch("session-1", [
       call("Read", { file_path: "/path/to/extraction.ts" }, "1: export const x = 1;\n"),
     ]);
-    const out = flushQueue("session-1");
+    const out = peekQueue("session-1");
     expect(out.length).toBe(1);
     expect(out[0].tool).toBe("Read");
     expect(out[0].args).toEqual({ file_path: "/path/to/extraction.ts" });
@@ -56,7 +56,7 @@ describe("appendBatch + flushQueue", () => {
       call("mcp__thatch__memory_recall", { query: "y" }, "[]"),
       call("Bash", { command: "ls" }, "file1\n"),
     ]);
-    const out = flushQueue("session-1");
+    const out = peekQueue("session-1");
     expect(out.length).toBe(2);
     expect(out.map((ix) => ix.tool)).toEqual(["Read", "Bash"]);
   });
@@ -69,7 +69,7 @@ describe("appendBatch + flushQueue", () => {
       call("Agent", { prompt: "extract" }, "done"),
       call("Bash", { command: "ls" }, "file1\n"),
     ]);
-    const out = flushQueue("session-1");
+    const out = peekQueue("session-1");
     expect(out.length).toBe(2);
     expect(out.map((ix) => ix.tool)).toEqual(["Read", "Bash"]);
   });
@@ -78,37 +78,37 @@ describe("appendBatch + flushQueue", () => {
     appendBatch("s", [call("Read", { file_path: "/a" }, "a")]);
     appendBatch("s", [call("Bash", { command: "ls" }, "file1")]);
     appendBatch("s", [call("Grep", { pattern: "foo" }, "no matches")]);
-    const out = flushQueue("s");
+    const out = peekQueue("s");
     expect(out.map((ix) => ix.tool)).toEqual(["Read", "Bash", "Grep"]);
   });
 
-  test("flush deletes the file", () => {
+  test("consume deletes the queue file", () => {
     appendBatch("s", [call("Read", { file_path: "/a" }, "a")]);
     const path = join(queueDir(), "s.jsonl");
     expect(existsSync(path)).toBe(true);
 
-    flushQueue("s");
+    consumeQueue("s");
     expect(existsSync(path)).toBe(false);
   });
 
-  test("second flush after delete returns empty", () => {
+  test("peek after consume returns empty", () => {
     appendBatch("s", [call("Read", { file_path: "/a" }, "a")]);
-    flushQueue("s");
-    expect(flushQueue("s")).toEqual([]);
+    consumeQueue("s");
+    expect(peekQueue("s")).toEqual([]);
   });
 
   test("sessions are isolated (separate files)", () => {
     appendBatch("sess-a", [call("Read", { file_path: "/a" }, "a")]);
     appendBatch("sess-b", [call("Bash", { command: "ls" }, "b")]);
-    expect(flushQueue("sess-a").map((ix) => ix.tool)).toEqual(["Read"]);
-    expect(flushQueue("sess-b").map((ix) => ix.tool)).toEqual(["Bash"]);
+    expect(peekQueue("sess-a").map((ix: { tool: string }) => ix.tool)).toEqual(["Read"]);
+    expect(peekQueue("sess-b").map((ix: { tool: string }) => ix.tool)).toEqual(["Bash"]);
   });
 
   test("caps queue at 20 entries (oldest dropped)", () => {
     for (let i = 0; i < 25; i++) {
       appendBatch("s", [call("Bash", { command: `cmd-${i}` }, `out-${i}`)]);
     }
-    const out = flushQueue("s");
+    const out = peekQueue("s");
     expect(out.length).toBe(20);
     expect(out[0].args.command).toBe("cmd-5");
     expect(out[19].args.command).toBe("cmd-24");
@@ -122,14 +122,14 @@ describe("appendBatch + flushQueue", () => {
         [{ type: "text", text: "x".repeat(600) }],
       ),
     ]);
-    const out = flushQueue("s");
+    const out = peekQueue("s");
     expect(out.length).toBe(1);
     expect(out[0].output.length).toBeLessThanOrEqual(500);
   });
 
   test("string response is preserved verbatim (truncation happens at payload time)", () => {
     appendBatch("s", [call("Read", { file_path: "/a" }, "hello world")]);
-    const out = flushQueue("s");
+    const out = peekQueue("s");
     expect(out[0].output).toBe("hello world");
   });
 
@@ -138,7 +138,7 @@ describe("appendBatch + flushQueue", () => {
       call("Read", { file_path: "/a.ts" }, "const x = 1;"),
       call("Bash", { command: "ls" }, "file1\nfile2"),
     ]);
-    const interactions = flushQueue("s");
+    const interactions = peekQueue("s");
     const payload = buildExtractionPayload(interactions, "test/repo");
     const parsed = JSON.parse(payload);
     expect(parsed.projectStore).toBe("test/repo");
@@ -151,7 +151,7 @@ describe("appendBatch + flushQueue", () => {
   test("skips corrupt JSON lines when reading the queue", () => {
     const path = join(queueDir(), "corrupt.jsonl");
     writeFileSync(path, '{"tool":"Read","sessionID":"s","args":{},"title":"a","output":"ok"}\n{not valid json}\n');
-    const out = flushQueue("corrupt");
+    const out = peekQueue("corrupt");
     expect(out.length).toBe(1);
     expect(out[0].tool).toBe("Read");
   });
@@ -175,7 +175,7 @@ describe("safe session ids", () => {
   test("unsafe characters are replaced with underscore", () => {
     appendBatch("weird/session id", [call("Read", { file_path: "/a" }, "a")]);
     expect(existsSync(join(queueDir(), "weird_session_id.jsonl"))).toBe(true);
-    const out = flushQueue("weird/session id");
+    const out = peekQueue("weird/session id");
     expect(out.length).toBe(1);
   });
 });
