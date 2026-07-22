@@ -22,7 +22,7 @@ file/IPC/CLI contracts ready to graduate into `bun:test` integration tests.
 | [UC-011](UC-011-write-time-similarity-warning.md) | Write-time warning never blocks; merge or mark-distinct reconciliation |
 | [UC-012](UC-012-model-migration.md) | `THATCH_MODEL` change: old memories skipped (not corrupted) until re-saved |
 | [UC-013](UC-013-compaction-context.md) | Compaction context re-familiarization (opencode-only) |
-| [UC-014](UC-014-skill-install-drift.md) | Skill install: 10 shared vs 11 opencode; drift overwritten on re-setup |
+| [UC-014](UC-014-skill-install-drift.md) | Skill install: 18 shared vs 19 opencode; drift overwritten on re-setup |
 | [UC-015](UC-015-env-override-matrix.md) | `THATCH_DB_PATH`, `XDG_CONFIG_HOME`, `CLAUDE_CONFIG_DIR`, `THATCH_QUEUE_DIR`, `THATCH_RECALL_THRESHOLD`, `THATCH_MODEL` |
 | [UC-016](UC-016-concurrent-session-isolation.md) | Per-session extraction isolation (in-memory + file queue); shared stateless sideband |
 | [UC-017](UC-017-buffer-tool-vs-buffer-batch.md) | `buffer-batch` (Claude, `tool_calls[]`+`session_id`) vs `buffer-tool` (Cursor, single+`conversation_id`) |

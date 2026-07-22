@@ -201,7 +201,7 @@ describe("setupClaudeCode (project-local)", () => {
 
     // Shared skills only — opencode-only skills (thatch-code-review) are not
     // installed for Claude Code because they require sub-agent support.
-    expect(result.skills.length).toBe(15);
+    expect(result.skills.length).toBe(18);
     const skillNames = result.skills.map((s) => s.name);
     expect(skillNames).toContain("thatch-fact-extractor");
     expect(skillNames).toContain("thatch-dedup-classifier");
@@ -218,6 +218,9 @@ describe("setupClaudeCode (project-local)", () => {
     expect(skillNames).toContain("thatch-change-walkthrough");
     expect(skillNames).toContain("thatch-code-walkthrough");
     expect(skillNames).toContain("thatch-session-reflection");
+    expect(skillNames).toContain("pr-description");
+    expect(skillNames).toContain("ticket-description");
+    expect(skillNames).toContain("split-overlarge-pr");
     expect(skillNames).not.toContain("thatch-code-review");
 
     for (const skill of result.skills) {
@@ -225,7 +228,7 @@ describe("setupClaudeCode (project-local)", () => {
       const content = readFileSync(skill.path, "utf8");
       // Syntax check: YAML frontmatter with name/description (not content fidelity)
       expect(content.trimStart().startsWith("---")).toBe(true);
-      expect(content).toContain("\nname: thatch-");
+      expect(content).toContain("\nname: ");
       expect(content).toContain("description:");
       // Frontmatter closes with second ---
       const frontEnd = content.indexOf("\n---", 3);
@@ -484,7 +487,7 @@ describe("setupCursor (project-local)", () => {
   test("installs skill files to ~/.cursor/skills/", () => {
     const result = setupCursor("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
-    expect(result.skills.length).toBe(15);
+    expect(result.skills.length).toBe(18);
     const skillNames = result.skills.map((s) => s.name);
     expect(skillNames).toContain("thatch-fact-extractor");
     expect(skillNames).toContain("thatch-dedup-classifier");
@@ -492,13 +495,16 @@ describe("setupCursor (project-local)", () => {
     expect(skillNames).toContain("thatch-review-mark-and-sweep");
     expect(skillNames).toContain("thatch-change-walkthrough");
     expect(skillNames).toContain("thatch-code-walkthrough");
+    expect(skillNames).toContain("pr-description");
+    expect(skillNames).toContain("ticket-description");
+    expect(skillNames).toContain("split-overlarge-pr");
     expect(skillNames).not.toContain("thatch-code-review");
 
     for (const skill of result.skills) {
       expect(existsSync(skill.path)).toBe(true);
       expect(skill.path).toContain(".cursor/skills");
       const content = readFileSync(skill.path, "utf8");
-      expect(content).toContain("name: thatch-");
+      expect(content).toContain("name: ");
     }
   });
 });

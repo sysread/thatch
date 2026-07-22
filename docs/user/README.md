@@ -155,7 +155,7 @@ With `thatch setup --claude`, skills install to `~/.claude/skills/` (or
 
 ### Code review skills
 
-Five specialist review lenses, each a self-contained static-analysis pass:
+Six specialist review lenses, each a self-contained static-analysis pass:
 
 | Skill | Focus |
 |-------|-------|
@@ -164,9 +164,20 @@ Five specialist review lenses, each a self-contained static-analysis pass:
 | `thatch-review-state-flow` | Data flow and contracts: module boundaries, implicit state machines, error propagation, separation of concerns. |
 | `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth wall breaks, em dashes, hedging, filler. |
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of the code's behavior? |
+| `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
 | `thatch-review-synthesizer` | Verifies and synthesizes findings from multiple specialists into a single deduplicated, severity-grouped report. |
 | `thatch-review-context` | Gathers project context (PR descriptions, git archaeology, ticket references, memory) before a review. Prevents false positives about intentionally deferred work. |
 | `thatch-workflow-research` | Researches code workflows and features affected by a change or planned change. Reads code flows, comments, git history, and produces a guide for reviewers or planners. |
+| `thatch-change-walkthrough` | Explains a change to the user as a teaching walkthrough: researches each affected workflow at the merge-base, teaches current behavior, then overlays the modifications with file:line citations. |
+| `thatch-code-walkthrough` | Explains a feature, module, or workflow to the user as a teaching walkthrough with file:line citations. Also used to draft high-level docs for new or undocumented features. |
+
+### Writing skills
+
+| Skill | Purpose |
+|-------|---------|
+| `pr-description` | Drafts PR descriptions using instructional-design scaffolding (SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES) with bold and italic emphasis for scanning. |
+| `ticket-description` | Drafts ticket or issue descriptions (Linear or Jira) using instructional-design scaffolding with bold and italic emphasis for scanning. |
+| `split-overlarge-pr` | Splits already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main. |
 
 ### opencode-only skills
 
@@ -179,9 +190,11 @@ Five specialist review lenses, each a self-contained static-analysis pass:
 | Skill | opencode | Claude Code | Cursor |
 |-------|----------|-------------|--------|
 | Memory skills (4) | Yes | Yes | Yes |
-| Review specialists (5) | Yes | Yes | Yes |
+| Review specialists (6) | Yes | Yes | Yes |
 | Review synthesizer | Yes | Yes | Yes |
 | Review context + workflow research | Yes | Yes | Yes |
+| Walkthrough skills (2) | Yes | Yes | Yes |
+| Writing skills (3) | Yes | Yes | Yes |
 | Code review coordinator | Yes | No (requires sub-agents) | No (requires sub-agents) |
 
 ### Using review skills

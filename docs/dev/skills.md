@@ -21,9 +21,9 @@ description: Extract durable project facts ... Use when ...
 - `description` drives when the agent loads the skill (both opencode and
   Cursor auto-discover skills and use the description for relevance).
 
-## The 16 skills
+## The 19 skills
 
-**Shared (15)** — installed everywhere; no sub-agents required:
+**Shared (18)** — installed everywhere; no sub-agents required:
 
 | Skill | Role |
 |-------|------|
@@ -42,6 +42,9 @@ description: Extract durable project facts ... Use when ...
 | `thatch-change-walkthrough` | Explain a change to the user as a teaching walkthrough: resolve the delta, research each affected workflow at the merge-base, teach current behavior, then overlay the modifications with file:line citations and analogies. |
 | `thatch-code-walkthrough` | Explain a feature, module, or workflow to the user as a teaching walkthrough: identify the code area (optionally from a branch or PR), research how it works, teach it with file:line citations and analogies, list the key files. |
 | `thatch-session-reflection` | End-of-session memory recording (project, user, tools, self). |
+| `pr-description` | Draft PR descriptions with instructional-design scaffolding (SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES) and bold+italic emphasis for scanning. |
+| `ticket-description` | Draft ticket/issue descriptions with instructional-design scaffolding (SYNOPSIS / PROBLEM / BACKGROUND / PROPOSED APPROACH / ACCEPTANCE CRITERIA / RELEASE PLAN / VALIDATION / DEPENDENCIES / NOTES). |
+| `split-overlarge-pr` | Split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main. |
 
 **opencode-only (1)** — the coordinator needs sub-agent support:
 
@@ -81,7 +84,7 @@ The synthesizer reuses the same verification rigor but has its own structure
 ## The two arrays
 
 ```ts
-const SHARED_SKILLS: SkillDef[] = [ /* 15 skills above */ ];
+const SHARED_SKILLS: SkillDef[] = [ /* 18 skills above */ ];
 const OPENCODE_ONLY_SKILLS: SkillDef[] = [ /* code-review coordinator */ ];
 ```
 

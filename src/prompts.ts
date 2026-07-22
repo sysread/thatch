@@ -41,6 +41,9 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-session-reflection\` — record what you learned at end of session.
 - \`thatch-fact-extractor\` — extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
 - \`thatch-dedup-classifier\` — resolve duplicate memory pairs from \`thatch_find_duplicates\`.
+- \`pr-description\` — draft a PR description using instructional-design scaffolding with bold and italic emphasis on the phrases that carry the meaning, so a reviewer skimming only the emphasized fragments still gets the story.
+- \`ticket-description\` — draft a ticket, issue, or work item (Linear or Jira) using instructional-design scaffolding with bold and italic emphasis for scanning.
+- \`split-overlarge-pr\` — split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
 
 ## When to Write
 
@@ -182,6 +185,9 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-session-reflection\` — record what you learned at end of session.
 - \`thatch-fact-extractor\` — extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
 - \`thatch-dedup-classifier\` — resolve duplicate memory pairs from \`find_duplicates\`.
+- \`pr-description\` — draft a PR description using instructional-design scaffolding with bold and italic emphasis on the phrases that carry the meaning, so a reviewer skimming only the emphasized fragments still gets the story.
+- \`ticket-description\` — draft a ticket, issue, or work item (Linear or Jira) using instructional-design scaffolding with bold and italic emphasis for scanning.
+- \`split-overlarge-pr\` — split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
 
 ## When to Write
 
@@ -385,6 +391,9 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-session-reflection\` — record what you learned at end of session.
 - \`thatch-fact-extractor\` — extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
 - \`thatch-dedup-classifier\` — resolve duplicate memory pairs from \`find_duplicates\`.
+- \`pr-description\` — draft a PR description using instructional-design scaffolding with bold and italic emphasis on the phrases that carry the meaning, so a reviewer skimming only the emphasized fragments still gets the story.
+- \`ticket-description\` — draft a ticket, issue, or work item (Linear or Jira) using instructional-design scaffolding with bold and italic emphasis for scanning.
+- \`split-overlarge-pr\` — split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
 
 ## When to Write
 
