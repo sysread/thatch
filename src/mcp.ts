@@ -5,6 +5,7 @@ import { detectRepo } from "./git";
 import { checkSetup } from "./setup";
 import { TOOL_DEFS, type CoreContext, type ToolDef } from "./tool-defs";
 import { SidebandServer, sidebandSocketPath } from "./sideband";
+import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
 // JSON-RPC 2.0 types
@@ -34,7 +35,7 @@ const INTERNAL_ERROR = -32603;
 // ---------------------------------------------------------------------------
 
 const SERVER_NAME = "thatch";
-const SERVER_VERSION = "0.1.16";
+const SERVER_VERSION = pkg.version;
 
 /**
  * MCP capabilities declared in the initialize response. Thatch is a tools-only
