@@ -48,6 +48,14 @@ workflows. The host auto-discovers them, but reach for them proactively:
 Save immediately on: feedback, preferences, corrections, emotional signals,
 new project knowledge, conventions, architectural decisions, investigation results.
 
+## Before Responding
+
+Before composing a final response after substantial work this turn — multiple
+rounds of tool calls for investigation, debugging, or code-writing — check
+whether you've discovered knowledge worth persisting. Use thatch_memory_recall
+to check for duplicates, then thatch_memory_remember for new findings. Then
+deliver your response.
+
 ## What to Store
 
 - **Global store**: user observations, agent personality, system environment
@@ -180,6 +188,14 @@ workflows. The host auto-discovers them, but reach for them proactively:
 **One signal is enough.** Do not wait for confirmation.
 Save immediately on: feedback, preferences, corrections, emotional signals,
 new project knowledge, conventions, architectural decisions, investigation results.
+
+## Before Responding
+
+Before composing a final response after substantial work this turn — multiple
+rounds of tool calls for investigation, debugging, or code-writing — check
+whether you've discovered knowledge worth persisting. Use memory_recall to
+check for duplicates, then memory_remember for new findings. Then deliver
+your response.
 
 ## What to Store
 
@@ -375,6 +391,14 @@ workflows. The host auto-discovers them, but reach for them proactively:
 **One signal is enough.** Do not wait for confirmation.
 Save immediately on: feedback, preferences, corrections, emotional signals,
 new project knowledge, conventions, architectural decisions, investigation results.
+
+## Before Responding
+
+Before composing a final response after substantial work this turn — multiple
+rounds of tool calls for investigation, debugging, or code-writing — check
+whether you've discovered knowledge worth persisting. Use memory_recall to
+check for duplicates, then memory_remember for new findings. Then deliver
+your response.
 
 ## What to Store
 
