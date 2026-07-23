@@ -29,6 +29,7 @@ function usage(): never {
   thatch buffer-batch              Append a PostToolBatch payload to the queue (Claude Code hook only)
   thatch buffer-tool               Append a single postToolUse interaction to the queue (Cursor hook only)
   thatch flush-tools [--json]      Peek the queue + print an extraction nudge (hook only)
+  thatch flush-predictions [--json] Query predictions for the prompt (hook only)
   thatch setup --claude [--cursor] [--global]
                                    Install config + instructions + hooks + skills
 
@@ -351,7 +352,7 @@ switch (command) {
 
       const { peekQueue, getMissedCount, incrementMissedCount } = await import("../src/extract-queue");
       const { buildExtractionPayload } = await import("../src/extraction");
-      const { extractionNudge, claudeWriteNudge, claudeRecallNudge } = await import("../src/prompts");
+      const { extractionNudge, claudeWriteNudge, claudeRecallNudge, predictionNudge } = await import("../src/prompts");
 
       let repo = "unknown";
       try { repo = await detectRepo(); } catch {}
@@ -369,16 +370,31 @@ switch (command) {
         break;
       }
 
-      // Tier 2: recall nudge via sideband. The prompt text field name varies
-      // by host (Claude Code: "prompt", Cursor: undocumented). Try candidates.
+      // Tier 2: recall nudge + prediction fire via sideband. The prompt text
+      // field name varies by host (Claude Code: "prompt", Cursor: undocumented).
+      // Both recall and predictions share the same sideband round-trip.
       const promptText = data.prompt ?? data.message ?? data.text ?? data.user_input ?? data.input;
       if (promptText && promptText.length >= 10) {
-        const { sidebandMatch, sidebandSocketPath } = await import("../src/sideband");
+        const { sidebandMatch, sidebandPredictions, sidebandSocketPath } = await import("../src/sideband");
         const sockPath = sidebandSocketPath(dbPath);
-        const threshold = parseFloat(process.env.THATCH_RECALL_THRESHOLD ?? "0.55");
-        const matches = await sidebandMatch(sockPath, promptText, [repo, "global"], threshold, 5);
+        const recallThreshold = parseFloat(process.env.THATCH_RECALL_THRESHOLD ?? "0.55");
+        const predThreshold = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.45");
+
+        const [matches, predictions] = await Promise.all([
+          sidebandMatch(sockPath, promptText, [repo, "global"], recallThreshold, 5),
+          sidebandPredictions(sockPath, promptText, [repo, "global"], predThreshold, 5),
+        ]);
+
+        const parts: string[] = [];
         if (matches && matches.length > 0) {
-          const output = claudeRecallNudge(matches);
+          parts.push(claudeRecallNudge(matches));
+        }
+        if (predictions && predictions.length > 0) {
+          parts.push(predictionNudge(predictions));
+        }
+
+        if (parts.length > 0) {
+          const output = parts.join("\n\n");
           if (isJson) console.log(JSON.stringify({ additional_context: output }));
           else console.log(output);
           break;
@@ -403,6 +419,56 @@ switch (command) {
         // If even the fallback import fails, do nothing — silent failure is
         // preferable to blocking the user's prompt over an unrelated hook.
       }
+    }
+    break;
+  }
+
+  case "flush-predictions": {
+    // UserPromptSubmit (Claude Code) / beforeSubmitPrompt (Cursor) hook.
+    // Standalone prediction fire: queries the sideband for scored
+    // predictions matching the prompt text, prints the prediction nudge
+    // if any matchers fire. --json wraps as { additional_context: "..." }
+    // for Cursor hooks. Without --json, stdout is plain text.
+    //
+    // NOTE: flush-tools already fires predictions alongside the recall
+    // nudge in its tier 2 block. This subcommand exists for testing and
+    // for hosts that want prediction-only output without the recall or
+    // extraction nudges.
+    const isJson = args.includes("--json");
+    try {
+      const raw = await Bun.stdin.text();
+      const data = JSON.parse(raw) as {
+        prompt?: string;
+        message?: string;
+        text?: string;
+        user_input?: string;
+        input?: string;
+      };
+
+      const promptText = data.prompt ?? data.message ?? data.text ?? data.user_input ?? data.input;
+      if (!promptText || promptText.length < 10) {
+        if (isJson) console.log(JSON.stringify({ additional_context: "" }));
+        break;
+      }
+
+      let repo = "unknown";
+      try { repo = await detectRepo(); } catch {}
+
+      const { sidebandPredictions, sidebandSocketPath } = await import("../src/sideband");
+      const { predictionNudge } = await import("../src/prompts");
+      const sockPath = sidebandSocketPath(dbPath);
+      const threshold = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.45");
+      const predictions = await sidebandPredictions(sockPath, promptText, [repo, "global"], threshold, 5);
+
+      if (predictions && predictions.length > 0) {
+        const output = predictionNudge(predictions);
+        if (isJson) console.log(JSON.stringify({ additional_context: output }));
+        else console.log(output);
+      } else {
+        if (isJson) console.log(JSON.stringify({ additional_context: "" }));
+      }
+    } catch (err) {
+      console.error(`[thatch flush-predictions] failed: ${err}`);
     }
     break;
   }

@@ -8,6 +8,7 @@
   "globs": ["README.md", "docs/**/*.md"],
   "ignores": [
     "docs/plans/**",
+    "docs/in-progress/**",
     "node_modules",
     ".git",
     "dist"

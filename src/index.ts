@@ -10,6 +10,7 @@ import {
   sessionStartReminder,
   recallNudge,
   extractionNudge,
+  predictionNudge,
   type NudgeMatch,
 } from "./prompts";
 import { ExtractionPipeline, type ToolInteraction } from "./extraction";
@@ -28,6 +29,11 @@ const RECALL_THRESHOLD = parseFloat(process.env.THATCH_RECALL_THRESHOLD ?? "0.55
 // Prompts shorter than this skip the recall nudge — trivially short prompts
 // like "yes" or "ok" match too broadly to be useful.
 const MIN_PROMPT_LEN = 10;
+
+// Minimum cosine score for the prediction auto-fire. Lower than
+// RECALL_THRESHOLD because "this situation matches a known pattern" is
+// a weaker signal than "this prompt relates to a stored memory."
+const PREDICTION_THRESHOLD = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.45");
 
 export const server: Plugin = async ({ client, worktree }) => {
   // The opencode server's cwd is wherever the server happened to start;
@@ -69,7 +75,7 @@ export const server: Plugin = async ({ client, worktree }) => {
   // (by reference identity), preserving interleaved-turn entries that arrived
   // while the sub-agent was running. Without this, the child's memory_remember
   // would drain the parent's ENTIRE buffer — silently dropping facts from
-  // any tool calls the parent made concurrenly with the sub-agent.
+  // any tool calls the parent made concurrently with the sub-agent.
   const parentSnapshots = new Map<string, ToolInteraction[]>();
 
   // Skills always install to the global opencode config — installing into the
@@ -173,9 +179,14 @@ export const server: Plugin = async ({ client, worktree }) => {
     // 4. Per-message nudge — two priority tiers:
     //   a. Extraction nudge: prior tool interactions are queued for fact
     //      extraction (carries the JSON payload for thatch-fact-extractor).
-    //   b. Recall nudge: the user's prompt semantically matches existing
-    //      memories — surface that prior knowledge exists before the agent
-    //      responds. Uses the in-process warm model (no sideband needed).
+    //   b. Recall + prediction nudge: when no extraction is pending, embed
+    //      the user's prompt (shared embedding for both) and:
+    //        - search memories by cosine (recall nudge)
+    //        - search matchers by cosine, score predictions (prediction fire)
+    //      Both fire independently; either, both, or neither may inject.
+    //      The auto-fire reuses the embedding already computed for recall,
+    //      adding only one more cosine scan against the matchers table.
+    //      No extra model calls.
     //
     // Skipped during compaction: the agent can't call tools while generating
     // a summary, so a nudge that says "use thatch_memory_recall" triggers a
@@ -212,23 +223,48 @@ export const server: Plugin = async ({ client, worktree }) => {
         if (promptText.length < MIN_PROMPT_LEN) return;
 
         const embedding = await model.queryEmbed(promptText);
-        const results = db.search([repo, "global"], embedding, { limit: 5 });
-        const matches: NudgeMatch[] = results
-          .filter((r) => r._score >= RECALL_THRESHOLD)
-          .map((r) => ({ label: r.label, score: Math.round(r._score * 1000) / 1000 }));
 
-        if (matches.length === 0) return;
+        // Recall nudge: separate try/catch so a memory-search failure
+        // does not block the prediction fire (they share only the embedding).
+        try {
+          const results = db.search([repo, "global"], embedding, { limit: 5 });
+          const matches: NudgeMatch[] = results
+            .filter((r) => r._score >= RECALL_THRESHOLD)
+            .map((r) => ({ label: r.label, score: Math.round(r._score * 1000) / 1000 }));
 
-        output.parts.push({
-          id: `prt_thatch_${Math.random().toString(36).slice(2)}`,
-          sessionID: input.sessionID,
-          messageID: input.messageID ?? output.message.id,
-          type: "text",
-          text: recallNudge(matches),
-          synthetic: true,
-        });
+          if (matches.length > 0) {
+            output.parts.push({
+              id: `prt_thatch_${Math.random().toString(36).slice(2)}`,
+              sessionID: input.sessionID,
+              messageID: input.messageID ?? output.message.id,
+              type: "text",
+              text: recallNudge(matches),
+              synthetic: true,
+            });
+          }
+        } catch (err) {
+          console.error(`[thatch] recall nudge failed: ${err}`);
+        }
+
+        // Prediction fire: independent of recall; a failure here does
+        // not affect the recall nudge that may have already been pushed.
+        try {
+          const predItems = db.scorePredictionNudge([repo, "global"], embedding, PREDICTION_THRESHOLD);
+          if (predItems.length > 0) {
+            output.parts.push({
+              id: `prt_thatch_${Math.random().toString(36).slice(2)}`,
+              sessionID: input.sessionID,
+              messageID: input.messageID ?? output.message.id,
+              type: "text",
+              text: predictionNudge(predItems),
+              synthetic: true,
+            });
+          }
+        } catch (err) {
+          console.error(`[thatch] prediction nudge failed: ${err}`);
+        }
       } catch (err) {
-        console.error(`[thatch] recall nudge failed: ${err}`);
+        console.error(`[thatch] nudge hook failed: ${err}`);
       }
     },
 

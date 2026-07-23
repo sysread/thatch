@@ -1,3 +1,5 @@
+import type { PredictionNudgeItem } from "./db";
+
 export function systemPrompt(repo: string): string {
   return `# Persistence
 
@@ -7,7 +9,9 @@ knowledge so future sessions can build on what you've already learned.
 Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
        thatch_memory_show, thatch_memory_forget, thatch_store_list,
        thatch_find_duplicates, thatch_dedup_mark_checked,
-       thatch_extraction_done
+       thatch_extraction_done,
+       thatch_prediction_query, thatch_prediction_update, thatch_prediction_list,
+       thatch_prediction_delete
 
 ## Stores
 
@@ -59,6 +63,27 @@ rounds of tool calls for investigation, debugging, or code-writing — check
 whether you've discovered knowledge worth persisting. Use thatch_memory_recall
 to check for duplicates, then thatch_memory_remember for new findings. Then
 deliver your response.
+
+## User Decision Model
+
+A statistical model of the user's decision-making preferences is maintained by
+the prediction engine. Scored predictions may appear above as "User decision
+model" context; these are learned patterns about what the user tends to
+prefer in specific situations.
+
+When facing a judgment call about scope, appropriateness, or methodology:
+- If a prediction is strong (high confidence, sufficient evidence), follow it
+- If predictions conflict or confidence is thin, surface the uncertainty
+  naturally: "I think you usually prefer X here, but I'm not sure; what do
+  you want?"
+- When the user responds to a surfaced prediction, use thatch_prediction_update
+  to reinforce or weaken the model
+
+When the user corrects you, answers your question, or provides a clear signal
+about their preferences:
+1. Use thatch_prediction_query to check for existing matchers and predictions
+2. Use thatch_prediction_update to create, reinforce, or weaken a prediction
+3. Use thatch_prediction_delete to remove a prediction created in error
 
 ## What to Store
 
@@ -150,8 +175,9 @@ Tools are prefixed in Claude Code: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__memory_recall\`, \`mcp__thatch__memory_list\`,
 \`mcp__thatch__memory_show\`, \`mcp__thatch__memory_forget\`,
 \`mcp__thatch__store_list\`, \`mcp__thatch__find_duplicates\`,
-\`mcp__thatch__dedup_mark_checked\`, \`mcp__thatch__extraction_done\`.
-Bare names used below for readability.
+\`mcp__thatch__dedup_mark_checked\`, \`mcp__thatch__extraction_done\`,
+\`mcp__thatch__prediction_query\`, \`mcp__thatch__prediction_update\`,
+\`mcp__thatch__prediction_list\`, \`mcp__thatch__prediction_delete\`. Bare names used below for readability.
 
 ## Stores
 
@@ -203,6 +229,27 @@ rounds of tool calls for investigation, debugging, or code-writing — check
 whether you've discovered knowledge worth persisting. Use memory_recall to
 check for duplicates, then memory_remember for new findings. Then deliver
 your response.
+
+## User Decision Model
+
+A statistical model of the user's decision-making preferences is maintained by
+the prediction engine. Scored predictions may appear above as "User decision
+model" context; these are learned patterns about what the user tends to
+prefer in specific situations.
+
+When facing a judgment call about scope, appropriateness, or methodology:
+- If a prediction is strong (high confidence, sufficient evidence), follow it
+- If predictions conflict or confidence is thin, surface the uncertainty
+  naturally: "I think you usually prefer X here, but I'm not sure; what do
+  you want?"
+- When the user responds to a surfaced prediction, use prediction_update
+  to reinforce or weaken the model
+
+When the user corrects you, answers your question, or provides a clear signal
+about their preferences:
+1. Use prediction_query to check for existing matchers and predictions
+2. Use prediction_update to create, reinforce, or weaken a prediction
+3. Use prediction_delete to remove a prediction created in error
 
 ## What to Store
 
@@ -356,8 +403,9 @@ Tools are prefixed in Cursor: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__memory_recall\`, \`mcp__thatch__memory_list\`,
 \`mcp__thatch__memory_show\`, \`mcp__thatch__memory_forget\`,
 \`mcp__thatch__store_list\`, \`mcp__thatch__find_duplicates\`,
-\`mcp__thatch__dedup_mark_checked\`, \`mcp__thatch__extraction_done\`.
-Bare names used below for readability.
+\`mcp__thatch__dedup_mark_checked\`, \`mcp__thatch__extraction_done\`,
+\`mcp__thatch__prediction_query\`, \`mcp__thatch__prediction_update\`,
+\`mcp__thatch__prediction_list\`, \`mcp__thatch__prediction_delete\`. Bare names used below for readability.
 
 ## Stores
 
@@ -409,6 +457,27 @@ rounds of tool calls for investigation, debugging, or code-writing — check
 whether you've discovered knowledge worth persisting. Use memory_recall to
 check for duplicates, then memory_remember for new findings. Then deliver
 your response.
+
+## User Decision Model
+
+A statistical model of the user's decision-making preferences is maintained by
+the prediction engine. Scored predictions may appear above as "User decision
+model" context; these are learned patterns about what the user tends to
+prefer in specific situations.
+
+When facing a judgment call about scope, appropriateness, or methodology:
+- If a prediction is strong (high confidence, sufficient evidence), follow it
+- If predictions conflict or confidence is thin, surface the uncertainty
+  naturally: "I think you usually prefer X here, but I'm not sure; what do
+  you want?"
+- When the user responds to a surfaced prediction, use prediction_update
+  to reinforce or weaken the model
+
+When the user corrects you, answers your question, or provides a clear signal
+about their preferences:
+1. Use prediction_query to check for existing matchers and predictions
+2. Use prediction_update to create, reinforce, or weaken a prediction
+3. Use prediction_delete to remove a prediction created in error
 
 ## What to Store
 
@@ -494,4 +563,19 @@ function formatRecallNudge(matches: NudgeMatch[], toolName: string): string {
   const labels = matches.slice(0, 2).map((m) => `"${m.label}"`).join(", ");
   const etc = n > 2 ? ", etc." : "";
   return `[thatch] ${n} ${word} ${verb} to this prompt (${labels}${etc}). Use ${toolName} before responding.`;
+}
+
+// ---------------------------------------------------------------------------
+// Prediction nudge: auto-injected when matchers fire for the user's prompt.
+// Descriptive, not directive: the system prompt instructions govern how to
+// act on the scored predictions (follow strong, surface weak/competing,
+// update on user response).
+// ---------------------------------------------------------------------------
+
+export function predictionNudge(items: PredictionNudgeItem[]): string {
+  const lines = items.map((p) => {
+    const verb = p.evidence_count === 0 ? "you may prefer" : "you tend to";
+    return `- [${p.confidence.toFixed(2)} conf, ${p.evidence_count} tests] When ${p.matcher_description}: ${verb} ${p.statement}`;
+  });
+  return `[thatch] User decision model\n${lines.join("\n")}`;
 }

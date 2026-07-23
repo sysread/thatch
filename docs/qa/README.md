@@ -91,7 +91,7 @@ correctness on `README.md` and `docs/` excluding `docs/plans/`; see
 
 ### `tests/plugin.test.ts`
 
-- `server` export shape: all nine tools, every hook present, tools carry
+- `server` export shape: all thirteen tools, every hook present, tools carry
   description/args/execute
 - System transform and compaction hooks append their text
 - `tool.execute.after` → `chat.message` extraction round-trip: nudge carries
@@ -101,6 +101,38 @@ correctness on `README.md` and `docs/` excluding `docs/plans/`; see
 - `event` handler: calls `client.session.prompt` on `session.created` with
   correct session ID and nudge text; ignores non-`session.created` events
 - `sessionStartReminder`: includes store name and recall instructions
+- Recall nudge via `chat.message`: surfaces when prompt matches a stored
+  memory, no nudge for unrelated or short prompts, extraction priority
+- Prediction auto-fire via `chat.message`: surfaces when prompt matches a
+  stored matcher, no nudge for unrelated prompts, prediction and recall
+  nudges fire independently as separate synthetic parts
+
+### `tests/tool-defs.test.ts`
+
+- Tool count (13) and name list
+- Zod schema validation for each tool's args
+- Execute functions: `memory_remember` save/duplicate/overwrite/archived,
+  `memory_recall` default/empty/archived, `memory_list`/`show`/`forget`,
+  `store_list`, `find_duplicates` clean store
+- Prediction execute functions: `prediction_update` create/confirm/disconfirm/
+  create-on-existing (dedup links without disconfirming), `prediction_query`
+  matching/unrelated, `prediction_list` with provenance, `prediction_delete`
+  found/not-found
+
+### `tests/prediction.test.ts`
+
+- Schema: tables exist, `populationP0` fallback on empty store
+- Matcher creation and lookup: `findMatchers` ranking, `findNearestMatcher`
+  threshold/dedup
+- Prediction creation: `createPrediction` seeds at p0, `adjustConfidence`
+  confirm/disconfirm/soft/multiple, non-existent ID no-op
+- Edges and scoring: `createEdge` links, `scorePredictions` empty/dedup/
+  weight-preservation, `scorePredictionNudge` threshold filtering + dedup
+- `findNearestPrediction`: store-wide search, threshold, cross-matcher
+- Provenance: `addProvenance` + `getProvenance` read-back, `deletePrediction`
+  cascade to edges and provenance
+- `listPredictions`: sorted by confidence, matchers included
+- `populationP0`: under-20 fallback, population hit rate with sufficient evidence
 
 ### `tests/hygiene.test.ts`
 

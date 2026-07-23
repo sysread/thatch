@@ -28,8 +28,8 @@ afterEach(() => {
 });
 
 describe("TOOL_DEFS", () => {
-  test("exports all 9 tools", () => {
-    expect(TOOL_DEFS.length).toBe(9);
+  test("exports all 13 tools", () => {
+    expect(TOOL_DEFS.length).toBe(13);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -41,6 +41,10 @@ describe("TOOL_DEFS", () => {
       "find_duplicates",
       "dedup_mark_checked",
       "extraction_done",
+      "prediction_query",
+      "prediction_update",
+      "prediction_list",
+      "prediction_delete",
     ]);
   });
 
@@ -140,6 +144,164 @@ describe("tool-defs execute functions", () => {
     const result = await list.execute({}, ctx);
     expect(result).not.toContain("Normal (archived)");
     expect(result).toContain("Old (archived)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Prediction tool execute functions
+// ---------------------------------------------------------------------------
+
+describe("prediction tool execute functions", () => {
+  const findTool = (name: string) => TOOL_DEFS.find((t) => t.name === name)!;
+
+  test("prediction_update create seeds at p0 with 0 evidence", async () => {
+    const result = await findTool("prediction_update").execute({
+      matcher: "reviewing a PR with tech debt",
+      prediction: "flag tech debt before reviewing the diff",
+      signal: "create",
+      rationale: "user asked to surface debt early",
+    }, ctx);
+    expect(result).toContain("[created]");
+    expect(result).toContain("reviewing a PR with tech debt");
+
+    // prediction_list should show it at p0 with 0 evidence
+    const list = await findTool("prediction_list").execute({}, ctx);
+    expect(list).toContain("[0.50 conf, 0 tests]");
+  });
+
+  test("prediction_update confirm applies signal immediately on new prediction", async () => {
+    const result = await findTool("prediction_update").execute({
+      matcher: "writing error handling",
+      prediction: "handle errors before happy paths",
+      signal: "confirm",
+      rationale: "user confirmed this preference",
+    }, ctx);
+    expect(result).toContain("[created + confirm]");
+    // confidence = (1 + 5*0.5) / (1 + 0 + 5) = 0.583
+    const list = await findTool("prediction_list").execute({}, ctx);
+    expect(list).toContain("[0.58 conf, 1 tests]");
+  });
+
+  test("prediction_update disconfirm on existing prediction lowers confidence", async () => {
+    // Create + confirm first
+    const created = await findTool("prediction_update").execute({
+      matcher: "writing tests",
+      prediction: "always write tests first",
+      signal: "confirm",
+      rationale: "user likes TDD",
+    }, ctx);
+    expect(created).toContain("(1/0)"); // 1 confirm, 0 disconfirm
+
+    // Now disconfirm with same matcher text (dedup finds it)
+    const result = await findTool("prediction_update").execute({
+      matcher: "writing tests",
+      prediction: "always write tests first",
+      signal: "disconfirm",
+      rationale: "user said not always",
+    }, ctx);
+    expect(result).toContain("[disconfirm]");
+    expect(result).toContain("(1/1)"); // 1 confirm, 1 disconfirm
+  });
+
+  test("prediction_update create on existing prediction links without disconfirming", async () => {
+    // Create a prediction with confirm
+    const confirmed = await findTool("prediction_update").execute({
+      matcher: "choosing variable names",
+      prediction: "prefer descriptive names over short ones",
+      signal: "confirm",
+      rationale: "user prefers clarity",
+    }, ctx);
+    expect(confirmed).toContain("(1/0)"); // 1 confirm, 0 disconfirm
+
+    // Call with signal=create and a DIFFERENT matcher that links to the same prediction
+    const result = await findTool("prediction_update").execute({
+      matcher: "choosing variable names in a function",
+      prediction: "prefer descriptive names over short ones",
+      signal: "create",
+      rationale: "observed again in a new context",
+    }, ctx);
+    // Should link the new matcher, not disconfirm
+    expect(result).toContain("[linked]");
+    // Confidence should NOT have changed: still 1 confirm, 0 disconfirm
+    expect(result).toContain("(1/0)");
+
+    // prediction_list should show two matchers linked to the same prediction
+    const list = await findTool("prediction_list").execute({}, ctx);
+    expect(list).toContain("choosing variable names");
+    expect(list).toContain("choosing variable names in a function");
+    // Provenance should have confirm + create, NOT disconfirm
+    expect(list).toContain("confirm:");
+    expect(list).toContain("create:");
+    expect(list).not.toContain("disconfirm:");
+  });
+
+  test("prediction_query returns matching predictions with 0-evidence verb", async () => {
+    await findTool("prediction_update").execute({
+      matcher: "deciding on test coverage",
+      prediction: "aim for 90 percent coverage",
+      signal: "create",
+      rationale: "user stated preference",
+    }, ctx);
+
+    // Query with the same matcher text (MockEmbeddingModel: identical text → cosine 1.0)
+    const result = await findTool("prediction_query").execute({
+      context: "deciding on test coverage",
+    }, ctx);
+    expect(result).toContain("you may prefer"); // 0-evidence verb
+    expect(result).toContain("aim for 90 percent coverage");
+  });
+
+  test("prediction_query returns no predictions for unrelated context", async () => {
+    await findTool("prediction_update").execute({
+      matcher: "database indexing strategy",
+      prediction: "use composite indexes",
+      signal: "create",
+      rationale: "user said",
+    }, ctx);
+
+    const result = await findTool("prediction_query").execute({
+      context: "designing a UI layout",
+    }, ctx);
+    expect(result).toContain("No matching predictions");
+  });
+
+  test("prediction_delete removes a prediction", async () => {
+    await findTool("prediction_update").execute({
+      matcher: "choosing a framework",
+      prediction: "prefer minimal dependencies",
+      signal: "create",
+      rationale: "user said",
+    }, ctx);
+
+    const result = await findTool("prediction_delete").execute({
+      statement: "prefer minimal dependencies",
+    }, ctx);
+    expect(result).toContain("[deleted]");
+
+    // prediction_list should be empty now
+    const list = await findTool("prediction_list").execute({}, ctx);
+    expect(list).toContain("No predictions");
+  });
+
+  test("prediction_delete returns not-found for unknown statement", async () => {
+    const result = await findTool("prediction_delete").execute({
+      statement: "this prediction does not exist at all",
+    }, ctx);
+    expect(result).toContain("No prediction matching");
+  });
+
+  test("prediction_list includes provenance entries", async () => {
+    await findTool("prediction_update").execute({
+      matcher: "reviewing code",
+      prediction: "check for null references",
+      signal: "confirm",
+      rationale: "user emphasized null safety",
+    }, ctx);
+
+    const list = await findTool("prediction_list").execute({}, ctx);
+    expect(list).toContain("provenance:");
+    expect(list).toContain("confirm:");
+    expect(list).toContain("null safety");
   });
 });
 

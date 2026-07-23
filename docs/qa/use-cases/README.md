@@ -29,6 +29,10 @@ file/IPC/CLI contracts ready to graduate into `bun:test` integration tests.
 | [UC-018](UC-018-mcp-startup-setup-detection.md) | MCP startup detects missing/broken setup instructions and warns the agent |
 | [UC-019](UC-019-archived-memory-lifecycle.md) | Archive, search exclusion, update guard, unarchive |
 | [UC-020](UC-020-extraction-escalation.md) | Nudge escalation (polite → insistent → ALL-CAPS), buffer persistence, `extraction_done` drain |
+| [UC-021](UC-021-prediction-autofire.md) | Prediction auto-fire: matcher scores prompt, prediction nudge injected alongside recall |
+| [UC-022](UC-022-prediction-dedup.md) | Prediction create-on-existing: dedup finds match, links edge without disconfirming |
+| [UC-023](UC-023-prediction-confidence-model.md) | Bayesian confidence math: create, confirm, soft (weak disconfirm), disconfirm signals |
+| [UC-024](UC-024-prediction-delete.md) | Prediction delete with cascade, provenance inspection, not-found handling |
 
 ## Template
 

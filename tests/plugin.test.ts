@@ -96,6 +96,10 @@ describe("plugin entry", () => {
       "thatch_memory_recall",
       "thatch_memory_remember",
       "thatch_memory_show",
+      "thatch_prediction_delete",
+      "thatch_prediction_list",
+      "thatch_prediction_query",
+      "thatch_prediction_update",
       "thatch_store_list",
     ]);
   });
@@ -666,8 +670,73 @@ describe("recall nudge via chat.message", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Compaction guard — chat.message nudges suppressed during compaction
+// Prediction auto-fire (prompt-aware, via chat.message hook)
 // ---------------------------------------------------------------------------
+
+describe("prediction auto-fire via chat.message", () => {
+  test("surfaces a prediction nudge when prompt matches a stored matcher", async () => {
+    // Seed a prediction via the server's own tool so embeddings come from
+    // the mocked BgeEmbeddingModel. The matcher text is the raw context;
+    // the chat.message hook embeds the user's prompt with queryEmbed
+    // (QUERY_PREFIX stripped by the mock), so identical text hits cosine ~1.0.
+    await hooks.tool!.thatch_prediction_update.execute({
+      matcher: "untangling a gnarly database migration plan",
+      prediction: "ask about prod scars and prior migrations before touching the schema",
+      signal: "create",
+      rationale: "user emphasized prod-history checks",
+    } as any, {} as any);
+
+    const output: any = {
+      message: { id: "msg_pred_1" },
+      parts: [{ type: "text", text: "untangling a gnarly database migration plan" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_pred_1", messageID: "msg_pred_1" } as any, output);
+    expect(output.parts.length).toBeGreaterThanOrEqual(2);
+    const predPart = output.parts.find((p: any) => p.text?.includes("User decision model"));
+    expect(predPart).toBeDefined();
+    expect(predPart.synthetic).toBe(true);
+    expect(predPart.text).toContain("[thatch]");
+    expect(predPart.text).toContain("you may prefer"); // 0-evidence verb
+  });
+
+  test("no prediction nudge when prompt matches no matcher above threshold", async () => {
+    const output: any = {
+      message: { id: "msg_pred_2" },
+      parts: [{ type: "text", text: "completely unrelated cooking recipe ideas for dinner" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_pred_2", messageID: "msg_pred_2" } as any, output);
+    const predPart = output.parts.find((p: any) => p.text?.includes("User decision model"));
+    expect(predPart).toBeUndefined();
+  });
+
+  test("prediction nudge and recall nudge fire independently", async () => {
+    // Seed a prediction whose matcher exactly matches the memory's stored
+    // text format so both nudges fire from one prompt. The memory was
+    // seeded via the thatch_memory_remember tool (which embeds
+    // "# {label}\n\n{content}"). Use that same text as the matcher so
+    // findMatchers hits cosine ~1.0 with the same prompt text.
+    await hooks.tool!.thatch_prediction_update.execute({
+      matcher: "# test-coverage\n\ntest coverage metrics and gaps",
+      prediction: "prioritize coverage in CI before merging",
+      signal: "create",
+      rationale: "user said coverage matters",
+    } as any, {} as any);
+
+    // Use a fresh sessionID so the compaction guard doesn't suppress.
+    const output: any = {
+      message: { id: "msg_pred_combined" },
+      parts: [{ type: "text", text: "# test-coverage\n\ntest coverage metrics and gaps" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_pred_combined", messageID: "msg_pred_combined" } as any, output);
+    // Both the recall nudge (memory match) and the prediction nudge
+    // (matcher match) should fire as independent synthetic parts.
+    expect(output.parts.length).toBeGreaterThanOrEqual(3);
+    const recallPart = output.parts.find((p: any) => p.text?.includes("thatch_memory_recall"));
+    const predPart = output.parts.find((p: any) => p.text?.includes("User decision model"));
+    expect(recallPart).toBeDefined();
+    expect(predPart).toBeDefined();
+  });
+});
 
 describe("compaction guard for chat.message", () => {
   test("chat.message skips nudges while session is compacting", async () => {
@@ -689,12 +758,13 @@ describe("compaction guard for chat.message", () => {
 
     const output: any = {
       message: { id: "msg_guard_2" },
-      parts: [{ type: "text", text: "# test-coverage\n\ntest coverage metrics and gaps" }],
+      parts: [{ type: "text", text: "untangling a gnarly database migration plan" }],
     };
     await hooks["chat.message"]!({ sessionID: "ses_guard", messageID: "msg_guard_2" } as any, output);
+    // The prediction nudge should fire (matcher seeded in earlier test).
     expect(output.parts.length).toBe(2);
     expect(output.parts[1].synthetic).toBe(true);
-    expect(output.parts[1].text).toContain("test-coverage");
+    expect(output.parts[1].text).toContain("User decision model");
   });
 
   test("extraction nudge is also suppressed during compaction", async () => {

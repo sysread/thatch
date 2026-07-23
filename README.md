@@ -98,6 +98,28 @@ When `thatch` is not on PATH, setup uses the absolute path to `bin/thatch` in
 the hooks and MCP config. When it is on PATH (npm global install), setup uses
 the bare `thatch` command so the config survives updates.
 
+### Other MCP-compatible harnesses
+
+Thatch works as a `stdio` MCP server with any MCP client. Register it in your
+harness's MCP config by pointing to the `thatch` binary:
+
+```json
+{
+  "mcpServers": {
+    "thatch": {
+      "command": "thatch",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+No `setup` step is needed for bare MCP usage; `setup` installs hooks and
+instructions specific to Claude Code and Cursor. For other harnesses, add the
+MCP server config above and include thatch's tools/instructions in your agent's
+system prompt manually (see [docs/dev/mcp-parity.md](docs/dev/mcp-parity.md)
+for the prompt text). [Bun] must be on PATH.
+
 ## Tools
 
 | Tool (opencode) | Tool (MCP) | What it does |
@@ -111,6 +133,36 @@ the bare `thatch` command so the config survives updates.
 | `thatch_find_duplicates` | `mcp__thatch__find_duplicates` | Surface pairs of suspiciously similar memories |
 | `thatch_dedup_mark_checked` | `mcp__thatch__dedup_mark_checked` | Record a reviewed pair so it stops being re-reported |
 | `thatch_extraction_done` | `mcp__thatch__extraction_done` | Acknowledge extraction nudge was dispatched to a sub-agent; drains the buffer |
+| `thatch_prediction_query` | `mcp__thatch__prediction_query` | Query the user decision model for scored predictions matching a context |
+| `thatch_prediction_update` | `mcp__thatch__prediction_update` | Create, reinforce, or weaken a prediction about user preferences |
+| `thatch_prediction_list` | `mcp__thatch__prediction_list` | List all predictions with matchers, confidence, evidence, and provenance |
+| `thatch_prediction_delete` | `mcp__thatch__prediction_delete` | Delete a prediction created in error (cascades to edges and provenance) |
+
+## Prediction engine
+
+Thatch maintains a statistical model of the user's decision-making preferences.
+When the user sends a prompt, the engine embeds it (sharing the embedding
+already computed for memory recall) and searches for **matchers** — context
+patterns that describe situations where the user has expressed preferences.
+Matching matchers fire linked **predictions** (scored by cosine similarity,
+edge weight, and Bayesian confidence), and a nudge is injected alongside the
+recall nudge:
+
+```text
+[thatch] User decision model
+- [0.72 conf, 4 tests] When X: you tend to Y
+- [0.50 conf, 0 tests] When Z: you may prefer W
+```
+
+The nudge is descriptive, not directive. The system prompt instructions tell
+the agent to follow strong predictions, surface uncertainty when confidence is
+thin, and update the model when the user responds. Predictions use a Bayesian
+posterior with a Beta prior (K=5, P0=0.5); signals are `confirm`,
+`disconfirm`, `soft` (weak disconfirm, weight 0.25), and `create`.
+
+The MCP path (Claude Code, Cursor) fires predictions via the same sideband
+socket used for recall nudges. The `flush-predictions` CLI subcommand provides
+standalone prediction-only output for testing.
 
 ## Skills
 
@@ -181,6 +233,7 @@ thatch hygiene                   Print the hygiene report (standalone)
 thatch buffer-batch              Append Claude Code PostToolBatch output to extraction queue
 thatch buffer-tool               Append Cursor postToolUse output to extraction queue
 thatch flush-tools [--json]      Peek extraction queue; print extraction + recall nudges
+thatch flush-predictions [--json]  Query predictions for the prompt (hook or standalone)
 thatch setup --claude [--cursor] [--global] Install config + instructions + hooks + skills
 ```
 
@@ -239,6 +292,7 @@ payload for the fact-extractor skill.
 | Session-start reminder | `session.created` event | `SessionStart` hook → `thatch reminder` | `sessionStart` hook → `thatch reminder --json` |
 | Compaction context | `experimental.session.compacting` hook | **Gap**: no equivalent (CLAUDE.md persists) | **Gap**: no equivalent |
 | Extraction nudge | `tool.execute.after` + `chat.message` | `PostToolBatch` + `UserPromptSubmit` (file-backed queue) | `postToolUse` + `beforeSubmitPrompt` (file-backed queue) |
+| Prediction auto-fire | `chat.message` hook, separate try/catch from recall | `flush-tools` tier 2 (sideband socket) | `flush-tools` tier 2 (sideband socket) |
 | Setup detection at startup | n/a (plugin auto-installs) | `checkSetup` in MCP server: detects missing/broken instructions | Same as Claude Code |
 | Skills | 19 (18 shared + coordinator) | 18 (shared only) | 18 (shared only) |
 | Store detection | `worktree` param from plugin | `CLAUDE_PROJECT_DIR` env var | `CURSOR_PROJECT_DIR` then `CLAUDE_PROJECT_DIR` |

@@ -3,7 +3,7 @@ import { unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, connect, type Server, type Socket } from "node:net";
-import type { ThatchDB } from "./db";
+import type { ThatchDB, PredictionNudgeItem } from "./db";
 import type { EmbeddingModel } from "./embeddings";
 
 /**
@@ -24,7 +24,7 @@ export interface SidebandMatch {
 }
 
 interface MatchRequest {
-  method: "match";
+  method: "match" | "predictions";
   text: string;
   stores: string[];
   threshold: number;
@@ -34,6 +34,7 @@ interface MatchRequest {
 interface MatchResponse {
   ok: boolean;
   matches?: SidebandMatch[];
+  predictions?: PredictionNudgeItem[];
   error?: string;
 }
 
@@ -115,13 +116,22 @@ export class SidebandServer {
       return;
     }
 
-    if (req.method !== "match") {
+    if (req.method !== "match" && req.method !== "predictions") {
       this.#respond(socket, { ok: false, error: `Unknown method: ${req.method}` });
       return;
     }
 
     try {
       const embedding = await this.#model.queryEmbed(req.text);
+
+      if (req.method === "predictions") {
+        const predictions = this.#db.scorePredictionNudge(
+          req.stores, embedding, req.threshold, 5,
+        );
+        this.#respond(socket, { ok: true, predictions });
+        return;
+      }
+
       const results = this.#db.search(req.stores, embedding, { limit: req.limit });
       const matches: SidebandMatch[] = results
         .filter((r) => r._score >= req.threshold)
@@ -156,16 +166,45 @@ export function sidebandMatch(
   limit: number,
   timeoutMs = 2000,
 ): Promise<SidebandMatch[] | null> {
+  return sidebandRequest("match", socketPath, text, stores, threshold, limit, timeoutMs)
+    .then((res) => res?.matches ?? null);
+}
+
+/**
+ * Connect to the sideband server and request scored predictions for a prompt.
+ * Returns null on any failure; callers treat null as "skip the prediction nudge."
+ */
+export function sidebandPredictions(
+  socketPath: string,
+  text: string,
+  stores: string[],
+  threshold: number,
+  limit: number,
+  timeoutMs = 2000,
+): Promise<PredictionNudgeItem[] | null> {
+  return sidebandRequest("predictions", socketPath, text, stores, threshold, limit, timeoutMs)
+    .then((res) => res?.predictions ?? null);
+}
+
+function sidebandRequest(
+  method: "match" | "predictions",
+  socketPath: string,
+  text: string,
+  stores: string[],
+  threshold: number,
+  limit: number,
+  timeoutMs: number,
+): Promise<MatchResponse | null> {
   return new Promise((resolve) => {
     let settled = false;
-    const done = (val: SidebandMatch[] | null) => {
+    const done = (val: MatchResponse | null) => {
       if (settled) return;
       settled = true;
       resolve(val);
     };
 
     const socket = connect(socketPath);
-    const req = JSON.stringify({ method: "match", text, stores, threshold, limit }) + "\n";
+    const req = JSON.stringify({ method, text, stores, threshold, limit }) + "\n";
     let buf = "";
 
     const timer = setTimeout(() => {
@@ -173,14 +212,13 @@ export function sidebandMatch(
       done(null);
     }, timeoutMs);
 
-    socket.on("error", () => {
+    socket.on("error", (err: NodeJS.ErrnoException) => {
       clearTimeout(timer);
-      // Stale socket file left by a crashed server — clean it up so the next
-      // connection attempt doesn't hit ECONNREFUSED again.
-      try {
-        unlinkSync(socketPath);
-      } catch {
-        // Already gone or never existed.
+      // Only remove the socket file if it's a stale-file situation
+      // (ECONNREFUSED). Other errors (timeout, server error) should
+      // not delete a live server's socket.
+      if (err.code === "ECONNREFUSED" || err.code === "ENOENT") {
+        try { unlinkSync(socketPath); } catch { /* already gone */ }
       }
       done(null);
     });
@@ -197,7 +235,7 @@ export function sidebandMatch(
       clearTimeout(timer);
       try {
         const res = JSON.parse(buf.slice(0, nl)) as MatchResponse;
-        done(res.ok ? (res.matches ?? []) : null);
+        done(res);
       } catch {
         done(null);
       }
