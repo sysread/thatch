@@ -27,6 +27,9 @@ immediately. For background extraction sub-agents:
 export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
 ```
 
+Then **prime your project memory** with by running `thatch prime` in your project directory.
+This will launch an `opencode` session to build an initial map of the code base and its architecture to seed the memory.
+
 ### Claude Code and Cursor
 
 Install globally, then run setup in your project:
@@ -35,13 +38,14 @@ Install globally, then run setup in your project:
 npm install -g @jeffober/thatch
 cd /path/to/your/project
 thatch setup --claude    # or --cursor
+
+# set up in your global config for all projects
+thatch setup --claude --global  # or --cursor --global
 ```
 
 `setup` installs the MCP server config, hooks, instructions, and skills.
 Restart your editor and thatch's tools are available as `mcp__thatch__*`.
 Requires [Bun] on PATH.
-
-**Global setup** (all projects): `thatch setup --claude --global`
 
 ### Other MCP-compatible harnesses
 
