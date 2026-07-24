@@ -36,21 +36,21 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth-wall breaks, em dashes, filler. |
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of behavior? |
 | `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
-| `thatch-review-synthesizer` | Verify specialist findings against code, dedupe, classify, calibrate severity. Cross-references findings against prior review comments when a follow-up round register is provided; produces a Previously identified appendix. |
+| `thatch-review-synthesizer` | Verify specialist findings against code, dedupe, classify, calibrate severity. Starts the final report with a workflow-change preface, then cross-references findings against prior review comments when a follow-up round register is provided. |
 | `thatch-review-context` | Gather project/feature context (PR descriptions, git archaeology, ticket references, memory) before fan-out. Prevents false positives about intentionally deferred work. Also fetches prior review comments on a connected PR/MR for follow-up-round detection and builds a register with preliminary addressed-check status per comment. |
 | `thatch-workflow-research` | Research code workflows/features affected by a change or planned change. Reads code flows, comments, git history, memories, docs. Produces a guide to the code for reviewers or planners. |
 | `thatch-change-walkthrough` | Explain a change to the user as a teaching walkthrough: resolve the delta, research each affected workflow at the merge-base, teach current behavior, then overlay the modifications with file:line citations and analogies. |
 | `thatch-code-walkthrough` | Explain a feature, module, or workflow to the user as a teaching walkthrough: identify the code area (optionally from a branch or PR), research how it works, teach it with file:line citations and analogies, list the key files. |
 | `thatch-session-reflection` | End-of-session memory recording (project, user, tools, self). |
-| `pr-description` | Draft PR descriptions with instructional-design scaffolding (SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES) and bold+italic emphasis for scanning. |
-| `ticket-description` | Draft ticket/issue descriptions with instructional-design scaffolding (SYNOPSIS / PROBLEM / BACKGROUND / PROPOSED APPROACH / ACCEPTANCE CRITERIA / RELEASE PLAN / VALIDATION / DEPENDENCIES / NOTES). |
+| `pr-description` | Draft PR descriptions with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, project-context research, clarity checks, and bold+italic emphasis for scanning. |
+| `ticket-description` | Draft ticket/issue descriptions with clear sections, project-context research, clarity checks, and bold+italic emphasis for scanning. |
 | `split-overlarge-pr` | Split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main. |
 
 **opencode-only (1)** — the coordinator needs sub-agent support:
 
 | Skill | Role |
 |-------|------|
-| `thatch-code-review` | Resolve review target (incl. VCS detection and connected PR/MR lookup for follow-up round detection), gather project context, research affected workflows, estimate complexity, partition, dispatch the 6 specialists in parallel, synthesize (incl. cross-referencing findings against prior review comments). |
+| `thatch-code-review` | Resolve review target (incl. VCS detection and connected PR/MR lookup for follow-up round detection), gather project context, research affected workflows, estimate complexity, partition, dispatch the 6 specialists in parallel, synthesize with a workflow-change preface and prior-comment cross-reference. |
 
 ## REVIEW_COMMON
 
@@ -115,7 +115,7 @@ and `--cursor` pass only the shared set.
 ## Memory review skills in practice
 
 - **Quick single lens**: load any specialist directly and point it at a branch.
-- **Full review on opencode**: load `thatch-code-review` — it gathers project context, researches affected workflows, dispatches all 6 specialists in parallel (with both the context brief and workflow guide injected into each briefing), then synthesizes.
+- **Full review on opencode**: load `thatch-code-review` — it gathers project context, researches affected workflows, dispatches all 6 specialists in parallel (with both the context brief and workflow guide injected into each briefing), then synthesizes a report that starts with the workflow changes before findings.
 - **Full review on Claude Code/Cursor**: run each specialist in sequence, then
   run `thatch-review-synthesizer` to verify and aggregate.
 

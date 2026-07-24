@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import yaml from "yaml";
 import { setupClaudeCode, setupCursor, checkSetup } from "../src/setup";
-import { claudeInstructions, cursorInstructions } from "../src/prompts";
+import { claudeInstructions, cursorInstructions, systemPrompt } from "../src/prompts";
 import { SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "../src/skills";
 
 let projectDir: string;
@@ -298,6 +298,12 @@ describe("claudeInstructions content", () => {
     expect(text).toContain("One signal is enough");
     expect(text).toContain("When to Write");
   });
+
+  test("includes review-discussion prediction guidance", () => {
+    const text = claudeInstructions();
+    expect(text).toContain("Code review discussions are high-signal prediction material");
+    expect(text).toContain("review threshold, severity, tone, evidence, scope, false positives");
+  });
 });
 
 describe("CLAUDE_CONFIG_DIR override", () => {
@@ -583,6 +589,25 @@ describe("cursorInstructions content", () => {
     expect(text).toContain("Session Startup");
     expect(text).toContain("user preferences and personality");
     expect(text).toContain("project architecture and conventions");
+  });
+
+  test("includes review-discussion prediction guidance", () => {
+    const text = cursorInstructions();
+    expect(text).toContain("Code review discussions are high-signal prediction material");
+    expect(text).toContain("review threshold, severity, tone, evidence, scope, false positives");
+  });
+});
+
+describe("systemPrompt content", () => {
+  test("includes review-discussion prediction guidance", () => {
+    const text = systemPrompt("test/repo");
+    expect(text).toContain("Code review discussions are high-signal prediction material");
+    expect(text).toContain("review threshold, severity, tone, evidence, scope, false positives");
+  });
+
+  test("does not use deprecated instructional-design wording for writing skills", () => {
+    const text = systemPrompt("test/repo") + claudeInstructions() + cursorInstructions();
+    expect(text).not.toContain("instructional-design scaffolding");
   });
 });
 

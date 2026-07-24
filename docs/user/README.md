@@ -174,7 +174,7 @@ Six specialist review lenses, each a self-contained static-analysis pass:
 | `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth wall breaks, em dashes, hedging, filler. |
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of the code's behavior? |
 | `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
-| `thatch-review-synthesizer` | Verifies and synthesizes findings from multiple specialists into a single deduplicated, severity-grouped report. |
+| `thatch-review-synthesizer` | Verifies and synthesizes findings from multiple specialists into a report that starts with workflow changes, then deduplicated severity-grouped findings. |
 | `thatch-review-context` | Gathers project context (PR descriptions, git archaeology, ticket references, memory) before a review. Prevents false positives about intentionally deferred work. |
 | `thatch-workflow-research` | Researches code workflows and features affected by a change or planned change. Reads code flows, comments, git history, and produces a guide for reviewers or planners. |
 | `thatch-change-walkthrough` | Explains a change to the user as a teaching walkthrough: researches each affected workflow at the merge-base, teaches current behavior, then overlays the modifications with file:line citations. |
@@ -184,15 +184,15 @@ Six specialist review lenses, each a self-contained static-analysis pass:
 
 | Skill | Purpose |
 |-------|---------|
-| `pr-description` | Drafts PR descriptions using instructional-design scaffolding (SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES) with bold and italic emphasis for scanning. |
-| `ticket-description` | Drafts ticket or issue descriptions (Linear or Jira) using instructional-design scaffolding with bold and italic emphasis for scanning. |
+| `pr-description` | Drafts PR descriptions with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, project-context research, clarity checks, and bold/italic emphasis for scanning. |
+| `ticket-description` | Drafts ticket or issue descriptions (Linear or Jira) with clear sections, project-context research, clarity checks, and bold/italic emphasis for scanning. |
 | `split-overlarge-pr` | Splits already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main. |
 
 ### opencode-only skills
 
 | Skill | Purpose |
 |-------|---------|
-| `thatch-code-review` | Multi-agent review coordinator. Dispatches parallel sub-agents for triage, decomposition, specialist fan-out, and synthesis. Not available in Claude Code (requires sub-agent support). |
+| `thatch-code-review` | Multi-agent review coordinator. Dispatches parallel sub-agents for triage, decomposition, specialist fan-out, and synthesis with a workflow-change preface. Not available in Claude Code (requires sub-agent support). |
 
 ### Host availability
 
@@ -222,7 +222,8 @@ Load thatch-code-review and review branch feature-x.
 ```
 
 The coordinator will triage the change, dispatch parallel sub-agents (one per
-specialist lens), and synthesize a final report.
+specialist lens), and synthesize a final report. The report starts with the
+workflow-level changes so the findings have context.
 
 For a **full review on Claude Code** (or without the coordinator), run each
 specialist in sequence, then synthesize:

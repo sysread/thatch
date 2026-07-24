@@ -46,8 +46,8 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-session-reflection\` — record what you learned at end of session.
 - \`thatch-fact-extractor\` — extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
 - \`thatch-dedup-classifier\` — resolve duplicate memory pairs from \`thatch_find_duplicates\`.
-- \`pr-description\` — draft a PR description using instructional-design scaffolding with bold and italic emphasis on the phrases that carry the meaning, so a reviewer skimming only the emphasized fragments still gets the story.
-- \`ticket-description\` — draft a ticket, issue, or work item (Linear or Jira) using instructional-design scaffolding with bold and italic emphasis for scanning.
+- \`pr-description\` — draft a PR description with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis on the phrases that carry the meaning.
+- \`ticket-description\` — draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
 - \`split-overlarge-pr\` — split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
 
 ## When to Write
@@ -84,6 +84,14 @@ about their preferences:
 1. Use thatch_prediction_query to check for existing matchers and predictions
 2. Use thatch_prediction_update to create, reinforce, or weaken a prediction
 3. Use thatch_prediction_delete to remove a prediction created in error
+
+Code review discussions are high-signal prediction material. When working
+through potential review comments with the user, watch for preferences about
+review threshold, severity, tone, evidence, scope, false positives, or what is
+worth posting. This applies whether the user invoked a review skill, is
+reviewing your changes, or asked you to review their changes or another LLM's
+changes. Before creating a new prediction, query for an existing one and
+reinforce or adjust it when possible.
 
 ## What to Store
 
@@ -212,8 +220,8 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-session-reflection\` — record what you learned at end of session.
 - \`thatch-fact-extractor\` — extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
 - \`thatch-dedup-classifier\` — resolve duplicate memory pairs from \`find_duplicates\`.
-- \`pr-description\` — draft a PR description using instructional-design scaffolding with bold and italic emphasis on the phrases that carry the meaning, so a reviewer skimming only the emphasized fragments still gets the story.
-- \`ticket-description\` — draft a ticket, issue, or work item (Linear or Jira) using instructional-design scaffolding with bold and italic emphasis for scanning.
+- \`pr-description\` — draft a PR description with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis on the phrases that carry the meaning.
+- \`ticket-description\` — draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
 - \`split-overlarge-pr\` — split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
 
 ## When to Write
@@ -250,6 +258,14 @@ about their preferences:
 1. Use prediction_query to check for existing matchers and predictions
 2. Use prediction_update to create, reinforce, or weaken a prediction
 3. Use prediction_delete to remove a prediction created in error
+
+Code review discussions are high-signal prediction material. When working
+through potential review comments with the user, watch for preferences about
+review threshold, severity, tone, evidence, scope, false positives, or what is
+worth posting. This applies whether the user invoked a review skill, is
+reviewing your changes, or asked you to review their changes or another LLM's
+changes. Before creating a new prediction, query for an existing one and
+reinforce or adjust it when possible.
 
 ## What to Store
 
@@ -440,8 +456,8 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-session-reflection\` — record what you learned at end of session.
 - \`thatch-fact-extractor\` — extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
 - \`thatch-dedup-classifier\` — resolve duplicate memory pairs from \`find_duplicates\`.
-- \`pr-description\` — draft a PR description using instructional-design scaffolding with bold and italic emphasis on the phrases that carry the meaning, so a reviewer skimming only the emphasized fragments still gets the story.
-- \`ticket-description\` — draft a ticket, issue, or work item (Linear or Jira) using instructional-design scaffolding with bold and italic emphasis for scanning.
+- \`pr-description\` — draft a PR description with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis on the phrases that carry the meaning.
+- \`ticket-description\` — draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
 - \`split-overlarge-pr\` — split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
 
 ## When to Write
@@ -478,6 +494,14 @@ about their preferences:
 1. Use prediction_query to check for existing matchers and predictions
 2. Use prediction_update to create, reinforce, or weaken a prediction
 3. Use prediction_delete to remove a prediction created in error
+
+Code review discussions are high-signal prediction material. When working
+through potential review comments with the user, watch for preferences about
+review threshold, severity, tone, evidence, scope, false positives, or what is
+worth posting. This applies whether the user invoked a review skill, is
+reviewing your changes, or asked you to review their changes or another LLM's
+changes. Before creating a new prediction, query for an existing one and
+reinforce or adjust it when possible.
 
 ## What to Store
 
