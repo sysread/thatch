@@ -104,7 +104,15 @@ For the integration review unit (5+ points), dispatch a sub-agent focused on:
 
 ## Step 7: Synthesize
 
-After all sub-agents complete, load the thatch-review-synthesizer skill to verify findings, deduplicate across specialists, classify (CONFIRMED/REJECTED/UNVERIFIABLE), and produce the final severity-grouped report.
+After all sub-agents complete, load the thatch-review-synthesizer skill to verify findings, deduplicate across specialists, classify (CONFIRMED/REJECTED/UNVERIFIABLE), and produce the final report.
+
+Pass the synthesizer:
+- The project context brief from Step 2.
+- The workflow guide from Step 3.
+- The specialist findings.
+- The prior-comments register when present.
+
+The final user-facing report MUST begin with a concise explanation of the workflow(s) this PR changes before listing findings. Use one `### Workflow changes` section, with one subheading per affected workflow when there are multiple. Use the before/now walkthrough shape from the pr-description skill: numbered step = existing behavior; `NOW` sub-bullet = what the PR changes; `N/A` for new stages. This gives the user a map of the change before the findings. Keep it short: 3-6 steps per workflow.
 
 Confirmed LOW findings are mandatory in the final report, including mechanical findings (pedantic, no-slop, breadcrumbs, docs, naming, style, comments). Do not omit them for being non-functional.
 
@@ -117,7 +125,7 @@ Alternatively, perform the synthesis yourself:
 4. Classify each as CONFIRMED, REJECTED, or UNVERIFIABLE. For behavioral findings, apply citation verification, reachability, and intent verification. For mechanical findings, verify the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy.
 5. Cross-reference against the prior-comments register if one was built in Step 2: tag matching findings `Provenance: previously identified by @author, PR #N, DATE` and produce the `### Previously identified findings` appendix per the synthesizer skill.
 6. Calibrate severity (BLOCKING > HIGH > MEDIUM > LOW) based on your verification.
-7. Produce a final report grouped by severity, with coverage gaps noted. Include every confirmed LOW finding.
+7. Produce a final report with a workflow-change preface, findings grouped by severity, and coverage gaps noted. Include every confirmed LOW finding.
 
 ## Specialist briefing template
 

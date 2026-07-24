@@ -1,9 +1,19 @@
 ---
 name: ticket-description
-description: Draft a ticket description using instructional-design scaffolding (SYNOPSIS / PROBLEM / BACKGROUND / PROPOSED APPROACH / ACCEPTANCE CRITERIA / RELEASE PLAN / VALIDATION / DEPENDENCIES / NOTES) with bold and italic emphasis on the phrases that carry the meaning, so a reader skimming only the emphasized fragments still gets the story. Use when the user asks you to write, draft, or file a ticket, issue, or work item (Linear or Jira). Do NOT use for PR descriptions (use pr-description), commit messages, or design docs.
+description: Draft a ticket description (SYNOPSIS / PROBLEM / BACKGROUND / PROPOSED APPROACH / ACCEPTANCE CRITERIA / RELEASE PLAN / VALIDATION / DEPENDENCIES / NOTES) with bold and italic emphasis on the phrases that carry the meaning, so a reader skimming only the emphasized fragments still gets the story. Use when the user asks you to write, draft, or file a ticket, issue, or work item (Linear or Jira). Do NOT use for PR descriptions (use pr-description), commit messages, or design docs.
 ---
 
 # Writing ticket descriptions
+
+## Core principle
+
+Write for humans. Not for LLMs. Not to impress. Not to pad.
+
+Every sentence earns its place or gets cut. Plain English over jargon. Concrete over abstract. Short over long. A ticket a human reads once and can start work from beats one that looks thorough but says nothing.
+
+If a word does not help a human understand the work, it is dead weight. If a sentence restates the previous one, one is redundant. If a phrase sounds smart but you cannot explain it in simpler words, it is a buzzword. Cut, replace, or simplify.
+
+Target a 7th-grade reading level. Not because the reader is dumb, but because plain prose is faster to read and harder to misread. Short sentences, common words, one idea each. The concepts stay technical; the language stays simple.
 
 ## The reader
 
@@ -15,7 +25,7 @@ The second reader is an **implementer** picking up the ticket cold. They need to
 
 The description is not a design doc. It is a specification that makes work startable. A design doc (when one is warranted) may live in repo docs, Linear, Notion, Archbee, Google Docs, Figma, or another system; link it from the ticket instead of inlining it. The ticket's job is to define the problem, propose a direction, and set the gates that define "done."
 
-This is **instructional design**, not documentation. Each section has a cognitive goal:
+Each section has one job:
 - SYNOPSIS: orient to the class of work and affected area.
 - PROBLEM: make the reader agree there is something worth solving.
 - BACKGROUND: give the implementer the context they would otherwise re-derive.
@@ -26,7 +36,7 @@ This is **instructional design**, not documentation. Each section has a cognitiv
 - DEPENDENCIES: explain ordering constraints, not just list them.
 - NOTES: flag scope limits, intentional non-goals, and things that look in-scope but aren't.
 
-Layer the knowledge so each section builds on the previous one. The reader should never encounter a concept in section N that was not introduced in section N-1.
+Each section builds on the previous one. The reader should never encounter a concept in section N that was not introduced in section N-1.
 
 ## Structure
 
@@ -119,7 +129,7 @@ Only when prod verification is non-trivial. A pure refactor with good tests does
 
 ### DEPENDENCIES (conditional)
 
-Blocking relationships and ordering constraints. "Blocked by PLAT-126" is the tracker field; the *why* belongs here: "PLAT-125 partitions by location_fingerprint, so it can only run after backfill completes (count == 0), not merely after PLAT-124 merges." That kind of nuance is what prevents a well-intentioned lead from reordering the queue.
+Blocking relationships and ordering constraints. "Blocked by PLAT-126" is the tracker field; the _why_ belongs here: "PLAT-125 partitions by location_fingerprint, so it can only run after backfill completes (count == 0), not merely after PLAT-124 merges." That kind of nuance is what prevents a well-intentioned lead from reordering the queue.
 
 Distinguish hard data dependencies (cannot run until X completes) from soft dependencies (should run after X for cleanliness, but technically works independently). Say which kind it is.
 
@@ -141,7 +151,7 @@ If there are no notes, omit the section entirely. Do not emit an empty `## NOTES
 
 ## Emphasis for scanning: bold and italics
 
-Bold and italicize the "save points" - the phrases that carry meaning - not whole sentences. A reader who skims *only* the bold and italic fragments should get the story; full prose is for when they want detail.
+Bold and italicize the "save points" - the phrases that carry meaning - not whole sentences. A reader who skims _only_ the bold and italic fragments should get the story; full prose is for when they want detail.
 
 **What to bold:** phrases that name the **work itself** - the component, the failure mode, the mechanism, the behavior the ticket asks for. These are the nouns and verbs that would appear in a diff of the design, not a diff of the code. "**circular wait** in the **KeyManager**" names the failure mode and the component. "**load key material outside the mutex**" names the mechanism.
 
@@ -177,10 +187,11 @@ These are hard rules, not suggestions.
 5. **No authoring-sequence narration.** Never describe the order you discovered things in, which draft had what, or what a later revision will add. Describe the ticket as it stands.
 6. **Italics for orientation asides.** Use `_italics_` for a one-phrase aside that orients the reader: _This is where the deadlock lived_. Not for emphasis.
 7. **Plain ASCII only.** No smart quotes, smart apostrophes, em dashes, en dashes, ellipsis glyphs, or arrow glyphs. Use plain hyphens (sparingly) for asides; semicolons are often better.
-8. **No buzzwordy abstractions.** If a phrase sounds like it is trying to sound smart, cut or replace it. Name the code and behavior directly. "identity contract" -> "the struct field that identifies the owner". "canonical hash" -> "the SHA-256 we compute on ingestion".
-9. **Prescriptive voice.** The ticket proposes work that hasn't happened yet. Use "the fix should...", "the implementation must...", "the worker should..." not "this PR moves..." or "the code now...". The PR description uses descriptive voice; the ticket uses prescriptive.
-10. **Default to a numbered outline for steps.** A flat list, with an occasional inline branch ("if the path is not in the registry, return a 404; otherwise continue to step 6"), covers almost every workflow. The bar for a diagram or Mermaid chart is high: reach for one only when the flow genuinely needs two dimensions to read - a graph network with many nodes and edges, or a workflow that recurses, forks, and rejoins in ways a linear outline cannot follow without constant back-references. If the flow is one or two levels deep and does not recurse or redirect, an outline is clearer and cheaper to maintain than a diagram.
-11. **Avoid loaded language.** Use neutral, current terminology unless the repo's established name is different. Prefer allowlist/blocklist over whitelist/blacklist, primary/replica over master/slave, and precise role names over moralized labels like "bad" or "evil".
+8. **No buzzwordy abstractions.** If a phrase sounds like it is trying to sound smart, cut or replace it. Name the code and behavior directly. "identity contract" -> "the struct field that identifies the owner". "canonical hash" -> "the SHA-256 we compute on ingestion". "leverage" -> "use". "utilize" -> "use". "facilitate" -> "help". If you cannot say what a phrase means in plain English, it does not belong. Buzzwords are the number-one signal that an AI wrote the ticket; do not send that signal.
+9. **Prefer specific terms over ambiguous ones.** If a word can mean more than one thing in this ticket, qualify it or replace it with the specific behavior. Do not rely on the reader guessing the local meaning. Ordinary words can be ambiguous when the code gives them a special role: claim, owner, active, current, generation, repair, coalesce, terminal, source, scope, sync, publish, resolve. "Publish the value" is vague. "Persist the value in the database so the UI can display it" is specific.
+10. **Prescriptive voice.** The ticket proposes work that hasn't happened yet. Use "the fix should...", "the implementation must...", "the worker should..." not "this PR moves..." or "the code now...". The PR description uses descriptive voice; the ticket uses prescriptive.
+11. **Default to a numbered outline for steps.** A flat list, with an occasional inline branch ("if the path is not in the registry, return a 404; otherwise continue to step 6"), covers almost every workflow. The bar for a diagram or Mermaid chart is high: reach for one only when the flow genuinely needs two dimensions to read - a graph network with many nodes and edges, or a workflow that recurses, forks, and rejoins in ways a linear outline cannot follow without constant back-references. If the flow is one or two levels deep and does not recurse or redirect, an outline is clearer and cheaper to maintain than a diagram.
+12. **Avoid loaded language.** Use neutral, current terminology unless the repo's established name is different. Prefer allowlist/blocklist over whitelist/blacklist, primary/replica over master/slave, and precise role names over moralized labels like "bad" or "evil".
 
 ## Length and style
 
@@ -206,6 +217,23 @@ Comparison process:
 4. If the ticket is a follow-up to a merged PR, check the merged code to confirm the follow-up is still needed.
 
 When the codebase contradicts the ticket, flag the discrepancy to the user before drafting. Do not silently paper over the gap.
+
+## Project context for planned work
+
+Some tickets are slices of a larger project. The code alone may not explain the project terms, ordering constraints, or prior decisions the implementer needs. Before drafting, read enough context to make the ticket startable for an engineer new to this area.
+
+Read project context when the request, existing ticket, code comments, branch name, prior PRs, docs, or discussion mentions:
+- a parent ticket, related PR, follow-up, or multi-ticket project;
+- a deferred part of the design;
+- an upstream dependency;
+- a project-specific term whose local meaning is not obvious from the code touched by this ticket;
+- a roadmap label, subsystem nickname, architecture slogan, or branch-local name.
+
+Use available source material: linked tickets, linked PRs, nearby docs, code comments, commit messages, and project memory. Build a private term map: term -> plain behavior -> source. Do not dump the map into the ticket. Use it to write the shortest useful BACKGROUND.
+
+If a term or dependency controls the work and you cannot resolve it from available context, stop and ask the user. Do not guess. Do not write around the missing definition with vaguer words.
+
+Put project context in BACKGROUND only when it helps the implementer start work or helps a lead schedule it correctly. Omit generic backstory.
 
 ## Search before create
 
@@ -361,20 +389,22 @@ That reading alone conveys the shape, scope, and gates of all three tickets.
 1. **Gather**: read the code the ticket references. Check `git log` for recent changes to the same files. Identify the problem, the prior work, and the proposed direction.
 2. **Search before create**: search Linear/Jira for likely duplicate tickets. If one exists, surface it before drafting or filing.
 3. **Codebase comparison**: verify the problem still exists in the current code. If it was already fixed, tell the user. If it was partially mitigated, note the mitigation.
-4. **Draft PROBLEM first**, in one breath, without looking at code. If you cannot state the harm in three sentences, you do not understand the problem yet. Go back and read.
-5. **Write BACKGROUND** (if needed): what prior work led here, what was done, what was left behind.
-6. **Write PROPOSED APPROACH**: the compass heading, not the map. Prescriptive voice.
-7. **Write ACCEPTANCE CRITERIA**: observable, testable bullets. Name the test shape where relevant.
-8. **Write RELEASE PLAN** (if needed): flags, ordering, rollback.
-9. **Write VALIDATION** (if needed): monitoring, signals, smoke tests.
-10. **Write DEPENDENCIES** (if needed): what blocks this, what this blocks, and why.
-11. **Write SYNOPSIS last** - it is a compression of PROBLEM + the core approach.
-12. **Bold and italicize the save points** in the allowed locations. Bold phrases that name the work (components, mechanisms, behaviors). Italicize phrases that orient to significance (conclusions, payoffs), at most one per paragraph. Apply the scan check.
-13. **Add NOTES** for non-goals, declined alternatives, and scope limits. Use `## NOTES` header. Omit if empty.
-14. **Suggest Linear labels** when the ticket is being filed in Linear. Use obvious stable labels only; do not guess initiative labels.
-15. **Verify links**: check repo file links, external docs, tickets, PRs, and design artifacts where tooling allows. Do not claim an unverified link was verified.
-16. **Verify prose style**: check each rule in Prose style. Cut design-narration, authoring-sequence, and buzzwordy abstractions. Verify plain ASCII. Verify prescriptive voice (not descriptive). Verify first-use definitions for subsystem jargon in BACKGROUND or PROBLEM. Verify plain English nouns (no code-domain nouns in prose). Verify conclusion-first in PROBLEM. Verify NOTES bullets are either short pointers or self-contained.
-17. **Verify length**: if the body exceeds what the work's conceptual size warrants, cut until each line earns its place. If PROPOSED APPROACH dominates, consider splitting into a design doc plus ticket.
+4. **Read project context for planned work**: if the ticket is part of a larger project, depends on prior work, uses unexplained project terms, or has scheduling dependencies, read the linked tickets, PRs, docs, comments, and memory before drafting. Build a private term map. If a term or dependency controls the work and you cannot resolve it, ask the user.
+5. **Draft PROBLEM first**, in one breath, without looking at code. If you cannot state the harm in three sentences, you do not understand the problem yet. Go back and read.
+6. **Write BACKGROUND** (if needed): what prior work led here, what was done, what was left behind, and what project context an engineer new to this area needs to start.
+7. **Write PROPOSED APPROACH**: the compass heading, not the map. Prescriptive voice.
+8. **Write ACCEPTANCE CRITERIA**: observable, testable bullets. Name the test shape where relevant.
+9. **Write RELEASE PLAN** (if needed): flags, ordering, rollback.
+10. **Write VALIDATION** (if needed): monitoring, signals, smoke tests.
+11. **Write DEPENDENCIES** (if needed): what blocks this, what this blocks, and why.
+12. **Write SYNOPSIS last** - it is a compression of PROBLEM + the core approach.
+13. **Bold and italicize the save points** in the allowed locations. Bold phrases that name the work (components, mechanisms, behaviors). Italicize phrases that orient to significance (conclusions, payoffs), at most one per paragraph. Apply the scan check.
+14. **Add NOTES** for non-goals, declined alternatives, and scope limits. Use `## NOTES` header. Omit if empty.
+15. **Suggest Linear labels** when the ticket is being filed in Linear. Use obvious stable labels only; do not guess initiative labels.
+16. **Verify links**: check repo file links, external docs, tickets, PRs, and design artifacts where tooling allows. Do not claim an unverified link was verified.
+17. **Verify prose style and core principle**: check each rule in Prose style. Cut design-narration, authoring-sequence, and buzzwordy abstractions. Verify plain ASCII. Verify prescriptive voice (not descriptive). Verify first-use definitions for subsystem jargon in BACKGROUND or PROBLEM. Verify plain English nouns (no code-domain nouns in prose). Verify conclusion-first in PROBLEM. Verify NOTES bullets are either short pointers or self-contained.
+18. **Clarity pass**: read the draft as a cold lead skimming a backlog, then as an implementer picking up the work cold. Rewrite before returning it; do not tell the user you performed this pass. Check: does every project-specific term get plain-English meaning before or with the label? Are ambiguous terms qualified or replaced with specific behavior? Does every process word name object/action/effect? Does every contrast name current and proposed behavior? Does every causal sentence show the middle step? Did you preserve connective tissue instead of compressing meaning into noun stacks? If the draft got longer, cut a lower-value claim instead of compressing a high-value one.
+19. **Verify length**: if the body exceeds what the work's conceptual size warrants, cut until each line earns its place. If PROPOSED APPROACH dominates, consider splitting into a design doc plus ticket.
 
 ## Anti-patterns
 

@@ -90,11 +90,36 @@ You MUST produce the full report structure below. Do not simplify or omit sectio
 
 Confirmed LOW findings are mandatory. Do not summarize them away or omit them for being non-functional. Pedantic, no-slop, breadcrumbs, docs, naming, style, and comment findings are first-class review findings when confirmed. Group them under LOW, but include every one.
 
+The report is user-facing. Start by teaching the changed workflows before listing findings. Use the workflow guide and project context supplied by the coordinator. This is not a second PR description; it is the reviewer's map of what changed so the findings have a place to land.
+
+For each affected workflow, use the same before/now shape as PR descriptions:
+- Numbered step: existing behavior or current workflow stage.
+- `NOW` sub-bullet: what this PR changes at that stage.
+- `N/A` as the numbered item for a new stage.
+
+Keep this section short. Aim for 3-6 steps per workflow. If there are multiple affected workflows, use one subheading per workflow. If the change is small and no workflow changed, write "None — no workflow-level behavior changed".
+
+Apply the same clarity rules as the writing skills: prefer concrete terms over ambiguous ones, translate project-private labels before using them, name object/action/effect for process words, show both sides of contrasts, and show causal middle steps. Do not copy code-comment shorthand when reader-facing behavior is clearer.
+
 ### Scope
+
 - Branch/range reviewed
 - Design context (if provided)
 
+### Workflow changes
+
+For each affected workflow:
+
+#### Workflow name
+
+1. **Existing behavior or stage** — one sentence describing how the code worked before this PR.
+   - **NOW** — _one sentence describing what this PR changes._
+
+2. **N/A**
+   - **NOW** — _one sentence describing a new stage this PR adds._
+
 ### Confirmed findings
+
 For each finding, grouped by severity (BLOCKING > HIGH > MEDIUM > LOW). Each finding MUST include all of these fields:
 1. **Severity** and **category** (from the specialist's taxonomy)
 2. **Source**: which specialist found it
@@ -105,12 +130,15 @@ For each finding, grouped by severity (BLOCKING > HIGH > MEDIUM > LOW). Each fin
 7. **Provenance**: branch-introduced or pre-existing. If the finding matches a prior review comment, append `; previously identified by @author, PR #N, DATE` to this field. For findings matching an `addressed` prior comment, also add a one-line note on why the finding persists so the user can investigate whether the prior resolution is incomplete or the issue has regressed.
 
 ### Rejected findings (appendix, brief)
+
 Findings you rejected and a one-line reason why. Include the specialist and location for each.
 
 ### Pre-existing bugs (appendix, brief)
+
 Findings you verified as real but pre-existing, with a one-line note on the issue and its potential impact.
 
 ### Previously identified findings (appendix — only when a prior-comments register was provided)
+
 List every entry from the prior-comments register here. For each entry, produce a one-block record:
 1. **Author and date** of the original comment
 2. **Original location** (`file:line @ commit-SHA`, or `summary review`) and **current HEAD location** (`file:line`) if locatable
@@ -125,4 +153,5 @@ List every entry from the prior-comments register here. For each entry, produce 
 If no prior-comments register was provided (local-branch review or first round on the PR/MR), state `None — no prior review comments to cross-reference` and move on.
 
 ### Coverage gaps
+
 Note which files or areas were NOT covered by any specialist.

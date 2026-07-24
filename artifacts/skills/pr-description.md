@@ -1,25 +1,35 @@
 ---
 name: pr-description
-description: Draft a PR description using instructional-design scaffolding (SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES) with bold and italic emphasis on the phrases that carry the meaning, so a reviewer skimming only the emphasized fragments still gets the story. Use when the user asks you to write, draft, or update a PR description or PR body, or when running `gh pr create` and no body has been supplied. Do NOT use for commit messages, release notes, or changelog entries.
+description: Draft a PR description (SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES) with bold and italic emphasis on the phrases that carry the meaning, so a reviewer skimming only the emphasized fragments still gets the story. Use when the user asks you to write, draft, or update a PR description or PR body, or when running `gh pr create` and no body has been supplied. Do NOT use for commit messages, release notes, or changelog entries.
 ---
 
 # Writing PR descriptions
+
+## Core principle
+
+Write for humans. Not for LLMs. Not to impress. Not to pad.
+
+Every sentence earns its place or gets cut. Plain English over jargon. Concrete over abstract. Short over long. A description a human reads and understands beats one that looks thorough but says nothing.
+
+If a word does not help a human understand the diff, it is dead weight. If a sentence restates the previous one, one is redundant. If a phrase sounds smart but you cannot explain it in simpler words, it is a buzzword. Cut, replace, or simplify.
+
+Target a 7th-grade reading level. Not because the reader is dumb, but because plain prose is faster to read and harder to misread. Short sentences, common words, one idea each. The concepts stay technical; the language stays simple.
 
 ## The reader
 
 You are writing for a senior engineer who knows the tech stack and general engineering vocabulary but has never touched this feature, subsystem, or branch. They may not know subsystem-specific jargon or acronyms: a crypto term like DEK, an auth term like the SAML assertion, a scanning term like a ScanRun, a results term like the frozen materialized view. Their goal is to review the diff. Your goal is to raise their baseline understanding just enough that the diff becomes self-explanatory, without making them check out the branch or open a design doc.
 
-The description is not a design doc, changelog, or implementation journal. It is a scaffold that front-loads the context the reviewer needs, didactically layered so they absorb it in the order that makes the diff land.
+The description is not a design doc, changelog, or implementation journal. It is a short, structured brief that gives the reviewer the context they need, in the order that makes the diff make sense.
 
-This is **instructional design**, not documentation. Each section has a cognitive goal for the reader:
+Each section has one job:
 - SYNOPSIS: orient to the class of change and affected area.
 - PURPOSE: make the reader agree there is a problem worth solving.
 - DESCRIPTION: teach the system's current behavior and how this change alters it.
-- WALK-THROUGH (when needed): walk the reviewer through the changed workflow step by step.
+- WALK-THROUGH (when needed): walk the reviewer through the new workflow step by step.
 - NOTES: flag scope limits, intentional regressions, and things AI reviewers will misread.
 - robots.txt (when needed): dense, machine-addressed context that heads off recurring false positives from automated reviewers.
 
-Layer the knowledge so each section builds on the previous one. The reader should never encounter a concept in layer N that was not introduced in layer N-1.
+Each section builds on the previous one. The reader should never encounter a concept in section N that was not introduced in section N-1.
 
 AI-authored PRs tend to be large. The description is the reader's lever against that: a good one lets them say "small description, easy to scan" and then read the code critically. A bad one makes them skip the description, wade through the diff cold, and miss intent.
 
@@ -29,13 +39,13 @@ Sections, in order: SYNOPSIS, PURPOSE, DESCRIPTION, WALK-THROUGH (conditional), 
 
 **SYNOPSIS, PURPOSE, and DESCRIPTION are mandatory** - even for a one-line, single-concern change. A tiny PR gets short sections, not fewer sections. WALK-THROUGH and NOTES appear only when warranted; omit them when empty. robots.txt appears only after an automated reviewer has produced a false positive worth heading off (see its section); it is always the final section.
 
-**Scale the body to the diff's conceptual size**, not its structure's capacity. A 2-file, single-concern change (add a flag, guard a branch, rename a symbol, bump a constant) is a few lines per section. SYNOPSIS one line, PURPOSE one to three, DESCRIPTION one short paragraph, NOTES if needed. The layered DESCRIPTION machinery below is for changes with real before/after mechanics to teach; when the diff is self-evident once you know the intent, collapse it. If your draft for a small change runs past ~15 lines of body, you are padding. Cut until each remaining line earns its place. Most of this skill's apparatus exists to tame large PRs; applying it wholesale to a small one produces exactly the bloat the skill warns against.
+**Scale the body to the diff's conceptual size**, not its structure's capacity. A 2-file, single-concern change (add a flag, guard a branch, rename a symbol, bump a constant) is a few lines per section. SYNOPSIS one line, PURPOSE one to three, DESCRIPTION one short paragraph, NOTES if needed. The layered DESCRIPTION machinery below is for changes with real before/after mechanics to teach; when the diff is self-evident once you know the intent, collapse it. If your draft for a small change runs past ~15 lines of body, you are padding. Cut until each remaining line earns its place. Most of this skill's guidance exists to tame large PRs; applying it wholesale to a small one produces exactly the bloat the skill warns against.
 
 ### SYNOPSIS
 
 One to two lines. Orient only. The reader should come away knowing the class of change (bugfix, refactor, feature, revert, infra, cleanup) and the affected area.
 
-SYNOPSIS may use subsystem-specific terms as scan anchors (that is its job). It does not define them. The first teaching section (PURPOSE or DESCRIPTION) picks up that burden. An outsider who does not know the terms should still be able to orient from the plain-English nouns around them.
+SYNOPSIS may use subsystem-specific terms as scan anchors (that is its job). It does not define them. The first teaching section (PURPOSE or DESCRIPTION) picks up that burden. An outsider who does not know the terms should still be able to orient from the plain-English nouns around them. Do not force all project context into SYNOPSIS; it is a TLDR, not the teaching section.
 
 Include a ticket link if one exists. Format: `Ticket: [PLAT-139](https://<host>/browse/PLAT-139)` on its own line directly under the SYNOPSIS text.
 
@@ -77,9 +87,9 @@ How much structure DESCRIPTION needs depends on the change's conceptual size.
 2. **What this PR changes.** For each decision point named in layer 1, say what it does now. Keep parallelism: same names, same order. The reader's mental model from layer 1 is the load-bearing structure here.
 3. **Why that fixes PURPOSE.** One or two sentences linking the mechanics in layer 2 to the harm named in PURPOSE. If the fix has limits (doesn't cover case Z, follow-up needed), call them out here in one line.
 
-The didactic spine: PURPOSE names a harm, layer 1 names the mechanism, layer 2 changes the mechanism, layer 3 shows the harm is gone. Names carry through. The reader builds one model, not four.
+The structure is simple: PURPOSE names a harm, layer 1 names the mechanism, layer 2 changes the mechanism, layer 3 shows the harm is gone. Names carry through. The reader builds one model, not four.
 
-**Large change with a workflow or lifecycle**: keep DESCRIPTION to root-cause and design concept only (what is wrong, what is the approach). Use a separate WALK-THROUGH section for the step-by-step mechanics.
+**Large change with a workflow or lifecycle**: keep DESCRIPTION to root-cause and design concept only (what is wrong, what is the approach). Use a separate WALK-THROUGH section for the step-by-step mechanics of the new flow.
 
 Organize by **workflow or data-flow**, not by touched symbol. A bullet list of API changes reads as disconnected touchpoints. A walkthrough following one object through the system reads as a story. If the change touches a request lifecycle, follow the request. If it touches a data pipeline, follow the data.
 
@@ -87,22 +97,44 @@ Organize by **workflow or data-flow**, not by touched symbol. A bullet list of A
 
 When the change has a sequence of steps - a lifecycle, a workflow, a data flow through the system - split the mechanics into a numbered WALK-THROUGH. Keep DESCRIPTION to root-cause + design concept only.
 
-Default to a numbered outline. A flat list of steps, with an occasional inline branch ("if the path is not in the registry, return a 404; otherwise continue to step 6"), covers almost every workflow. The bar for a diagram or Mermaid chart is high: reach for one only when the flow genuinely needs two dimensions to read - a graph network with many nodes and edges, or a workflow that recurses, forks, and rejoins in ways a linear outline cannot follow without constant back-references. If the flow is one or two levels deep and does not recurse or redirect, an outline is clearer and cheaper to maintain than a diagram.
+Each numbered step describes the **existing behavior** at that stage of the workflow - what the reviewer already knows or can see in the current code. A sub-bullet below it describes what this PR changes, prefixed with **NOW**. For stages that are entirely new (no existing behavior to describe), use `N/A` as the numbered step.
 
-Each numbered step states what changed at that stage of the workflow. Bold the **key phrase** that identifies the step (the scan anchor). The rest of the step is plain prose.
+This before/now pattern lets the reviewer anchor on what they already understand, then see the delta right below it. They never have to reconstruct the current state from inversions.
+
+If the PR changes more than one workflow, split WALK-THROUGH into one subheading per workflow. Do not force unrelated processes into one numbered list. Each workflow gets its own 3-6 step before/now list. Keep subheads concrete: `### Request validation`, `### Background retry`, `### Finalization`, not `### Backend changes`.
 
 Format:
 
-1. **Request enters the handler** - the new guard checks the tenant scope before dispatching.
-2. **Validation runs** - the validator now rejects empty payloads that previously passed through.
-3. **Database write** - the write happens inside the transaction boundary, not after it.
+```md
+### Workflow name
+
+1. **Existing behavior at this stage** - one sentence describing how the code works today.
+   - **NOW** - _what this PR changes about this stage._
+
+2. **N/A**
+   - **NOW** - _a new stage that did not exist before._
+```
+
+Default to a numbered outline. A flat list of steps, with an occasional inline branch ("if the path is not in the registry, return a 404; otherwise continue to step 6"), covers almost every workflow. The bar for a diagram or Mermaid chart is high: reach for one only when the flow genuinely needs two dimensions to read - a graph network with many nodes and edges, or a workflow that recurses, forks, and rejoins in ways a linear outline cannot follow without constant back-references. If the flow is one or two levels deep and does not recurse or redirect, an outline is clearer and cheaper to maintain than a diagram.
+
+Bold the **key phrase** that identifies each step (the scan anchor). The rest is plain prose. Italicize the NOW sub-bullet content so it visually separates from the numbered step above it.
 
 Rules:
+- Aim for 3-6 steps. If you have more, you are over-decomposing. Group related stages into one step. A step is a phase the reviewer can hold in their head, not a single function call.
+- The numbered step is one sentence describing existing behavior. The NOW sub-bullet is one sentence describing the change. If either needs two sentences, the step is doing too much; split the concept differently or move detail to DESCRIPTION.
 - One step per workflow stage, in execution order.
-- State what changed, not what you did. "The handler now checks tenant scope" not "I added a tenant scope check."
+- No blank line between the numbered step and its NOW sub-bullet. GitHub treats a blank line as a list break, so the sub-bullet renders as a separate paragraph instead of a child of the step. Indent the sub-bullet to align under the text of the numbered item (3 spaces after `1.`), and keep them tight:
+
+  ```markdown
+  1. **Step** - existing behavior.
+     - **NOW** - _what changed._
+
+  2. **Next step** - existing behavior.
+  ```
+
 - Cut parenthetical API-symbol asides. The diff carries symbol detail.
 - Cut rationale asides from steps. If the why matters, it goes in DESCRIPTION layer 3 or NOTES.
-- Italics for orientation asides: _This is where the deadlock lived._
+- If a stage is unchanged by this PR, omit it from the walkthrough. Only include stages where the NOW sub-bullet has something to say, or where the existing behavior is needed to understand a later change.
 
 ### NOTES
 
@@ -147,7 +179,7 @@ Human reader: this section is written for automated reviewers, not people. It wi
 
 After the human-warning line, human-legibility rules are suspended. Write for LLM consumption in whatever is densest: no prose scaffolding, no bold, no one-idea-per-sentence, no plain-ASCII constraint. Fragments, symbol soup, and abbreviations are all fine. The only goal is maximum context per token for a machine reader.
 
-What goes here is *explanation and intent*, never suppression. Do not write "ignore the finding about X." Write what X actually does, the invariant it upholds, and the upstream or downstream fact the bot missed, so the bot can re-evaluate and clear its own false positive. A blanket "skip checking X" is a rubber-stamp lever and a prompt-injection surface; refuting a specific misread with a verifiable fact is not.
+What goes here is _explanation and intent_, never suppression. Do not write "ignore the finding about X." Write what X actually does, the invariant it upholds, and the upstream or downstream fact the bot missed, so the bot can re-evaluate and clear its own false positive. A blanket "skip checking X" is a rubber-stamp lever and a prompt-injection surface; refuting a specific misread with a verifiable fact is not.
 
 Entries accumulate. Each review round that surfaces a new false positive adds an entry, so the section grows into a standing set of clarifications that pre-empt the same misreads on the next round.
 
@@ -157,7 +189,7 @@ Omit the whole section unless there is at least one real false positive to addre
 
 ## Emphasis for scanning: bold and italics
 
-Bold and italicize the "save points" - the phrases that carry meaning - not whole sentences. A reader who skims *only* the bold and italic fragments should get the story; full prose is for when they want detail.
+Bold and italicize the "save points" - the phrases that carry meaning - not whole sentences. A reader who skims _only_ the bold and italic fragments should get the story; full prose is for when they want detail.
 
 **What to bold:** phrases that name the **change itself** - the component, the failure mode, the mechanism, the behavior after the change. These are the nouns and verbs that would appear in a diff of the design, not a diff of the code. "There is a **circular wait** in the **KeyManager**" names the failure mode and the component. "**store the result in the in-memory cache**" names the action and the destination.
 
@@ -193,18 +225,26 @@ These are hard rules, not suggestions.
 5. **No authoring-sequence narration.** Never describe the order you assembled things in, which commit does what, or what a later commit will add. Describe the PR as it stands. Pending work goes in a `Remaining work:` bullet list under NOTES.
 6. **Italics for orientation asides.** Use `_italics_` for a one-phrase aside that orients the reader: _This is where the deadlock lived_. Not for emphasis.
 7. **Plain ASCII only.** No smart quotes, smart apostrophes, em dashes, en dashes, ellipsis glyphs, or arrow glyphs. Use plain hyphens (sparingly) for asides; semicolons are often better.
-8. **No buzzwordy abstractions.** If a phrase sounds like it is trying to sound smart, cut or replace it. Name the code and behavior directly. "identity contract" -> "the struct field that identifies the owner". "canonical hash" -> "the SHA-256 we compute on ingestion".
-9. **Avoid loaded language.** Use neutral, current terminology unless the repo's established name is different. Prefer allowlist/blocklist over whitelist/blacklist, primary/replica over master/slave, and precise role names over moralized labels like "bad" or "evil".
-10. **No parenthetical API-symbol asides in WALK-THROUGH steps.** The diff carries symbol detail. If the reader needs the function name, they will find it in the diff.
+8. **No buzzwordy abstractions.** If a phrase sounds like it is trying to sound smart, cut or replace it. Name the code and behavior directly. "identity contract" -> "the struct field that identifies the owner". "canonical hash" -> "the SHA-256 we compute on ingestion". "shared seam" -> "shared helper" or "boundary" depending on what is meant. "leverage" -> "use". "utilize" -> "use". "facilitate" -> "help". If you cannot say what a phrase means in plain English, it does not belong. Buzzwords are the number-one signal that an AI wrote the description; do not send that signal.
+9. **Translate project-private labels.** If a phrase only makes sense to people already working on this project, replace it or explain it before using the label. This includes roadmap names, subsystem nicknames, architecture slogans, ticket shorthand, internal stack names, and labels invented by the current branch. Name the behavior first: what reads, writes, blocks, retries, ignores, repairs, or changes. The reader should understand the sentence before they learn the nickname.
+10. **Prefer concrete terms over ambiguous ones.** If a word can mean more than one thing in this PR, qualify it or replace it with the concrete behavior. Do not rely on the reader guessing the local meaning. Ordinary words can be ambiguous when the code gives them a special role: claim, owner, active, current, generation, repair, coalesce, terminal, source, scope, sync, publish, resolve. "Publish the value" is vague. "Persist the value in the database so the UI can display it" is concrete.
+11. **Clarity wins over compression.** Brevity means fewer claims, not denser claims. If a sentence needs hidden facts to make sense, split it. Keep the connective tissue that makes the idea parse on first read; cut a less important claim instead. Do not compress a missing explanation into a noun stack.
+12. **Explain operations before naming them.** Process words like refresh, repair, coalesce, project, projection, reconcile, classify, normalize, aggregate, route, resolve, hydrate, and fan out are not explanations by themselves. Name the object, the action, and the effect. "The cache refreshes in the background" is vague. "The worker waits up to 5 seconds, then reloads each stale cache key once" is clear. "Projection" is vague unless the sentence says what input is read and what output is computed or stored.
+13. **Do not inherit code wording blindly.** Code comments, function names, metrics labels, and existing PR text often use shorthand for people already in the area. Treat that wording as a clue, not prose to copy. If the code says "coalesce", the description may need "waits up to 5 seconds, then runs once for all requests seen during that window". Prefer the clearest reader-facing behavior over the code's nickname.
+14. **Name both sides of a contrast.** If the PR changes timing, ownership, source of truth, error handling, or ordering, state the old behavior and the new behavior close together. "Retries are synchronous now" is not enough. "The handler used to return before retrying failed webhook deliveries. It now retries once before returning, so callers see the final delivery result" gives the reader a reference point.
+15. **Show causal links.** If a sentence uses "so", "because", "therefore", "prevents", or "allows", make the middle step visible. "The importer uses stable IDs, so duplicate rows do not inflate counts" hides the mechanism. "Some rows arrive with both a display name and a stable ID. The importer counts the stable ID first and ignores the duplicate display-name row, so one item stays one count" explains the cause.
+16. **Avoid loaded language.** Use neutral, current terminology unless the repo's established name is different. Prefer allowlist/blocklist over whitelist/blacklist, primary/replica over master/slave, and precise role names over moralized labels like "bad" or "evil".
+17. **No parenthetical API-symbol asides in WALK-THROUGH steps.** The diff carries symbol detail. If the reader needs the function name, they will find it in the diff.
 
 ## Length and style
 
-Target: the reader can take in the whole description in under 60 seconds. Err on the shorter side.
+Target for most PRs: the reader can take in the whole description in under 60 seconds. Err on the shorter side.
 
 Scale the body to the diff's conceptual size:
 - Trivial 2-file change: ~15-line ceiling. SYNOPSIS one line, PURPOSE one to three, DESCRIPTION one short paragraph, NOTES if needed.
 - Moderate refactor: one tight paragraph or bullet set per section.
-- Large change with WALK-THROUGH: as long as the walkthrough needs, but no longer. Each step earns its place.
+- Large change with WALK-THROUGH: as long as the flow needs, but no longer. Aim for 3-6 steps; more means you are over-decomposing. Each step earns its place.
+- Enormous PR: accept that the reader may need more than 60 seconds. Keep the same rules, but spend the extra words on context, concrete behavior, and reviewer safety. Do not chase a tiny body by compressing meaning.
 
 If your draft for a small change runs past ~15 lines of body, you are padding. Cut until each remaining line earns its place.
 
@@ -233,6 +273,23 @@ Context process:
 Do not turn this into a code-review checklist. The PR description does not need to prove every acceptance criterion was met. It needs to explain how the PR as implemented relates to the plan reviewers saw in the ticket.
 
 When there is no ticket, skip this step. The rest of the process works the same; PURPOSE is seeded from the diff and commit messages instead.
+
+## Project context for stacked work
+
+Some PRs are slices of a larger project. The diff alone may not explain the project terms it uses. Before drafting, read enough context to define those terms correctly.
+
+Read project context when the PR body, ticket, branch name, commit messages, code comments, or diff mentions:
+- a related PR, parent PR, follow-up PR, or stacked branch;
+- a deferred piece of the design;
+- an upstream dependency;
+- a project-specific term whose local meaning is not obvious from the diff;
+- a roadmap label, subsystem nickname, architecture slogan, or branch-local name.
+
+Use available source material: linked tickets, linked PRs, nearby docs, code comments, commit messages, and project memory. Build a private term map: term -> plain behavior -> source. Do not dump the map into the PR description. Use it to write the shortest useful explanation.
+
+If a term controls the reader's understanding of the PR and you cannot resolve it from available context, stop and ask the user. Do not guess. Do not write around the missing definition with vaguer words.
+
+Do not add a `## CONTEXT` section by default. Put a one- or two-sentence context bridge in PURPOSE or DESCRIPTION only when the reviewer needs it to understand this PR's delta.
 
 ## Link verification
 
@@ -268,48 +325,61 @@ One line each. Fold into NOTES as bullets.
 
 ### Small change (collapsed DESCRIPTION)
 
-    ## SYNOPSIS
-    Narrow the **rotation advisory lock** to DB writes only; release across KMS I/O.
+```md
+## SYNOPSIS
+Narrow the **rotation advisory lock** to DB writes only; release across KMS I/O.
 
-    Ticket: [PLAT-412](https://example.atlassian.net/browse/PLAT-412)
+Ticket: [PLAT-412](https://example.atlassian.net/browse/PLAT-412)
 
-    ## PURPOSE
-    The secret rotation worker currently holds a Postgres advisory lock for the full rotation batch, including network I/O to KMS. A batch of 500 keys blocks all other rotations for ~3 min, stalling unrelated tenants sharing the worker pool.
+## PURPOSE
+The secret rotation worker currently holds a Postgres advisory lock for the full rotation batch, including network I/O to KMS. A batch of 500 keys blocks all other rotations for ~3 min, stalling unrelated tenants sharing the worker pool.
 
-    ## DESCRIPTION
-    `rotateBatch` acquires `pg_advisory_lock(rotation_ns)` once, then loops: read key, call KMS encrypt, write ciphertext, advance cursor. The lock spans the whole loop.
+## DESCRIPTION
+`rotateBatch` acquires `pg_advisory_lock(rotation_ns)` once, then loops: read key, call KMS encrypt, write ciphertext, advance cursor. The lock spans the whole loop.
 
-    This PR moves the lock acquisition inside the loop, around only the DB read+write. KMS calls run unlocked. Cursor advancement unchanged.
+This PR moves the lock acquisition inside the loop, around only the DB read+write. KMS calls run unlocked. Cursor advancement unchanged.
 
-    Net effect: concurrent rotations for other tenants no longer block on KMS I/O, removing the stall in PURPOSE. A crash mid-batch resumes from the cursor, which was already the behavior on any non-lock failure.
+Net effect: concurrent rotations for other tenants no longer block on KMS I/O, removing the stall in PURPOSE. A crash mid-batch resumes from the cursor, which was already the behavior on any non-lock failure.
 
-    ## NOTES
-    - **lock is no longer held across KMS** - intentional narrowing, not a regression.
+## NOTES
+- **lock is no longer held across KMS** - intentional narrowing, not a regression.
+```
 
 ### Large change (with WALK-THROUGH)
 
-    ## SYNOPSIS
-    Move **connection acquisition** inside the transaction boundary to prevent **lock leaks across retry loops**.
+```md
+## SYNOPSIS
+Move **connection acquisition** inside the transaction boundary to prevent **lock leaks across retry loops**.
 
-    Ticket: [PLAT-501](https://example.atlassian.net/browse/PLAT-501)
+Ticket: [PLAT-501](https://example.atlassian.net/browse/PLAT-501)
 
-    ## PURPOSE
-    The batch processor opens a database connection before entering the retry loop, then begins a transaction inside each retry attempt. If a retry fails and the loop continues, the connection is reused for the next attempt without releasing the transaction savepoint. This holds locks from the failed attempt across the retry, blocking concurrent writers.
+## PURPOSE
+The batch processor opens a database connection before entering the retry loop, then begins a transaction inside each retry attempt. If a retry fails and the loop continues, the connection is reused for the next attempt without releasing the transaction savepoint. This holds locks from the failed attempt across the retry, blocking concurrent writers.
 
-    ## DESCRIPTION
-    The root cause is a mismatch between connection lifecycle and transaction lifecycle. The connection is acquired once and held for the whole batch. The transaction is per-attempt but the savepoint release is skipped on error. The fix is to acquire a fresh connection per attempt, so each retry starts with a clean connection and a clean transaction boundary.
+## DESCRIPTION
+The root cause is a mismatch between connection lifecycle and transaction lifecycle. The connection is acquired once and held for the whole batch. The transaction is per-attempt but the savepoint release is skipped on error. The fix is to acquire a fresh connection per attempt, so each retry starts with a clean connection and a clean transaction boundary.
 
-    ## WALK-THROUGH
+## WALK-THROUGH
 
-    1. **Batch processor receives work item** - the handler now calls `acquireConnection` per attempt instead of once at the top.
-    2. **Connection enters transaction** - `BEGIN` is issued immediately after acquisition, so the connection and transaction lifecycles are aligned.
-    3. **Work executes** - the batch runs its queries inside the transaction. _This is where the lock leak originated: the old code held the connection open across retries, dragging the previous transaction's locks into the next attempt._
-    4. **Retry on failure** - on error, the connection is released and a new one is acquired for the next attempt. The savepoint from the failed attempt is gone with the connection.
-    5. **Commit on success** - the transaction commits and the connection is released. Clean exit.
+1. **Connection acquired once at the top** - the handler opens a database connection before entering the retry loop and holds it for the whole batch.
+   - **NOW** - _a fresh connection is acquired per attempt, so each retry starts with a clean connection._
 
-    ## NOTES
-    - **connection pool pressure** - acquiring per attempt increases pool churn under heavy retry load. Acceptable because retries are rare (observed <0.1% in prod).
-    - **PLAT-501 scope** - this addresses the lock leak. The retry backoff strategy described in the ticket is deferred to a follow-up.
+2. **Transaction begins inside each retry** - `BEGIN` is issued inside the retry loop, but the connection from the failed attempt is reused without releasing the savepoint.
+   - **NOW** - _`BEGIN` is issued immediately after acquisition, so the connection and transaction lifecycles are aligned._
+
+3. **Work executes inside the transaction** - the batch runs its queries, holding locks from the failed attempt across the retry.
+   - **NOW** - _the batch runs inside a clean transaction. The previous attempt's locks are gone with the released connection._
+
+4. **Retry reuses the connection** - on error, the loop continues with the same connection, dragging the previous transaction's locks into the next attempt.
+   - **NOW** - _on error, the connection is released and a new one is acquired. The savepoint from the failed attempt is gone with the connection._
+
+5. **Commit releases the connection** - on success, the transaction commits but the connection was already held for the whole batch.
+   - **NOW** - _the transaction commits and the connection is released. Clean exit per attempt._
+
+## NOTES
+- **connection pool pressure** - acquiring per attempt increases pool churn under heavy retry load. Acceptable because retries are rare (observed <0.1% in prod).
+- **PLAT-501 scope** - this addresses the lock leak. The retry backoff strategy described in the ticket is deferred to a follow-up.
+```
 
 Scan the bolds only:
 > rotation advisory lock ... KMS I/O ... connection acquisition ... lock leaks across retry loops ... Batch processor receives work item ... Connection enters transaction ... Work executes ... Retry on failure ... Commit on success ... lock is no longer held across KMS ... connection pool pressure ... PLAT-501 scope
@@ -320,17 +390,19 @@ That reading alone conveys the shape and scope of both changes. The prose is for
 
 1. **Gather**: `git log $MERGE_BASE..HEAD`, `git diff $MERGE_BASE..HEAD --stat`, commit messages, current branch name. Apply the ticket resolution order (SYNOPSIS section) - infer first, ask only if nothing matches. Skim the diff; identify decision points (components or branches where behavior differs before vs after). Identify the workflow or lifecycle path if the change has one.
 2. **Read ticket context**: if a ticket is resolved, fetch its description. Use it to seed PURPOSE and identify reviewer-relevant plan changes: revisions, pivots caused by code reality, discoveries after the ticket was written, and deferred or unnecessary ticket items.
-3. **Draft PURPOSE first**, in one breath, without looking at code. If you cannot state the harm in two sentences, you do not understand the PR yet. Go back and read. When a ticket is available, seed PURPOSE from its problem statement, but verify against the code.
-4. **Write DESCRIPTION**: choose the right depth (collapsed for small, three-layer for medium, root-cause + concept for large with WALK-THROUGH). Name everything you will refer to later. Organize by workflow/data-flow, not by touched symbol.
-5. **Write WALK-THROUGH** (if needed): numbered steps in execution order. Bold the step leads. State what changed, not what you did.
-6. **Write SYNOPSIS last** - it is a compression of PURPOSE + the core mechanic.
-7. **Bold and italicize the save points** in the allowed locations. Bold phrases that name the change (components, mechanisms, behaviors). Italicize phrases that orient to significance (conclusions, payoffs), at most one per paragraph. Apply the scan check: read only the bold and italic fragments and verify the shape comes through.
-8. **Add NOTES** for AI-reviewer defensive lines, scope disclaimers, ticket scope mismatches, and remaining work. Use `## NOTES` header. Omit if empty.
-9. **robots.txt only when earned**: do not add it during initial authoring. It is added later, in response to an automated reviewer's false positive (see its section). When you do add it, use the collapsed `<details>` format with `<summary>robots.txt</summary>`, keep the editing HTML comment at the top of the block, and keep the human-warning line first after the comment.
-10. **Verify links**: check ticket/PR links, repo file links, and external docs where tooling allows. Do not claim an unverified link was verified.
-11. **Verify prose style**: check each rule in Prose style. Cut design-narration, authoring-sequence, and buzzwordy abstractions. Verify plain ASCII. Verify first-use definitions for subsystem jargon. Verify plain English nouns (no code-domain nouns in prose). Verify conclusion-first in PURPOSE. Verify NOTES bullets are either short pointers or self-contained. Verify one-paragraph-one-physical-line for GitHub rendering. The robots.txt section is exempt from these prose rules below its human-warning line.
-12. **Verify length**: if the body exceeds the ceiling for its conceptual size, cut until each line earns its place.
-13. **Submit** via `gh pr create --body "$(cat <<'EOF' ... EOF)"` to preserve formatting.
+3. **Read project context for stacked work**: if the PR refers to related PRs, follow-ups, deferred design, upstream dependencies, or unexplained project terms, read the linked source material before drafting. Build a private term map. If a term controls the PR and you cannot resolve it, ask the user.
+4. **Draft PURPOSE first**, in one breath, without looking at code. If you cannot state the harm in two sentences, you do not understand the PR yet. Go back and read. When a ticket is available, seed PURPOSE from its problem statement, but verify against the code.
+5. **Write DESCRIPTION**: choose the right depth (collapsed for small, three-layer for medium, root-cause + concept for large with WALK-THROUGH). Name everything you will refer to later. Organize by workflow/data-flow, not by touched symbol. Add a one- or two-sentence context bridge only when stacked-project context is needed to understand this PR's delta.
+6. **Write WALK-THROUGH** (if needed): numbered steps in execution order. Bold the step leads. State what changed, not what you did.
+7. **Write SYNOPSIS last** - it is a compression of PURPOSE + the core mechanic.
+8. **Bold and italicize the save points** in the allowed locations. Bold phrases that name the change (components, mechanisms, behaviors). Italicize phrases that orient to significance (conclusions, payoffs), at most one per paragraph. Apply the scan check: read only the bold and italic fragments and verify the shape comes through.
+9. **Add NOTES** for AI-reviewer defensive lines, scope disclaimers, ticket scope mismatches, and remaining work. Use `## NOTES` header. Omit if empty.
+10. **robots.txt only when earned**: do not add it during initial authoring. It is added later, in response to an automated reviewer's false positive (see its section). When you do add it, use the collapsed `<details>` format with `<summary>robots.txt</summary>`, keep the editing HTML comment at the top of the block, and keep the human-warning line first after the comment.
+11. **Verify links**: check ticket/PR links, repo file links, and external docs where tooling allows. Do not claim an unverified link was verified.
+12. **Verify prose style and core principle**: check each rule in Prose style. Cut design-narration, authoring-sequence, and buzzwordy abstractions. Verify plain ASCII. Verify first-use definitions for subsystem jargon. Verify project-private labels are translated before use. Verify plain English nouns (no code-domain nouns in prose). Verify conclusion-first in PURPOSE. Verify NOTES bullets are either short pointers or self-contained. Verify one-paragraph-one-physical-line for GitHub rendering. The robots.txt section is exempt from these prose rules below its human-warning line.
+13. **Clarity pass**: read the draft as a cold reviewer skimming the PR. Rewrite before returning it; do not tell the user you performed this pass. Check: does every project-specific term get plain-English meaning before or with the label? Are ambiguous terms qualified or replaced with concrete behavior? Did you replace code/comment shorthand with reader-facing behavior when the shorthand is less clear? Does every process word name object/action/effect? Does every contrast name old and new behavior? Does every causal sentence show the middle step? Did you preserve connective tissue instead of compressing meaning into noun stacks? If the draft got longer, cut a lower-value claim instead of compressing a high-value one.
+14. **Verify length**: if the body exceeds the ceiling for its conceptual size, cut until each line earns its place. For enormous PRs, accept extra length only when it buys context, concrete behavior, or reviewer safety.
+15. **Submit** via `gh pr create --body "$(cat <<'EOF' ... EOF)"` to preserve formatting.
 
 ## Anti-patterns
 
@@ -346,7 +418,12 @@ That reading alone conveys the shape and scope of both changes. The prose is for
 - **Orphaned synopsis.** A bold lead paragraph with no `## SYNOPSIS` header above a body that does use headers. Add the header; it is mandatory.
 - **Bare `Notes:` line.** Use `## NOTES` header or omit the section entirely.
 - **Organizing by touched symbol.** A bullet list of "changed X in file A, changed Y in file B" reads as disconnected touchpoints. Follow the data flow.
-- **Buzzwordy abstractions.** "identity contract", "canonical hash", "check in isolation" - if it sounds like it is trying to sound smart, replace it with plain concrete wording.
+- **Buzzwordy abstractions.** "identity contract", "canonical hash", "check in isolation", "shared seam" - if it sounds like it is trying to sound smart, replace it with plain concrete wording. If "seam" means a conceptual border, say "boundary". If it means common code, say "shared helper", "shared function", or "shared SQL expression".
+- **Project-private labels as explanations.** Roadmap names, subsystem nicknames, architecture slogans, ticket shorthand, internal stack names, and branch-local labels are not explanations. Say what the code does first. The label can follow only if it helps a reviewer connect the prose to the code.
+- **Compressed meaning.** "Coalesced refresh", "synchronous repair", "derived projection", "normalized identity", "resolved state", and similar phrases are not clear unless the sentence says what object changes and what the result is. If a reader has to infer the missing action, expand the sentence or cut the claim.
+- **Copied code shorthand.** A term from a function name, code comment, metric, or existing PR body is not automatically good prose. If the code's word is less concrete than the behavior, translate it.
+- **Invisible contrast.** "X is synchronous now" or "Y is now shared" means little unless the old behavior is nearby. Name both sides of the change.
+- **Missing causal step.** A sentence with "so", "because", "therefore", "prevents", or "allows" must show the mechanism. If the cause and effect do not obviously touch, add the missing step or remove the causal claim.
 - **Loaded language.** Using avoidable loaded terms when neutral terms exist. Prefer allowlist/blocklist, primary/replica, and precise role names.
 - **Smart punctuation.** Em dashes, smart quotes, ellipsis glyphs. Use plain ASCII.
 - **Splitting paragraphs across lines.** GitHub renders each line break as a visible break. One paragraph = one physical line.
@@ -358,3 +435,4 @@ That reading alone conveys the shape and scope of both changes. The prose is for
 - **NOTES bullets that are both wordy and terse.** A bullet that compresses a paragraph of rationale into one dense sentence reads as a private note. Either flag the thing and point to the full explanation, or write a self-contained sentence or two. Not the middle thing.
 - **robots.txt as a suppression lever.** Writing "ignore the finding about X" or "skip checking X" in robots.txt turns it into a rubber stamp and a prompt-injection surface. Explain what X does and the intent behind it so the reviewer clears its own false positive; never instruct it to stop looking.
 - **Preemptive robots.txt.** Adding the section before any automated reviewer has actually produced a false positive. It is a response to a demonstrated misread, not scaffolding.
+- **Over-decomposed WALK-THROUGH.** Nine steps for a refresh flow means you are listing function calls, not workflow phases. Group related stages. A step is a phase the reviewer can hold in their head, not a single operation. If a step's bold lead is a function name, you went too granular.
