@@ -51,9 +51,12 @@ export const server: Plugin = async ({ client, worktree }) => {
   // Sessions currently being compacted. chat.message nudges are skipped while
   // a session is in this set — the agent can't call tools during summary
   // generation, so a recall or extraction nudge would cause a blocked-tool
-  // error. Cleared by experimental.compaction.autocontinue. If compaction
-  // fails, the entry leaks (graceful degradation: nudges stay off for that
-  // session, but no crash).
+  // error. Cleared by experimental.compaction.autocontinue (success), the
+  // session.compacted event (redundant belt-and-suspenders), or chat.message
+  // itself when a non-compaction message arrives (compaction failure fallback
+  // — autocontinue never fired, so the next real user message clears the
+  // stale flag). If all three somehow miss, the flag leaks (graceful
+  // degradation: nudges stay off for that session, but no crash).
   const compacting = new Set<string>();
 
   // Per-session count of consecutive extraction nudges delivered without any
@@ -192,7 +195,18 @@ export const server: Plugin = async ({ client, worktree }) => {
     // a summary, so a nudge that says "use thatch_memory_recall" triggers a
     // blocked-tool error.
     "chat.message": async (input, output) => {
-      if (compacting.has(input.sessionID)) return;
+      if (compacting.has(input.sessionID)) {
+        // The session is marked as compacting. If this message is the
+        // compaction summary generation itself (has a compaction-type part),
+        // suppress nudges — tools are blocked during summary generation and a
+        // nudge would cause a blocked-tool error. If it is NOT a compaction
+        // message, compaction has already failed (autocontinue never fired)
+        // and the user is sending a new message. Clear the stale flag and
+        // proceed normally — tools are available again.
+        const isCompactionMsg = (output.parts as any[]).some((p) => p.type === "compaction");
+        if (isCompactionMsg) return;
+        compacting.delete(input.sessionID);
+      }
       if (extraction.pending(input.sessionID)) {
         const batch = extraction.peek(input.sessionID);
         const payload = extraction.buildPayload(batch, repo);
@@ -288,6 +302,15 @@ export const server: Plugin = async ({ client, worktree }) => {
       if (event.type === "session.deleted") {
         childToParent.delete(event.properties.info.id);
         parentSnapshots.delete(event.properties.info.id);
+        return;
+      }
+
+      // session.compacted fires on successful compaction. Redundant with
+      // experimental.compaction.autocontinue, but belt-and-suspenders: if
+      // autocontinue didn't fire or wasn't installed, the event still clears
+      // the compacting flag so nudges resume.
+      if (event.type === "session.compacted") {
+        compacting.delete(event.properties.sessionID);
         return;
       }
 

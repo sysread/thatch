@@ -747,7 +747,7 @@ describe("compaction guard for chat.message", () => {
 
     const output: any = {
       message: { id: "msg_guard_1" },
-      parts: [{ type: "text", text: "# test-coverage\n\ntest coverage metrics and gaps" }],
+      parts: [{ type: "compaction", auto: true, overflow: false }],
     };
     await hooks["chat.message"]!({ sessionID: "ses_guard", messageID: "msg_guard_1" } as any, output);
     expect(output.parts.length).toBe(1);
@@ -780,12 +780,70 @@ describe("compaction guard for chat.message", () => {
 
     const output: any = {
       message: { id: "msg_guard_ext" },
-      parts: [{ type: "text", text: "anything" }],
+      parts: [{ type: "compaction", auto: true, overflow: false }],
     };
     await hooks["chat.message"]!({ sessionID: "ses_guard_ext", messageID: "msg_guard_ext" } as any, output);
     expect(output.parts.length).toBe(1);
 
     // Clean up so the buffer doesn't leak into other tests.
     await hooks["experimental.compaction.autocontinue"]!({ sessionID: "ses_guard_ext" } as any, { enabled: true } as any);
+  });
+
+  test("session.compacted event clears the compacting flag (belt-and-suspenders)", async () => {
+    await hooks["experimental.session.compacting"]!(
+      { sessionID: "ses_guard_evt" } as any,
+      { context: [] as string[] },
+    );
+
+    // Simulate compaction success via the event hook (not autocontinue).
+    await hooks.event!({ event: { type: "session.compacted", properties: { sessionID: "ses_guard_evt" } } } as any);
+
+    const output: any = {
+      message: { id: "msg_guard_evt" },
+      parts: [{ type: "text", text: "untangling a gnarly database migration plan" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_guard_evt", messageID: "msg_guard_evt" } as any, output);
+    // Flag was cleared by the event, so nudges should fire.
+    expect(output.parts.length).toBe(2);
+    expect(output.parts[1].synthetic).toBe(true);
+  });
+
+  test("compaction failure: non-compaction chat.message clears stale flag and resumes nudges", async () => {
+    await hooks["experimental.session.compacting"]!(
+      { sessionID: "ses_guard_fail" } as any,
+      { context: [] as string[] },
+    );
+
+    // Simulate compaction failure: no autocontinue, no session.compacted event.
+    // The next user message arrives with regular text parts (no compaction part).
+    const output: any = {
+      message: { id: "msg_guard_fail" },
+      parts: [{ type: "text", text: "untangling a gnarly database migration plan" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_guard_fail", messageID: "msg_guard_fail" } as any, output);
+    // The stale flag was cleared because this is not a compaction message.
+    // Nudges should fire (prediction nudge from seeded matcher).
+    expect(output.parts.length).toBe(2);
+    expect(output.parts[1].synthetic).toBe(true);
+    expect(output.parts[1].text).toContain("User decision model");
+  });
+
+  test("compaction summary message still suppresses nudges (has compaction part)", async () => {
+    await hooks["experimental.session.compacting"]!(
+      { sessionID: "ses_guard_sum" } as any,
+      { context: [] as string[] },
+    );
+
+    // A compaction-type part identifies the compaction summary generation message.
+    const output: any = {
+      message: { id: "msg_guard_sum" },
+      parts: [{ type: "compaction", auto: true, overflow: false }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_guard_sum", messageID: "msg_guard_sum" } as any, output);
+    // Suppressed — tools are blocked during summary generation.
+    expect(output.parts.length).toBe(1);
+
+    // Clean up.
+    await hooks["experimental.compaction.autocontinue"]!({ sessionID: "ses_guard_sum" } as any, { enabled: true } as any);
   });
 });
