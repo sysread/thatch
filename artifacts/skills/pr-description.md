@@ -39,7 +39,7 @@ Sections, in order: SYNOPSIS, PURPOSE, DESCRIPTION, WALK-THROUGH (conditional), 
 
 **SYNOPSIS, PURPOSE, and DESCRIPTION are mandatory** - even for a one-line, single-concern change. A tiny PR gets short sections, not fewer sections. WALK-THROUGH and NOTES appear only when warranted; omit them when empty. robots.txt appears only after an automated reviewer has produced a false positive worth heading off (see its section); it is always the final section.
 
-**Scale the body to the diff's conceptual size**, not its structure's capacity. A 2-file, single-concern change (add a flag, guard a branch, rename a symbol, bump a constant) is a few lines per section. SYNOPSIS one line, PURPOSE one to three, DESCRIPTION one short paragraph, NOTES if needed. The layered DESCRIPTION machinery below is for changes with real before/after mechanics to teach; when the diff is self-evident once you know the intent, collapse it. If your draft for a small change runs past ~15 lines of body, you are padding. Cut until each remaining line earns its place. Most of this skill's guidance exists to tame large PRs; applying it wholesale to a small one produces exactly the bloat the skill warns against.
+**Scale the body to the PR's complexity, not its size in files or lines.** Estimate complexity by how much new mental model the reviewer must build (see the point-based budgets in Length and style). A 1-point mechanical change gets short sections, not fewer sections. The layered DESCRIPTION machinery below is for changes with real before/after mechanics to teach; when the diff is self-evident once you know the intent, collapse it. Most of this skill's guidance exists to tame large PRs; applying it wholesale to a small one produces exactly the bloat the skill warns against.
 
 ### SYNOPSIS
 
@@ -77,7 +77,7 @@ When a ticket description is available, use its problem statement as the seed fo
 
 ### DESCRIPTION
 
-How much structure DESCRIPTION needs depends on the change's conceptual size.
+How much structure DESCRIPTION needs depends on the PR's complexity.
 
 **Small, self-evident change** (add a flag, guard a branch, rename a symbol, bump a constant): collapse to a sentence or two stating what the PR adds/changes. Do not manufacture a "how the code behaves today" paragraph for a change whose intent already makes the diff obvious. That is padding, not scaffolding.
 
@@ -240,13 +240,20 @@ These are hard rules, not suggestions.
 
 Target for most PRs: the reader can take in the whole description in under 60 seconds. Err on the shorter side.
 
-Scale the body to the diff's conceptual size:
-- Trivial 2-file change: ~15-line ceiling. SYNOPSIS one line, PURPOSE one to three, DESCRIPTION one short paragraph, NOTES if needed.
-- Moderate refactor: one tight paragraph or bullet set per section.
-- Large change with WALK-THROUGH: as long as the flow needs, but no longer. Aim for 3-6 steps; more means you are over-decomposing. Each step earns its place.
-- Enormous PR: accept that the reader may need more than 60 seconds. Keep the same rules, but spend the extra words on context, concrete behavior, and reviewer safety. Do not chase a tiny body by compressing meaning.
+Estimate the PR's **complexity** (how much new mental model the reviewer must build), not its size in files or lines. Complexity drives the word budget the way scrum points drive effort estimates:
 
-If your draft for a small change runs past ~15 lines of body, you are padding. Cut until each remaining line earns its place.
+- **1 point** (mechanical: rename, flag, guard, bump): the reviewer needs to know what changed, not why or how. ~50-100 words. SYNOPSIS one line, PURPOSE 1-2 sentences, DESCRIPTION 1-2 sentences.
+- **2-3 points** (new behavior, non-obvious mechanics): the reviewer needs to understand a before/after they cannot infer from the diff. ~100-250 words. SYNOPSIS 1-2 lines, PURPOSE 2-4 sentences, DESCRIPTION one tight paragraph or short three-layer.
+- **5 points** (new primitive, multi-workflow): the reviewer needs a mental model they do not have yet. ~250-400 words. Full sections as needed, WALK-THROUGH if there is a lifecycle.
+- **8 points** (architectural shift): the reviewer needs to re-orient their understanding of a subsystem. ~400-600 words. Accept the length, spend on context and reviewer safety.
+
+Estimate by: how many new concepts, how many decision points, whether the before/after is non-obvious, whether multiple workflows are affected. Not by files changed or lines added. A 200-line mechanical rename is 1 point. A 50-line new primitive with non-obvious semantics is 3-5 points.
+
+**When a section is too long, step up the abstraction ladder.** Do not compress terminology or cut connective tissue to hit a word count. Instead, replace a sequence of mechanism details with the principle that subsumes them. If you are explaining three mechanisms in sequence, find the one principle that makes all three obvious to someone who already knows the stack. The mechanism details belong in DESCRIPTION or the diff, not in PURPOSE or every section.
+
+Example: instead of six claims about how a connection pool reuses connections, how session locks are session-scoped, how a lock taken by one statement does not guard the next, and how nothing reports the mismatch, write: "Some Postgres features attach to the connection, not the statement. The pool freely reuses connections between statements, so state set by one statement may not be there for the next, and nothing reports the mismatch." Same understanding, fewer words, no compression.
+
+Brevity means fewer ideas, not compressed claims. If the section is still too long after stepping up, cut the lowest-value claim entirely. Do not cut the connective tissue that makes the remaining claims parse on first read.
 
 Inside sections, telegraphic bullet style is fine: lowercase start, abbreviations (`w/`, `1x`, `~`), parenthetical shorthand. Full sentences only when required for clarity. The section headers are the only formal structure.
 
@@ -401,7 +408,7 @@ That reading alone conveys the shape and scope of both changes. The prose is for
 11. **Verify links**: check ticket/PR links, repo file links, and external docs where tooling allows. Do not claim an unverified link was verified.
 12. **Verify prose style and core principle**: check each rule in Prose style. Cut design-narration, authoring-sequence, and buzzwordy abstractions. Verify plain ASCII. Verify first-use definitions for subsystem jargon. Verify project-private labels are translated before use. Verify plain English nouns (no code-domain nouns in prose). Verify conclusion-first in PURPOSE. Verify NOTES bullets are either short pointers or self-contained. Verify one-paragraph-one-physical-line for GitHub rendering. The robots.txt section is exempt from these prose rules below its human-warning line.
 13. **Clarity pass**: read the draft as a cold reviewer skimming the PR. Rewrite before returning it; do not tell the user you performed this pass. Check: does every project-specific term get plain-English meaning before or with the label? Are ambiguous terms qualified or replaced with concrete behavior? Did you replace code/comment shorthand with reader-facing behavior when the shorthand is less clear? Does every process word name object/action/effect? Does every contrast name old and new behavior? Does every causal sentence show the middle step? Did you preserve connective tissue instead of compressing meaning into noun stacks? If the draft got longer, cut a lower-value claim instead of compressing a high-value one.
-14. **Verify length**: if the body exceeds the ceiling for its conceptual size, cut until each line earns its place. For enormous PRs, accept extra length only when it buys context, concrete behavior, or reviewer safety.
+14. **Verify length**: estimate the PR's complexity (see the point-based budgets in Length and style). If the body exceeds the budget, step up the abstraction ladder first (replace mechanism sequences with the principle that subsumes them). If still over, cut the lowest-value claim entirely. Do not compress terminology or cut connective tissue to hit a word count.
 15. **Submit** via `gh pr create --body "$(cat <<'EOF' ... EOF)"` to preserve formatting.
 
 ## Anti-patterns
