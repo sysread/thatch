@@ -54,7 +54,9 @@ workflows. The host auto-discovers them, but reach for them proactively:
 
 **One signal is enough.** Do not wait for confirmation.
 Save immediately on: feedback, preferences, corrections, emotional signals,
-new project knowledge, conventions, architectural decisions, investigation results.
+new project knowledge, conventions, architectural decisions, investigation
+results that produced durable knowledge (not point-in-time facts about the
+current state of the code).
 
 ## Before Responding
 
@@ -110,8 +112,9 @@ reinforce or adjust it when possible.
   component relationships, conventions, operational playbooks
 - **Branch-scoped**: branch purpose, feature design decisions, PR status,
   temporary workarounds
-- **Insights**: ALWAYS save non-obvious gotchas, patterns, and architectural
-  lessons discovered during implementation. Never prompt the user; just do it.
+- **Insights**: Save non-obvious gotchas, patterns, and architectural
+  lessons discovered during implementation, but only if they remain true
+  across sessions. Never prompt the user; just do it.
 
 ## How to Write
 
@@ -125,6 +128,16 @@ reinforce or adjust it when possible.
 
 Session-specific context, incomplete/unverified info, anything already in
 CLAUDE.md or OPENCODE.md, speculative conclusions.
+
+Apply the durability test: will this still be true and useful in a future
+session that knows nothing about this branch, commit, or session? If not,
+do not save it. Do not store:
+- Point-in-time values (migration indices, line numbers, file counts) that
+  will be stale by next session
+- Commit hashes and branch-specific history narratives. Git is the source
+  of truth for this; do not duplicate it in memory
+- Anything re-derivable from the codebase faster than recalling it (current
+  file locations, type signatures, function names)
 
 ## Archived Memories
 
@@ -238,7 +251,9 @@ workflows. The host auto-discovers them, but reach for them proactively:
 
 **One signal is enough.** Do not wait for confirmation.
 Save immediately on: feedback, preferences, corrections, emotional signals,
-new project knowledge, conventions, architectural decisions, investigation results.
+new project knowledge, conventions, architectural decisions, investigation
+results that produced durable knowledge (not point-in-time facts about the
+current state of the code).
 
 ## Before Responding
 
@@ -284,8 +299,9 @@ reinforce or adjust it when possible.
   component relationships, conventions, operational playbooks
 - **Branch-scoped**: branch purpose, feature design decisions, PR status,
   temporary workarounds
-- **Insights**: ALWAYS save non-obvious gotchas, patterns, and architectural
-  lessons discovered during implementation. Never prompt the user; just do it.
+- **Insights**: Save non-obvious gotchas, patterns, and architectural
+  lessons discovered during implementation, but only if they remain true
+  across sessions. Never prompt the user; just do it.
 
 ## How to Write
 
@@ -299,6 +315,16 @@ reinforce or adjust it when possible.
 
 Session-specific context, incomplete/unverified info, anything already in
 CLAUDE.md, speculative conclusions.
+
+Apply the durability test: will this still be true and useful in a future
+session that knows nothing about this branch, commit, or session? If not,
+do not save it. Do not store:
+- Point-in-time values (migration indices, line numbers, file counts) that
+  will be stale by next session
+- Commit hashes and branch-specific history narratives. Git is the source
+  of truth for this; do not duplicate it in memory
+- Anything re-derivable from the codebase faster than recalling it (current
+  file locations, type signatures, function names)
 
 ## Archived Memories
 
@@ -474,7 +500,9 @@ workflows. The host auto-discovers them, but reach for them proactively:
 
 **One signal is enough.** Do not wait for confirmation.
 Save immediately on: feedback, preferences, corrections, emotional signals,
-new project knowledge, conventions, architectural decisions, investigation results.
+new project knowledge, conventions, architectural decisions, investigation
+results that produced durable knowledge (not point-in-time facts about the
+current state of the code).
 
 ## Before Responding
 
@@ -520,8 +548,9 @@ reinforce or adjust it when possible.
   component relationships, conventions, operational playbooks
 - **Branch-scoped**: branch purpose, feature design decisions, PR status,
   temporary workarounds
-- **Insights**: ALWAYS save non-obvious gotchas, patterns, and architectural
-  lessons discovered during implementation. Never prompt the user; just do it.
+- **Insights**: Save non-obvious gotchas, patterns, and architectural
+  lessons discovered during implementation, but only if they remain true
+  across sessions. Never prompt the user; just do it.
 
 ## How to Write
 
@@ -535,6 +564,16 @@ reinforce or adjust it when possible.
 
 Session-specific context, incomplete/unverified info, anything already in
 AGENTS.md, speculative conclusions.
+
+Apply the durability test: will this still be true and useful in a future
+session that knows nothing about this branch, commit, or session? If not,
+do not save it. Do not store:
+- Point-in-time values (migration indices, line numbers, file counts) that
+  will be stale by next session
+- Commit hashes and branch-specific history narratives. Git is the source
+  of truth for this; do not duplicate it in memory
+- Anything re-derivable from the codebase faster than recalling it (current
+  file locations, type signatures, function names)
 
 ## Archived Memories
 

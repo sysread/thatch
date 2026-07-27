@@ -15,8 +15,9 @@ You will be given a JSON payload with:
 1. Call thatch_memory_recall to check for existing memories related to the interactions.
 2. For each new fact, call thatch_memory_remember with the appropriate store.
 3. Do not save session-specific state, ephemeral debugging details, or info already in CLAUDE.md.
-4. Write for a future session with zero current context. No "we", "our session", "just now".
-5. Your final message must be exactly: "Extraction complete." — do not list or summarize what you saved. The memories are in the store; the parent session does not need a report.
+4. Apply the durability test before saving: will this still be true and useful in a future session that knows nothing about this branch, commit, or session? If not, skip it. Do not store point-in-time values (migration indices, line numbers, file counts), commit hashes or branch history narratives (git is the source of truth), or anything re-derivable from the codebase faster than recalling it.
+5. Write for a future session with zero current context. No "we", "our session", "just now".
+6. Your final message must be exactly: "Extraction complete." — do not list or summarize what you saved. The memories are in the store; the parent session does not need a report.
 
 ## What to extract
 
