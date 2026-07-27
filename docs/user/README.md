@@ -108,6 +108,15 @@ Stores are created automatically — no setup required.
 |------|-------------|
 | `thatch_extraction_done` | Acknowledge that the extraction nudge was dispatched to a sub-agent. Drains the buffer so the nudge does not replay. Called after dispatching a background task to run the fact-extractor skill. |
 
+### Prediction tools
+
+| Tool | What it does |
+|------|-------------|
+| `thatch_prediction_query` | Query the user decision model for scored predictions matching a context. Returns predictions with confidence and evidence count. |
+| `thatch_prediction_update` | Create, reinforce, or weaken a prediction. Takes a matcher (context description), a prediction (preference statement), and a signal (confirm/disconfirm/soft/create). |
+| `thatch_prediction_list` | List all predictions in a store with matchers, confidence, and provenance. |
+| `thatch_prediction_delete` | Delete a prediction by semantic match. Edges and provenance are cascade-deleted. |
+
 ## Automatic behaviors
 
 Beyond the tools, thatch hooks into opencode itself:
@@ -133,6 +142,12 @@ Beyond the tools, thatch hooks into opencode itself:
   thatch never saves memories on its own.
 - **Compaction context.** When opencode compacts a long session, thatch injects
   a reminder so the summarized session still knows memory tools exist.
+- **Prediction auto-fire.** When a prompt matches learned contexts, thatch
+  injects a `User decision model` block alongside the recall nudge. The block
+  lists scored predictions (confidence, evidence count) that the agent can
+  follow silently (strong prediction), surface to the user (ambiguous), or
+  use to update the model after the user responds. No extra model call —
+  the prediction search reuses the same prompt embedding as the recall nudge.
 
 ### Setup detection (Claude Code and Cursor)
 

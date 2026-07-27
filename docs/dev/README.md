@@ -58,11 +58,11 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `setup.ts` | `thatch setup --claude` installer. Writes .mcp.json, appends to CLAUDE.md (idempotent), installs hooks in settings.json, installs skills. |
 | `hygiene.ts` | Hygiene report: pending dedup pairs, stale count, orphaned branch memories. Shared by the plugin's session-start hook and the CLI's `thatch reminder` command. |
 | `git.ts` | Parse `owner/repo` from git remote. Worktree-safe fallback chain. |
-| `db.ts` | SQLite schema, CRUD for entries/stores, brute-force cosine search (`search` = pure scoring, `recall` = search + telemetry stamping), dedup-pair verdict tracking. |
+| `db.ts` | SQLite schema, CRUD for entries/stores, brute-force cosine search (`search` = pure scoring, `recall` = search + telemetry stamping), dedup-pair verdict tracking. Prediction tables: matchers, predictions, edges, provenance. `scorePredictionNudge` is the shared auto-fire entry point for both host paths. |
 | `embeddings.ts` | Lazy-load the embedding model. Expose `queryEmbed`/`passageEmbed` and the model `name` (stored as an informational tag). `MockEmbeddingModel` for tests. |
 | `extraction.ts` | Per-session in-memory ring buffer (cap 20) that buffers non-thatch tool interactions and serializes them into the JSON payload the extraction nudge carries. The in-memory pipeline is opencode-only, but the payload builders (`buildExtractionPayload`, `deriveTitle`) are shared by both paths — `extract-queue.ts` imports `deriveTitle`, `bin/thatch` imports `buildExtractionPayload`. `summarizeArgs` is used internally by `buildExtractionPayload`. |
 | `extract-queue.ts` | File-backed per-session JSONL queue (caps 20, oldest dropped). Shared by the Claude Code and Cursor hook paths, which fire one-shot per event with no cross-call state. This is the MCP-side equivalent of `extraction.ts`. |
-| `sideband.ts` | Unix domain socket server + client. The MCP server (long-lived, warm model) runs `SidebandServer` so one-shot hook processes can ask it to embed a prompt and search for matches without loading the model themselves. Socket path is a hash of the DB path — both processes compute it independently. |
+| `sideband.ts` | Unix domain socket server + client. The MCP server (long-lived, warm model) runs `SidebandServer` so one-shot hook processes can ask it to embed a prompt and search for matches without loading the model themselves. Handles two methods: `match` (recall nudge) and `predictions` (prediction auto-fire). Socket path is a hash of the DB path — both processes compute it independently. |
 | `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, prompt-aware recall nudge (`recallNudge` / `claudeRecallNudge`), Claude Code CLAUDE.md instructions, Cursor AGENTS.md instructions, Claude Code hook text. |
 | `skills.ts` | `SKILL.md` content for all thatch skills, plus the installer. Skills are split into `SHARED_SKILLS` (18 skills: fact-extractor, dedup-classifier, project-primer, 6 review specialists, review synthesizer, review context, workflow research, change walkthrough, code walkthrough, session reflection, pr-description, ticket-description, split-overlarge-pr — work on both opencode and Claude Code) and `OPENCODE_ONLY_SKILLS` (1 skill: code-review coordinator — requires sub-agent support, not installed for Claude Code). `installSkills(dir, skills)` defaults to `SHARED_SKILLS`; the opencode plugin passes `[...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]`. |
 
@@ -74,9 +74,9 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 |------|-------------|
 | `experimental.chat.system.transform` | Appends the thatch system prompt (store names, usage rules). |
 | `experimental.session.compacting` | Marks the session as compacting and appends re-familiarization context so a compacted session still knows thatch exists. |
-| `experimental.compaction.autocontinue` | Clears the compacting flag so `chat.message` nudges resume. Without this, nudges that instruct tool calls would fire during summary generation where tools are blocked. |
+| `experimental.compaction.autocontinue` | Clears the compacting flag so `chat.message` nudges resume. Without this, nudges that instruct tool calls would fire during summary generation where tools are blocked. The `chat.message` hook also clears the flag if it fires for a session still in the compacting set but the incoming message has no compaction-type part — this handles compaction failure, where the session would otherwise be stuck with nudges off forever. |
 | `tool.execute.after` | Buffers every non-`thatch_*`, non-`skill`, non-`task` tool call into the session's extraction buffer. (Skill/task are excluded — buffering them creates a feedback loop where the nudge triggers a skill load, which gets buffered, which triggers another nudge.) Memory writes (`thatch_memory_remember`) and `thatch_extraction_done` drain the buffer and reset the missed-nudge counter. This is a plugin hook, NOT a bus event — do not move it into the `event` handler; the event bus has no such event and it will silently never fire. |
-| `chat.message` | Two priority tiers: (a) if extraction buffer has interactions, **peeks** the buffer (does NOT drain it) and injects a synthetic text part carrying the extraction nudge + JSON payload — the buffer persists until the agent writes a memory or calls `thatch_extraction_done`, so ignored nudges repeat and escalate (polite → insistent → ALL-CAPS) via the `missedNudges` counter; (b) otherwise, embeds the user's prompt text with the in-process warm model, searches `db.search()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55). Skipped entirely while the session is compacting (tool calls are blocked during summary generation). |
+| `chat.message` | Two priority tiers: (a) if extraction buffer has interactions, **peeks** the buffer (does NOT drain it) and injects a synthetic text part carrying the extraction nudge + JSON payload — the buffer persists until the agent writes a memory or calls `thatch_extraction_done`, so ignored nudges repeat and escalate (polite → insistent → ALL-CAPS) via the `missedNudges` counter; (b) otherwise, embeds the user's prompt text with the in-process warm model, searches `db.search()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55). The same embedding also feeds the prediction auto-fire: `db.scorePredictionNudge` scores the prompt against prediction matchers and injects a separate `[thatch] User decision model` nudge if any matchers clear the 0.45 threshold. Recall and prediction nudges fire independently (separate try/catch blocks, separate synthetic parts). Skipped entirely while the session is compacting (tool calls are blocked during summary generation). |
 | `event` (`session.created`) | Sends the session-start reminder via `client.session.prompt`, carrying the hygiene heartbeat (pending dedup pairs, stale count, orphaned branch memories) when any signal is non-zero. The session id is at `event.properties.info.id`. |
 | `dispose` | Closes the DB. |
 
@@ -121,6 +121,23 @@ Two of these hooks were dead for weeks because failures were invisible.
    case (agent forgot to save, next user turn arrives with buffer still
    pending). This is an experiment — model reliability on meta-instructions
    is uncertain.
+10. **Background completion narration is suppressed, not prevented.** When a
+    background sub-agent completes, opencode injects a `<task_result>` block
+    into the parent session and triggers a full model generation. Thatch
+    cannot cancel this turn (no pre-response hook). Two mitigations: the
+    fact-extractor skill's return value is constrained to the literal
+    "Extraction complete." so the injected block has no narratable content,
+    and the system prompt's "Background Task Completions" section instructs
+    the model not to narrate completions or treat them as approval to act.
+11. **Prediction engine is a statistical model, not an LLM call.** The query
+    (embed prompt, cosine-match against matchers, score linked predictions)
+    is mechanical — same shape as `thatch_memory_recall` but against different
+    tables. The agent drives formation and evaluation via tools
+    (`thatch_prediction_update` with confirm/disconfirm/soft/create signals)
+    guided by system prompt instructions. No wall-clock decay; confidence is
+    relevance-gated (being tested moves it, not being ignored). See the
+    prediction DB tables, auto-fire in `chat.message`, and the sideband
+    `predictions` method for the MCP path.
 
 ## Data flow
 
@@ -178,6 +195,33 @@ hygiene heartbeat (session start)
     longer exist (skipped when worktree isn't a git repo)
   → non-zero signals appended to the session-start reminder; the agent tends
     the store when convenient — the plugin never deletes memories itself
+
+prediction cycle (agent-driven, statistical model)
+  → formation: agent calls thatch_prediction_update(matcher, prediction, signal)
+    with signal = create|confirm|disconfirm|soft. The tool embeds the matcher
+    text (raw, no header prepend — unlike memory_remember), finds or creates
+    a matcher (0.85 dedup), finds or creates a prediction (0.85 store-wide
+    dedup), links them via an edge, and adjusts confidence via a Bayesian
+    posterior: (confirm + K*P0) / (confirm + disconfirm + K), K=5, P0=0.5.
+    Soft signals count as 0.25 of a full signal. No wall-clock decay;
+    confidence is relevance-gated (being tested moves it, not being ignored).
+  → auto-fire (opencode): chat.message reuses the prompt embedding already
+    computed for the recall nudge. db.scorePredictionNudge([repo, global],
+    embedding, 0.45) finds matchers above threshold, follows edges to
+    predictions, scores by cosine * weight * confidence, dedups by
+    prediction_id, and returns top 5. Injects a separate synthetic part
+    with a [thatch] User decision model block. 0-evidence predictions use
+    "you may prefer"; predictions with evidence use "you tend to".
+  → auto-fire (Claude Code/Cursor): flush-tools fires the prediction query
+    via the sideband socket's `predictions` method in parallel with the
+    recall nudge. Same scorePredictionNudge entry point prevents scoring
+    drift between host paths.
+  → consumption: agent follows strong predictions silently, surfaces
+    ambiguous/competing predictions to the user, and calls
+    thatch_prediction_update to reinforce or weaken after the user responds.
+    thatch_prediction_list inspects the model with provenance;
+    thatch_prediction_delete removes bad predictions (cascade clears edges
+    and provenance).
 ```
 
 ## Database
@@ -188,7 +232,11 @@ hygiene heartbeat (session start)
   `entries(slug, store, label, content, embedding BLOB, model, branch,
   confidence, archived, created_at, updated_at, recall_count,
   last_recalled_at, PK(slug, store))`,
-  `dedup_pairs(store, slug_a, slug_b, status, checked_at, PK(store, slug_a, slug_b))`.
+  `dedup_pairs(store, slug_a, slug_b, status, checked_at, PK(store, slug_a, slug_b))`,
+  `prediction_matchers(id PK, store, description, embedding BLOB, model, created_at, updated_at)`,
+  `predictions(id PK, store, statement, rationale, embedding BLOB, model, confidence REAL, confirm_count REAL, disconfirm_count REAL, created_at, updated_at)`,
+  `prediction_edges(matcher_id, prediction_id, weight REAL, PK(matcher_id, prediction_id), FK CASCADE)`,
+  `prediction_provenance(id PK, prediction_id, signal, detail, created_at, FK CASCADE)`.
 - `recall_count`, `last_recalled_at`, and `archived` are added to pre-existing
   databases by an idempotent column migration at init (`PRAGMA table_info` +
   `ALTER TABLE`). The `archived` column is `INTEGER NOT NULL DEFAULT 0` (0 =
