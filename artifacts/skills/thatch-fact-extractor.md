@@ -16,6 +16,7 @@ You will be given a JSON payload with:
 2. For each new fact, call thatch_memory_remember with the appropriate store.
 3. Do not save session-specific state, ephemeral debugging details, or info already in CLAUDE.md.
 4. Write for a future session with zero current context. No "we", "our session", "just now".
+5. Your final message must be exactly: "Extraction complete." — do not list or summarize what you saved. The memories are in the store; the parent session does not need a report.
 
 ## What to extract
 

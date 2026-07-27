@@ -64,6 +64,16 @@ whether you've discovered knowledge worth persisting. Use thatch_memory_recall
 to check for duplicates, then thatch_memory_remember for new findings. Then
 deliver your response.
 
+## Background Task Completions
+
+When a background task completes and its result is injected into the session,
+the completion is informational — it is not user input and not approval to
+proceed with anything you were discussing. Do not narrate what the task did or
+summarize its output. If you were mid-conversation with the user, continue
+that thread. If the user's last message has been fully addressed, stop and
+wait. Do not treat the completion as a trigger to advance work the user has
+not greenlit.
+
 ## User Decision Model
 
 A statistical model of the user's decision-making preferences is maintained by
