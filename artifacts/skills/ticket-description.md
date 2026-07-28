@@ -44,7 +44,7 @@ Sections, in order: SYNOPSIS, PROBLEM, BACKGROUND (conditional), PROPOSED APPROA
 
 **SYNOPSIS, PROBLEM, PROPOSED APPROACH, and ACCEPTANCE CRITERIA are mandatory.** A small ticket gets short sections, not fewer sections. Conditional sections appear only when warranted; omit them when empty. Never emit an empty header.
 
-**Scale the body to the work's conceptual size.** A one-line fix gets a one-line PROBLEM, a one-line PROPOSED APPROACH, and one or two acceptance criteria. A multi-PR feature gets full sections with real depth. The implementer should be able to start work after reading the ticket, but they should not have to read a novel to fix a guard clause.
+**Scale the body to the work's complexity, not its size in files or lines.** Estimate complexity by how much new mental model the implementer must build (see the point-based budgets in Length and style). A one-line fix gets a one-line PROBLEM, a one-line PROPOSED APPROACH, and one or two acceptance criteria. A multi-PR feature gets full sections with real depth. The implementer should be able to start work after reading the ticket, but they should not have to read a novel to fix a guard clause. Most of this skill's guidance exists to tame large tickets; applying it wholesale to a small one produces exactly the bloat the skill warns against.
 
 ### SYNOPSIS
 
@@ -66,10 +66,12 @@ The reader should know what the problem is before they read why it happens.
 
 No solution yet. The reader should finish this section agreeing there is something to address, even with zero code knowledge.
 
-Cover three things, each in its own paragraph:
+Cover three things, each in its own paragraph when the ticket has the complexity to warrant it:
 1. **What is wrong**, concretely. Name the component, the behavior, and the failure mode.
 2. **Why it matters.** Incident history, risk rating, customer impact, or "preventive: blocks a class of bug we keep almost-hitting."
 3. **Hazard rating and motivation.** How likely is the bad outcome, and under what conditions? Then answer "why now?": if the risk is low, what motivates this ticket? A prior PR identified it as a follow-up, the API still permits a failure shape, or the next planned change would make it worse. The lead's question is "should I prioritize this?" - give them the answer. _PLAT-135's ticket did this well: it named the cross-wait, then said "why it never fired" and rated the window as once-per-process cold load._
+
+A small ticket covers all three in a single paragraph; split into one paragraph per topic only when the content earns it.
 
 If the problem is preventive (no current defect), say so plainly. Then say why it is worth fixing despite the low risk.
 
@@ -195,12 +197,22 @@ These are hard rules, not suggestions.
 
 ## Length and style
 
-Target: the implementer can start work after one read. The lead can prioritize after reading SYNOPSIS and PROBLEM.
+Target: the implementer can start work after one read. The lead can prioritize after reading SYNOPSIS and PROBLEM. Err on the shorter side.
 
-Scale the body to the work's conceptual size:
-- Small fix (one guard, one flag, one constant): one paragraph per mandatory section, one to three acceptance criteria. ~20-line ceiling.
-- Moderate change (new function, restructured flow, multi-file refactor): full sections with real depth. No hard ceiling, but each paragraph earns its place.
-- Large change (new feature, multi-PR effort, migration sequence): full sections plus RELEASE PLAN and VALIDATION. May run a full page. If PROPOSED APPROACH is longer than the rest of the ticket combined, the ticket is probably a design doc wearing a ticket costume; split it.
+Estimate the ticket's **complexity** (how much new mental model the implementer must build), not its size in files or lines. Complexity drives the word budget the way scrum points drive effort estimates:
+
+- **1 point** (one guard, one flag, one constant): the implementer needs to know what to change, not a lesson in the subsystem. ~100-200 words. SYNOPSIS one line, PROBLEM 2-4 sentences (still rate the hazard, even if it is "no current defect"), PROPOSED APPROACH 1-2 sentences, one to three acceptance criteria.
+- **2-3 points** (new function, restructured flow, multi-file refactor): the implementer needs a before/after they cannot infer from the code alone. ~200-400 words. Full mandatory sections; BACKGROUND only when prior work or project context earns it.
+- **5 points** (new feature, migration sequence): the implementer needs a mental model they do not have yet. ~400-600 words. RELEASE PLAN, VALIDATION, and DEPENDENCIES when prod coordination warrants.
+- **8 points** (multi-PR effort, subsystem redesign): ~600-800 words. Accept the length; spend it on context and starting state. If PROPOSED APPROACH is longer than the rest of the ticket combined, the ticket is probably a design doc wearing a ticket costume; split it.
+
+Estimate by: how many new concepts the implementer must learn, whether the problem and approach have non-obvious mechanics, whether the work spans multiple workflows or systems. Not by files the change will touch or sections present. A mechanical multi-file rename is 1 point. A one-line fix with subtle semantics is 2-3.
+
+**When a section is too long, step up the abstraction ladder.** Do not compress terminology or cut connective tissue to hit a word count. Instead, replace a sequence of mechanism details with the principle that subsumes them.
+
+Example: instead of six claims about how a connection pool reuses connections, how session locks are session-scoped, how a lock taken by one statement does not guard the next, and how nothing reports the mismatch, write: "Some Postgres features attach to the connection, not the statement. The pool freely reuses connections between statements, so state set by one statement may not be there for the next, and nothing reports the mismatch." Same understanding, fewer words, no compression. The mechanism details belong in the linked design doc or the code itself, not in the ticket.
+
+Brevity means fewer ideas, not compressed claims. If the ticket is still too long after stepping up, cut the lowest-value claim entirely. Do not cut the connective tissue that makes the remaining claims parse on first read.
 
 Inside sections, telegraphic bullet style is fine for criteria and plans: lowercase start, abbreviations (`w/`, `1x`, `~`), parenthetical shorthand. Full sentences for PROBLEM and BACKGROUND prose.
 
@@ -404,7 +416,7 @@ That reading alone conveys the shape, scope, and gates of all three tickets.
 16. **Verify links**: check repo file links, external docs, tickets, PRs, and design artifacts where tooling allows. Do not claim an unverified link was verified.
 17. **Verify prose style and core principle**: check each rule in Prose style. Cut design-narration, authoring-sequence, and buzzwordy abstractions. Verify plain ASCII. Verify prescriptive voice (not descriptive). Verify first-use definitions for subsystem jargon in BACKGROUND or PROBLEM. Verify plain English nouns (no code-domain nouns in prose). Verify conclusion-first in PROBLEM. Verify NOTES bullets are either short pointers or self-contained.
 18. **Clarity pass**: read the draft as a cold lead skimming a backlog, then as an implementer picking up the work cold. Rewrite before returning it; do not tell the user you performed this pass. Check: does every project-specific term get plain-English meaning before or with the label? Are ambiguous terms qualified or replaced with specific behavior? Does every process word name object/action/effect? Does every contrast name current and proposed behavior? Does every causal sentence show the middle step? Did you preserve connective tissue instead of compressing meaning into noun stacks? If the draft got longer, cut a lower-value claim instead of compressing a high-value one.
-19. **Verify length**: if the body exceeds what the work's conceptual size warrants, cut until each line earns its place. If PROPOSED APPROACH dominates, consider splitting into a design doc plus ticket.
+19. **Verify length**: estimate the ticket's complexity (see the point-based budgets in Length and style). If the body exceeds the budget, step up the abstraction ladder first (replace mechanism sequences with the principle that subsumes them). If still over, cut the lowest-value claim entirely. Do not compress terminology or cut connective tissue to hit a word count. If PROPOSED APPROACH dominates, consider splitting into a design doc plus ticket.
 
 ## Anti-patterns
 
