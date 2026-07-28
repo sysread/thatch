@@ -91,6 +91,8 @@ Omit when the problem is self-contained. A one-line "follow-up from #6838" can l
 
 The design concept. Not a full implementation plan. Enough that the implementer knows the direction: "load key material outside the mutex" not "restructure ActiveKey to use cachedKey/publish helpers with a publish function that zeroizes the loser's DEK." The implementer writes the implementation plan; the ticket sets the compass heading.
 
+Present each mechanism in one short paragraph: what it does, plus the constraint that justifies its existence. Keep a justification when it answers an objection the reader will have (a lock that looks redundant, a retry that looks pointless). Compress failure-mode sagas to their consequence: "a leaked lock blocks every later attempt" carries what a paragraph of driver internals would. Reasons of the form "why not X" (no metric, no kill switch, no singleflight) go in NOTES as declined alternatives.
+
 For investigative tickets, this is "investigate X and propose a solution" rather than a concrete approach. Say so explicitly so the implementer knows the ticket expects analysis before implementation.
 
 This is where the ticket diverges most from a PR description. A PR description describes a change that already happened. A ticket proposes one that hasn't. The prose is prescriptive ("the fix should...") rather than descriptive ("this PR moves...").
@@ -107,7 +109,9 @@ Bad criteria are vague:
 - "improve the locking situation" (untestable)
 - "restructure ActiveKey" (implementation detail, not a behavior)
 
-If the criterion has a test shape, name it: "SetMaxOpenConns(1) with the connection held by a tx that also resolves the key." This gives the implementer the test design without dictating the implementation.
+If a criterion's test design is non-obvious, name the test shape: "SetMaxOpenConns(1) with the connection held by a tx that also resolves the key." This gives the implementer the test design without dictating the implementation. "Tested explicitly" is not a test shape.
+
+Keep the list coarse: three to seven criteria cover most tickets. This section defines "done"; it is not a test inventory. Merge parallel checks that verify the same behavior under different triggers. Drop criteria that restate PROPOSED APPROACH as a checklist - the criterion must add an observable gate, not echo the design.
 
 ### RELEASE PLAN (conditional)
 
@@ -117,7 +121,7 @@ Rollout strategy for tickets that change production behavior. Only when the chan
 - Deploy sequence (which services, in what order).
 - Rollback path (what to do if it goes wrong).
 
-A pure internal refactor with no operator-visible behavior change does not need this section. A migration that gates on a backfill completing does.
+A pure internal refactor with no operator-visible behavior change does not need this section. Neither does a change whose rollout is a normal deploy: if the only available bullets say "nothing special happens," omit the section - its absence is the nothing-special signal. A migration that gates on a backfill completing, or a revert that is not free, does need it.
 
 ### VALIDATION (conditional)
 
@@ -131,9 +135,11 @@ Only when prod verification is non-trivial. A pure refactor with good tests does
 
 ### DEPENDENCIES (conditional)
 
-Blocking relationships and ordering constraints. "Blocked by PLAT-126" is the tracker field; the _why_ belongs here: "PLAT-125 partitions by location_fingerprint, so it can only run after backfill completes (count == 0), not merely after PLAT-124 merges." That kind of nuance is what prevents a well-intentioned lead from reordering the queue.
+The tracker's blocker links carry the what; this section carries only what links cannot. Write a bullet when there is a _why_ the link cannot express: "PLAT-125 partitions by location_fingerprint, so it can only run after backfill completes (count == 0), not merely after PLAT-124 merges." That kind of nuance is what prevents a well-intentioned lead from reordering the queue. "Blocked by PLAT-126" with nothing to add is the tracker field - set the link there and omit the bullet.
 
 Distinguish hard data dependencies (cannot run until X completes) from soft dependencies (should run after X for cleanliness, but technically works independently). Say which kind it is.
+
+If every bullet would restate a tracker link, omit the section and set the links.
 
 ### NOTES
 
@@ -204,15 +210,17 @@ Estimate the ticket's **complexity** (how much new mental model the implementer 
 - **1 point** (one guard, one flag, one constant): the implementer needs to know what to change, not a lesson in the subsystem. ~100-200 words. SYNOPSIS one line, PROBLEM 2-4 sentences (still rate the hazard, even if it is "no current defect"), PROPOSED APPROACH 1-2 sentences, one to three acceptance criteria.
 - **2-3 points** (new function, restructured flow, multi-file refactor): the implementer needs a before/after they cannot infer from the code alone. ~200-400 words. Full mandatory sections; BACKGROUND only when prior work or project context earns it.
 - **5 points** (new feature, migration sequence): the implementer needs a mental model they do not have yet. ~400-600 words. RELEASE PLAN, VALIDATION, and DEPENDENCIES when prod coordination warrants.
-- **8 points** (multi-PR effort, subsystem redesign): ~600-800 words. Accept the length; spend it on context and starting state. If PROPOSED APPROACH is longer than the rest of the ticket combined, the ticket is probably a design doc wearing a ticket costume; split it.
+- **8 points** (multi-PR effort, subsystem redesign, constraint-dense work): ~800-1100 words. Complex tickets legitimately need more text; spend it on context and starting state, not on repetition. If PROPOSED APPROACH is longer than the rest of the ticket combined, the ticket is probably a design doc wearing a ticket costume; split it.
 
 Estimate by: how many new concepts the implementer must learn, whether the problem and approach have non-obvious mechanics, whether the work spans multiple workflows or systems. Not by files the change will touch or sections present. A mechanical multi-file rename is 1 point. A one-line fix with subtle semantics is 2-3.
 
-**When a section is too long, step up the abstraction ladder.** Do not compress terminology or cut connective tissue to hit a word count. Instead, replace a sequence of mechanism details with the principle that subsumes them.
+**When a ticket runs long, take the section-level levers first.** Omit RELEASE PLAN, VALIDATION, DEPENDENCIES, or NOTES when they carry nothing a normal deploy or the tracker links already say. Coarsen ACCEPTANCE CRITERIA. Compress PROPOSED APPROACH failure sagas to their consequences. These levers remove duplication, not knowledge.
+
+**Then step up the abstraction ladder.** Do not compress terminology or cut connective tissue to hit a word count. Instead, replace a sequence of mechanism details with the principle that subsumes them.
 
 Example: instead of six claims about how a connection pool reuses connections, how session locks are session-scoped, how a lock taken by one statement does not guard the next, and how nothing reports the mismatch, write: "Some Postgres features attach to the connection, not the statement. The pool freely reuses connections between statements, so state set by one statement may not be there for the next, and nothing reports the mismatch." Same understanding, fewer words, no compression. The mechanism details belong in the linked design doc or the code itself, not in the ticket.
 
-Brevity means fewer ideas, not compressed claims. If the ticket is still too long after stepping up, cut the lowest-value claim entirely. Do not cut the connective tissue that makes the remaining claims parse on first read.
+Brevity means fewer ideas, not compressed claims. If the ticket is still too long after the levers and the ladder, cut the lowest-value claim entirely. Do not cut the connective tissue that makes the remaining claims parse on first read. The knowledge build-up - each section introducing what the next one needs - survives every trim; what goes is redundancy.
 
 Inside sections, telegraphic bullet style is fine for criteria and plans: lowercase start, abbreviations (`w/`, `1x`, `~`), parenthetical shorthand. Full sentences for PROBLEM and BACKGROUND prose.
 
@@ -242,6 +250,8 @@ Read project context when the request, existing ticket, code comments, branch na
 - a roadmap label, subsystem nickname, architecture slogan, or branch-local name.
 
 Use available source material: linked tickets, linked PRs, nearby docs, code comments, commit messages, and project memory. Build a private term map: term -> plain behavior -> source. Do not dump the map into the ticket. Use it to write the shortest useful BACKGROUND.
+
+When rewriting an existing ticket, mine the old text for facts - harm statements, platform behaviors, traps already discovered - but draft the new description from the sources, not from the old text. Editing the old ticket inherits its phrasing and its habits; the rewrite should stand on the plan docs, the code, and the mined facts.
 
 If a term or dependency controls the work and you cannot resolve it from available context, stop and ask the user. Do not guess. Do not write around the missing definition with vaguer words.
 
@@ -401,14 +411,14 @@ That reading alone conveys the shape, scope, and gates of all three tickets.
 1. **Gather**: read the code the ticket references. Check `git log` for recent changes to the same files. Identify the problem, the prior work, and the proposed direction.
 2. **Search before create**: search Linear/Jira for likely duplicate tickets. If one exists, surface it before drafting or filing.
 3. **Codebase comparison**: verify the problem still exists in the current code. If it was already fixed, tell the user. If it was partially mitigated, note the mitigation.
-4. **Read project context for planned work**: if the ticket is part of a larger project, depends on prior work, uses unexplained project terms, or has scheduling dependencies, read the linked tickets, PRs, docs, comments, and memory before drafting. Build a private term map. If a term or dependency controls the work and you cannot resolve it, ask the user.
+4. **Read project context for planned work**: if the ticket is part of a larger project, depends on prior work, uses unexplained project terms, or has scheduling dependencies, read the linked tickets, PRs, docs, comments, and memory before drafting. Build a private term map. If a term or dependency controls the work and you cannot resolve it, ask the user. When rewriting an existing ticket, mine the old text for facts but draft fresh.
 5. **Draft PROBLEM first**, in one breath, without looking at code. If you cannot state the harm in three sentences, you do not understand the problem yet. Go back and read.
 6. **Write BACKGROUND** (if needed): what prior work led here, what was done, what was left behind, and what project context an engineer new to this area needs to start.
-7. **Write PROPOSED APPROACH**: the compass heading, not the map. Prescriptive voice.
-8. **Write ACCEPTANCE CRITERIA**: observable, testable bullets. Name the test shape where relevant.
-9. **Write RELEASE PLAN** (if needed): flags, ordering, rollback.
+7. **Write PROPOSED APPROACH**: the compass heading, not the map. Prescriptive voice. One short paragraph per mechanism, each with the constraint that justifies it; compress failure sagas to their consequence; move "why not X" reasoning to NOTES.
+8. **Write ACCEPTANCE CRITERIA**: observable, testable bullets. Coarse: three to seven, merging parallel checks and dropping restatements of the approach. Name the test shape only where the test design is non-obvious.
+9. **Write RELEASE PLAN** (if needed): flags, ordering, rollback. Omit when the rollout is a normal deploy.
 10. **Write VALIDATION** (if needed): monitoring, signals, smoke tests.
-11. **Write DEPENDENCIES** (if needed): what blocks this, what this blocks, and why.
+11. **Write DEPENDENCIES** (if needed): only the why that tracker blocker links cannot express. Omit when the links carry it; set the links instead.
 12. **Write SYNOPSIS last** - it is a compression of PROBLEM + the core approach.
 13. **Bold and italicize the save points** in the allowed locations. Bold phrases that name the work (components, mechanisms, behaviors). Italicize phrases that orient to significance (conclusions, payoffs), at most one per paragraph. Apply the scan check.
 14. **Add NOTES** for non-goals, declined alternatives, and scope limits. Use `## NOTES` header. Omit if empty.
@@ -416,7 +426,7 @@ That reading alone conveys the shape, scope, and gates of all three tickets.
 16. **Verify links**: check repo file links, external docs, tickets, PRs, and design artifacts where tooling allows. Do not claim an unverified link was verified.
 17. **Verify prose style and core principle**: check each rule in Prose style. Cut design-narration, authoring-sequence, and buzzwordy abstractions. Verify plain ASCII. Verify prescriptive voice (not descriptive). Verify first-use definitions for subsystem jargon in BACKGROUND or PROBLEM. Verify plain English nouns (no code-domain nouns in prose). Verify conclusion-first in PROBLEM. Verify NOTES bullets are either short pointers or self-contained.
 18. **Clarity pass**: read the draft as a cold lead skimming a backlog, then as an implementer picking up the work cold. Rewrite before returning it; do not tell the user you performed this pass. Check: does every project-specific term get plain-English meaning before or with the label? Are ambiguous terms qualified or replaced with specific behavior? Does every process word name object/action/effect? Does every contrast name current and proposed behavior? Does every causal sentence show the middle step? Did you preserve connective tissue instead of compressing meaning into noun stacks? If the draft got longer, cut a lower-value claim instead of compressing a high-value one.
-19. **Verify length**: estimate the ticket's complexity (see the point-based budgets in Length and style). If the body exceeds the budget, step up the abstraction ladder first (replace mechanism sequences with the principle that subsumes them). If still over, cut the lowest-value claim entirely. Do not compress terminology or cut connective tissue to hit a word count. If PROPOSED APPROACH dominates, consider splitting into a design doc plus ticket.
+19. **Verify length**: estimate the ticket's complexity (see the point-based budgets in Length and style). If the body exceeds the budget, take the section-level levers first (omit conditional sections that duplicate the tracker or a normal deploy, coarsen acceptance criteria, compress approach sagas), then step up the abstraction ladder (replace mechanism sequences with the principle that subsumes them). If still over, cut the lowest-value claim entirely. Do not compress terminology or cut connective tissue to hit a word count. If PROPOSED APPROACH dominates, consider splitting into a design doc plus ticket.
 
 ## Anti-patterns
 
@@ -439,3 +449,7 @@ That reading alone conveys the shape, scope, and gates of all three tickets.
 - **Conclusion buried at the end.** PROBLEM that builds to its point in the last sentence forces the reader to absorb the explanation before knowing what is being explained. Lead with the problem, then explain why.
 - **Hazard rating without motivation.** "No incident has hit this shape" answers "how bad?" but not "why prioritize this?" Answer "why now?" so the lead can decide whether to schedule it.
 - **NOTES bullets that are both wordy and terse.** A bullet that compresses a paragraph of rationale into one dense sentence reads as a private note. Either flag the thing and point to the full explanation, or write a self-contained sentence or two. Not the middle thing.
+- **RELEASE PLAN that argues the release is boring.** If every bullet says the rollout is routine, omit the section. Its absence is the nothing-special signal.
+- **DEPENDENCIES that restate tracker links.** "Blocked by PLAT-126" with nothing to add is the tracker field. Set the link; keep the section only for the why a link cannot express.
+- **Test inventory as acceptance criteria.** A dozen bullets covering every code path is a test plan, not a definition of done. Keep three to seven observable gates; merge parallel checks.
+- **Failure sagas in PROPOSED APPROACH.** Paragraphs of driver internals, pool lifecycle, or library quirks. Compress to the consequence; the implementer discovers the saga at the keyboard.
