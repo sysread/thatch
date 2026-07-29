@@ -690,7 +690,8 @@ describe("extractionNudge escalation", () => {
     const nudge = extractionNudge(3, 0, tool, payload);
     expect(nudge).toContain("Dispatch a task with background: true");
     expect(nudge).toContain("thatch_extraction_done");
-    expect(nudge).toContain("Then answer the user");
+    expect(nudge).toContain("not user input");
+    expect(nudge).toContain("continue waiting");
     expect(nudge).not.toContain("YOU HAVE NOT");
     expect(nudge).not.toContain("IGNORING");
     expect(nudge).not.toContain("if your harness");

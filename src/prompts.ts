@@ -426,7 +426,9 @@ export function extractionNudge(
   return `[thatch] ${dispatch} to run the thatch-fact-extractor skill ` +
     `on ${count} queued tool interaction${plural}. ` +
     `${acknowledge} ` +
-    `Then answer the user. ` +
+    `This is a system nudge, not user input. After dispatching and acknowledging, ` +
+    `stop: do not advance pending work on this nudge's account. If you are ` +
+    `waiting for the user to respond, continue waiting. ` +
     `Use ${toolName} to save durable facts from this payload:\n${payload}`;
 }
 
