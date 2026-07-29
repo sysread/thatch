@@ -251,3 +251,98 @@ describe("ExtractionPipeline.consumeSnapshot", () => {
     expect(remaining.every((ix) => post.includes(ix))).toBe(true);
   });
 });
+
+describe("ExtractionPipeline accept/complete/requeue", () => {
+  function pushN(pipeline: ExtractionPipeline, session: string, n: number): ToolInteraction[] {
+    const entries: ToolInteraction[] = [];
+    for (let i = 0; i < n; i++) {
+      const ix: ToolInteraction = {
+        tool: "bash",
+        sessionID: session,
+        args: { command: `cmd-${i}` },
+        title: `title-${i}`,
+        output: `output-${i}`,
+      };
+      entries.push(ix);
+      pipeline.push(ix);
+    }
+    return entries;
+  }
+
+  test("accept moves the buffer to holding: nudge stops, entries kept", () => {
+    const pipeline = new ExtractionPipeline();
+    const session = "parent";
+
+    pushN(pipeline, session, 3);
+    pipeline.accept(session);
+
+    expect(pipeline.pending(session)).toBe(false);
+    expect(pipeline.peek(session).length).toBe(0);
+    expect(pipeline.peekAccepted(session).length).toBe(3);
+  });
+
+  test("accept with an empty buffer is a no-op", () => {
+    const pipeline = new ExtractionPipeline();
+    pipeline.accept("nonexistent");
+    expect(pipeline.peekAccepted("nonexistent").length).toBe(0);
+  });
+
+  test("accept accumulates across calls", () => {
+    const pipeline = new ExtractionPipeline();
+    const session = "parent";
+
+    pushN(pipeline, session, 2);
+    pipeline.accept(session);
+    pushN(pipeline, session, 2);
+    pipeline.accept(session);
+
+    expect(pipeline.peekAccepted(session).length).toBe(4);
+  });
+
+  test("completeAccepted drops held entries", () => {
+    const pipeline = new ExtractionPipeline();
+    const session = "parent";
+
+    pushN(pipeline, session, 3);
+    pipeline.accept(session);
+    pipeline.completeAccepted(session);
+
+    expect(pipeline.peekAccepted(session).length).toBe(0);
+    expect(pipeline.pending(session)).toBe(false);
+  });
+
+  test("completeAccepted with nothing held is a no-op", () => {
+    const pipeline = new ExtractionPipeline();
+    pipeline.completeAccepted("nonexistent");
+    expect(pipeline.peekAccepted("nonexistent").length).toBe(0);
+  });
+
+  test("requeueAccepted restores entries to pending, ahead of newer arrivals", () => {
+    const pipeline = new ExtractionPipeline();
+    const session = "parent";
+
+    const old = pushN(pipeline, session, 3);
+    pipeline.accept(session);
+    const newer = pushN(pipeline, session, 2);
+
+    pipeline.requeueAccepted(session);
+
+    expect(pipeline.peekAccepted(session).length).toBe(0);
+    const pending = pipeline.peek(session);
+    expect(pending.length).toBe(5);
+    expect(pending[0]).toBe(old[0]);
+    expect(pending[2]).toBe(old[2]);
+    expect(pending[3]).toBe(newer[0]);
+    expect(pending[4]).toBe(newer[1]);
+  });
+
+  test("requeueAccepted with nothing held is a no-op", () => {
+    const pipeline = new ExtractionPipeline();
+    const session = "parent";
+
+    pushN(pipeline, session, 2);
+    pipeline.requeueAccepted(session);
+
+    expect(pipeline.peek(session).length).toBe(2);
+  });
+});

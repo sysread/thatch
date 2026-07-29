@@ -1,6 +1,6 @@
 # UC-020: Extraction nudge escalation and acknowledgment
 
-_Automatable: missedNudges counter + escalation tiers + extraction_done drain
+_Automatable: missedNudges counter + escalation tiers + extraction_done accept
 are testable with the mock client and a synthetic tool call sequence._
 
 **Preconditions**
@@ -27,10 +27,12 @@ are testable with the mock client and a synthetic tool call sequence._
   persists until a memory is written or `extraction_done` is called. The nudge
   repeats each turn with escalated tone (and the payload grows if new tool
   activity adds entries between nudges).
-- Step 6: `thatch_extraction_done` drains the buffer and resets the
-  `missedNudges` counter. The tool returns `"[acknowledged] extraction buffer
-  drained"`.
-- Step 7: no extraction nudge appears (buffer is empty). If the user prompt
+- Step 6: `thatch_extraction_done` in the parent accepts the buffer (moves it
+  to a holding area) and resets the `missedNudges` counter. The tool returns
+  `"[acknowledged]"`. Held entries drop when the extractor completes (child
+  memory write, child `extraction_done`, or child idle); if the child errors
+  or is deleted first, the entries requeue and the nudge replays.
+- Step 7: no extraction nudge appears (buffer is accepted). If the user prompt
   semantically matches existing memories, a recall nudge may appear instead.
 - Alternative drain path: if a child sub-agent (dispatched via the `task`
   tool) writes a memory via `thatch_memory_remember`, the parent's buffer is

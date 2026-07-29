@@ -340,7 +340,7 @@ describe("plugin entry", () => {
     expect(parentOut.parts[0].text).toContain("Dispatch a task with background: true");
   });
 
-  test("fix C: thatch_extraction_done drains the buffer without a memory write", async () => {
+  test("accept/complete: extraction_done quiets the nudge without dropping entries", async () => {
     // Buffer tool interactions
     await hooks["tool.execute.after"]!(
       { tool: "bash", sessionID: "ses_fixc", callID: "fc1", args: { command: "ls" } },
@@ -352,16 +352,130 @@ describe("plugin entry", () => {
     await hooks["chat.message"]!({ sessionID: "ses_fixc", messageID: "msg_fc0" } as any, out1);
     expect(out1.parts.length).toBe(1);
 
-    // Agent calls extraction_done to acknowledge
+    // Parent accepts the buffer after dispatching the extractor
     await hooks["tool.execute.after"]!(
       { tool: "thatch_extraction_done", sessionID: "ses_fixc", callID: "fc2", args: {} },
       { title: "ack", output: "[acknowledged]", metadata: {} },
     );
 
-    // Buffer should be drained — no nudge on next chat.message
+    // Nudge quiets while the extractor works
     const out2: any = { message: { id: "msg_fc1" }, parts: [] };
     await hooks["chat.message"]!({ sessionID: "ses_fixc", messageID: "msg_fc1" } as any, out2);
     expect(out2.parts.length).toBe(0);
+
+    // Extractor (child session) finishes without saving anything and goes
+    // idle — that completes the accepted entries.
+    await hooks.event!({ event: {
+      type: "session.created",
+      properties: { info: { id: "ses_child_fixc", parentID: "ses_fixc" } } } as any,
+    });
+    await hooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_child_fixc", status: { type: "idle" } } } as any,
+    });
+
+    const out3: any = { message: { id: "msg_fc2" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_fixc", messageID: "msg_fc2" } as any, out3);
+    expect(out3.parts.length).toBe(0);
+  });
+
+  test("accept/requeue: child session error returns entries to pending", async () => {
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_requeue", callID: "rq1", args: { command: "ls" } },
+      { title: "list", output: "file.txt", metadata: {} },
+    );
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_extraction_done", sessionID: "ses_requeue", callID: "rq2", args: {} },
+      { title: "ack", output: "[acknowledged]", metadata: {} },
+    );
+
+    // Extractor child errors out before writing any memory
+    await hooks.event!({ event: {
+      type: "session.created",
+      properties: { info: { id: "ses_child_requeue", parentID: "ses_requeue" } } } as any,
+    });
+    await hooks.event!({ event: {
+      type: "session.error",
+      properties: { sessionID: "ses_child_requeue", error: { name: "APIError", message: "boom" } } } as any,
+    });
+
+    // The nudge replays with the original payload — facts are not lost
+    const out: any = { message: { id: "msg_rq1" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_requeue", messageID: "msg_rq1" } as any, out);
+    expect(out.parts.length).toBe(1);
+    expect(out.parts[0].text).toContain('"tool":"bash"');
+  });
+
+  test("accept/requeue: child session deleted before completing returns entries", async () => {
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_delq", callID: "dq1", args: { command: "ls" } },
+      { title: "list", output: "file.txt", metadata: {} },
+    );
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_extraction_done", sessionID: "ses_delq", callID: "dq2", args: {} },
+      { title: "ack", output: "[acknowledged]", metadata: {} },
+    );
+    await hooks.event!({ event: {
+      type: "session.created",
+      properties: { info: { id: "ses_child_delq", parentID: "ses_delq" } } } as any,
+    });
+    await hooks.event!({ event: {
+      type: "session.deleted",
+      properties: { info: { id: "ses_child_delq" } } } as any,
+    });
+
+    const out: any = { message: { id: "msg_dq1" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_delq", messageID: "msg_dq1" } as any, out);
+    expect(out.parts.length).toBe(1);
+    expect(out.parts[0].text).toContain('"tool":"bash"');
+  });
+
+  test("accept/complete: child extraction_done completes the parent's accepted entries", async () => {
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_ack", callID: "ak1", args: { command: "ls" } },
+      { title: "list", output: "file.txt", metadata: {} },
+    );
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_extraction_done", sessionID: "ses_ack", callID: "ak2", args: {} },
+      { title: "ack", output: "[acknowledged]", metadata: {} },
+    );
+    await hooks.event!({ event: {
+      type: "session.created",
+      properties: { info: { id: "ses_child_ack", parentID: "ses_ack" } } } as any,
+    });
+
+    // Extractor finishes a no-save run by calling extraction_done itself
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_extraction_done", sessionID: "ses_child_ack", callID: "ak3", args: {} },
+      { title: "ack", output: "[acknowledged]", metadata: {} },
+    );
+
+    const out: any = { message: { id: "msg_ak1" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_ack", messageID: "msg_ak1" } as any, out);
+    expect(out.parts.length).toBe(0);
+  });
+
+  test("accept/complete: child memory write completes accepted entries", async () => {
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_mwc", callID: "mw1", args: { command: "ls" } },
+      { title: "list", output: "file.txt", metadata: {} },
+    );
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_extraction_done", sessionID: "ses_mwc", callID: "mw2", args: {} },
+      { title: "ack", output: "[acknowledged]", metadata: {} },
+    );
+    await hooks.event!({ event: {
+      type: "session.created",
+      properties: { info: { id: "ses_child_mwc", parentID: "ses_mwc" } } } as any,
+    });
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_memory_remember", sessionID: "ses_child_mwc", callID: "mw3", args: {} },
+      { title: "save", output: "[saved]", metadata: {} },
+    );
+
+    const out: any = { message: { id: "msg_mw1" }, parts: [] };
+    await hooks["chat.message"]!({ sessionID: "ses_mwc", messageID: "msg_mw1" } as any, out);
+    expect(out.parts.length).toBe(0);
   });
 
   test("installs skill files under the redirected config home", async () => {

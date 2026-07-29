@@ -17,7 +17,8 @@ You will be given a JSON payload with:
 3. Do not save session-specific state, ephemeral debugging details, or info already in CLAUDE.md.
 4. Apply the durability test before saving: will this still be true and useful in a future session that knows nothing about this branch, commit, or session? If not, skip it. Do not store point-in-time values (migration indices, line numbers, file counts), commit hashes or branch history narratives (git is the source of truth), or anything re-derivable from the codebase faster than recalling it.
 5. Write for a future session with zero current context. No "we", "our session", "just now".
-6. Your final message must be exactly: "Extraction complete." — do not list or summarize what you saved. The memories are in the store; the parent session does not need a report.
+6. Call thatch_extraction_done to mark the run complete. Do this even when nothing was worth saving: the parent session holds the buffered interactions until a completion signal arrives, and a memory write is not one on a no-save run.
+7. Your final message must be exactly: "Extraction complete." — do not list or summarize what you saved. The memories are in the store; the parent session does not need a report.
 
 ## What to extract
 

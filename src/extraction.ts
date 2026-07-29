@@ -91,6 +91,7 @@ export function buildExtractionPayload(
  */
 export class ExtractionPipeline {
   #buffers = new Map<string, ToolInteraction[]>();
+  #accepted = new Map<string, ToolInteraction[]>();
   #maxBuffer = 20;
 
   /** Record a tool execution for later extraction. */
@@ -108,6 +109,46 @@ export class ExtractionPipeline {
   /** Clears the session's buffer. Called when the agent writes a memory. */
   consume(sessionID: string): void {
     this.#buffers.delete(sessionID);
+  }
+
+  /**
+   * Accept the session's buffer: move it to a holding area so the nudge
+   * stops replaying while a dispatched extractor works. AMQP-style accept —
+   * the entries are not dropped until a completion signal arrives (the
+   * extractor writes a memory, calls extraction_done, or goes idle). If the
+   * extractor dies first, requeueAccepted puts them back.
+   */
+  accept(sessionID: string): void {
+    const buf = this.#buffers.get(sessionID) ?? [];
+    if (buf.length === 0) return;
+    this.#buffers.delete(sessionID);
+    const existing = this.#accepted.get(sessionID) ?? [];
+    this.#accepted.set(sessionID, [...existing, ...buf]);
+  }
+
+  /** Drop accepted entries: the extractor finished (save or no-save). */
+  completeAccepted(sessionID: string): void {
+    this.#accepted.delete(sessionID);
+  }
+
+  /**
+   * Move accepted entries back to pending: the extractor errored or its
+   * session was deleted before completing, so the facts were never
+   * processed. Prepended so they replay in original order. Not capped at
+   * maxBuffer — a silent drop here would defeat the point of requeueing;
+   * the next push trims back to the cap.
+   */
+  requeueAccepted(sessionID: string): void {
+    const accepted = this.#accepted.get(sessionID);
+    if (!accepted || accepted.length === 0) return;
+    this.#accepted.delete(sessionID);
+    const buf = this.#buffers.get(sessionID) ?? [];
+    this.#buffers.set(sessionID, [...accepted, ...buf]);
+  }
+
+  /** Returns the session's accepted (held) interactions. Test/introspection. */
+  peekAccepted(sessionID: string): ToolInteraction[] {
+    return this.#accepted.get(sessionID) ?? [];
   }
 
   /**

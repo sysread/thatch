@@ -352,29 +352,35 @@ const markCheckedDef: ToolDef = {
 };
 
 /**
- * Acknowledge that the extraction nudge has been handled. Drains the
- * extraction buffer so the nudge does not replay on the next turn.
+ * Extraction-buffer acknowledgment, with AMQP-style accept/complete roles.
  *
- * The actual draining happens in the host's post-tool hook
+ * Called in a PARENT session after dispatching the fact-extractor, it accepts
+ * the buffer: entries move to a holding area and the nudge quiets, but they
+ * are not dropped until the extractor completes. Called in a CHILD extractor
+ * at the end of its run, it completes the parent's accepted entries —
+ * including no-save runs that write no memory. If the child errors or is
+ * deleted before either signal, the host requeues the entries so the facts
+ * are not lost.
+ *
+ * The actual state changes happen in the host's post-tool hook
  * (tool.execute.after for opencode, PostToolBatch/appendBatch for MCP) —
  * this tool's execute function is a no-op confirmation. The tool exists so
- * the model can call it in the parent session after dispatching the
- * fact-extractor to a sub-agent, giving the hook a recognizable tool name
- * to key on. Without it, the buffer only drains when a memory_remember
- * call lands in the same session (or a tracked child session), which fails
- * if the sub-agent errors out or the host doesn't expose parent-child
- * session relationships.
+ * the model has a recognizable tool name to key on. In the MCP path the
+ * file-backed queue is consumed on this call (or on any memory_remember),
+ * which is durable across interruption because the queue persists on disk
+ * until then.
  */
 const extractionDoneDef: ToolDef = {
   name: "extraction_done",
   description:
-    "Acknowledge that the extraction nudge has been dispatched to a sub-agent. " +
-    "Drains the extraction buffer so the nudge does not replay. " +
-    "Call this in the parent session after dispatching a background task " +
-    "to run the thatch-fact-extractor skill.",
+    "Acknowledge extraction-buffer work. In a parent session, call after " +
+    "dispatching the fact-extractor to a sub-agent: accepts the buffer " +
+    "(quiets the nudge) while keeping entries until the extractor completes. " +
+    "In the fact-extractor sub-agent, call at the end of the run to mark the " +
+    "entries complete, even when nothing was worth saving.",
   args: {},
   async execute() {
-    return "[acknowledged] extraction buffer drained";
+    return "[acknowledged]";
   },
 };
 

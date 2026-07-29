@@ -129,27 +129,34 @@ export const server: Plugin = async ({ client, worktree }) => {
     //    agent writes a memory, so ignored nudges accumulate and the payload
     //    grows with each missed cycle.
     //
-    //    A memory_remember call in a child session (sub-agent) also drains
-    //    the parent's buffer — but only the entries that existed at dispatch
-    //    time (the snapshot). Entries from interleaved turns survive so their
-    //    facts aren't silently dropped. Without this, dispatching the
-    //    fact-extractor as a background task writes memories in the child but
-    //    never clears the parent's queue — the nudge replays every turn.
+    //    Buffer lifecycle is AMQP-style accept/complete, so a failed
+    //    extractor does not silently drop unprocessed interactions:
+    //    - thatch_extraction_done in the parent ACCEPTS the buffer: it moves
+    //      to a holding area and the nudge quiets, but entries are not
+    //      dropped yet.
+    //    - COMPLETE drops the held entries. Signals: a memory_remember or
+    //      extraction_done call in a child session of that parent (the
+    //      extractor confirming it processed them), or the child going idle
+    //      (a no-save run that never acks still counts as processed).
+    //    - REQUEUE returns the held entries to pending. Signals: the child
+    //      session errors or is deleted before completing.
     //
-    //    thatch_extraction_done is an explicit acknowledgment tool the model
-    //    calls in the parent session after dispatching. Covers the case where
-    //    the sub-agent errors out or the host doesn't expose parent-child
-    //    session relationships.
+    //    A memory_remember call in a child session (sub-agent) also drains
+    //    the parent's pending buffer — but only the entries that existed at
+    //    dispatch time (the snapshot). Entries from interleaved turns survive
+    //    so their facts aren't silently dropped.
     "tool.execute.after": async (input, output) => {
       if (input.tool === "thatch_memory_remember") {
         extraction.consume(input.sessionID);
         missedNudges.delete(input.sessionID);
-        // If this is a child session, drain only the parent's snapshot entries
-        // (those present at dispatch time). Interleaved-turn entries survive.
-        // If no snapshot was recorded (e.g. session.created event never
-        // arrived), fall back to draining the entire parent buffer.
+        // If this is a child session, complete the parent's accepted entries
+        // (the extractor confirmed it is alive and saving) and drain the
+        // parent's snapshot entries from the pending buffer. If no snapshot
+        // was recorded (e.g. session.created event never arrived), fall back
+        // to draining the entire parent buffer.
         const parentID = childToParent.get(input.sessionID);
         if (parentID) {
+          extraction.completeAccepted(parentID);
           const snapshot = parentSnapshots.get(input.sessionID);
           if (snapshot) {
             extraction.consumeSnapshot(parentID, snapshot);
@@ -161,11 +168,21 @@ export const server: Plugin = async ({ client, worktree }) => {
         }
         return;
       }
-      // Explicit acknowledgment tool drains the buffer without requiring a
-      // memory write. The model calls this after dispatching the
-      // fact-extractor to a sub-agent.
+      // thatch_extraction_done has two roles depending on the session:
+      // - parent, after dispatching the fact-extractor: ACCEPT the buffer
+      //   (quiet the nudge, hold the entries for completion).
+      // - child extractor, at the end of its run: COMPLETE the parent's
+      //   accepted entries, including no-save runs that write no memory,
+      //   and drop the child's own buffer (its work is done).
       if (input.tool === "thatch_extraction_done") {
-        extraction.consume(input.sessionID);
+        const parentID = childToParent.get(input.sessionID);
+        if (parentID) {
+          extraction.completeAccepted(parentID);
+          missedNudges.delete(parentID);
+          extraction.consume(input.sessionID);
+        } else {
+          extraction.accept(input.sessionID);
+        }
         missedNudges.delete(input.sessionID);
         return;
       }
@@ -290,7 +307,13 @@ export const server: Plugin = async ({ client, worktree }) => {
     // snapshots the parent's current buffer — so the child's later
     // memory_remember drains only those snapshot entries, not the parent's
     // entire buffer (which may have grown from interleaved turns).
-    // session.deleted cleans both maps to avoid unbounded growth.
+    //
+    // The accepted-buffer lifecycle completes or requeues on child lifecycle
+    // events: idle means the extractor finished (a no-save run writes no
+    // memory but still processed the payload); error or deletion before
+    // completion means the facts were never extracted, so the entries go
+    // back to pending. session.deleted also cleans both maps to avoid
+    // unbounded growth.
     event: async ({ event }) => {
       if (event.type === "session.created") {
         const info = event.properties.info;
@@ -299,9 +322,30 @@ export const server: Plugin = async ({ client, worktree }) => {
           parentSnapshots.set(info.id, [...extraction.peek(info.parentID)]);
         }
       }
+      if (event.type === "session.error") {
+        const childID = event.properties.sessionID;
+        const parentID = childID ? childToParent.get(childID) : undefined;
+        if (parentID) extraction.requeueAccepted(parentID);
+        return;
+      }
+      if (event.type === "session.status" && event.properties.status?.type === "idle") {
+        const childID = event.properties.sessionID;
+        const parentID = childID ? childToParent.get(childID) : undefined;
+        if (parentID) {
+          extraction.completeAccepted(parentID);
+          missedNudges.delete(parentID);
+        }
+        return;
+      }
       if (event.type === "session.deleted") {
-        childToParent.delete(event.properties.info.id);
-        parentSnapshots.delete(event.properties.info.id);
+        const id = event.properties.info.id;
+        // A child deleted before completing never processed its payload.
+        const parentID = childToParent.get(id);
+        if (parentID) extraction.requeueAccepted(parentID);
+        childToParent.delete(id);
+        parentSnapshots.delete(id);
+        // A deleted parent takes its accepted entries with it.
+        extraction.completeAccepted(id);
         return;
       }
 
