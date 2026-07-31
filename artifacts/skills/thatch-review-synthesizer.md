@@ -176,3 +176,7 @@ If no prior-comments register was provided (local-branch review or first round o
 ### Coverage gaps
 
 Note which files or areas were NOT covered by any specialist.
+
+### Human-verifiable unknowns
+
+Flag conclusions that rest on something static analysis cannot reach: a rollout state, a config value in a different environment, a deploy order, a feature flag setting, a migration that has not run. These are things a human reviewer can check and the review cannot. Each entry names the unknown and where to check it. If none, write "None."

@@ -96,6 +96,7 @@ For each prior comment, record:
 - Original commit SHA, file, line range (or `summary` for non-inline review)
 - Comment body (quoted)
 - The semantic claim raised (what the reviewer said was wrong — paraphrase the core issue, one sentence)
+- Resolution rationale, if the thread was resolved: the recorded reason why the concern was settled. Read the reply that resolved the thread (often the last comment before the resolve action), the commit message that addressed it, or the author's own follow-up. Capture the reasoning in one sentence. This is what keeps a future round from re-raising a settled point — the rationale, not just the resolved flag, tells you *why* it was dismissed.
 - VCS resolve state if available (GitLab `resolved`/`resolved_by`; GitHub `isResolved` via GraphQL if accessible)
 
 #### Addressed-check methodology
@@ -145,6 +146,7 @@ List the prior-comments register (one entry per prior comment):
 - Author and submitted date
 - Original location (`file:line @ commit-SHA`, or `summary review`) and current HEAD location (`file:line`) if locatable
 - The semantic claim raised (one-sentence paraphrase)
+- Resolution rationale, if the thread was resolved (one-sentence paraphrase of why it was settled)
 - Preliminary status: `addressed` / `still active` / `unclear` — with the code-state evidence (a short quote from the current HEAD that supports the verdict)
 - VCS resolve flag if applicable (and any disagreement with the code-state verdict)
 

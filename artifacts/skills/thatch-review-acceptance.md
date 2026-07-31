@@ -51,7 +51,21 @@ For each user-facing feature touched by the changes:
 - Could the change break workflows that span multiple features?
 - Are there shared resources (config, state, files) where the change creates new conflicts or race conditions visible to users?
 
-### 6. Prove the workflow inputs
+### 6. Check ticket alignment
+If your briefing includes a ticket or PR description with stated scope or acceptance criteria, compare the diff against what was actually asked for:
+- Is anything in scope that the diff does not deliver? Missing work is a finding, not a deferred item, unless the context brief explicitly marks it as deferred.
+- Is there work in the diff that falls outside the stated scope? Out-of-scope work may belong in a separate PR.
+- If no ticket is linked and the PR description has no acceptance criteria, skip this step.
+
+### 7. Check description accuracy
+Compare the PR title and body against the actual diff:
+- Do claims in the description match what the code does? Flag specific claims that contradict the diff.
+- Is the description stale or templated (copy-pasted from another PR, describing work that is not in this diff)?
+- If the description has a Testing section, does it reflect what the tests actually do? Flag a Testing section that lists steps the diff does not cover.
+
+This is about metadata honesty. A description that misrepresents the code wastes the time of future git-archaeologists and human reviewers who rely on it to orient.
+
+### 8. Prove the workflow inputs
 For any finding that depends on bad state, malformed data, or surprising cross-feature behavior, identify:
 - Which user action or entrypoint starts the workflow
 - Which code path produces the relevant state/data
@@ -66,5 +80,7 @@ If the issue only exists when someone manually fabricates invalid state/data out
 - **INCONSISTENCY**: Mismatch with existing behavior, conventions, or user expectations
 - **SILENT_FAILURE**: Operation appears to succeed but doesn't do what user expects
 - **BREAKING**: Previously working workflow is now broken or produces wrong results
+- **SCOPE_GAP**: The diff is missing work the ticket or PR description says it delivers, or includes work outside the stated scope
+- **DESCRIPTION_DRIFT**: The PR title or body does not match the actual diff — claims that contradict the code, a stale description, or a Testing section that does not reflect reality
 
 Report findings as behavioral observations, not code complaints. Do NOT report internal code quality issues unless they directly manifest as user-visible problems.

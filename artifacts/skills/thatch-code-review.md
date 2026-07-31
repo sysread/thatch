@@ -87,7 +87,7 @@ For each review unit, dispatch sub-agents using the Task tool. Each sub-agent ru
 
 1. **Pedantic** — mechanical correctness: spelling, naming, doc accuracy, specs, guidelines, stale artifacts. Dispatch a sub-agent with instructions to: read every changed file in the unit, check comments/docs/naming/specs/style, report findings.
 
-2. **Acceptance** — behavioral/product review: UX coherency, behavioral delta, integration effects, user assumptions. Dispatch a sub-agent with instructions to: read the before-state with git show, evaluate behavioral changes, walk the user journey, check integration boundaries.
+2. **Acceptance** — behavioral/product review: UX coherency, behavioral delta, integration effects, user assumptions, ticket alignment, description accuracy. Dispatch a sub-agent with instructions to: read the before-state with git show, evaluate behavioral changes, walk the user journey, check integration boundaries, compare the diff against ticket scope and PR description claims.
 
 3. **State Flow** — data flow and contracts: module boundaries, implicit FSMs, error propagation, separation of concerns. Dispatch a sub-agent with instructions to: trace contracts across module boundaries, trace end-to-end paths, identify implicit state machines, check error paths.
 
@@ -129,7 +129,7 @@ Alternatively, perform the synthesis yourself:
 4. Classify each as CONFIRMED, REJECTED, or UNVERIFIABLE. For behavioral findings, apply citation verification, reachability, and intent verification. For mechanical findings, verify the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy. For highlights, verify the cited text exists, the claim is accurate, and the highlighted thing genuinely rises above baseline competence.
 5. Cross-reference against the prior-comments register if one was built in Step 2: tag matching findings `Provenance: previously identified by @author, PR #N, DATE` and produce the `### Previously identified findings` appendix per the synthesizer skill.
 6. Calibrate severity (BLOCKING > HIGH > MEDIUM > LOW) based on your verification.
-7. Produce a final report with a workflow-change preface, highlights (if any), findings grouped by severity, and coverage gaps noted. Include every confirmed LOW finding.
+7. Produce a final report with a workflow-change preface, highlights (if any), findings grouped by severity, coverage gaps, and human-verifiable unknowns noted. Include every confirmed LOW finding.
 
 ## Specialist briefing template
 
@@ -144,5 +144,5 @@ When dispatching each sub-agent, include in the prompt:
 - Any design context or specific concerns
 - Explicit scope boundaries ("your scope is X; do NOT review Y")
 - Instruction to produce markdown findings with: severity, category, file:line, finding, evidence, trigger scenario, reachability, source of truth, producer chain, provenance
-- Instruction to apply the reachability gate (including reading and citing governing constraints for data-state claims) and intent verification before reporting
+- Instruction to apply the reachability gate (including reading and citing governing constraints for data-state claims), the security attack-chain gate for security findings, and intent verification before reporting
 - Instruction to respect the project context brief: do not flag deferred work as bugs or inconsistencies, and recognize TODO ($ticket) markers as intentional breadcrumbs

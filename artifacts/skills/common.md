@@ -18,6 +18,9 @@ For every potential finding, you MUST describe a concrete scenario where a real 
 
 Before claiming a value can hold a problematic state (NULL, orphaned, out-of-range, wrong-type), read the artifact that governs that state: the column definition, type declaration, FK/NOT NULL constraint, validation, or guard. Quote it in your finding. If a schema constraint, type, or guard makes the state unreachable, it is not a finding. "The join could drop rows" requires proving a droppable row can exist — cite the constraint that permits it.
 
+## Security attack-chain gate
+For any finding labeled a security concern, spell out what an attacker would actually need: the capability they must hold, the entrypoint they reach, the exploit path, and the impact. A label is not a finding. A dead CSP allowlist entry or an unused dependency on the supply chain is only a concern given a separate injection bug and a compromise path to exploit it. Size it honestly: name the prerequisites and let the reader judge. Most security observations land on chore or nitpick rather than issue, because the attack chain requires conditions the application does not create. Do not report a security finding without the chain that makes it real.
+
 ## Intent verification
 Before flagging behavior as a bug, verify intent:
 1. **Trace callers.** Read every caller of the cited code. The behavior may be intentional given how the feature is actually used.
@@ -44,6 +47,9 @@ Code may contain `TODO ($TICKET-ID): description` comments that mark intentional
 - Do NOT flag a TODO ($ticket) marker as a stale artifact if the ticket it references is still open or future work.
 - DO flag it if you can verify the referenced ticket is closed or merged (the TODO is now stale).
 - If your briefing includes a context brief that lists the deferred work, use it to determine whether the ticket is still pending.
+
+## Severity calibration
+Inflating one finding is expensive, because it is the reason the next one gets discounted. A reader who sees an over-labeled finding will trust the next label less. Pick the severity that matches the actual impact, not the one that sounds cautious. When unsure, the lower label is correct.
 
 ## Output format
 Produce findings as markdown. For each finding:
