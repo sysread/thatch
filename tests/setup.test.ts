@@ -201,7 +201,7 @@ describe("setupClaudeCode (project-local)", () => {
 
     // Shared skills only — opencode-only skills (thatch-code-review) are not
     // installed for Claude Code because they require sub-agent support.
-    expect(result.skills.length).toBe(18);
+    expect(result.skills.length).toBe(19);
     const skillNames = result.skills.map((s) => s.name);
     expect(skillNames).toContain("thatch-fact-extractor");
     expect(skillNames).toContain("thatch-dedup-classifier");
@@ -212,6 +212,7 @@ describe("setupClaudeCode (project-local)", () => {
     expect(skillNames).toContain("thatch-review-no-slop");
     expect(skillNames).toContain("thatch-review-breadcrumbs");
     expect(skillNames).toContain("thatch-review-mark-and-sweep");
+    expect(skillNames).toContain("thatch-review-highlights");
     expect(skillNames).toContain("thatch-review-synthesizer");
     expect(skillNames).toContain("thatch-review-context");
     expect(skillNames).toContain("thatch-workflow-research");
@@ -493,12 +494,13 @@ describe("setupCursor (project-local)", () => {
   test("installs skill files to ~/.cursor/skills/", () => {
     const result = setupCursor("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
-    expect(result.skills.length).toBe(18);
+    expect(result.skills.length).toBe(19);
     const skillNames = result.skills.map((s) => s.name);
     expect(skillNames).toContain("thatch-fact-extractor");
     expect(skillNames).toContain("thatch-dedup-classifier");
     expect(skillNames).toContain("thatch-project-primer");
     expect(skillNames).toContain("thatch-review-mark-and-sweep");
+    expect(skillNames).toContain("thatch-review-highlights");
     expect(skillNames).toContain("thatch-change-walkthrough");
     expect(skillNames).toContain("thatch-code-walkthrough");
     expect(skillNames).toContain("pr-description");
@@ -739,7 +741,7 @@ describe("skill artifact registry parity", () => {
 
   test("REVIEW_COMMON is interpolated only into review specialist skills", () => {
     // The loader interpolates `${REVIEW_COMMON}` when it appears on its own
-    // line (the directive form used by the six review specialists). Inline
+    // line (the directive form used by the six problem-finding review specialists). Inline
     // mentions of the token in other skills (e.g. as prose examples) must
     // NOT trigger interpolation — that would splice the review framework
     // into the middle of an unrelated skill body and corrupt the content.

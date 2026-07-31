@@ -179,7 +179,7 @@ With `thatch setup --claude`, skills install to `~/.claude/skills/` (or
 
 ### Code review skills
 
-Six specialist review lenses, each a self-contained static-analysis pass:
+Seven specialist review lenses, each a self-contained static-analysis pass:
 
 | Skill | Focus |
 |-------|-------|
@@ -189,7 +189,8 @@ Six specialist review lenses, each a self-contained static-analysis pass:
 | `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth wall breaks, em dashes, hedging, filler. |
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of the code's behavior? |
 | `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
-| `thatch-review-synthesizer` | Verifies and synthesizes findings from multiple specialists into a report that starts with workflow changes, then deduplicated severity-grouped findings. |
+| `thatch-review-highlights` | Positive finding detection: notably clever solutions, cleanup done along the way, documentation that helps. Medium-high bar against generic praise. |
+| `thatch-review-synthesizer` | Verifies and synthesizes findings from multiple specialists into a report that starts with workflow changes, then highlights, then deduplicated severity-grouped findings. |
 | `thatch-review-context` | Gathers project context (PR descriptions, git archaeology, ticket references, memory) before a review. Prevents false positives about intentionally deferred work. |
 | `thatch-workflow-research` | Researches code workflows and features affected by a change or planned change. Reads code flows, comments, git history, and produces a guide for reviewers or planners. |
 | `thatch-change-walkthrough` | Explains a change to the user as a teaching walkthrough: researches each affected workflow at the merge-base, teaches current behavior, then overlays the modifications with file:line citations. |
@@ -214,7 +215,7 @@ Six specialist review lenses, each a self-contained static-analysis pass:
 | Skill | opencode | Claude Code | Cursor |
 |-------|----------|-------------|--------|
 | Memory skills (4) | Yes | Yes | Yes |
-| Review specialists (6) | Yes | Yes | Yes |
+| Review specialists (7) | Yes | Yes | Yes |
 | Review synthesizer | Yes | Yes | Yes |
 | Review context + workflow research | Yes | Yes | Yes |
 | Walkthrough skills (2) | Yes | Yes | Yes |

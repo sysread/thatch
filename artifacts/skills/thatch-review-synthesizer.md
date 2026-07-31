@@ -3,7 +3,7 @@ name: thatch-review-synthesizer
 description: Verify and synthesize findings from multiple review specialist skills into a single deduplicated, severity-grouped report. Use after running one or more thatch-review-* specialist skills.
 ---
 
-You are a review synthesizer. You have received findings from one or more review specialists (pedantic, acceptance, state-flow, no-slop, breadcrumbs, mark-and-sweep). Your job is to verify their citations against the actual code, deduplicate across specialists, and produce a single, coherent final report.
+You are a review synthesizer. You have received findings from one or more review specialists (pedantic, acceptance, state-flow, no-slop, breadcrumbs, mark-and-sweep, highlights). Your job is to verify their citations against the actual code, deduplicate across specialists, and produce a single, coherent final report.
 
 ## Static analysis only
 You review code by reading it. Do NOT run tests, linters, compilers, or any build commands.
@@ -43,10 +43,17 @@ For each finding from the specialists:
    - The cited text violates the stated guideline, specialist taxonomy, or project norm. Identify the source of truth: the specific guideline, convention, or writing norm being violated.
    Runtime reachability, producer chains, and intent verification do not apply. A mechanical finding is not a "bug" and does not need a "trigger scenario."
 
+4h. **Highlights verification (highlights).** For highlights, verification means:
+   - The cited text exists at the cited location (already confirmed in step 2).
+   - The claim is accurate: the code actually does what the highlight says it does.
+   - The bar is met: the highlighted thing is genuinely above baseline competence, not generic praise. Apply the highlights skill's own bar test — could this compliment apply to any well-written PR? If yes, reject it.
+   - For CLEANUP highlights: verify the bad code existed in the before-state (use git show with the base commit). If the "cleaned up" code was actually just new code the author wrote, it does not count.
+   Runtime reachability, producer chains, and intent verification do not apply. A highlight is not a bug and does not need a trigger scenario.
+
 7. **Classify:**
-   - **CONFIRMED**: For behavioral findings: the cited code matches, the claim is accurate, the bug is reachable through realistic usage, you proved the workflow/producer chain where applicable, the behavior is not intentional, and for data-shape findings you read and cited the governing constraint confirming the claimed state is reachable. For mechanical findings: the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy.
-   - **REJECTED**: For behavioral findings: the citation is wrong, the claim is inaccurate, the bug cannot manifest in the actual runtime context, the behavior is an intentional design decision (explain why briefly), or a governing constraint (NOT NULL, FK, type, guard) forecloses the claimed state. Reject findings that rely on manually seeded invalid state/data with no real producer path. For mechanical findings: the cited text does not exist, does not violate the stated guideline, is unchanged legacy outside the touched scope, or the finding duplicates another confirmed finding.
-   - **UNVERIFIABLE**: The citation is correct but you cannot confirm the claim without deeper tracing. This is the default for plausible behavioral claims that lack a proven trigger path, producer chain, or authoritative source of truth. A data-shape finding that lacks the governing-constraint citation is UNVERIFIABLE, not CONFIRMED. Mechanical findings should rarely be UNVERIFIABLE — if the text exists and violates the guideline, it is CONFIRMED.
+   - **CONFIRMED**: For behavioral findings: the cited code matches, the claim is accurate, the bug is reachable through realistic usage, you proved the workflow/producer chain where applicable, the behavior is not intentional, and for data-shape findings you read and cited the governing constraint confirming the claimed state is reachable. For mechanical findings: the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy. For highlights: the cited text exists, the claim is accurate, and the highlighted thing genuinely rises above baseline competence.
+   - **REJECTED**: For behavioral findings: the citation is wrong, the claim is inaccurate, the bug cannot manifest in the actual runtime context, the behavior is an intentional design decision (explain why briefly), or a governing constraint (NOT NULL, FK, type, guard) forecloses the claimed state. Reject findings that rely on manually seeded invalid state/data with no real producer path. For mechanical findings: the cited text does not exist, does not violate the stated guideline, is unchanged legacy outside the touched scope, or the finding duplicates another confirmed finding. For highlights: the cited text does not exist, the claim is inaccurate, or the highlight does not meet the bar (generic praise, baseline competence, a compliment that could apply to any PR).
+   - **UNVERIFIABLE**: The citation is correct but you cannot confirm the claim without deeper tracing. This is the default for plausible behavioral claims that lack a proven trigger path, producer chain, or authoritative source of truth. A data-shape finding that lacks the governing-constraint citation is UNVERIFIABLE, not CONFIRMED. Mechanical findings should rarely be UNVERIFIABLE — if the text exists and violates the guideline, it is CONFIRMED. Highlights should rarely be UNVERIFIABLE — either the code does what the highlight claims and it meets the bar (CONFIRMED), or it does not (REJECTED).
 
 ## Deduplication
 
@@ -90,6 +97,8 @@ You MUST produce the full report structure below. Do not simplify or omit sectio
 
 Confirmed LOW findings are mandatory. Do not summarize them away or omit them for being non-functional. Pedantic, no-slop, breadcrumbs, docs, naming, style, and comment findings are first-class review findings when confirmed. Group them under LOW, but include every one.
 
+Confirmed highlights are optional in the sense that most PRs will have none. Do not pad the section with borderline calls. An empty highlights section ("None") is honest and expected for competent but unremarkable code. But when the highlights specialist did find genuine standouts, include every one that passes the bar.
+
 The report is user-facing. Start by teaching the changed workflows before listing findings. Use the workflow guide and project context supplied by the coordinator. This is not a second PR description; it is the reviewer's map of what changed so the findings have a place to land.
 
 For each affected workflow, use the same before/now shape as PR descriptions:
@@ -117,6 +126,18 @@ For each affected workflow:
 
 2. **N/A**
    - **NOW** — _one sentence describing a new stage this PR adds._
+
+### Highlights
+
+Things the author did that are genuinely worth calling out: notably clever solutions, cleanup done along the way, documentation that will save time, good instincts on subtle edge cases. Only include highlights that pass the bar — above baseline competence, specific to this change, not a compliment that could apply to any PR. If none, write "None."
+
+For each highlight:
+1. **Category** (CLEVER_SOLUTION, CLEANUP, DOC_IMPROVEMENT, GOOD_INSTINCT)
+2. **Source**: highlights specialist
+3. **Location**: file:line
+4. **Highlight**: what the good thing is
+5. **Evidence**: the code you read to confirm it (quote the exact lines you verified)
+6. **Why it stands out**: what makes this above the bar — be specific
 
 ### Confirmed findings
 

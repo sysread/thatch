@@ -39,6 +39,7 @@ function loadSharedSkills(): SkillDef[] {
     "thatch-review-no-slop",
     "thatch-review-breadcrumbs",
     "thatch-review-mark-and-sweep",
+    "thatch-review-highlights",
     "thatch-review-synthesizer",
     "thatch-review-context",
     "thatch-workflow-research",

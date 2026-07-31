@@ -21,9 +21,9 @@ description: Extract durable project facts ... Use when ...
 - `description` drives when the agent loads the skill (both opencode and
   Cursor auto-discover skills and use the description for relevance).
 
-## The 19 skills
+## The 20 skills
 
-**Shared (18)** — installed everywhere; no sub-agents required:
+**Shared (19)** — installed everywhere; no sub-agents required:
 
 | Skill | Role |
 |-------|------|
@@ -36,6 +36,7 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth-wall breaks, em dashes, filler. |
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of behavior? |
 | `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
+| `thatch-review-highlights` | Positive finding detection: notably clever solutions, cleanup done along the way, documentation that helps. Medium-high bar against generic praise. |
 | `thatch-review-synthesizer` | Verify specialist findings against code, dedupe, classify, calibrate severity. Starts the final report with a workflow-change preface, then cross-references findings against prior review comments when a follow-up round register is provided. |
 | `thatch-review-context` | Gather project/feature context (PR descriptions, git archaeology, ticket references, memory) before fan-out. Prevents false positives about intentionally deferred work. Also fetches prior review comments on a connected PR/MR for follow-up-round detection and builds a register with preliminary addressed-check status per comment. |
 | `thatch-workflow-research` | Research code workflows/features affected by a change or planned change. Reads code flows, comments, git history, memories, docs. Produces a guide to the code for reviewers or planners. |
@@ -50,11 +51,11 @@ description: Extract durable project facts ... Use when ...
 
 | Skill | Role |
 |-------|------|
-| `thatch-code-review` | Resolve review target (incl. VCS detection and connected PR/MR lookup for follow-up round detection), gather project context, research affected workflows, estimate complexity, partition, dispatch the 6 specialists in parallel, synthesize with a workflow-change preface and prior-comment cross-reference. |
+| `thatch-code-review` | Resolve review target (incl. VCS detection and connected PR/MR lookup for follow-up round detection), gather project context, research affected workflows, estimate complexity, partition, dispatch the 7 specialists in parallel, synthesize with a workflow-change preface and prior-comment cross-reference. |
 
 ## REVIEW_COMMON
 
-The six review specialists share a framework interpolated via `${REVIEW_COMMON}`:
+The six problem-finding review specialists share a framework interpolated via `${REVIEW_COMMON}` (the seventh specialist, highlights, finds positive things and uses its own structure):
 
 - **Static analysis only** — no running tests/linters/compilers.
 - **Scope gathering** — resolve the git range, `git diff --stat`, read changed
@@ -84,7 +85,7 @@ The synthesizer reuses the same verification rigor but has its own structure
 ## The two arrays
 
 ```ts
-const SHARED_SKILLS: SkillDef[] = [ /* 18 skills above */ ];
+const SHARED_SKILLS: SkillDef[] = [ /* 19 skills above */ ];
 const OPENCODE_ONLY_SKILLS: SkillDef[] = [ /* code-review coordinator */ ];
 ```
 
@@ -107,7 +108,7 @@ and `--cursor` pass only the shared set.
 
 ## Adding a skill
 
-1. Write `artifacts/skills/thatch-<name>.md` with YAML frontmatter. If it's a review specialist, include `${REVIEW_COMMON}` (interpolated from `artifacts/skills/common.md`).
+1. Write `artifacts/skills/thatch-<name>.md` with YAML frontmatter. If it's a problem-finding review specialist, include `${REVIEW_COMMON}` (interpolated from `artifacts/skills/common.md`). The highlights specialist does not use REVIEW_COMMON — it finds positive things, not problems, so the problem-finding framework does not apply.
 2. Add the skill name to the `names` array in `loadSharedSkills()` (or `loadOpencodeOnlySkills()` if sub-agents are needed). The loader in `src/skills.ts` reads `.md` files at init.
 3. If the skill name appears in a tool's workflow (e.g. `thatch-fact-extractor`), update `src/prompts.ts`.
 4. Run `mise run check` — tests verify counts; `installSkills` picks up new files on next init.
@@ -115,7 +116,7 @@ and `--cursor` pass only the shared set.
 ## Memory review skills in practice
 
 - **Quick single lens**: load any specialist directly and point it at a branch.
-- **Full review on opencode**: load `thatch-code-review` — it gathers project context, researches affected workflows, dispatches all 6 specialists in parallel (with both the context brief and workflow guide injected into each briefing), then synthesizes a report that starts with the workflow changes before findings.
+- **Full review on opencode**: load `thatch-code-review` — it gathers project context, researches affected workflows, dispatches all 7 specialists in parallel (with both the context brief and workflow guide injected into each briefing), then synthesizes a report that starts with the workflow changes before findings.
 - **Full review on Claude Code/Cursor**: run each specialist in sequence, then
   run `thatch-review-synthesizer` to verify and aggregate.
 

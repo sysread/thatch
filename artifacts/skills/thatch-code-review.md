@@ -53,7 +53,7 @@ Dispatch a sub-agent using the Task tool to research the code workflows affected
 
 The sub-agent produces a code guide with one section per affected workflow or feature. Wait for it to complete and collect the guide.
 
-This guide gives specialists the code-level context (purpose, data flow, evolutions, constraints) they need to avoid false positives about intentional behavior and long-standing design decisions, and reduces duplicate code-tracing across the six specialist lenses.
+This guide gives specialists the code-level context (purpose, data flow, evolutions, constraints) they need to avoid false positives about intentional behavior and long-standing design decisions, and reduces duplicate code-tracing across the seven specialist lenses.
 
 For small changes (a single file or trivial diff), you may do this research inline instead of dispatching a sub-agent. Use your judgment: if the workflow research would require reading more than 3-4 files, dispatch a sub-agent to preserve your context for orchestration.
 
@@ -83,7 +83,7 @@ For changes estimated at 3 points or fewer, skip partitioning — dispatch one s
 
 ## Step 6: Dispatch specialist sub-agents
 
-For each review unit, dispatch sub-agents using the Task tool. Each sub-agent runs one specialist lens on one review unit. The six specialists are:
+For each review unit, dispatch sub-agents using the Task tool. Each sub-agent runs one specialist lens on one review unit. The seven specialists are:
 
 1. **Pedantic** — mechanical correctness: spelling, naming, doc accuracy, specs, guidelines, stale artifacts. Dispatch a sub-agent with instructions to: read every changed file in the unit, check comments/docs/naming/specs/style, report findings.
 
@@ -96,6 +96,8 @@ For each review unit, dispatch sub-agents using the Task tool. Each sub-agent ru
 5. **Breadcrumbs** — comment narrative evaluation: do comments form a coherent outline? Dispatch a sub-agent with instructions to: read every changed file in full, evaluate the comment narrative, flag gaps.
 
 6. **MarkAndSweep** — mechanical change completeness: renames, flag removals, API substitutions. Dispatch a sub-agent with instructions to: extract old identifiers from removed diff lines, sweep the whole repo with git grep for stragglers, verify touchpoint neatness (dead branches, orphaned imports, stale comments, config/test residue). Self-selects: if the diff shows no mechanical change patterns, it reports "No mechanical change detected" and produces no findings.
+
+7. **Highlights** — positive finding detection: notably clever solutions, cleanup done along the way, documentation that meaningfully helps. Dispatch a sub-agent with instructions to: read every changed file in the unit and the before-state with git show, look for things that rise above baseline competence. Medium-high bar: no generic praise, no baseline competence. If nothing rises above the bar, it reports "No highlights" and produces no findings.
 
 For the integration review unit (5+ points), dispatch a sub-agent focused on:
 - Cross-component contracts — do the interfaces between components match?
@@ -116,23 +118,25 @@ The final user-facing report MUST begin with a concise explanation of the workfl
 
 Confirmed LOW findings are mandatory in the final report, including mechanical findings (pedantic, no-slop, breadcrumbs, docs, naming, style, comments). Do not omit them for being non-functional.
 
+Confirmed highlights (from the highlights specialist) appear in a `### Highlights` section after the workflow changes and before the confirmed findings. Most PRs will have none — that is expected. Do not pad with borderline calls. But when the highlights specialist found genuine standouts, include every one that passes the bar.
+
 **Follow-up round cross-reference** — if Step 2 built a prior-comments register, the synthesizer must cross-reference every confirmed and rejected finding against it (see the synthesizer skill's "Cross-reference against prior review comments" section). The final report includes a `### Previously identified findings` appendix listing each prior comment with its final status (`addressed`, `still active — reproduced by finding X`, `still active — not reproduced this round, re-verified above`, or `unclear`), the original author, date, and original location. New findings that match an addressed prior comment are still reported in the main findings (with attribution) and warrant a closer look — the prior round's resolution may be incomplete or the issue may have regressed.
 
 Alternatively, perform the synthesis yourself:
 1. Read each finding's cited location to verify evidence accuracy.
 2. Deduplicate findings flagged by multiple specialists.
 3. Group findings by root cause where multiple findings stem from the same issue.
-4. Classify each as CONFIRMED, REJECTED, or UNVERIFIABLE. For behavioral findings, apply citation verification, reachability, and intent verification. For mechanical findings, verify the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy.
+4. Classify each as CONFIRMED, REJECTED, or UNVERIFIABLE. For behavioral findings, apply citation verification, reachability, and intent verification. For mechanical findings, verify the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy. For highlights, verify the cited text exists, the claim is accurate, and the highlighted thing genuinely rises above baseline competence.
 5. Cross-reference against the prior-comments register if one was built in Step 2: tag matching findings `Provenance: previously identified by @author, PR #N, DATE` and produce the `### Previously identified findings` appendix per the synthesizer skill.
 6. Calibrate severity (BLOCKING > HIGH > MEDIUM > LOW) based on your verification.
-7. Produce a final report with a workflow-change preface, findings grouped by severity, and coverage gaps noted. Include every confirmed LOW finding.
+7. Produce a final report with a workflow-change preface, highlights (if any), findings grouped by severity, and coverage gaps noted. Include every confirmed LOW finding.
 
 ## Specialist briefing template
 
 When dispatching each sub-agent, include in the prompt:
 - The git range to review
 - The specific files in this unit's scope
-- The specialist focus (from the six specialists above)
+- The specialist focus (from the seven specialists above)
 - The diff stat for this unit's files
 - **The project context brief** from Step 2, filtered to what is relevant to this unit's scope. Explicitly list any deferred work that falls within this unit's files, and call out TODO ($ticket) markers the specialists should recognize as intentional.
 - **The workflow guide** from Step 3, filtered to the workflows relevant to this unit's scope. Use it to understand the purpose and evolution of the code before flagging issues. It provides the code-level context (flows, contracts, history, constraints) that prevents false positives about intentional behavior and long-standing design decisions.
