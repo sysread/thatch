@@ -20,16 +20,15 @@ Publish to npm and add thatch to your opencode config:
 
 OpenCode installs the plugin and its dependencies automatically on next start.
 
-Set this environment variable so the extraction nudge can dispatch the
-fact-extractor as a **background** sub-agent instead of blocking your turn:
+For async extraction (child sessions run in the background):
 
 ```bash
 export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
 ```
 
-Without it, opencode hides the task tool's `background` parameter and the
-extraction nudge runs synchronously. Put it in your shell rc, `mise.toml`
-`[env]`, or `.envrc`.
+Without this env var, extraction still works — the child session runs
+fire-and-forget instead of asynchronously. Put it in your shell rc,
+`mise.toml` `[env]`, or `.envrc`.
 
 For local development before publishing, use a file path:
 
@@ -106,7 +105,7 @@ Stores are created automatically — no setup required.
 
 | Tool | What it does |
 |------|-------------|
-| `thatch_extraction_done` | Acknowledge that the extraction nudge was dispatched to a sub-agent. Drains the buffer so the nudge does not replay. Called after dispatching a background task to run the fact-extractor skill. |
+| `thatch_extraction_done` | Acknowledge extraction buffer work. In the nudge fallback path, quiets the nudge while holding entries until the extractor completes. In a child extractor session, marks entries complete. Called by the model after dispatching the fact-extractor skill. |
 
 ### Prediction tools
 

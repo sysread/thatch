@@ -89,8 +89,10 @@ here first. These are the things that have already cost time.
   extracting), the parent's snapshot entries must still be drained from the
   buffer. Without this, entries linger in pending and the nudge fires as a
   synthetic (TUI-hidden) part on the next `chat.message`. The child-idle
-  handler calls `consumeSnapshot(parentID, snapshot)` unconditionally —
-  whether or not the child wrote memories.
+  handler drains the snapshot only if it still exists (the child wrote no
+  memories). If the child did write memories, `tool.execute.after` already
+  consumed the snapshot — the idle handler skips the drain so interleaved-turn
+  entries survive.
 - **`client.tui.showToast` is best-effort.** The toast call is wrapped in a
   catch-and-ignore — if the TUI is not connected (headless mode), it silently
   does nothing. The toast is TUI-rendered (in-app), not an OS notification.

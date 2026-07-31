@@ -92,6 +92,16 @@ export const server: Plugin = async ({ client, worktree }) => {
   // path takes over as a fallback on the next chat.message.
   const extracting = new Set<string>();
 
+  // Child session IDs created by triggerExtraction (direct extraction only).
+  // The child idle handler uses this to distinguish plugin-created extraction
+  // children from task-dispatched sub-agents (code review specialists, the
+  // nudge-path fact-extractor, any model-dispatched task). Only extraction
+  // children get the full cleanup: buffer drain, session deletion, toast.
+  // Non-extraction children get the old behavior (completeAccepted +
+  // missedNudges.reset) so their sessions are not deleted out from under the
+  // task tool that dispatched them.
+  const extractionChildren = new Set<string>();
+
   // Per-child-session extraction metrics for the toast notification. When the
   // child session goes idle, these counts are formatted into a toast that
   // shows the user thatch is working without polluting the conversation.
@@ -115,14 +125,18 @@ export const server: Plugin = async ({ client, worktree }) => {
 
   // Direct extraction: create a child session linked to the parent and prompt
   // it with the extraction payload. The child runs the fact-extractor skill,
-  // writes memories, and goes idle — the existing childToParent / snapshot
-  // drain machinery handles buffer cleanup. This replaces the nudge-and-pray
-  // path where the model had to notice the nudge, dispatch a task, and call
-  // extraction_done. The nudge path remains as a fallback if this throws.
+  // writes memories, and goes idle. The existing childToParent / snapshot
+  // drain machinery handles buffer cleanup. The nudge path is a fallback if
+  // this throws.
   //
   // Does NOT call extraction.accept — entries stay in pending so consumeSnapshot
   // can drain them by reference identity when the child writes a memory. The
   // extracting set (not accept) suppresses the nudge in chat.message.
+  //
+  // The child ID is added to extractionChildren so the idle handler can
+  // distinguish plugin-created extraction children from task-dispatched
+  // sub-agents. Only extraction children get the full cleanup (buffer drain,
+  // session deletion, toast).
   async function triggerExtraction(parentID: string): Promise<void> {
     extracting.add(parentID);
 
@@ -137,18 +151,37 @@ export const server: Plugin = async ({ client, worktree }) => {
     // parentSnapshots (snapshot of the full pending buffer, since we
     // have not called accept).
     const childId = result.data!.id;
+    extractionChildren.add(childId);
+
+    // Clean up the child session and all map entries if prompting fails.
+    // Without this, the child exists on the server but was never prompted,
+    // so it never goes idle and the maps leak.
+    const cleanupChild = () => {
+      extracting.delete(parentID);
+      extractionChildren.delete(childId);
+      childToParent.delete(childId);
+      parentSnapshots.delete(childId);
+      childMetrics.delete(childId);
+      try { client.session.delete({ path: { id: childId } }); } catch {}
+    };
 
     const bgEnabled =
       process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS === "true" ||
       process.env.OPENCODE_EXPERIMENTAL === "true";
 
     if (bgEnabled) {
-      await client.session.promptAsync({
-        path: { id: childId },
-        body: {
-          parts: [{ type: "text", text: promptText }],
-        },
-      });
+      try {
+        await client.session.promptAsync({
+          path: { id: childId },
+          body: {
+            parts: [{ type: "text", text: promptText }],
+          },
+        });
+      } catch (err) {
+        console.error(`[thatch] extraction promptAsync failed: ${err}`);
+        cleanupChild();
+        throw err;
+      }
     } else {
       // Fire and forget — the parent is already idle, so blocking the event
       // handler would only delay other event processing. The child runs to
@@ -162,7 +195,7 @@ export const server: Plugin = async ({ client, worktree }) => {
         })
         .catch((err: unknown) => {
           console.error(`[thatch] extraction child failed: ${err}`);
-          extracting.delete(parentID);
+          cleanupChild();
         });
     }
   }
@@ -189,12 +222,13 @@ export const server: Plugin = async ({ client, worktree }) => {
       compacting.delete(input.sessionID);
     },
 
-    // 3. Tool buffering — feeds the extraction nudge. Excluded tools:
+    // 3. Tool buffering — feeds the extraction pipeline (direct extraction
+    //    via SDK or nudge fallback). Excluded tools:
     //    - thatch_*: extracting facts from memory ops would echo the store
     //    - skill/task: meta-tools that orchestrate agent behavior (loading
     //      skills, dispatching sub-agents). Buffering them creates a feedback
-    //      loop — the nudge triggers a skill load, which gets buffered, which
-    //      triggers another nudge on the next turn.
+    //      loop — extraction triggers a skill load, which gets buffered, which
+    //      triggers another extraction on the next turn.
     //    Memory writes consume the buffer and reset the missed-nudge counter.
     //    The buffer is NOT drained on nudge delivery — it persists until the
     //    agent writes a memory, so ignored nudges accumulate and the payload
@@ -220,22 +254,28 @@ export const server: Plugin = async ({ client, worktree }) => {
       if (input.tool === "thatch_memory_remember") {
         extraction.consume(input.sessionID);
         missedNudges.delete(input.sessionID);
-        // Track extraction metrics for toast display. Only count in child
-        // sessions (direct-extraction children), not the parent or manual
-        // memory writes from the user's session.
+        // Track extraction metrics for toast display. Counted for any
+        // child session (both direct-extraction and nudge-path sub-agents)
+        // since childToParent covers both. The toast only fires for
+        // extraction children (extractionChildren set) on idle.
         const parentID = childToParent.get(input.sessionID);
         if (parentID) {
           const metrics = childMetrics.get(input.sessionID) ?? { new: 0, updated: 0, deleted: 0 };
           if (input.args?.overwrite) metrics.updated++;
           else metrics.new++;
           childMetrics.set(input.sessionID, metrics);
+          // Complete the parent's accepted entries (the extractor confirmed
+          // it is alive and saving) and drain the parent's snapshot entries
+          // from the pending buffer. If no snapshot was recorded (unreachable
+          // when childToParent has the entry, since both are set together in
+          // session.created), skip the drain rather than dropping the entire
+          // buffer — interleaved-turn entries that arrived while the child
+          // was running must survive for the next extraction cycle.
           extraction.completeAccepted(parentID);
           const snapshot = parentSnapshots.get(input.sessionID);
           if (snapshot) {
             extraction.consumeSnapshot(parentID, snapshot);
             parentSnapshots.delete(input.sessionID);
-          } else {
-            extraction.consume(parentID);
           }
           missedNudges.delete(parentID);
         }
@@ -260,6 +300,8 @@ export const server: Plugin = async ({ client, worktree }) => {
         return;
       }
       // Track memory deletions in child sessions for the toast metrics.
+      // Same scoping as the remember handler above — only child sessions,
+      // not the parent or manual memory writes from the user's session.
       if (input.tool === "thatch_memory_forget" && childToParent.has(input.sessionID)) {
         const metrics = childMetrics.get(input.sessionID) ?? { new: 0, updated: 0, deleted: 0 };
         metrics.deleted++;
@@ -304,6 +346,10 @@ export const server: Plugin = async ({ client, worktree }) => {
         if (isCompactionMsg) return;
         compacting.delete(input.sessionID);
       }
+      // Extraction nudge (fallback path). Skipped when the extracting set
+      // is active — that means a direct-extraction child session is running
+      // and the plugin is handling extraction via the SDK. The nudge fires
+      // here only when direct extraction was never triggered or threw.
       if (!extracting.has(input.sessionID) && extraction.pending(input.sessionID)) {
         const batch = extraction.peek(input.sessionID);
         const payload = extraction.buildPayload(batch, repo);
@@ -355,7 +401,7 @@ export const server: Plugin = async ({ client, worktree }) => {
             try {
               await client.tui.showToast({
                 body: {
-                  message: `[thatch] recalled ${matches.length} memor${matches.length === 1 ? "y" : "ies"}`,
+                  message: `\u{1F4AD} recalled ${matches.length} memor${matches.length === 1 ? "y" : "ies"}`,
                   variant: "info",
                   duration: 3000,
                 },
@@ -384,7 +430,7 @@ export const server: Plugin = async ({ client, worktree }) => {
             try {
               await client.tui.showToast({
                 body: {
-                  message: `[thatch] ${predItems.length} prediction${predItems.length === 1 ? "" : "s"} surfaced`,
+                  message: `\u{1F4AD} ${predItems.length} prediction${predItems.length === 1 ? "" : "s"} surfaced`,
                   variant: "info",
                   duration: 3000,
                 },
@@ -402,26 +448,31 @@ export const server: Plugin = async ({ client, worktree }) => {
     },
 
     // 5. Session-start reminder, carrying the hygiene heartbeat. Hygiene is
-    // best-effort: a failure there must not cost the reminder itself.
+    //    best-effort: a failure there must not cost the reminder itself.
     //
     // Also tracks parent-child session relationships for cross-session buffer
     // drain. session.created with a parentID records the mapping AND
-    // snapshots the parent's current buffer — so the child's later
+    // snapshots the parent's current buffer so the child's later
     // memory_remember drains only those snapshot entries, not the parent's
     // entire buffer (which may have grown from interleaved turns).
     //
-    // The accepted-buffer lifecycle completes or requeues on child lifecycle
-    // events: idle means the extractor finished (a no-save run writes no
-    // memory but still processed the payload); error or deletion before
-    // completion means the facts were never extracted, so the entries go
-    // back to pending. session.deleted also cleans both maps to avoid
-    // unbounded growth.
+    // Child lifecycle events: idle means the extractor finished; error or
+    // deletion before completion means the facts were never extracted, so
+    // entries go back to pending. Only extraction children (created by
+    // triggerExtraction, tracked in extractionChildren) get the full cleanup
+    // (buffer drain, session deletion, toast). Task-dispatched sub-agents
+    // get the old behavior (completeAccepted + missedNudges.reset) so their
+    // sessions are not deleted out from under the task tool.
     event: async ({ event }) => {
       if (event.type === "session.created") {
         const info = event.properties.info;
         if (info.parentID) {
           childToParent.set(info.id, info.parentID);
           parentSnapshots.set(info.id, [...extraction.peek(info.parentID)]);
+          // Child sessions don't need the session-start reminder — only
+          // top-level sessions do. Returning here prevents extraction
+          // children from receiving the hygiene report and tool overview.
+          return;
         }
       }
       if (event.type === "session.error") {
@@ -433,6 +484,7 @@ export const server: Plugin = async ({ client, worktree }) => {
           childToParent.delete(childID);
           parentSnapshots.delete(childID);
           childMetrics.delete(childID);
+          extractionChildren.delete(childID);
         }
         return;
       }
@@ -440,65 +492,74 @@ export const server: Plugin = async ({ client, worktree }) => {
         const sessionID = event.properties.sessionID;
         const parentID = sessionID ? childToParent.get(sessionID) : undefined;
         if (parentID && sessionID) {
-          // Child went idle — extraction child finished (save or no-save).
-          // Complete the parent's accepted entries (no-op in the direct-extraction
-          // path, where we don't accept), clean up maps and the extracting flag,
-          // and delete the child session to avoid clutter.
-          //
-          // Drain the parent's snapshot entries from the pending buffer. If the
-          // child wrote memories, consumeSnapshot already ran in tool.execute.after
-          // and the snapshot is gone — so this is a no-op. If the child did a
-          // no-save run (nothing worth extracting), the snapshot entries are still
-          // in the buffer and need to be drained here so they don't replay as a
-          // nudge on the next chat.message.
-          //
-          // Fire a toast with the extraction metrics so the user sees thatch is
-          // working without any conversation pollution.
-          const metrics = childMetrics.get(sessionID);
-          const parts: string[] = [];
-          if (metrics) {
-            if (metrics.new > 0) parts.push(`new: ${metrics.new}`);
-            if (metrics.updated > 0) parts.push(`updated: ${metrics.updated}`);
-            if (metrics.deleted > 0) parts.push(`deleted: ${metrics.deleted}`);
-          }
-          const message = parts.length > 0
-            ? parts.join(", ")
-            : "extraction complete — nothing to save";
-          const variant = parts.length > 0 ? "success" : "info";
-          try {
-            await client.tui.showToast({
-              body: { message: `[thatch] ${message}`, variant, duration: 4000 },
-            });
-          } catch {
-            // TUI may not be connected (e.g. headless mode). Best-effort.
-          }
+          // A child session went idle. Two cases:
+          // - Extraction child (created by triggerExtraction, tracked in
+          //   extractionChildren): drain the parent's snapshot, fire a toast
+          //   with metrics, delete the child session, clean up all maps.
+          // - Task-dispatched sub-agent (code review specialist, nudge-path
+          //   fact-extractor, any model-dispatched task): complete the
+          //   parent's accepted entries and reset missedNudges. Do NOT drain
+          //   the buffer or delete the session — the task tool that
+          //   dispatched the sub-agent needs to read its output.
+          if (extractionChildren.has(sessionID)) {
+            // Drain the parent's snapshot entries from the pending buffer.
+            // If the child wrote memories, consumeSnapshot already ran in
+            // tool.execute.after and the snapshot is gone — nothing to
+            // drain. If the child did a no-save run, the snapshot entries
+            // are still in the buffer and need to be drained here so they
+            // don't replay as a nudge on the next chat.message. Never drain
+            // the entire buffer — interleaved-turn entries must survive.
+            const snapshot = parentSnapshots.get(sessionID);
+            if (snapshot) {
+              extraction.consumeSnapshot(parentID, snapshot);
+            }
 
-          extraction.completeAccepted(parentID);
-          const snapshot = parentSnapshots.get(sessionID);
-          if (snapshot) {
-            extraction.consumeSnapshot(parentID, snapshot);
+            // Fire a toast with the extraction metrics. Only show a toast
+            // when memories were actually written — no toast for no-save
+            // runs to avoid notification fatigue.
+            const metrics = childMetrics.get(sessionID);
+            const parts: string[] = [];
+            if (metrics) {
+              if (metrics.new > 0) parts.push(`new: ${metrics.new}`);
+              if (metrics.updated > 0) parts.push(`updated: ${metrics.updated}`);
+              if (metrics.deleted > 0) parts.push(`deleted: ${metrics.deleted}`);
+            }
+            if (parts.length > 0) {
+              try {
+                await client.tui.showToast({
+                  body: { message: `\u{1F4AD} ${parts.join(", ")}`, variant: "success", duration: 4000 },
+                });
+              } catch {
+                // TUI may not be connected (e.g. headless mode).
+              }
+            }
+
+            extraction.completeAccepted(parentID);
+            missedNudges.delete(parentID);
+            extracting.delete(parentID);
+            childToParent.delete(sessionID);
+            parentSnapshots.delete(sessionID);
+            childMetrics.delete(sessionID);
+            extractionChildren.delete(sessionID);
+            extraction.consume(sessionID);
+            // Delete the child session to avoid clutter.
+            try {
+              await client.session.delete({ path: { id: sessionID } });
+            } catch {
+              // Best-effort — the child is idle and harmless if not deleted.
+            }
           } else {
-            extraction.consume(parentID);
-          }
-          missedNudges.delete(parentID);
-          extracting.delete(parentID);
-          childToParent.delete(sessionID);
-          parentSnapshots.delete(sessionID);
-          childMetrics.delete(sessionID);
-          extraction.consume(sessionID);
-          try {
-            await client.session.delete({ path: { id: sessionID } });
-          } catch {
-            // Best-effort — the child is idle and harmless if not deleted.
+            // Task-dispatched sub-agent went idle. Complete the parent's
+            // accepted entries (from the nudge-path extraction_done accept)
+            // and reset missedNudges. Retained for the nudge fallback path.
+            extraction.completeAccepted(parentID);
+            missedNudges.delete(parentID);
           }
           return;
         }
         // Parent went idle — trigger direct extraction if there are pending
-        // tool interactions and no extraction is already running. This replaces
-        // the nudge-based path: instead of injecting a nudge into the next user
-        // message and relying on the model to dispatch a sub-agent, the plugin
-        // creates a child session and prompts it directly. Falls back to the
-        // nudge path on the next chat.message if this throws.
+        // tool interactions and no extraction is already running. Falls
+        // back to the nudge path on the next chat.message if this throws.
         if (
           sessionID &&
           !compacting.has(sessionID) &&
@@ -525,6 +586,7 @@ export const server: Plugin = async ({ client, worktree }) => {
         childToParent.delete(id);
         parentSnapshots.delete(id);
         childMetrics.delete(id);
+        extractionChildren.delete(id);
         // A deleted parent takes its accepted entries with it.
         extraction.completeAccepted(id);
         extracting.delete(id);

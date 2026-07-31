@@ -624,7 +624,7 @@ describe("plugin entry", () => {
     testHooks.dispose?.();
   });
 
-  test("direct extraction: child error clears extracting and requeues", async () => {
+  test("direct extraction: child error clears extracting, nudge fires as fallback", async () => {
     const recClient = {
       session: {
         prompt: async () => {},
@@ -785,6 +785,108 @@ describe("plugin entry", () => {
     testHooks.dispose?.();
   });
 
+  test("HIGH fix: interleaved entries survive when child writes memory then goes idle", async () => {
+    const recClient = {
+      session: {
+        prompt: async () => {},
+        promptAsync: async () => {},
+        create: async () => ({ data: { id: "child_interleave_fix" } }),
+        delete: async () => {},
+      },
+      tui: { showToast: async () => {} },
+    };
+    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
+
+    // Buffer 3 entries in parent, trigger extraction
+    for (let i = 0; i < 3; i++) {
+      await testHooks["tool.execute.after"]!(
+        { tool: "bash", sessionID: "ses_interleave_fix", callID: `pre-${i}`, args: { command: `cmd-${i}` } },
+        { title: `title-${i}`, output: `out-${i}`, metadata: {} },
+      );
+    }
+    await testHooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_interleave_fix", status: { type: "idle" } } } as any,
+    });
+    await testHooks.event!({ event: {
+      type: "session.created",
+      properties: { info: { id: "child_interleave_fix", parentID: "ses_interleave_fix" } } } as any,
+    });
+
+    // Simulate interleaved turn: 2 new entries arrive while child runs
+    for (let i = 0; i < 2; i++) {
+      await testHooks["tool.execute.after"]!(
+        { tool: "bash", sessionID: "ses_interleave_fix", callID: `post-${i}`, args: { command: `cmd2-${i}` } },
+        { title: `title2-${i}`, output: `out2-${i}`, metadata: {} },
+      );
+    }
+
+    // Child writes a memory — drains snapshot (3 pre-dispatch entries),
+    // deletes parentSnapshots entry
+    await testHooks["tool.execute.after"]!(
+      { tool: "thatch_memory_remember", sessionID: "child_interleave_fix", callID: "mem", args: {} },
+      { title: "save", output: "[saved]", metadata: {} },
+    );
+
+    // Child goes idle — must NOT drain the entire buffer (interleaved
+    // entries should survive for the next extraction cycle)
+    await testHooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "child_interleave_fix", status: { type: "idle" } } } as any,
+    });
+
+    // The 2 interleaved entries should still be pending — nudge fires
+    const out: any = { message: { id: "msg_iv" }, parts: [{ type: "text", text: "hello world testing" }] };
+    await testHooks["chat.message"]!({ sessionID: "ses_interleave_fix", messageID: "msg_iv" } as any, out);
+    expect(out.parts.length).toBe(2);
+    expect(out.parts[1].text).toContain("thatch-fact-extractor");
+
+    testHooks.dispose?.();
+  });
+
+  test("HIGH fix: non-extraction sub-agent idle does not drain buffer or delete session", async () => {
+    let deleteCalled = false;
+
+    const recClient = {
+      session: {
+        prompt: async () => {},
+        promptAsync: async () => {},
+        create: async () => ({ data: { id: "should-not-delete" } }),
+        delete: async () => { deleteCalled = true; },
+      },
+      tui: { showToast: async () => {} },
+    };
+    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
+
+    // Buffer entries in parent
+    await testHooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_task_parent", callID: "tk1", args: { command: "ls" } },
+      { title: "list", output: "file.txt", metadata: {} },
+    );
+
+    // Simulate a task-dispatched sub-agent (NOT created by triggerExtraction)
+    await testHooks.event!({ event: {
+      type: "session.created",
+      properties: { info: { id: "ses_task_child", parentID: "ses_task_parent" } } } as any,
+    });
+
+    // Sub-agent goes idle — should NOT drain buffer or delete session
+    await testHooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_task_child", status: { type: "idle" } } } as any,
+    });
+
+    expect(deleteCalled).toBe(false);
+
+    // Buffer should still have entries — nudge should fire
+    const out: any = { message: { id: "msg_task" }, parts: [{ type: "text", text: "hello world testing" }] };
+    await testHooks["chat.message"]!({ sessionID: "ses_task_parent", messageID: "msg_task" } as any, out);
+    expect(out.parts.length).toBe(2);
+    expect(out.parts[1].text).toContain("thatch-fact-extractor");
+
+    testHooks.dispose?.();
+  });
+
   test("toast: shows metrics on child idle after memory writes", async () => {
     let toastCalled = false;
     let toastArgs: any = null;
@@ -844,9 +946,8 @@ describe("plugin entry", () => {
     testHooks.dispose?.();
   });
 
-  test("toast: shows 'nothing to save' on no-save extraction run", async () => {
+  test("toast: no toast on no-save extraction run", async () => {
     let toastCalled = false;
-    let toastArgs: any = null;
 
     const recClient = {
       session: {
@@ -856,7 +957,7 @@ describe("plugin entry", () => {
         delete: async () => {},
       },
       tui: {
-        showToast: async (args: any) => { toastCalled = true; toastArgs = args; },
+        showToast: async () => { toastCalled = true; },
       },
     };
     const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
@@ -874,15 +975,13 @@ describe("plugin entry", () => {
       properties: { info: { id: "child_toast2", parentID: "ses_toast2" } } } as any,
     });
 
-    // Child goes idle without writing any memories
+    // Child goes idle without writing any memories — no toast should fire.
     await testHooks.event!({ event: {
       type: "session.status",
       properties: { sessionID: "child_toast2", status: { type: "idle" } } } as any,
     });
 
-    expect(toastCalled).toBe(true);
-    expect(toastArgs.body.message).toContain("nothing to save");
-    expect(toastArgs.body.variant).toBe("info");
+    expect(toastCalled).toBe(false);
 
     testHooks.dispose?.();
   });
