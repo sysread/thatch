@@ -104,13 +104,12 @@ For the integration review unit (5+ points), dispatch a sub-agent focused on:
 - Boundary correctness — race conditions, ordering dependencies, shared state issues at boundaries.
 - Top-level coherence — does the overall change make sense as a unit?
 
-## Step 6b: Handle timed-out or failed specialists
+## Step 6b: Handle stalled or failed specialists
 
-Background sub-agents can hang or time out. The thatch plugin watchdog cancels sub-agents stuck for longer than the configured timeout (default 5m) and injects a synthetic notification into the parent session.
+Background sub-agents can stall or fail. If a specialist has not produced output in a reasonable time or returns an error:
 
-When a specialist times out or fails:
 1. **Re-dispatch once.** Re-dispatch the same specialist with the same briefing. Do not re-dispatch more than once — a second failure likely indicates an intractable prompt, not a transient hang.
-2. **Simplify on re-dispatch.** If the first re-dispatch also fails or times out, note the gap in the synthesis: "The [specialist] lens could not be completed due to repeated sub-agent failures. The review may have gaps in [area]." Do not retry again.
+2. **Note gaps if re-dispatch fails.** If the re-dispatch also fails or stalls, note the gap in the synthesis: "The [specialist] lens could not be completed due to repeated sub-agent failures. The review may have gaps in [area]." Do not retry again.
 3. **Never silently drop a specialist.** Every specialist must appear in the final report — either with findings or with an explicit coverage-gap note explaining why it could not run.
 
 ## Step 7: Synthesize
