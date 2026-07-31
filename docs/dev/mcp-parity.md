@@ -22,7 +22,8 @@ This document maps the feature parity and documents the remaining gaps.
 | **System prompt** (store names, usage rules) | `experimental.chat.system.transform` — dynamic, repo baked in at runtime | CLAUDE.md static text appended by `thatch setup`; repo auto-detected by the MCP server at startup | AGENTS.md static text appended by `thatch setup`; repo auto-detected at startup | **Approximate** — static text persists through compaction, so the agent retains the usage instructions, but the dynamic per-turn refresh is lost |
 | **Session-start reminder** (recall nudge + hygiene heartbeat) | `session.created` event → `client.session.prompt` injects a synthetic message | `SessionStart` hook → `thatch reminder`; stdout becomes context | `sessionStart` hook → `thatch reminder --json`; output is `additional_context` JSON | **Full** |
 | **Compaction context** (re-familiarize after compaction) | `experimental.session.compacting` hook appends context to the compaction output | `PostCompact` hook — side-effects only, **cannot inject context** | No equivalent hook | **Gapped** — see below |
-| **Extraction nudge** (buffer tool calls, inject JSON payload) | `tool.execute.after` buffers non-thatch, non-skill, non-task tool calls in-process; `chat.message` peeks the buffer (does not drain it) and injects a synthetic text part | `PostToolBatch` → `thatch buffer-batch` (file-backed JSONL queue); `UserPromptSubmit` → `thatch flush-tools` peeks the queue and prints the nudge (does not drain — the queue persists until a memory write or `extraction_done`) | `postToolUse` → `thatch buffer-tool` (single-tool, file-backed queue); `beforeSubmitPrompt` → `thatch flush-tools --json` | **Full** (file-backed) — timing differs: the nudge arrives at the **start** of the next turn in Claude Code/Cursor, not at the end of the current one like opencode's `chat.message` |
+| **Extraction** (buffer tool calls, extract durable facts) | `tool.execute.after` buffers non-thatch, non-skill, non-task tool calls in-process; **direct extraction** is the primary path — when the parent session goes idle with pending buffer entries, the plugin creates a child session via the SDK (`client.session.create` with `parentID`) and prompts it with the extraction payload (nudge suppressed via the `extracting` set); the `chat.message` nudge path is a **fallback** used when direct extraction throws | `PostToolBatch` → `thatch buffer-batch` (file-backed JSONL queue); `UserPromptSubmit` → `thatch flush-tools` peeks the queue and prints the nudge (does not drain — the queue persists until a memory write or `extraction_done`) | `postToolUse` → `thatch buffer-tool` (single-tool, file-backed queue); `beforeSubmitPrompt` → `thatch flush-tools --json` | **Partial** — opencode now uses direct extraction (parent idle → child session) as the primary path, with the nudge as fallback; MCP hosts are nudge-only. Both paths produce the same JSON shape via `buildExtractionPayload()`. Nudge timing differs: the nudge arrives at the **start** of the next turn in Claude Code/Cursor, not at the end of the current one like opencode's `chat.message` |
+| **Extraction feedback** (toast notifications) | `client.tui.showToast` fires when the extraction child goes idle — shows `[thatch] new: N, updated: M, deleted: K` (success) or `extraction complete — nothing to save` (info); best-effort, silently ignored in headless mode | No TUI connection — MCP hosts have no equivalent | No TUI connection | **Gapped** — MCP hosts cannot show toast notifications |
 | **Prompt-aware recall nudge** | `chat.message` hook embeds the prompt with the in-process warm model, searches `db.search()`, pushes a nudge part if matches ≥ threshold | `UserPromptSubmit` hook → `thatch flush-tools` connects to the MCP server's sideband socket; the warm server embeds + searches; hook prints the nudge or falls back to the write nudge | `beforeSubmitPrompt` hook → `thatch flush-tools --json` (same sideband path) | **Full** — sideband socket gives cold hook processes access to the warm MCP server's model |
 | **Prediction auto-fire** (user decision model) | `chat.message` hook scores the prompt embedding against prediction matchers; injects a `[thatch] User decision model` nudge alongside the recall nudge (separate synthetic part, same embedding call) | `UserPromptSubmit` hook → `thatch flush-tools` fires prediction query via the sideband socket's `predictions` method in parallel with the recall nudge | `beforeSubmitPrompt` hook → `thatch flush-tools --json` (same sideband path) | **Full** — same `scorePredictionNudge` entry point in both paths |
 | **Skills** | Installed to `$XDG_CONFIG_HOME/opencode/skills` at plugin init (shared **+** opencode-only) | Installed to `$CLAUDE_CONFIG_DIR/skills/` by `thatch setup` (shared only) | Installed to `~/.cursor/skills/` by `thatch setup` (shared only) | **Full** — same SKILL.md format; the code-review coordinator is opencode-only (needs sub-agents) |
@@ -61,18 +62,37 @@ through compaction, so the agent retains the usage instructions. The
 compaction in Claude Code, so the recall reminder runs again. There is no
 explicit "re-familiarization" nudge for hosts without a compaction hook.
 
-### Extraction nudge timing
+### Extraction timing
 
-OpenCode's extraction pipeline works by:
+OpenCode's extraction pipeline has two paths — direct extraction (primary)
+and the nudge (fallback):
+
+**Direct extraction (primary path):**
 
 1. `tool.execute.after` buffers every non-thatch, non-skill, non-task tool
    call into a per-session in-memory array (max 20 interactions).
-2. On the next `chat.message`, the buffer is **peeked** (not drained) and a
-   synthetic text part carrying the JSON payload is injected into the
-   conversation. The buffer persists until the agent writes a memory or calls
-   `thatch_extraction_done`, so ignored nudges repeat and escalate (polite →
-   insistent → ALL-CAPS) via the `missedNudges` counter.
-3. The agent sees the nudge, loads the `thatch-fact-extractor` skill, and saves
+2. When the parent session goes idle (`session.status` idle event) with pending
+   buffer entries, the plugin calls `triggerExtraction`: creates a child session
+   via `client.session.create` (with `parentID`), then prompts it via
+   `client.session.promptAsync` (or `prompt`) with the extraction payload. The
+   `extracting` set suppresses the nudge in `chat.message` while the child runs.
+3. The child session runs the `thatch-fact-extractor` skill, writes memories via
+   `thatch_memory_remember`. A memory write in the child drains the parent's
+   buffer snapshot (via the `childToParent` Map and `consumeSnapshot`) and
+   resets the missed-nudge counter.
+4. When the child goes idle, the handler drains any remaining snapshot entries
+   (covers no-save runs), deletes the child session, and fires a toast via
+   `client.tui.showToast`.
+
+**Nudge (fallback path):**
+
+1. If `triggerExtraction` throws (session creation or prompt fails), the catch
+   block clears the `extracting` flag. On the next `chat.message`, the buffer is
+   **peeked** (not drained) and a synthetic text part carrying the JSON payload
+   is injected into the conversation. The buffer persists until the agent writes
+   a memory or calls `thatch_extraction_done`, so ignored nudges repeat and
+   escalate (polite → insistent → ALL-CAPS) via the `missedNudges` counter.
+2. The agent sees the nudge, loads the `thatch-fact-extractor` skill, and saves
    durable facts via `thatch_memory_remember`. A memory write in the session
    (or a child sub-agent via the `childToParent` Map) or `thatch_extraction_done`
    drains the buffer and resets the missed-nudge counter.

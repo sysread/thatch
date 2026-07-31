@@ -21,11 +21,14 @@ everything runs on your machine.
 ```
 
 On next start, OpenCode npm-installs thatch and its tools are available
-immediately. For background extraction sub-agents:
+immediately. For async extraction (child sessions run in the background):
 
 ```bash
 export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
 ```
+
+Without this env var, extraction still works — the child session runs
+synchronously (fire-and-forget) instead of asynchronously.
 
 Then **prime your project memory** with by running `thatch prime` in your project directory.
 This will launch an `opencode` session to build an initial map of the code base and its architecture to seed the memory.

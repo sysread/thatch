@@ -133,13 +133,21 @@ Beyond the tools, thatch hooks into opencode itself:
 - **Write-time similarity warning.** Saving a memory that closely resembles an
   existing one succeeds, but the response warns the agent and lists the
   similar entries so it can merge them or record that they're distinct.
-- **Fact-extraction nudges.** Thatch buffers the session's recent tool calls
-  (up to 20, per session). On your next message, the agent receives a summary
-  payload and is prompted to save any durable facts it reveals. The nudge
-  repeats and escalates (polite to insistent to ALL-CAPS) each turn it's
-  ignored — the buffer drains only when the agent writes a memory or
-  acknowledges via `thatch_extraction_done`. The agent does the writing —
-  thatch never saves memories on its own.
+- **Fact extraction.** Thatch buffers the session's recent tool calls (up
+  to 20, per session). When the session goes idle, the plugin creates a
+  child session and prompts it to run the fact-extractor skill directly —
+  no nudge text in your conversation. The child writes memories via
+  `thatch_memory_remember` and is cleaned up when it finishes. A toast
+  notification shows the results (`[thatch] new: 2, updated: 1`). If the
+  direct path fails, a nudge is injected into the next message as a
+  fallback. On Claude Code and Cursor, the nudge-and-acknowledge path is
+  the only mechanism (no SDK client to create child sessions). The agent
+  does the writing — thatch never saves memories on its own.
+- **Recall and prediction toasts.** When your prompt matches stored
+  memories or learned decision patterns, thatch injects a synthetic nudge
+  (invisible to you, visible to the agent) and fires a toast notification
+  (`[thatch] recalled 3 memories` or `[thatch] 2 predictions surfaced`).
+  The toast is ephemeral — it fades after a few seconds.
 - **Compaction context.** When opencode compacts a long session, thatch injects
   a reminder so the summarized session still knows memory tools exist.
 - **Prediction auto-fire.** When a prompt matches learned contexts, thatch

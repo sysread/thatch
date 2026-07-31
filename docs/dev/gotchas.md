@@ -65,15 +65,35 @@ here first. These are the things that have already cost time.
   agent writes a memory or calls `thatch_extraction_done`. Ignored nudges
   accumulate; the `missedNudges` counter escalates the tone (polite at 0-1
   misses, insistent at 2, ALL-CAPS at 3+). The counter resets when the
-  buffer drains.
+  buffer drains. The primary opencode path doesn't use the nudge at all:
+  `triggerExtraction` creates a child session directly, and the `extracting`
+  set suppresses the nudge in `chat.message` while a direct-extraction child
+  is active. The peek-not-drain semantics still hold for the fallback nudge
+  path (MCP hosts and any `triggerExtraction` failure).
 - **A child sub-agent's `thatch_memory_remember` drains the parent's buffer**
   via the `childToParent` Map (`index.ts:65` declaration, `index.ts:131`
-  lookup). Without this, dispatching the fact-extractor as a background task
-  would write memories in the child but never clear the parent's queue — the
-  nudge would replay every turn. `thatch_extraction_done` is the
-  belt-and-suspenders explicit acknowledgment: it drains the buffer without
-  requiring a memory write (covers cases where the sub-agent errors out or the
-  host doesn't expose parent-child session relationships).
+  lookup). Two paths reach this machinery: (a) the **plugin-initiated child
+  session** — `triggerExtraction` calls `client.session.create` with a
+  `parentID`, the primary opencode path; (b) the **agent-initiated background
+  task** — the model dispatches the fact-extractor via the `task` tool after
+  receiving the nudge, the fallback path still used by MCP hosts. Both use
+  the same `childToParent`/`parentSnapshots`/`consumeSnapshot` plumbing.
+  Without this, either path would write memories in the child but never
+  clear the parent's queue — the nudge would replay every turn.
+  `thatch_extraction_done` is the belt-and-suspenders explicit
+  acknowledgment: it drains the buffer without requiring a memory write
+  (covers cases where the sub-agent errors out or the host doesn't expose
+  parent-child session relationships).
+- **The no-save drain runs in the child-idle handler regardless of writes.**
+  When the extraction child goes idle after a no-save run (nothing worth
+  extracting), the parent's snapshot entries must still be drained from the
+  buffer. Without this, entries linger in pending and the nudge fires as a
+  synthetic (TUI-hidden) part on the next `chat.message`. The child-idle
+  handler calls `consumeSnapshot(parentID, snapshot)` unconditionally —
+  whether or not the child wrote memories.
+- **`client.tui.showToast` is best-effort.** The toast call is wrapped in a
+  catch-and-ignore — if the TUI is not connected (headless mode), it silently
+  does nothing. The toast is TUI-rendered (in-app), not an OS notification.
 
 ## Hooks (Claude Code / Cursor)
 

@@ -54,7 +54,7 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `tool-defs.ts` | **Single source of truth** for all tools. Each tool has a name, description, zod schema (args), and execute function. Framework-agnostic — neither opencode nor MCP specific. |
 | `tools.ts` | Thin opencode wrappers. Imports tool-defs, wraps each in opencode's `tool()` with a `thatch_` prefix. |
 | `mcp.ts` | Stdio JSON-RPC 2.0 server. Compiles zod schemas to JSON Schema via `z.toJSONSchema()` for `tools/list`. Validates args via `z.object().parse()` in `tools/call`. All logging to stderr (stdout is the transport). |
-| `index.ts` | OpenCode plugin entry. Wires DB, model, extraction; registers tools and hooks; installs skills. |
+| `index.ts` | OpenCode plugin entry. Wires DB, model, extraction; registers tools and hooks; installs skills. Internal state beyond the extraction pipeline: `extracting` set (parent IDs with an active direct-extraction child), `childMetrics` map (new/updated/deleted counts per child session), and `triggerExtraction(parentID)` (creates a child session via the SDK client and prompts it with the extraction payload). |
 | `setup.ts` | `thatch setup --claude` installer. Writes .mcp.json, appends to CLAUDE.md (idempotent), installs hooks in settings.json, installs skills. |
 | `hygiene.ts` | Hygiene report: pending dedup pairs, stale count, orphaned branch memories. Shared by the plugin's session-start hook and the CLI's `thatch reminder` command. |
 | `git.ts` | Parse `owner/repo` from git remote. Worktree-safe fallback chain. |
@@ -75,9 +75,9 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `experimental.chat.system.transform` | Appends the thatch system prompt (store names, usage rules). |
 | `experimental.session.compacting` | Marks the session as compacting and appends re-familiarization context so a compacted session still knows thatch exists. |
 | `experimental.compaction.autocontinue` | Clears the compacting flag so `chat.message` nudges resume. Without this, nudges that instruct tool calls would fire during summary generation where tools are blocked. The `chat.message` hook also clears the flag if it fires for a session still in the compacting set but the incoming message has no compaction-type part — this handles compaction failure, where the session would otherwise be stuck with nudges off forever. |
-| `tool.execute.after` | Buffers every non-`thatch_*`, non-`skill`, non-`task` tool call into the session's extraction buffer. (Skill/task are excluded — buffering them creates a feedback loop where the nudge triggers a skill load, which gets buffered, which triggers another nudge.) Memory writes (`thatch_memory_remember`) and `thatch_extraction_done` drain the buffer and reset the missed-nudge counter. This is a plugin hook, NOT a bus event — do not move it into the `event` handler; the event bus has no such event and it will silently never fire. |
-| `chat.message` | Two priority tiers: (a) if extraction buffer has interactions, **peeks** the buffer (does NOT drain it) and injects a synthetic text part carrying the extraction nudge + JSON payload — the buffer persists until the agent writes a memory or calls `thatch_extraction_done`, so ignored nudges repeat and escalate (polite → insistent → ALL-CAPS) via the `missedNudges` counter; (b) otherwise, embeds the user's prompt text with the in-process warm model, searches `db.search()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55). The same embedding also feeds the prediction auto-fire: `db.scorePredictionNudge` scores the prompt against prediction matchers and injects a separate `[thatch] User decision model` nudge if any matchers clear the 0.45 threshold. Recall and prediction nudges fire independently (separate try/catch blocks, separate synthetic parts). Skipped entirely while the session is compacting (tool calls are blocked during summary generation). |
-| `event` (`session.created`) | Sends the session-start reminder via `client.session.prompt`, carrying the hygiene heartbeat (pending dedup pairs, stale count, orphaned branch memories) when any signal is non-zero. The session id is at `event.properties.info.id`. |
+| `tool.execute.after` | Buffers every non-`thatch_*`, non-`skill`, non-`task` tool call into the session's extraction buffer. (Skill/task are excluded — buffering them creates a feedback loop where the nudge triggers a skill load, which gets buffered, which triggers another nudge.) Memory writes (`thatch_memory_remember`) and `thatch_extraction_done` drain the buffer and reset the missed-nudge counter. For child sessions (`childToParent.has(sessionID)`), also tracks metrics: `remember` with `overwrite:false` → new++, `overwrite:true` → updated++, `forget` → deleted++. This is a plugin hook, NOT a bus event — do not move it into the `event` handler; the event bus has no such event and it will silently never fire. |
+| `chat.message` | Two priority tiers: (a) if extraction buffer has interactions and the session is NOT in the `extracting` set (direct extraction in progress), **peeks** the buffer (does NOT drain it) and injects a synthetic text part carrying the extraction nudge + JSON payload — the buffer persists until the agent writes a memory or calls `thatch_extraction_done`, so ignored nudges repeat and escalate (polite → insistent → ALL-CAPS) via the `missedNudges` counter; (b) otherwise, embeds the user's prompt text with the in-process warm model, searches `db.search()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55). The same embedding also feeds the prediction auto-fire: `db.scorePredictionNudge` scores the prompt against prediction matchers and injects a separate `[thatch] User decision model` nudge if any matchers clear the 0.45 threshold. Recall and prediction nudges fire independently (separate try/catch blocks, separate synthetic parts). Skipped entirely while the session is compacting (tool calls are blocked during summary generation). |
+| `event` | Subscribes to all session bus events. `session.created`: records `childToParent` + `parentSnapshots` (shallow copy of the parent's buffer for snapshot-aware drain), then sends the session-start reminder via `client.session.prompt` carrying the hygiene heartbeat (pending dedup pairs, stale count, orphaned branch memories) when any signal is non-zero. `session.status` (idle): if the session is a child, drains its snapshot, fires a toast with `childMetrics`, and deletes the child session; if the session is a parent with pending tool interactions and not already extracting, calls `triggerExtraction` to create a direct-extraction child. `session.error`: requeues the parent's buffer (child died without draining). `session.deleted`: cleans up `childToParent`, `parentSnapshots`, `childMetrics`, and `extracting`. `session.compacted`: clears the compacting flag so `chat.message` nudges resume. |
 | `dispose` | Closes the DB. |
 
 Hook failures are logged with a `[thatch]` prefix — never swallowed silently.
@@ -168,16 +168,45 @@ dedup cycle (agent-driven)
   → thatch_dedup_mark_checked records verdicts for surviving pairs
   (overwriting or forgetting an entry clears its verdicts → can re-flag)
 
-extraction cycle (agent-driven)
+extraction cycle
   → tool.execute.after buffers non-thatch, non-skill, non-task tool calls
-    per session (max 20)
-  → next chat.message peeks the buffer (does NOT drain it) and injects a
-    nudge part with JSON payload; missed nudges escalate (polite → insistent
-    → ALL-CAPS) via the missedNudges counter
-  → drain: thatch_memory_remember in the session (or a child sub-agent via
-    the childToParent Map) OR thatch_extraction_done — both clear the buffer
-    and reset the missed-nudge counter
-  → agent loads thatch-fact-extractor skill, saves facts via thatch_memory_remember
+    per session (max 20); for child sessions, also tracks new/updated/deleted
+    metrics
+  → direct extraction (primary path, opencode-only):
+    parent goes idle (session.status idle) with pending tool interactions
+    → triggerExtraction adds parentID to the `extracting` set (suppresses
+      nudge in chat.message), creates a child session via
+      client.session.create, and prompts it with the extraction payload
+    → child runs the fact-extractor skill, writes memories via
+      thatch_memory_remember → consumeSnapshot drains the parent's buffer
+      (snapshot-aware: removes only entries captured at dispatch time by
+      reference identity, preserving interleaved-turn entries)
+    → child goes idle → event handler drains remaining snapshot entries,
+      fires a toast with childMetrics, deletes the child session
+  → nudge path (fallback): if triggerExtraction throws (create or prompt
+    fails), the `extracting` set clears and the next chat.message sees
+    pending entries with no extracting flag → peeks the buffer and injects
+    a nudge part with JSON payload; missed nudges escalate (polite →
+    insistent → ALL-CAPS) via the missedNudges counter
+    → drain: thatch_memory_remember (or thatch_extraction_done) clears the
+      buffer and resets the missed-nudge counter
+    → agent loads thatch-fact-extractor skill, saves facts via
+      thatch_memory_remember
+  → MCP path (Claude Code/Cursor): unchanged — no SDK client, no child
+    sessions; extract-queue.ts + flush-tools drives the nudge via hooks
+
+toast notifications (opencode-only, TUI-rendered)
+  → client.tui.showToast — best-effort, silently ignored if TUI not
+    connected (headless mode); model-invisible (goes to the user only,
+    not the conversation history — the inverse of synthetic nudge parts,
+    which are model-visible but TUI-hidden)
+  → extraction metrics: `[thatch] new: N, updated: M, deleted: K` (success
+    variant, 4s) — fires when an extraction child goes idle; no-save runs
+    show `[thatch] extraction complete — nothing to save` (info variant)
+  → recall matches: `[thatch] recalled N memories` (info variant, 3s) —
+    fires when chat.message matches stored memories
+  → prediction matches: `[thatch] N predictions surfaced` (info variant,
+    3s) — fires when chat.message matches decision-model patterns
 
 prompt-aware recall nudge (both paths)
   → opencode: chat.message hook embeds prompt text with warm in-process model,

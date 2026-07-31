@@ -34,7 +34,19 @@ are testable with the mock client and a synthetic tool call sequence._
   or is deleted first, the entries requeue and the nudge replays.
 - Step 7: no extraction nudge appears (buffer is accepted). If the user prompt
   semantically matches existing memories, a recall nudge may appear instead.
-- Alternative drain path: if a child sub-agent (dispatched via the `task`
-  tool) writes a memory via `thatch_memory_remember`, the parent's buffer is
-  also drained via the `childToParent` Map — the `missedNudges` counter resets
-  for the parent session.
+- Alternative drain path (opencode direct extraction): when the parent session
+  goes idle with pending tool interactions, the plugin calls
+  `triggerExtraction` — creates a child session via the SDK client and prompts
+  it directly. The `extracting` set suppresses the nudge in `chat.message`
+  while the child runs. The child writes memories via
+  `thatch_memory_remember`, which drains the parent's snapshot entries via
+  `consumeSnapshot`. When the child goes idle, the snapshot is drained
+  (covering no-save runs), the child session is deleted, and a toast fires
+  with the metrics. This path bypasses the nudge-and-acknowledge cycle
+  entirely — no `missedNudges` counter, no escalation. The nudge path is
+  fallback only (when `triggerExtraction` throws).
+- Alternative drain path (agent-initiated): if a child sub-agent (dispatched
+  via the `task` tool in the fallback nudge path) writes a memory via
+  `thatch_memory_remember`, the parent's buffer is also drained via the
+  `childToParent` Map — the `missedNudges` counter resets for the parent
+  session.
