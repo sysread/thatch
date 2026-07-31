@@ -433,6 +433,23 @@ export function extractionNudge(
 }
 
 /**
+ * Prompt text sent directly to a child session the plugin created for
+ * extraction. Unlike extractionNudge (which tells the model to dispatch a
+ * sub-agent and call extraction_done), this prompt is already inside the
+ * child — the model just runs the fact-extractor skill and saves facts.
+ * The payload format is identical to the nudge path so the skill receives
+ * the same contract either way.
+ */
+export function extractionDirectPrompt(count: number, payload: string): string {
+  const plural = count === 1 ? "" : "s";
+  return `Run the thatch-fact-extractor skill to extract durable facts from ` +
+    `${count} queued tool interaction${plural}. ` +
+    `Use thatch_memory_remember to save any durable facts you find. ` +
+    `Call thatch_extraction_done when finished, even if nothing was worth saving.\n` +
+    `Payload:\n${payload}`;
+}
+
+/**
  * Backwards-compatible wrapper for the Claude Code/Cursor CLI path.
  * Maintained for any external callers; bin/thatch should use extractionNudge
  * directly with a missedCount from extract-queue.ts.

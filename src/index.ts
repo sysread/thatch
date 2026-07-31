@@ -10,6 +10,7 @@ import {
   sessionStartReminder,
   recallNudge,
   extractionNudge,
+  extractionDirectPrompt,
   predictionNudge,
   type NudgeMatch,
 } from "./prompts";
@@ -81,6 +82,22 @@ export const server: Plugin = async ({ client, worktree }) => {
   // any tool calls the parent made concurrently with the sub-agent.
   const parentSnapshots = new Map<string, ToolInteraction[]>();
 
+  // Parent sessions with an active direct-extraction child. When the parent
+  // goes idle with pending tool interactions, the plugin creates a child
+  // session and prompts it directly (via the SDK client) instead of injecting
+  // a nudge into the next user message. This set suppresses the nudge path
+  // while the child runs, and prevents re-triggering if the parent goes idle
+  // again before the child finishes. Cleared when the child goes idle, errors,
+  // or is deleted. If direct extraction fails, the set is cleared so the nudge
+  // path takes over as a fallback on the next chat.message.
+  const extracting = new Set<string>();
+
+  // Per-child-session extraction metrics for the toast notification. When the
+  // child session goes idle, these counts are formatted into a toast that
+  // shows the user thatch is working without polluting the conversation.
+  // Keyed by child session ID. Cleaned up on child idle, error, or deletion.
+  const childMetrics = new Map<string, { new: number; updated: number; deleted: number }>();
+
   // Skills always install to the global opencode config — installing into the
   // worktree would mutate the user's repo (untracked files in git status).
   // A failed install degrades the nudge workflow but must not kill the plugin.
@@ -95,6 +112,60 @@ export const server: Plugin = async ({ client, worktree }) => {
 
   const sys = systemPrompt(repo);
   const compact = compactionContext(repo);
+
+  // Direct extraction: create a child session linked to the parent and prompt
+  // it with the extraction payload. The child runs the fact-extractor skill,
+  // writes memories, and goes idle — the existing childToParent / snapshot
+  // drain machinery handles buffer cleanup. This replaces the nudge-and-pray
+  // path where the model had to notice the nudge, dispatch a task, and call
+  // extraction_done. The nudge path remains as a fallback if this throws.
+  //
+  // Does NOT call extraction.accept — entries stay in pending so consumeSnapshot
+  // can drain them by reference identity when the child writes a memory. The
+  // extracting set (not accept) suppresses the nudge in chat.message.
+  async function triggerExtraction(parentID: string): Promise<void> {
+    extracting.add(parentID);
+
+    const batch = extraction.peek(parentID);
+    const payload = extraction.buildPayload(batch, repo);
+    const promptText = extractionDirectPrompt(batch.length, payload);
+
+    const result = await client.session.create({
+      body: { parentID, title: "thatch-extraction" },
+    });
+    // session.created event fires here, setting childToParent and
+    // parentSnapshots (snapshot of the full pending buffer, since we
+    // have not called accept).
+    const childId = result.data!.id;
+
+    const bgEnabled =
+      process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS === "true" ||
+      process.env.OPENCODE_EXPERIMENTAL === "true";
+
+    if (bgEnabled) {
+      await client.session.promptAsync({
+        path: { id: childId },
+        body: {
+          parts: [{ type: "text", text: promptText }],
+        },
+      });
+    } else {
+      // Fire and forget — the parent is already idle, so blocking the event
+      // handler would only delay other event processing. The child runs to
+      // completion and its idle event triggers cleanup.
+      client.session
+        .prompt({
+          path: { id: childId },
+          body: {
+            parts: [{ type: "text", text: promptText }],
+          },
+        })
+        .catch((err: unknown) => {
+          console.error(`[thatch] extraction child failed: ${err}`);
+          extracting.delete(parentID);
+        });
+    }
+  }
 
   return {
     tool: createTools(db, model, repo),
@@ -149,13 +220,15 @@ export const server: Plugin = async ({ client, worktree }) => {
       if (input.tool === "thatch_memory_remember") {
         extraction.consume(input.sessionID);
         missedNudges.delete(input.sessionID);
-        // If this is a child session, complete the parent's accepted entries
-        // (the extractor confirmed it is alive and saving) and drain the
-        // parent's snapshot entries from the pending buffer. If no snapshot
-        // was recorded (e.g. session.created event never arrived), fall back
-        // to draining the entire parent buffer.
+        // Track extraction metrics for toast display. Only count in child
+        // sessions (direct-extraction children), not the parent or manual
+        // memory writes from the user's session.
         const parentID = childToParent.get(input.sessionID);
         if (parentID) {
+          const metrics = childMetrics.get(input.sessionID) ?? { new: 0, updated: 0, deleted: 0 };
+          if (input.args?.overwrite) metrics.updated++;
+          else metrics.new++;
+          childMetrics.set(input.sessionID, metrics);
           extraction.completeAccepted(parentID);
           const snapshot = parentSnapshots.get(input.sessionID);
           if (snapshot) {
@@ -184,6 +257,13 @@ export const server: Plugin = async ({ client, worktree }) => {
           extraction.accept(input.sessionID);
         }
         missedNudges.delete(input.sessionID);
+        return;
+      }
+      // Track memory deletions in child sessions for the toast metrics.
+      if (input.tool === "thatch_memory_forget" && childToParent.has(input.sessionID)) {
+        const metrics = childMetrics.get(input.sessionID) ?? { new: 0, updated: 0, deleted: 0 };
+        metrics.deleted++;
+        childMetrics.set(input.sessionID, metrics);
         return;
       }
       if (input.tool.startsWith("thatch_") || input.tool === "skill" || input.tool === "task") return;
@@ -224,7 +304,7 @@ export const server: Plugin = async ({ client, worktree }) => {
         if (isCompactionMsg) return;
         compacting.delete(input.sessionID);
       }
-      if (extraction.pending(input.sessionID)) {
+      if (!extracting.has(input.sessionID) && extraction.pending(input.sessionID)) {
         const batch = extraction.peek(input.sessionID);
         const payload = extraction.buildPayload(batch, repo);
         const missed = missedNudges.get(input.sessionID) ?? 0;
@@ -272,6 +352,17 @@ export const server: Plugin = async ({ client, worktree }) => {
               text: recallNudge(matches),
               synthetic: true,
             });
+            try {
+              await client.tui.showToast({
+                body: {
+                  message: `[thatch] recalled ${matches.length} memor${matches.length === 1 ? "y" : "ies"}`,
+                  variant: "info",
+                  duration: 3000,
+                },
+              });
+            } catch {
+              // TUI may not be connected. Best-effort.
+            }
           }
         } catch (err) {
           console.error(`[thatch] recall nudge failed: ${err}`);
@@ -290,6 +381,17 @@ export const server: Plugin = async ({ client, worktree }) => {
               text: predictionNudge(predItems),
               synthetic: true,
             });
+            try {
+              await client.tui.showToast({
+                body: {
+                  message: `[thatch] ${predItems.length} prediction${predItems.length === 1 ? "" : "s"} surfaced`,
+                  variant: "info",
+                  duration: 3000,
+                },
+              });
+            } catch {
+              // TUI may not be connected. Best-effort.
+            }
           }
         } catch (err) {
           console.error(`[thatch] prediction nudge failed: ${err}`);
@@ -325,15 +427,90 @@ export const server: Plugin = async ({ client, worktree }) => {
       if (event.type === "session.error") {
         const childID = event.properties.sessionID;
         const parentID = childID ? childToParent.get(childID) : undefined;
-        if (parentID) extraction.requeueAccepted(parentID);
+        if (parentID && childID) {
+          extraction.requeueAccepted(parentID);
+          extracting.delete(parentID);
+          childToParent.delete(childID);
+          parentSnapshots.delete(childID);
+          childMetrics.delete(childID);
+        }
         return;
       }
       if (event.type === "session.status" && event.properties.status?.type === "idle") {
-        const childID = event.properties.sessionID;
-        const parentID = childID ? childToParent.get(childID) : undefined;
-        if (parentID) {
+        const sessionID = event.properties.sessionID;
+        const parentID = sessionID ? childToParent.get(sessionID) : undefined;
+        if (parentID && sessionID) {
+          // Child went idle — extraction child finished (save or no-save).
+          // Complete the parent's accepted entries (no-op in the direct-extraction
+          // path, where we don't accept), clean up maps and the extracting flag,
+          // and delete the child session to avoid clutter.
+          //
+          // Drain the parent's snapshot entries from the pending buffer. If the
+          // child wrote memories, consumeSnapshot already ran in tool.execute.after
+          // and the snapshot is gone — so this is a no-op. If the child did a
+          // no-save run (nothing worth extracting), the snapshot entries are still
+          // in the buffer and need to be drained here so they don't replay as a
+          // nudge on the next chat.message.
+          //
+          // Fire a toast with the extraction metrics so the user sees thatch is
+          // working without any conversation pollution.
+          const metrics = childMetrics.get(sessionID);
+          const parts: string[] = [];
+          if (metrics) {
+            if (metrics.new > 0) parts.push(`new: ${metrics.new}`);
+            if (metrics.updated > 0) parts.push(`updated: ${metrics.updated}`);
+            if (metrics.deleted > 0) parts.push(`deleted: ${metrics.deleted}`);
+          }
+          const message = parts.length > 0
+            ? parts.join(", ")
+            : "extraction complete — nothing to save";
+          const variant = parts.length > 0 ? "success" : "info";
+          try {
+            await client.tui.showToast({
+              body: { message: `[thatch] ${message}`, variant, duration: 4000 },
+            });
+          } catch {
+            // TUI may not be connected (e.g. headless mode). Best-effort.
+          }
+
           extraction.completeAccepted(parentID);
+          const snapshot = parentSnapshots.get(sessionID);
+          if (snapshot) {
+            extraction.consumeSnapshot(parentID, snapshot);
+          } else {
+            extraction.consume(parentID);
+          }
           missedNudges.delete(parentID);
+          extracting.delete(parentID);
+          childToParent.delete(sessionID);
+          parentSnapshots.delete(sessionID);
+          childMetrics.delete(sessionID);
+          extraction.consume(sessionID);
+          try {
+            await client.session.delete({ path: { id: sessionID } });
+          } catch {
+            // Best-effort — the child is idle and harmless if not deleted.
+          }
+          return;
+        }
+        // Parent went idle — trigger direct extraction if there are pending
+        // tool interactions and no extraction is already running. This replaces
+        // the nudge-based path: instead of injecting a nudge into the next user
+        // message and relying on the model to dispatch a sub-agent, the plugin
+        // creates a child session and prompts it directly. Falls back to the
+        // nudge path on the next chat.message if this throws.
+        if (
+          sessionID &&
+          !compacting.has(sessionID) &&
+          !extracting.has(sessionID) &&
+          extraction.pending(sessionID)
+        ) {
+          try {
+            await triggerExtraction(sessionID);
+          } catch (err) {
+            console.error(`[thatch] direct extraction trigger failed: ${err}`);
+            extracting.delete(sessionID);
+          }
         }
         return;
       }
@@ -341,11 +518,16 @@ export const server: Plugin = async ({ client, worktree }) => {
         const id = event.properties.info.id;
         // A child deleted before completing never processed its payload.
         const parentID = childToParent.get(id);
-        if (parentID) extraction.requeueAccepted(parentID);
+        if (parentID) {
+          extraction.requeueAccepted(parentID);
+          extracting.delete(parentID);
+        }
         childToParent.delete(id);
         parentSnapshots.delete(id);
+        childMetrics.delete(id);
         // A deleted parent takes its accepted entries with it.
         extraction.completeAccepted(id);
+        extracting.delete(id);
         return;
       }
 
