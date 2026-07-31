@@ -36,6 +36,14 @@ const MIN_PROMPT_LEN = 10;
 // a weaker signal than "this prompt relates to a stored memory."
 const PREDICTION_THRESHOLD = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.45");
 
+// Timeout for background sub-agent sessions. A child session stuck in
+// "busy" for longer than this is cancelled and the parent is notified so
+// the model can re-dispatch it. opencode's background job engine has no
+// deadline, no watchdog, and no stuck detection — a hung sub-agent's
+// notify fiber waits on Deferred.await(job.done) forever. This timer is
+// the only thing that bounds a runaway background sub-agent. 0 disables.
+const SUBAGENT_TIMEOUT_MS = parseInt(process.env.THATCH_SUBAGENT_TIMEOUT_MS ?? "300000", 10);
+
 export const server: Plugin = async ({ client, worktree }) => {
   // The opencode server's cwd is wherever the server happened to start;
   // `worktree` is the project this plugin instance actually serves.
@@ -107,6 +115,12 @@ export const server: Plugin = async ({ client, worktree }) => {
   // shows the user thatch is working without polluting the conversation.
   // Keyed by child session ID. Cleaned up on child idle, error, or deletion.
   const childMetrics = new Map<string, { new: number; updated: number; deleted: number }>();
+
+  // Timestamps recording when each child session entered "busy" status.
+  // The watchdog timer checks these and cancels sessions busy for longer
+  // than SUBAGENT_TIMEOUT_MS — the signature of a hung background
+  // sub-agent that will never complete or notify its parent.
+  const childBusySince = new Map<string, number>();
 
   // Skills always install to the global opencode config — installing into the
   // worktree would mutate the user's repo (untracked files in git status).
@@ -199,6 +213,56 @@ export const server: Plugin = async ({ client, worktree }) => {
         });
     }
   }
+
+  // Watchdog: periodically check for stuck child sessions and cancel them.
+  // opencode's background job engine has no deadline — a hung sub-agent's
+  // notify fiber waits on Deferred.await(job.done) forever and the parent
+  // is never notified. The watchdog batches timeouts per parent so a single
+  // notification covers all specialists that timed out in the same check.
+  // Deleting the child session cancels the background job via opencode's
+  // cascade, but the task tool's notify fiber does Effect.void for
+  // "cancelled" status (no notification injected), so we also prompt the
+  // parent directly with a synthetic message the model can act on.
+  const watchdog = SUBAGENT_TIMEOUT_MS > 0
+    ? setInterval(() => {
+        const now = Date.now();
+        const timedOut = new Map<string, string[]>();
+        for (const [childID, since] of childBusySince) {
+          if (now - since < SUBAGENT_TIMEOUT_MS) continue;
+          const parentID = childToParent.get(childID);
+          childBusySince.delete(childID);
+          if (!parentID) continue;
+          try { client.session.delete({ path: { id: childID } }); } catch {}
+          const children = timedOut.get(parentID) ?? [];
+          children.push(childID);
+          timedOut.set(parentID, children);
+        }
+        for (const [parentID, childIDs] of timedOut) {
+          const desc = childIDs.length === 1
+            ? `sub-agent ${childIDs[0]}`
+            : `${childIDs.length} sub-agents (${childIDs.join(", ")})`;
+          const min = Math.round(SUBAGENT_TIMEOUT_MS / 60000);
+          console.error(
+            `[thatch] watchdog: cancelling stuck ${desc} (parent ${parentID}) after ${min}m`,
+          );
+          client.session.promptAsync({
+            path: { id: parentID },
+            body: {
+              parts: [{
+                type: "text",
+                synthetic: true,
+                text:
+                  `Background ${desc} timed out after ${min} minutes and was cancelled. ` +
+                  `Re-dispatch any timed-out code review specialists or other important tasks. ` +
+                  `If a re-dispatched specialist fails again, note the gap in the synthesis and move on.`,
+              }],
+            },
+          }).catch((err: unknown) => {
+            console.error(`[thatch] watchdog parent notification failed: ${err}`);
+          });
+        }
+      }, 30_000)
+    : null;
 
   return {
     tool: createTools(db, model, repo),
@@ -484,7 +548,15 @@ export const server: Plugin = async ({ client, worktree }) => {
           childToParent.delete(childID);
           parentSnapshots.delete(childID);
           childMetrics.delete(childID);
+          childBusySince.delete(childID);
           extractionChildren.delete(childID);
+        }
+        return;
+      }
+      if (event.type === "session.status" && event.properties.status?.type === "busy") {
+        const sessionID = event.properties.sessionID;
+        if (sessionID && childToParent.has(sessionID)) {
+          childBusySince.set(sessionID, Date.now());
         }
         return;
       }
@@ -492,6 +564,7 @@ export const server: Plugin = async ({ client, worktree }) => {
         const sessionID = event.properties.sessionID;
         const parentID = sessionID ? childToParent.get(sessionID) : undefined;
         if (parentID && sessionID) {
+          childBusySince.delete(sessionID);
           // A child session went idle. Two cases:
           // - Extraction child (created by triggerExtraction, tracked in
           //   extractionChildren): drain the parent's snapshot, fire a toast
@@ -586,6 +659,7 @@ export const server: Plugin = async ({ client, worktree }) => {
         childToParent.delete(id);
         parentSnapshots.delete(id);
         childMetrics.delete(id);
+        childBusySince.delete(id);
         extractionChildren.delete(id);
         // A deleted parent takes its accepted entries with it.
         extraction.completeAccepted(id);
@@ -626,6 +700,7 @@ export const server: Plugin = async ({ client, worktree }) => {
     },
 
     dispose: async () => {
+      if (watchdog) clearInterval(watchdog);
       db.close();
     },
   };

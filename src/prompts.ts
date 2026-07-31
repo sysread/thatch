@@ -76,6 +76,11 @@ that thread. If the user's last message has been fully addressed, stop and
 wait. Do not treat the completion as a trigger to advance work the user has
 not greenlit.
 
+If a background task was cancelled after timing out, re-dispatch it once with
+the same prompt. If the re-dispatch also fails or times out, note the gap and
+move on. Do not retry more than once — repeated failures indicate an
+intractable prompt, not a transient hang.
+
 ## User Decision Model
 
 A statistical model of the user's decision-making preferences is maintained by
