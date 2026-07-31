@@ -512,6 +512,11 @@ describe("plugin entry", () => {
         showToast: async () => {},
       },
     };
+
+    // The preload (tests/clean-env.ts) strips OPENCODE_* vars. Set the one
+    // this test needs, then clean up.
+    process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS = "true";
+
     const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
 
     // Buffer a tool interaction in the parent
@@ -531,6 +536,8 @@ describe("plugin entry", () => {
     expect(promptAsyncCalled).toBe(true);
     expect(promptAsyncArgs.path.id).toBe("child_direct1");
     expect(promptAsyncArgs.body.parts[0].text).toContain("thatch-fact-extractor");
+
+    delete process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS;
 
     testHooks.dispose?.();
   });
@@ -728,11 +735,8 @@ describe("plugin entry", () => {
       },
     };
 
-    // Save and clear env vars to test sync path
-    const savedBg = process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS;
-    const savedExp = process.env.OPENCODE_EXPERIMENTAL;
-    delete process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS;
-    delete process.env.OPENCODE_EXPERIMENTAL;
+    // Preload (tests/clean-env.ts) already strips OPENCODE_* vars, so the
+    // sync path is the default — no env manipulation needed.
 
     const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
 
@@ -750,10 +754,6 @@ describe("plugin entry", () => {
 
     expect(promptCalled).toBe(true);
     expect(promptAsyncCalled).toBe(false);
-
-    // Restore env vars
-    if (savedBg !== undefined) process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS = savedBg;
-    if (savedExp !== undefined) process.env.OPENCODE_EXPERIMENTAL = savedExp;
 
     testHooks.dispose?.();
   });
