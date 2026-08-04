@@ -21,9 +21,9 @@ description: Extract durable project facts ... Use when ...
 - `description` drives when the agent loads the skill (both opencode and
   Cursor auto-discover skills and use the description for relevance).
 
-## The 20 skills
+## The 21 skills
 
-**Shared (19)** — installed everywhere; no sub-agents required:
+**Shared (20)** — installed everywhere; no sub-agents required:
 
 | Skill | Role |
 |-------|------|
@@ -40,6 +40,7 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-synthesizer` | Verify specialist findings against code, dedupe, classify, calibrate severity. Starts the final report with a workflow-change preface, then cross-references findings against prior review comments when a follow-up round register is provided. |
 | `thatch-review-context` | Gather project/feature context (PR descriptions, git archaeology, ticket references, memory) before fan-out. Prevents false positives about intentionally deferred work. Also fetches prior review comments on a connected PR/MR for follow-up-round detection and builds a register with preliminary addressed-check status per comment. |
 | `thatch-workflow-research` | Research code workflows/features affected by a change or planned change. Reads code flows, comments, git history, memories, docs. Produces a guide to the code for reviewers or planners. |
+| `thatch-review-followup` | Alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review round adequately addressed your prior findings, offers to reply on resolved items, then optionally re-runs the full structured review. |
 | `thatch-change-walkthrough` | Explain a change to the user as a teaching walkthrough: resolve the delta, research each affected workflow at the merge-base, teach current behavior, then overlay the modifications with file:line citations and analogies. |
 | `thatch-code-walkthrough` | Explain a feature, module, or workflow to the user as a teaching walkthrough: identify the code area (optionally from a branch or PR), research how it works, teach it with file:line citations and analogies, list the key files. |
 | `thatch-session-reflection` | End-of-session memory recording (project, user, tools, self). |
@@ -85,7 +86,7 @@ The synthesizer reuses the same verification rigor but has its own structure
 ## The two arrays
 
 ```ts
-const SHARED_SKILLS: SkillDef[] = [ /* 19 skills above */ ];
+const SHARED_SKILLS: SkillDef[] = [ /* 20 skills above */ ];
 const OPENCODE_ONLY_SKILLS: SkillDef[] = [ /* code-review coordinator */ ];
 ```
 
@@ -119,6 +120,10 @@ and `--cursor` pass only the shared set.
 - **Full review on opencode**: load `thatch-code-review` — it gathers project context, researches affected workflows, dispatches all 7 specialists in parallel (with both the context brief and workflow guide injected into each briefing), then synthesizes a report that starts with the workflow changes before findings.
 - **Full review on Claude Code/Cursor**: run each specialist in sequence, then
   run `thatch-review-synthesizer` to verify and aggregate.
+- **Follow-up round (re-review)**: load `thatch-review-followup` when the author
+  has responded or pushed changes after your initial review. It verifies whether
+  your prior findings were adequately addressed, offers to reply on resolved
+  items, then optionally hands off to `thatch-code-review` for a fresh round.
 
 The coordinator is the only skill that can't be used without sub-agents; that's
 why it lives in `OPENCODE_ONLY_SKILLS`.

@@ -200,6 +200,7 @@ Seven specialist review lenses, each a self-contained static-analysis pass:
 | `thatch-review-synthesizer` | Verifies and synthesizes findings from multiple specialists into a report that starts with workflow changes, then highlights, then deduplicated severity-grouped findings. |
 | `thatch-review-context` | Gathers project context (PR descriptions, git archaeology, ticket references, memory) before a review. Prevents false positives about intentionally deferred work. |
 | `thatch-workflow-research` | Researches code workflows and features affected by a change or planned change. Reads code flows, comments, git history, and produces a guide for reviewers or planners. |
+| `thatch-review-followup` | Alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed your prior findings, offers to reply on resolved items, then optionally re-runs the full structured review. |
 | `thatch-change-walkthrough` | Explains a change to the user as a teaching walkthrough: researches each affected workflow at the merge-base, teaches current behavior, then overlays the modifications with file:line citations. |
 | `thatch-code-walkthrough` | Explains a feature, module, or workflow to the user as a teaching walkthrough with file:line citations. Also used to draft high-level docs for new or undocumented features. |
 
@@ -225,6 +226,7 @@ Seven specialist review lenses, each a self-contained static-analysis pass:
 | Review specialists (7) | Yes | Yes | Yes |
 | Review synthesizer | Yes | Yes | Yes |
 | Review context + workflow research | Yes | Yes | Yes |
+| Review followup | Yes | Yes | Yes |
 | Walkthrough skills (2) | Yes | Yes | Yes |
 | Writing skills (3) | Yes | Yes | Yes |
 | Code review coordinator | Yes | No (requires sub-agents) | No (requires sub-agents) |
@@ -257,6 +259,18 @@ specialist in sequence, then synthesize:
 3. ... repeat for state-flow, no-slop, breadcrumbs, mark-and-sweep ...
 4. Load thatch-review-synthesizer, verify and aggregate all findings.
 ```
+
+For a **follow-up round** (the author responded or pushed changes after your
+review), load the re-check skill:
+
+```text
+Load thatch-review-followup and check whether my prior review comments
+on this PR were adequately addressed.
+```
+
+It verifies whether each finding was resolved (by code change, proof, or
+follow-up ticket with a risk explanation), offers to reply on the resolved
+ones, then optionally hands off to the coordinator for a fresh full review.
 
 These files are plugin-owned: local edits are overwritten the next time the
 plugin initializes (this is how skill improvements ship with new versions).

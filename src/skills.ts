@@ -43,6 +43,7 @@ function loadSharedSkills(): SkillDef[] {
     "thatch-review-synthesizer",
     "thatch-review-context",
     "thatch-workflow-research",
+    "thatch-review-followup",
     "thatch-change-walkthrough",
     "thatch-code-walkthrough",
     "thatch-session-reflection",
