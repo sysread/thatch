@@ -17,8 +17,14 @@ docs/qa/            Test plan and manual QA use-case scenarios
 docs/qa/use-cases/  Numbered use-case docs (UC-NNN-title.md)
 docs/user/          User-facing install and usage guide
 docs/plans/         Design-decision snapshots (temporary, see graduation below)
-docs/in-progress/  Drafts not ready for lint (ignored by markdownlint)
+docs/in-progress/   Work-in-progress docs for features being built (ignored by markdownlint)
 ```
+
+When a feature in `docs/in-progress/` is complete, graduate it: move
+durable architecture into `docs/dev/`, add use-case docs to
+`docs/qa/use-cases/`, then delete the in-progress file. An empty
+`docs/in-progress/` directory can be removed; it will be recreated when
+needed.
 
 ## What goes where
 
@@ -63,17 +69,17 @@ Newer use cases carry an _Automatable_ note flagging which are pure
 file/IPC/CLI contracts ready to graduate into bun:test integration tests.
 Add this note after the title when the scenario needs no LLM or live session.
 
-## Plan graduation
+## Plan and in-progress graduation
 
-Plans in docs/plans/ are design-decision snapshots, not permanent records.
-When a plan is fully implemented:
+Plans in `docs/plans/` and work-in-progress docs in `docs/in-progress/`
+are temporary. When a plan or in-progress feature is fully implemented:
 
-1. Remove the plan file from docs/plans/.
-2. Ensure the final architecture is documented in docs/dev/ (update existing
-   docs or create a new one).
-3. Ensure end-to-end use-case scenarios exist in docs/qa/use-cases/.
+1. Remove the plan or in-progress file.
+2. Ensure the final architecture is documented in `docs/dev/` (update
+   existing docs or create a new one).
+3. Ensure end-to-end use-case scenarios exist in `docs/qa/use-cases/`.
 4. The dev docs and use-case docs are the permanent record. Git history
-   preserves the original plan if someone needs the design reasoning.
+   preserves the original file if someone needs the design reasoning.
 
 Do NOT maintain a plan index in the README. Plans are temporary and the
 README describes the graduation process, not a list of active plans.
@@ -81,7 +87,8 @@ README describes the graduation process, not a list of active plans.
 ## Markdownlint gate
 
 The quality gate (`mise run check`) runs markdownlint-cli2 on `README.md` and
-`docs/**/*.md`, excluding `docs/plans/**` and `docs/in-progress/**`.
+`docs/**/*.md`, excluding `docs/plans/**` and `docs/in-progress/**` (when it
+exists).
 
 Disabled rules (in `.markdownlint-cli2.jsonc`):
 - MD013 (line length) — dense table-heavy house style
