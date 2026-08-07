@@ -137,7 +137,7 @@ export async function ensureMaster(): Promise<void> {
   // drift detection skips the install on subsequent startups.
   // This also installs opencode's own npm deps into the config dir's
   // node_modules/, which is the slow part (~30s on first run).
-  await step("Pre-installing skills via opencode warm-up (this is the slow part)", async () => {
+  await step("Initializing opencode + thatch (npm deps, skills, plugin)", async () => {
     const masterConfig = join(masterDir, "config");
     const masterHome = join(masterDir, "home");
     mkdirSync(masterConfig, { recursive: true });
