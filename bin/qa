@@ -1,0 +1,295 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Thatch QA runner: creates isolated copies of the repo, runs each use case
+# via `opencode run`, and aggregates results. Does NOT use the real repo,
+# real config, or real database.
+#
+# Usage: bin/qa [--batch-size N] [--model MODEL] [--dry-run]
+#   --batch-size N   Number of parallel opencode sessions (default 5)
+#   --model MODEL    Model to use (default venice/deepseek-v4-flash-0731)
+#   --dry-run        Create environments and print what would run, but don't
+#                    spawn opencode sessions
+#
+# Requires: git, bun, opencode, VENICE_API_KEY in the environment.
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BATCH_SIZE=5
+MODEL="venice/deepseek-v4-flash-0731"
+DRY_RUN=0
+QA_ROOT="/tmp/thatch-qa"
+
+# Kill all child processes on exit or interrupt so Ctrl-C doesn't leave
+# orphaned opencode sessions running.
+cleanup() {
+  # Kill the entire process group we're in. This catches all background
+  # children spawned by the batch loops.
+  kill 0 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --batch-size) BATCH_SIZE="$2"; shift 2 ;;
+    --model)      MODEL="$2"; shift 2 ;;
+    --dry-run)    DRY_RUN=1; shift ;;
+    *) echo "unknown arg: $1"; exit 1 ;;
+  esac
+done
+
+# VENICE_API_KEY must be set. We never read or echo its value.
+if [ -z "${VENICE_API_KEY:-}" ]; then
+  echo "error: VENICE_API_KEY is not set in the environment"
+  exit 1
+fi
+
+section() {
+  echo ""
+  echo "# ---------------------------------------------------------------------------"
+  echo "# $1"
+  echo "# ---------------------------------------------------------------------------"
+  echo ""
+}
+
+# --- Pre-flight: run the automated suite -----------------------------------
+
+section "Pre-flight: mise run check"
+if ! (cd "$REPO_ROOT" && mise run check 2>&1); then
+  echo "error: mise run check failed. Fix the build before running QA."
+  exit 1
+fi
+echo "Check passed."
+
+# --- Discover use cases ----------------------------------------------------
+
+section "Discovering use cases"
+UC_DIR="$REPO_ROOT/docs/qa/use-cases"
+UC_FILES=()
+for f in "$UC_DIR"/UC-*.md; do
+  [ -f "$f" ] || continue
+  UC_FILES+=("$f")
+done
+
+if [ ${#UC_FILES[@]} -eq 0 ]; then
+  echo "error: no use case files found in $UC_DIR"
+  exit 1
+fi
+
+echo "Found ${#UC_FILES[@]} use cases."
+
+# --- Create master copy via git archive ------------------------------------
+
+section "Creating master copy"
+rm -rf "$QA_ROOT"
+mkdir -p "$QA_ROOT/master"
+
+# git archive gives us exactly the tracked files: no .git, no node_modules,
+# no untracked artifacts. Fast (local pipe), universal (git is required).
+(cd "$REPO_ROOT" && git archive HEAD) | tar -x -C "$QA_ROOT/master"
+
+# Symlink node_modules from the real repo so tests can run without bun install.
+if [ -d "$REPO_ROOT/node_modules" ]; then
+  ln -s "$REPO_ROOT/node_modules" "$QA_ROOT/master/node_modules"
+fi
+
+# Copy the .opencode directory (gitignored, so git archive skips it).
+# The QA skill lives here and must be available to the opencode sessions.
+if [ -d "$REPO_ROOT/.opencode" ]; then
+  cp -r "$REPO_ROOT/.opencode" "$QA_ROOT/master/.opencode"
+  # Remove node_modules and other gitignored cruft from the copy.
+  rm -rf "$QA_ROOT/master/.opencode/node_modules" \
+         "$QA_ROOT/master/.opencode/package.json" \
+         "$QA_ROOT/master/.opencode/package-lock.json" \
+         "$QA_ROOT/master/.opencode/bun.lock" 2>/dev/null || true
+fi
+
+# Write the opencode config for the QA sessions. Uses env var substitution
+# for the Venice API key so the key is never written to disk.
+mkdir -p "$QA_ROOT/master/.opencode/plugins"
+cat > "$QA_ROOT/master/opencode.json" << 'EOF'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
+  "snapshot": false,
+  "model": "venice/deepseek-v4-flash-0731",
+  "provider": {
+    "venice": {
+      "options": {
+        "apiKey": "{env:VENICE_API_KEY}"
+      }
+    }
+  },
+  "permission": {
+    "external_directory": {
+      "/tmp/**": "allow"
+    }
+  }
+}
+EOF
+
+# Plugin loader: imports from the copy's own src/index, not the real repo.
+cat > "$QA_ROOT/master/.opencode/plugins/thatch.ts" << 'EOF'
+export { server } from "./src/index";
+EOF
+
+echo "Master copy ready at $QA_ROOT/master"
+
+# --- Run use cases in batches ----------------------------------------------
+
+run_uc() {
+  local uc_file="$1"
+  local uc_name
+  uc_name=$(basename "$uc_file" .md)
+
+  # Each use case gets its own copy of the master.
+  local uc_dir="$QA_ROOT/$uc_name"
+  cp -r "$QA_ROOT/master" "$uc_dir"
+
+  # Thatch data isolation: each UC gets its own temp DB and queue.
+  export THATCH_DB_PATH="$uc_dir/thatch.db"
+  export THATCH_QUEUE_DIR="$uc_dir/queue"
+  export CLAUDE_CONFIG_DIR="$uc_dir/claude"
+  export XDG_CONFIG_HOME="$uc_dir/config"
+  export HOME="$uc_dir/home"
+  export OPENCODE_DISABLE_CLAUDE_CODE=1
+  export OPENCODE_DISABLE_EXTERNAL_SKILLS=1
+  export OPENCODE_DISABLE_DEFAULT_PLUGINS=1
+  unset CURSOR_PROJECT_DIR CLAUDE_PROJECT_DIR 2>/dev/null || true
+
+  # Create the home and config dirs so tools don't fail.
+  mkdir -p "$HOME" "$CLAUDE_CONFIG_DIR"
+
+  local uc_content
+  uc_content=$(cat "$uc_file")
+
+  local prompt
+  prompt="Load the thatch-qa skill. Then execute this use case and report results:
+
+$uc_content
+
+Report your result in this format:
+UC-NNN: <title>
+Result: PASS | FAIL | PARTIAL | MANUAL-ONLY
+Evidence:
+  - What was run
+  - What was observed
+  - What matched or didn't match the expected outcome"
+
+  local output_file="$uc_dir/result.txt"
+
+  if [ $DRY_RUN -eq 1 ]; then
+    echo "  [DRY RUN] $uc_name -> would run: opencode run --dir $uc_dir --model $MODEL --auto"
+    echo "  [DRY RUN] prompt length: ${#prompt} chars"
+    echo "DRY-RUN: $uc_name" > "$output_file"
+    return 0
+  fi
+
+  echo "  Running $uc_name..."
+  if opencode run --dir "$uc_dir" --model "$MODEL" --auto "$prompt" > "$output_file" 2>&1; then
+    echo "  DONE: $uc_name"
+  else
+    echo "  ERROR: $uc_name (see $output_file)"
+    echo "ERROR: opencode run failed for $uc_name" >> "$output_file"
+  fi
+}
+
+section "Running use cases in batches of $BATCH_SIZE"
+
+# Process in batches.
+batch_num=0
+declare -a batch=()
+for uc_file in "${UC_FILES[@]}"; do
+  batch+=("$uc_file")
+
+  if [ ${#batch[@]} -ge $BATCH_SIZE ]; then
+    batch_num=$((batch_num + 1))
+    echo "Batch $batch_num: $(basename "${batch[0]}" .md) .. $(basename "${batch[-1]}" .md)"
+    for f in "${batch[@]}"; do
+      run_uc "$f" &
+    done
+    wait
+    echo ""
+    batch=()
+  fi
+done
+
+# Process remaining.
+if [ ${#batch[@]} -gt 0 ]; then
+  batch_num=$((batch_num + 1))
+  echo "Batch $batch_num: $(basename "${batch[0]}" .md) .. $(basename "${batch[-1]}" .md)"
+  for f in "${batch[@]}"; do
+    run_uc "$f" &
+  done
+  wait
+  echo ""
+fi
+
+# --- Aggregate results -----------------------------------------------------
+
+section "QA Results"
+
+pass=0; fail=0; partial=0; manual=0; error=0
+
+for uc_file in "${UC_FILES[@]}"; do
+  uc_name=$(basename "$uc_file" .md)
+  result_file="$QA_ROOT/$uc_name/result.txt"
+
+  if [ ! -f "$result_file" ]; then
+    status="ERROR"
+    error=$((error + 1))
+    notes="no result file"
+  else
+    # Extract the Result line from the output.
+    status=$(grep -m1 "^Result:" "$result_file" 2>/dev/null | sed 's/^Result: //' || echo "")
+    if [ -z "$status" ]; then
+      # Check for dry-run or error markers.
+      if grep -q "^DRY-RUN:" "$result_file" 2>/dev/null; then
+        status="DRY-RUN"
+      elif grep -q "^ERROR:" "$result_file" 2>/dev/null; then
+        status="ERROR"
+        error=$((error + 1))
+      else
+        status="UNKNOWN"
+        error=$((error + 1))
+      fi
+    else
+      case "$status" in
+        PASS)       pass=$((pass + 1)) ;;
+        FAIL)       fail=$((fail + 1)) ;;
+        PARTIAL)    partial=$((partial + 1)) ;;
+        MANUAL-ONLY) manual=$((manual + 1)) ;;
+        *)          error=$((error + 1)) ;;
+      esac
+    fi
+    notes=""
+  fi
+
+  printf "| %-30s | %-12s | %s\n" "$uc_name" "$status" "$notes"
+done
+
+echo ""
+echo "Summary: $pass PASS, $fail FAIL, $partial PARTIAL, $manual MANUAL-ONLY, $error ERROR"
+
+# Print evidence for any non-pass results.
+if [ $((fail + partial + error)) -gt 0 ]; then
+  section "Failure evidence"
+  for uc_file in "${UC_FILES[@]}"; do
+    uc_name=$(basename "$uc_file" .md)
+    result_file="$QA_ROOT/$uc_name/result.txt"
+    [ -f "$result_file" ] || continue
+
+    status=$(grep -m1 "^Result:" "$result_file" 2>/dev/null | sed 's/^Result: //' || echo "")
+    if [ "$status" != "PASS" ] && [ "$status" != "MANUAL-ONLY" ] && [ "$status" != "DRY-RUN" ]; then
+      echo "---"
+      echo "$uc_name:"
+      cat "$result_file"
+      echo ""
+    fi
+  done
+fi
+
+# --- Cleanup ---------------------------------------------------------------
+
+section "Cleanup"
+echo "QA artifacts left in $QA_ROOT"
+echo "Remove with: rm -rf $QA_ROOT"
