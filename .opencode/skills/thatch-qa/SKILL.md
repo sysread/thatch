@@ -10,6 +10,17 @@ You are running manual QA for the thatch project. Each use case in
 steps, and expected results. You execute them in isolated temp environments
 that never touch the developer's real config, database, or skill installs.
 
+## The repo is read-only
+
+The thatch repo at `/Users/jeff.ober/dev/thatch` is READ-ONLY during QA.
+Sub-agents may read files from it and run commands in it, but must never
+write to it, commit to it, or generate files in it. This is not a
+suggestion. Previous QA runs have clobbered README.md, created stray
+AGENTS.md files, and committed "init" to main. These are destructive
+failures caused by sub-agents that treated the repo as writable.
+
+The rules below are mechanical. Follow them exactly.
+
 ## Environment setup
 
 Every use case runs inside a throwaway directory under `/tmp`. Using `/tmp`
@@ -20,22 +31,19 @@ sub-agents inherit that permission. On macOS, `$TMPDIR` resolves to a
 
 ### Creating the environment
 
-Run this before any use case. Each sub-agent creates its own environment
-so parallel use cases never share state.
+Each sub-agent creates its own environment so parallel use cases never
+share state. The sub-agent's working directory is `$QA_ROOT`, NOT the
+repo.
 
 ```bash
+REPO=/Users/jeff.ober/dev/thatch
 QA_ROOT=$(mktemp -d /tmp/thatch-qa-XXXXXX)
 
 # Opencode config: temp dir so no real ~/.config/opencode is read or written
 mkdir -p "$QA_ROOT/config/opencode/plugins"
 mkdir -p "$QA_ROOT/home"
-
-# Thatch data: temp DB and queue so the real store is never touched
-# (THATCH_DB_PATH and THATCH_QUEUE_DIR are read at process start, not
-# module load, so exporting them before spawning processes works.)
-
-# Claude Code config: temp dir so setup tests don't write to ~/.claude
 mkdir -p "$QA_ROOT/claude"
+mkdir -p "$QA_ROOT/queue"
 
 # Minimal opencode config that loads the thatch plugin from the dev checkout
 cat > "$QA_ROOT/config/opencode/opencode.json" << 'EOF'
@@ -50,6 +58,9 @@ EOF
 cat > "$QA_ROOT/config/opencode/plugins/thatch.ts" << 'EOF'
 export { server } from "/Users/jeff.ober/dev/thatch/src/index";
 EOF
+
+# All work happens inside QA_ROOT. cd there now.
+cd "$QA_ROOT"
 ```
 
 ### Environment variables
@@ -57,32 +68,6 @@ EOF
 Export these before running any thatch CLI command or opencode session.
 They redirect every config path to the temp tree and disable all external
 config discovery.
-
-| Variable | Value | Why |
-|----------|-------|-----|
-| `XDG_CONFIG_HOME` | `$QA_ROOT/config` | Opencode reads `$XDG_CONFIG_HOME/opencode/` for config and skills. Redirecting here prevents reading or writing `~/.config/opencode`. |
-| `HOME` | `$QA_ROOT/home` | Git, SSH, and other tools resolve `~` from `HOME`. A temp home prevents them from finding real config files. |
-| `THATCH_DB_PATH` | `$QA_ROOT/thatch.db` | Thatch's SQLite database. Default is `~/.config/thatch/thatch.db`. Redirecting prevents cross-contamination with the real store. |
-| `THATCH_QUEUE_DIR` | `$QA_ROOT/queue` | File-backed extraction queue for Claude Code/Cursor hooks. Default is `~/.cache/thatch/queue/`. |
-| `CLAUDE_CONFIG_DIR` | `$QA_ROOT/claude` | Claude Code config root. `thatch setup --claude` writes here. Default is `~/.claude`. |
-| `OPENCODE_DISABLE_CLAUDE_CODE` | `1` | Stops opencode from reading `~/.claude/CLAUDE.md` and scanning `~/.claude/skills/`. |
-| `OPENCODE_DISABLE_EXTERNAL_SKILLS` | `1` | Stops opencode from scanning `~/.claude/skills/` and `~/.agents/skills/` for skill definitions. |
-| `OPENCODE_DISABLE_PROJECT_CONFIG` | `1` | Stops the upward directory walk for `opencode.json`, `.opencode/`, and `AGENTS.md`/`CLAUDE.md` files. The test runs from the repo, but we do not want project config to merge in. |
-| `OPENCODE_DISABLE_DEFAULT_PLUGINS` | `1` | Skips loading built-in opencode plugins. The thatch plugin loads from the temp config's `plugins/` dir, which is not affected by this flag. |
-| `CURSOR_PROJECT_DIR` | unset | Prevents the MCP server from detecting Cursor as the host. |
-| `CLAUDE_PROJECT_DIR` | unset | Prevents the MCP server from detecting Claude Code as the host. |
-
-Do NOT set `OPENCODE_PURE=1`. That flag empties plugin origins and would
-prevent the thatch plugin from loading. The thatch plugin lives in the
-temp config's `plugins/` directory, which is separate from npm plugin
-discovery.
-
-Do NOT set `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT`. The temp
-`opencode.json` in `$XDG_CONFIG_HOME/opencode/` is the config. Setting
-either of these would layer additional config on top, which is
-unnecessary and could mask issues.
-
-### Exporting the variables
 
 ```bash
 export XDG_CONFIG_HOME="$QA_ROOT/config"
@@ -97,9 +82,27 @@ export OPENCODE_DISABLE_DEFAULT_PLUGINS=1
 unset CURSOR_PROJECT_DIR CLAUDE_PROJECT_DIR
 ```
 
-### Cleanup
+| Variable | Value | Why |
+|----------|-------|-----|
+| `XDG_CONFIG_HOME` | `$QA_ROOT/config` | Opencode reads `$XDG_CONFIG_HOME/opencode/` for config and skills. Redirecting here prevents reading or writing `~/.config/opencode`. |
+| `HOME` | `$QA_ROOT/home` | Git, SSH, and other tools resolve `~` from `HOME`. A temp home prevents them from finding real config files. |
+| `THATCH_DB_PATH` | `$QA_ROOT/thatch.db` | Thatch's SQLite database. Default is `~/.config/thatch/thatch.db`. Redirecting prevents cross-contamination with the real store. |
+| `THATCH_QUEUE_DIR` | `$QA_ROOT/queue` | File-backed extraction queue for Claude Code/Cursor hooks. Default is `~/.cache/thatch/queue/`. |
+| `CLAUDE_CONFIG_DIR` | `$QA_ROOT/claude` | Claude Code config root. `thatch setup --claude` writes here. Default is `~/.claude`. |
+| `OPENCODE_DISABLE_CLAUDE_CODE` | `1` | Stops opencode from reading `~/.claude/CLAUDE.md` and scanning `~/.claude/skills/`. |
+| `OPENCODE_DISABLE_EXTERNAL_SKILLS` | `1` | Stops opencode from scanning `~/.claude/skills/` and `~/.agents/skills/` for skill definitions. |
+| `OPENCODE_DISABLE_PROJECT_CONFIG` | `1` | Stops the upward directory walk for `opencode.json`, `.opencode/`, and `AGENTS.md`/`CLAUDE.md` files. |
+| `OPENCODE_DISABLE_DEFAULT_PLUGINS` | `1` | Skips loading built-in opencode plugins. The thatch plugin loads from the temp config's `plugins/` dir, which is not affected by this flag. |
+| `CURSOR_PROJECT_DIR` | unset | Prevents the MCP server from detecting Cursor as the host. |
+| `CLAUDE_PROJECT_DIR` | unset | Prevents the MCP server from detecting Claude Code as the host. |
 
-Remove the temp directory when the use case is done:
+Do NOT set `OPENCODE_PURE=1`. That flag empties plugin origins and would
+prevent the thatch plugin from loading.
+
+Do NOT set `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT`. The temp
+`opencode.json` in `$XDG_CONFIG_HOME/opencode/` is the config.
+
+### Cleanup
 
 ```bash
 rm -rf "$QA_ROOT"
@@ -107,7 +110,8 @@ rm -rf "$QA_ROOT"
 
 ## Use case discovery
 
-Read every `UC-NNN-*.md` file from `docs/qa/use-cases/`. Each file has:
+Read every `UC-NNN-*.md` file from `/Users/jeff.ober/dev/thatch/docs/qa/use-cases/`.
+Each file has:
 
 - **Preconditions**: what state the system must be in
 - **Steps**: numbered actions to perform
@@ -123,47 +127,54 @@ embedding model and are harder to automate.
 Dispatch use cases to sub-agents in batches of 5. Each sub-agent:
 
 1. Creates its own isolated environment (the setup above)
-2. Reads the use case file
-3. Executes the steps
+2. Reads the use case file from the repo (read-only)
+3. Executes the steps inside its temp environment
 4. Verifies the expected outcomes
 5. Reports a structured result
 6. Cleans up its temp directory
 
-Wait for each batch to complete before dispatching the next. This keeps
-the parallelism bounded and makes result collection manageable.
+Wait for each batch to complete before dispatching the next.
 
-### Safety constraints for sub-agents
+## Sub-agent safety contract
 
-Tell every sub-agent these rules explicitly in the prompt:
+Include this contract VERBATIM in every sub-agent prompt. These are
+hard constraints, not guidelines.
 
-- **Never run `git commit`, `git push`, `git tag`, or `git reset` in the
-  repo.** The sub-agent is verifying behavior, not making changes. A
-  sub-agent that commits to the real repo can destroy work (this
-  happened: a QA sub-agent overwrote README.md with "test" and committed
-  it as "init").
-- **Never write to files inside the repo checkout.** All writes go to
-  the temp environment (`$QA_ROOT`). The repo is read-only for QA
-  purposes.
-- **The only git command allowed in the repo is read-only inspection**
-  (`git log`, `git show`, `git diff`, `git status`). No mutating git
-  commands.
-- **If a use case step says to edit a file, do it inside `$QA_ROOT`**,
-  not in the repo. Copy the file to the temp dir first if needed.
-- **Do not fix anything.** QA is read-only verification. If a use case
-  fails, report it — do not edit code, fix tests, update docs, or make
-  any changes to the repo. The user decides what to fix after reviewing
-  the aggregated findings.
+```
+SAFETY CONTRACT — READ THIS BEFORE DOING ANYTHING
 
-### Sub-agent prompt template
+The repo at /Users/jeff.ober/dev/thatch is READ-ONLY.
+
+NEVER do any of these in the repo:
+- git commit, git push, git tag, git reset, git add, git rm
+- Write, edit, or create any file in the repo directory
+- Run /init or generate AGENTS.md
+- Run any command that modifies files in the repo
+
+The ONLY git commands allowed in the repo are read-only:
+  git log, git show, git diff, git status, git branch
+
+ALL writes go to your temp directory ($QA_ROOT). If a use case step
+says to edit a file, copy it to $QA_ROOT first and edit the copy.
+
+Do NOT fix anything. QA is verification only. If a use case fails,
+report it. Do not edit code, fix tests, update docs, or make any
+changes. The user decides what to fix after reviewing findings.
+
+Your working directory is $QA_ROOT, not the repo. Commands that need
+the repo (bun test, bin/thatch, reading source files) reference it by
+absolute path: /Users/jeff.ober/dev/thatch
+```
+
+## Sub-agent prompt template
 
 Give each sub-agent:
 
+- The safety contract above, verbatim
 - The full use case file content (preconditions, steps, expected)
 - The repo path: `/Users/jeff.ober/dev/thatch`
 - The environment setup instructions (the env vars and directory
   structure above)
-- The bun and mise binary paths (they are on PATH; no special setup
-  needed)
 - Instructions to report results in this format:
 
 ```
@@ -175,32 +186,28 @@ Evidence:
   - What matched or didn't match the expected outcome
 ```
 
-### What each sub-agent can do
+## What each sub-agent can do
 
-- **Run bun tests**: `bun test tests/<module>.test.ts` from the repo
-  root. The test suite uses mock embeddings and temp DBs, so it needs
-  no environment setup beyond the repo itself.
-- **Run the CLI**: `bun run bin/thatch <subcommand>` with the env vars
-  exported. The CLI uses the temp DB and temp config.
+- **Run bun tests**: `cd /Users/jeff.ober/dev/thatch && bun test tests/<module>.test.ts`
+  (read-only — tests use mock embeddings and temp DBs internally)
+- **Run the CLI**: `cd /Users/jeff.ober/dev/thatch && bun run bin/thatch <subcommand>`
+  with the env vars exported. The CLI writes to the temp DB and temp config.
 - **Run setup commands**: `bun run bin/thatch setup --claude` and
-  `--cursor` write to the temp config dirs.
+  `--cursor` write to `$CLAUDE_CONFIG_DIR` (the temp dir).
 - **Inspect files**: read the temp config dirs to verify artifacts were
   written (`.mcp.json`, `CLAUDE.md`, `hooks.json`, skill files).
-- **Run opencode sessions**: `opencode run "<prompt>"` with the env
-  vars exported. This starts a real session with the thatch plugin
-  loaded from the dev source. Needs the real embedding model (downloads
-  on first use, ~34 MB, cached after that). Use sparingly — it costs
-  model tokens.
+- **Run opencode sessions**: `opencode run "<prompt>"` with the env vars
+  exported. This starts a real session with the thatch plugin loaded from
+  the dev source. Needs the real embedding model (downloads on first use,
+  ~34 MB, cached after that). Use sparingly — it costs model tokens.
 
-### What sub-agents cannot do
+## What sub-agents cannot do
 
 - **Visual TUI verification**: no way to see toast notifications, TUI
-  layout, or interactive prompts. Use cases that require visual
-  verification should be marked MANUAL-ONLY.
+  layout, or interactive prompts. Mark as MANUAL-ONLY.
 - **Real Claude Code or Cursor sessions**: those hosts have their own
-  process models that sub-agents cannot drive. Use cases specific to
-  those hosts should verify the file artifacts (setup output, hook
-  commands) rather than running the hosts.
+  process models that sub-agents cannot drive. Verify file artifacts
+  instead.
 - **Compaction**: opencode compaction is triggered by context window
   limits, which cannot be reliably forced in a short session. UC-013
   is MANUAL-ONLY.
@@ -218,7 +225,7 @@ After all batches complete, present a summary table:
 ```
 
 Count PASS, FAIL, PARTIAL, and MANUAL-ONLY results. Flag any FAIL or
-PARTIAL for follow-up.
+PARTIAL for follow-up. Do NOT fix anything — present findings only.
 
 ## Before starting
 
