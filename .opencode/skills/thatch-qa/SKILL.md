@@ -120,7 +120,7 @@ embedding model and are harder to automate.
 
 ## Batching strategy
 
-Dispatch use cases to sub-agents in batches of 3. Each sub-agent:
+Dispatch use cases to sub-agents in batches of 5. Each sub-agent:
 
 1. Creates its own isolated environment (the setup above)
 2. Reads the use case file
