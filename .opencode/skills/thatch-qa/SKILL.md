@@ -12,9 +12,11 @@ that never touch the developer's real config, database, or skill installs.
 
 ## Environment setup
 
-Every use case runs inside a throwaway directory under `$TMPDIR` (or
-`/tmp` on macOS). The environment isolates four layers: opencode config,
-thatch data, Claude/Cursor config, and host detection.
+Every use case runs inside a throwaway directory under `/tmp`. Using `/tmp`
+explicitly (instead of `$TMPDIR`) avoids permission prompts: the global
+opencode config already allows `/tmp/**` for external directory access, and
+sub-agents inherit that permission. On macOS, `$TMPDIR` resolves to a
+`/var/folders/` path that may not match the existing allow rule.
 
 ### Creating the environment
 
@@ -22,7 +24,7 @@ Run this before any use case. Each sub-agent creates its own environment
 so parallel use cases never share state.
 
 ```bash
-QA_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/thatch-qa-XXXXXX")
+QA_ROOT=$(mktemp -d /tmp/thatch-qa-XXXXXX)
 
 # Opencode config: temp dir so no real ~/.config/opencode is read or written
 mkdir -p "$QA_ROOT/config/opencode/plugins"
