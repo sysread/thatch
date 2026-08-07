@@ -1,4 +1,4 @@
-import { registerUseCase, type UseCase } from "./runner";
+import { registerUseCase, type UseCase } from "../runner";
 
 /**
  * UC-007: Prompt-aware recall nudge.

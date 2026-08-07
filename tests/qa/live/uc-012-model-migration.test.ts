@@ -1,4 +1,4 @@
-import { registerUseCase, type UseCase } from "./runner";
+import { registerUseCase, type UseCase } from "../runner";
 
 /**
  * UC-012: THATCH_MODEL migration (mixed embedding dimensions).

@@ -1,4 +1,4 @@
-import { registerUseCase, type UseCase } from "./runner";
+import { registerUseCase, type UseCase } from "../runner";
 
 /**
  * UC-005: Setup install (Claude Code and Cursor).

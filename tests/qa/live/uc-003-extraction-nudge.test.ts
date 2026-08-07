@@ -1,4 +1,4 @@
-import { registerUseCase, type UseCase } from "./runner";
+import { registerUseCase, type UseCase } from "../runner";
 
 /**
  * UC-003: Fact extraction from tool activity.
