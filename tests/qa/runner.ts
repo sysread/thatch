@@ -130,18 +130,26 @@ export async function ensureMaster(): Promise<void> {
     return Promise.resolve();
   });
 
-  // Pre-install skills by running opencode once in the master copy.
-  // The thatch plugin's installSkills runs at startup and writes SKILL.md
-  // files to $XDG_CONFIG_HOME/opencode/skills/. By doing this in the master,
-  // each cp -r copy inherits the pre-installed skills and the plugin's
-  // drift detection skips the install on subsequent startups.
-  // This also installs opencode's own npm deps into the config dir's
-  // node_modules/, which is the slow part (~30s on first run).
+  // Pre-initialize opencode in the master copy by symlinking the real
+  // opencode config's node_modules and package.json. This skips the slow
+  // npm install that opencode does on first startup (~30-60s). The thatch
+  // plugin's installSkills also runs here, writing SKILL.md files to the
+  // config dir's skills/. Each cp -r copy inherits all of this.
   await step("Initializing opencode + thatch (npm deps, skills, plugin)", async () => {
     const masterConfig = join(masterDir, "config");
+    const masterOpencodeConfig = join(masterConfig, "opencode");
     const masterHome = join(masterDir, "home");
-    mkdirSync(masterConfig, { recursive: true });
+    mkdirSync(masterOpencodeConfig, { recursive: true });
     mkdirSync(masterHome, { recursive: true });
+
+    // Symlink the real opencode config's node_modules and package.json
+    // so opencode's startup npm install is a no-op.
+    const realOpencodeConfig = join(process.env.HOME ?? "", ".config", "opencode");
+    if (existsSync(join(realOpencodeConfig, "node_modules"))) {
+      await $`ln -s ${join(realOpencodeConfig, "node_modules")} ${join(masterOpencodeConfig, "node_modules")}`;
+      await $`ln -s ${join(realOpencodeConfig, "package.json")} ${join(masterOpencodeConfig, "package.json")}`;
+    }
+
     await $`opencode run --dir ${masterDir} --model ${MODEL} --auto "Reply with: ready"`
       .env({
         ...process.env,
