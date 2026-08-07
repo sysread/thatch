@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 const QA_ROOT = "/tmp/thatch-qa";
 const REPO_ROOT = join(import.meta.dir, "..", "..");
-const MODEL = process.env.QA_MODEL ?? "venice/deepseek-v4-flash-0731";
+const MODEL = process.env.QA_MODEL ?? "venice/mistral-small-2603";
 const DRY_RUN = process.env.QA_DRY_RUN === "1";
 
 // --- Types ------------------------------------------------------------------
@@ -55,22 +55,26 @@ export async function ensureMaster(): Promise<void> {
   }
 
   const masterDir = join(QA_ROOT, "master");
+  console.log("  [setup] Cleaning previous QA artifacts...");
   rmSync(QA_ROOT, { recursive: true, force: true });
   mkdirSync(masterDir, { recursive: true });
 
   // git archive: tracked files only, no .git, no node_modules.
+  console.log("  [setup] Creating master copy via git archive...");
   const archivePath = join(QA_ROOT, "master.tar");
   await $`git archive HEAD -o ${archivePath}`.cwd(REPO_ROOT).quiet();
   await $`tar -xf ${archivePath} -C ${masterDir}`;
   rmSync(archivePath, { force: true });
 
   // Symlink node_modules from the real repo.
+  console.log("  [setup] Symlinking node_modules...");
   const realNodeModules = join(REPO_ROOT, "node_modules");
   if (existsSync(realNodeModules)) {
     await $`ln -s ${realNodeModules} ${join(masterDir, "node_modules")}`;
   }
 
   // Copy .opencode (gitignored, so git archive skips it).
+  console.log("  [setup] Copying .opencode directory...");
   const opencodeDir = join(REPO_ROOT, ".opencode");
   if (existsSync(opencodeDir)) {
     await $`cp -r ${opencodeDir} ${join(masterDir, ".opencode")}`;
@@ -104,7 +108,32 @@ export async function ensureMaster(): Promise<void> {
     'export { server } from "./src/index";\n',
   );
 
+  // Pre-install skills by running opencode once in the master copy.
+  // The thatch plugin's installSkills runs at startup and writes SKILL.md
+  // files to $XDG_CONFIG_HOME/opencode/skills/. By doing this in the master,
+  // each cp -r copy inherits the pre-installed skills and the plugin's
+  // drift detection skips the install on subsequent startups.
+  console.log("  [setup] Pre-installing skills via opencode warm-up...");
+  const masterConfig = join(masterDir, "config");
+  const masterHome = join(masterDir, "home");
+  mkdirSync(masterConfig, { recursive: true });
+  mkdirSync(masterHome, { recursive: true });
+  await $`opencode run --dir ${masterDir} --model ${MODEL} --auto "Reply with: ready"`
+    .env({
+      ...process.env,
+      XDG_CONFIG_HOME: masterConfig,
+      HOME: masterHome,
+      THATCH_DB_PATH: join(masterDir, "thatch.db"),
+      OPENCODE_DISABLE_CLAUDE_CODE: "1",
+      OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
+      OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
+    })
+    .quiet()
+    .nothrow();
+
   masterReady = true;
+  console.log(`  [setup] Master copy ready at ${QA_ROOT}/master`);
+  console.log(`  [setup] Model: ${MODEL}`);
 }
 
 // --- Per-use-case fixture ---------------------------------------------------
@@ -114,7 +143,9 @@ export async function createFixture(name: string): Promise<QaContext> {
   const dir = join(QA_ROOT, name);
   await $`cp -r ${masterDir} ${dir}`;
 
-  for (const sub of ["home", "claude", "config", "queue"]) {
+  // The master already has config/ and home/ from the warm-up run.
+  // Just ensure the remaining per-UC dirs exist.
+  for (const sub of ["claude", "queue"]) {
     mkdirSync(join(dir, sub), { recursive: true });
   }
 
