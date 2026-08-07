@@ -160,6 +160,9 @@ export async function ensureMaster(): Promise<void> {
 
   masterReady = true;
   console.log(`  [setup] Master copy ready (model: ${MODEL}) \u2713`);
+  console.log("");
+  console.log("  Running use cases (live sessions may take several minutes each)...");
+  console.log("");
 }
 
 // --- Per-use-case fixture ---------------------------------------------------
