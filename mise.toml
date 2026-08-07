@@ -42,9 +42,9 @@ run = "bin/release"
 
 [tasks.qa]
 description = "Run QA use-case scenarios in isolated temp environments"
-run = "bun test tests/qa/ --concurrency 5"
+run = "bun test tests/qa/ --concurrent --max-concurrency 5"
 
 [tasks.qa-dry-run]
 description = "List QA use cases without spawning opencode sessions"
-run = "QA_DRY_RUN=1 bun test tests/qa/ --concurrency 5"
+run = "QA_DRY_RUN=1 bun test tests/qa/ --concurrent --max-concurrency 5"
 
