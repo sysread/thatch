@@ -55,85 +55,109 @@ export async function ensureMaster(): Promise<void> {
   }
 
   const masterDir = join(QA_ROOT, "master");
-  console.log("  [setup] Cleaning previous QA artifacts...");
-  rmSync(QA_ROOT, { recursive: true, force: true });
-  mkdirSync(masterDir, { recursive: true });
 
-  // git archive: tracked files only, no .git, no node_modules.
-  console.log("  [setup] Creating master copy via git archive...");
-  const archivePath = join(QA_ROOT, "master.tar");
-  await $`git archive HEAD -o ${archivePath}`.cwd(REPO_ROOT).quiet();
-  await $`tar -xf ${archivePath} -C ${masterDir}`;
-  rmSync(archivePath, { force: true });
-
-  // Symlink node_modules from the real repo.
-  console.log("  [setup] Symlinking node_modules...");
-  const realNodeModules = join(REPO_ROOT, "node_modules");
-  if (existsSync(realNodeModules)) {
-    await $`ln -s ${realNodeModules} ${join(masterDir, "node_modules")}`;
-  }
-
-  // Copy .opencode (gitignored, so git archive skips it).
-  console.log("  [setup] Copying .opencode directory...");
-  const opencodeDir = join(REPO_ROOT, ".opencode");
-  if (existsSync(opencodeDir)) {
-    await $`cp -r ${opencodeDir} ${join(masterDir, ".opencode")}`;
-    for (const cruft of ["node_modules", "package.json", "package-lock.json", "bun.lock"]) {
-      rmSync(join(masterDir, ".opencode", cruft), { recursive: true, force: true });
+  // Helper: print a step message, run an async fn, then print a checkmark
+  // or x on the same line when it completes.
+  async function step<T>(msg: string, fn: () => Promise<T>): Promise<T> {
+    process.stdout.write(`  [setup] ${msg}...`);
+    try {
+      const result = await fn();
+      console.log(" \u2713");
+      return result;
+    } catch (err) {
+      console.log(" \u2717");
+      throw err;
     }
   }
 
-  // Write the opencode config with {env:VENICE_API_KEY} (key never on disk).
-  mkdirSync(join(masterDir, ".opencode", "plugins"), { recursive: true });
-  writeFileSync(
-    join(masterDir, "opencode.json"),
-    JSON.stringify({
-      $schema: "https://opencode.ai/config.json",
-      autoupdate: false,
-      snapshot: false,
-      model: MODEL,
-      provider: {
-        venice: {
-          options: { apiKey: "{env:VENICE_API_KEY}" },
-        },
-      },
-      permission: {
-        external_directory: { "/tmp/**": "allow" },
-      },
-    }, null, 2) + "\n",
-  );
+  await step("Cleaning previous QA artifacts", () => {
+    rmSync(QA_ROOT, { recursive: true, force: true });
+    mkdirSync(masterDir, { recursive: true });
+    return Promise.resolve();
+  });
 
-  writeFileSync(
-    join(masterDir, ".opencode", "plugins", "thatch.ts"),
-    'export { server } from "./src/index";\n',
-  );
+  // git archive: tracked files only, no .git, no node_modules.
+  await step("Creating master copy via git archive", async () => {
+    const archivePath = join(QA_ROOT, "master.tar");
+    await $`git archive HEAD -o ${archivePath}`.cwd(REPO_ROOT).quiet();
+    await $`tar -xf ${archivePath} -C ${masterDir}`;
+    rmSync(archivePath, { force: true });
+  });
+
+  // Symlink node_modules from the real repo.
+  await step("Symlinking node_modules", async () => {
+    const realNodeModules = join(REPO_ROOT, "node_modules");
+    if (existsSync(realNodeModules)) {
+      await $`ln -s ${realNodeModules} ${join(masterDir, "node_modules")}`;
+    }
+  });
+
+  // Copy .opencode (gitignored, so git archive skips it).
+  await step("Copying .opencode directory", async () => {
+    const opencodeDir = join(REPO_ROOT, ".opencode");
+    if (existsSync(opencodeDir)) {
+      await $`cp -r ${opencodeDir} ${join(masterDir, ".opencode")}`;
+      for (const cruft of ["node_modules", "package.json", "package-lock.json", "bun.lock"]) {
+        rmSync(join(masterDir, ".opencode", cruft), { recursive: true, force: true });
+      }
+    }
+  });
+
+  // Write the opencode config with {env:VENICE_API_KEY} (key never on disk).
+  await step("Writing opencode config", () => {
+    mkdirSync(join(masterDir, ".opencode", "plugins"), { recursive: true });
+    writeFileSync(
+      join(masterDir, "opencode.json"),
+      JSON.stringify({
+        $schema: "https://opencode.ai/config.json",
+        autoupdate: false,
+        snapshot: false,
+        model: MODEL,
+        provider: {
+          venice: {
+            options: { apiKey: "{env:VENICE_API_KEY}" },
+          },
+        },
+        permission: {
+          external_directory: { "/tmp/**": "allow" },
+        },
+      }, null, 2) + "\n",
+    );
+    writeFileSync(
+      join(masterDir, ".opencode", "plugins", "thatch.ts"),
+      'export { server } from "./src/index";\n',
+    );
+    return Promise.resolve();
+  });
 
   // Pre-install skills by running opencode once in the master copy.
   // The thatch plugin's installSkills runs at startup and writes SKILL.md
   // files to $XDG_CONFIG_HOME/opencode/skills/. By doing this in the master,
   // each cp -r copy inherits the pre-installed skills and the plugin's
   // drift detection skips the install on subsequent startups.
-  console.log("  [setup] Pre-installing skills via opencode warm-up...");
-  const masterConfig = join(masterDir, "config");
-  const masterHome = join(masterDir, "home");
-  mkdirSync(masterConfig, { recursive: true });
-  mkdirSync(masterHome, { recursive: true });
-  await $`opencode run --dir ${masterDir} --model ${MODEL} --auto "Reply with: ready"`
-    .env({
-      ...process.env,
-      XDG_CONFIG_HOME: masterConfig,
-      HOME: masterHome,
-      THATCH_DB_PATH: join(masterDir, "thatch.db"),
-      OPENCODE_DISABLE_CLAUDE_CODE: "1",
-      OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
-      OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
-    })
-    .quiet()
-    .nothrow();
+  // This also installs opencode's own npm deps into the config dir's
+  // node_modules/, which is the slow part (~30s on first run).
+  await step("Pre-installing skills via opencode warm-up (this is the slow part)", async () => {
+    const masterConfig = join(masterDir, "config");
+    const masterHome = join(masterDir, "home");
+    mkdirSync(masterConfig, { recursive: true });
+    mkdirSync(masterHome, { recursive: true });
+    await $`opencode run --dir ${masterDir} --model ${MODEL} --auto "Reply with: ready"`
+      .env({
+        ...process.env,
+        XDG_CONFIG_HOME: masterConfig,
+        HOME: masterHome,
+        THATCH_DB_PATH: join(masterDir, "thatch.db"),
+        OPENCODE_DISABLE_CLAUDE_CODE: "1",
+        OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
+        OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
+      })
+      .quiet()
+      .nothrow();
+  });
 
   masterReady = true;
-  console.log(`  [setup] Master copy ready at ${QA_ROOT}/master`);
-  console.log(`  [setup] Model: ${MODEL}`);
+  console.log(`  [setup] Master copy ready at ${QA_ROOT}/master (model: ${MODEL})`);
 }
 
 // --- Per-use-case fixture ---------------------------------------------------
