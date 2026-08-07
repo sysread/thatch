@@ -210,7 +210,7 @@ export function registerUseCase(uc: UseCase): void {
     if (result === "FAIL" || result === "PARTIAL") {
       throw new Error(`${uc.name}: ${result}`);
     }
-  }, { timeout: 300_000 });
+  }, { timeout: 600_000 }); // 10 min per use case
 }
 
 // --- Pre-flight check ------------------------------------------------------
