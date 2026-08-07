@@ -6,7 +6,10 @@ coverage/
 *.db-shm
 .env
 .envrc
-.opencode/
+.opencode/node_modules/
+.opencode/package.json
+.opencode/package-lock.json
+.opencode/bun.lock
 .claude/
 .mcp.json
 opencode.json
