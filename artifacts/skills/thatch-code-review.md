@@ -122,7 +122,7 @@ Pass the synthesizer:
 - The specialist findings.
 - The prior-comments register when present.
 
-The final user-facing report MUST begin with a concise explanation of the workflow(s) this PR changes before listing findings. Use one `### Workflow changes` section, with one subheading per affected workflow when there are multiple. Use the before/now walkthrough shape from the pr-description skill: numbered step = existing behavior; `NOW` sub-bullet = what the PR changes; `N/A` for new stages. This gives the user a map of the change before the findings. Keep it short: 3-6 steps per workflow.
+The final user-facing report MUST begin with a concise explanation of the workflow(s) this PR changes before listing findings. Use one `### Workflow changes` section, with one subheading per affected workflow when there are multiple. Use the before/now walkthrough shape from the thatch-pr-description skill: numbered step = existing behavior; `NOW` sub-bullet = what the PR changes; `N/A` for new stages. This gives the user a map of the change before the findings. Keep it short: 3-6 steps per workflow.
 
 Confirmed LOW findings are mandatory in the final report, including mechanical findings (pedantic, no-slop, breadcrumbs, docs, naming, style, comments). Do not omit them for being non-functional.
 

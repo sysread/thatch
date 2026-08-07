@@ -5,7 +5,7 @@ import { join, dirname } from "node:path";
 import yaml from "yaml";
 import { setupClaudeCode, setupCursor, checkSetup } from "../src/setup";
 import { claudeInstructions, cursorInstructions, systemPrompt } from "../src/prompts";
-import { SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "../src/skills";
+import { SHARED_SKILLS, OPENCODE_ONLY_SKILLS, installSkills } from "../src/skills";
 
 let projectDir: string;
 let fakeHome: string;
@@ -220,9 +220,9 @@ describe("setupClaudeCode (project-local)", () => {
     expect(skillNames).toContain("thatch-change-walkthrough");
     expect(skillNames).toContain("thatch-code-walkthrough");
     expect(skillNames).toContain("thatch-session-reflection");
-    expect(skillNames).toContain("pr-description");
-    expect(skillNames).toContain("ticket-description");
-    expect(skillNames).toContain("split-overlarge-pr");
+    expect(skillNames).toContain("thatch-pr-description");
+    expect(skillNames).toContain("thatch-ticket-description");
+    expect(skillNames).toContain("thatch-split-overlarge-pr");
     expect(skillNames).not.toContain("thatch-code-review");
 
     for (const skill of result.skills) {
@@ -505,9 +505,9 @@ describe("setupCursor (project-local)", () => {
     expect(skillNames).toContain("thatch-review-followup");
     expect(skillNames).toContain("thatch-change-walkthrough");
     expect(skillNames).toContain("thatch-code-walkthrough");
-    expect(skillNames).toContain("pr-description");
-    expect(skillNames).toContain("ticket-description");
-    expect(skillNames).toContain("split-overlarge-pr");
+    expect(skillNames).toContain("thatch-pr-description");
+    expect(skillNames).toContain("thatch-ticket-description");
+    expect(skillNames).toContain("thatch-split-overlarge-pr");
     expect(skillNames).not.toContain("thatch-code-review");
 
     for (const skill of result.skills) {
@@ -792,5 +792,59 @@ describe("skill artifact registry parity", () => {
       expect(typeof parsed.description).toBe("string");
       expect((parsed.description as string).length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("stale skill cleanup on install", () => {
+  test("removes old non-prefixed skill dirs from before the rename", () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-cleanup-"));
+    // Simulate a pre-rename install: create dirs with the old names.
+    for (const name of ["pr-description", "ticket-description", "split-overlarge-pr"]) {
+      mkdirSync(join(dir, name), { recursive: true });
+      writeFileSync(join(dir, name, "SKILL.md"), "stale content");
+    }
+    // Also create a current skill to prove install still works.
+    mkdirSync(join(dir, "thatch-fact-extractor"), { recursive: true });
+    writeFileSync(join(dir, "thatch-fact-extractor", "SKILL.md"), "old content");
+
+    installSkills(dir, SHARED_SKILLS);
+
+    expect(existsSync(join(dir, "pr-description"))).toBe(false);
+    expect(existsSync(join(dir, "ticket-description"))).toBe(false);
+    expect(existsSync(join(dir, "split-overlarge-pr"))).toBe(false);
+    // Current skills are installed and not deleted.
+    expect(existsSync(join(dir, "thatch-fact-extractor", "SKILL.md"))).toBe(true);
+  });
+
+  test("removes stale thatch-* dirs not in the current skill set", () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-cleanup-"));
+    // A hypothetical old skill name that was renamed or removed.
+    mkdirSync(join(dir, "thatch-old-removed-skill"), { recursive: true });
+    writeFileSync(join(dir, "thatch-old-removed-skill", "SKILL.md"), "stale");
+
+    installSkills(dir, SHARED_SKILLS);
+
+    expect(existsSync(join(dir, "thatch-old-removed-skill"))).toBe(false);
+  });
+
+  test("leaves non-thatch, non-renamed skill dirs alone", () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-cleanup-"));
+    mkdirSync(join(dir, "someone-elses-skill"), { recursive: true });
+    writeFileSync(join(dir, "someone-elses-skill", "SKILL.md"), "not ours");
+
+    installSkills(dir, SHARED_SKILLS);
+
+    expect(existsSync(join(dir, "someone-elses-skill", "SKILL.md"))).toBe(true);
+  });
+
+  test("does not delete current thatch-* skills", () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-cleanup-"));
+
+    installSkills(dir, SHARED_SKILLS);
+
+    // A few representative current skills should exist.
+    expect(existsSync(join(dir, "thatch-fact-extractor", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(dir, "thatch-pr-description", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(dir, "thatch-code-walkthrough", "SKILL.md"))).toBe(true);
   });
 });

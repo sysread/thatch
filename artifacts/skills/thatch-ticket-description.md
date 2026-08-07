@@ -1,6 +1,6 @@
 ---
-name: ticket-description
-description: Draft a ticket description (SYNOPSIS / PROBLEM / BACKGROUND / PROPOSED APPROACH / ACCEPTANCE CRITERIA / RELEASE PLAN / VALIDATION / DEPENDENCIES / NOTES) with bold and italic emphasis on the phrases that carry the meaning, so a reader skimming only the emphasized fragments still gets the story. Use when the user asks you to write, draft, or file a ticket, issue, or work item (Linear or Jira). Do NOT use for PR descriptions (use pr-description), commit messages, or design docs.
+name: thatch-ticket-description
+description: Draft a ticket description (SYNOPSIS / PROBLEM / BACKGROUND / PROPOSED APPROACH / ACCEPTANCE CRITERIA / RELEASE PLAN / VALIDATION / DEPENDENCIES / NOTES) with bold and italic emphasis on the phrases that carry the meaning, so a reader skimming only the emphasized fragments still gets the story. Use when the user asks you to write, draft, or file a ticket, issue, or work item (Linear or Jira). Do NOT use for PR descriptions (use thatch-pr-description), commit messages, or design docs.
 ---
 
 # Writing ticket descriptions
@@ -273,7 +273,7 @@ Before filing or updating a ticket, verify every link you can. Tickets are usual
 
 ## Linear labels
 
-When filing a Linear ticket, add obvious labels when they clarify triage. Labels are filing metadata, not ticket-description prose.
+When filing a Linear ticket, add obvious labels when they clarify triage. Labels are filing metadata, not thatch-ticket-description prose.
 
 - **Bug** - user-visible broken behavior, incorrect result, regression, or production defect.
 - **tech-debt** - cleanup, drift, dead code, consistency work, or known design debt with no direct behavior change.

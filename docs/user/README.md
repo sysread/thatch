@@ -208,9 +208,9 @@ Seven specialist review lenses, each a self-contained static-analysis pass:
 
 | Skill | Purpose |
 |-------|---------|
-| `pr-description` | Drafts PR descriptions with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, project-context research, clarity checks, and bold/italic emphasis for scanning. |
-| `ticket-description` | Drafts ticket or issue descriptions (Linear or Jira) with clear sections, project-context research, clarity checks, and bold/italic emphasis for scanning. |
-| `split-overlarge-pr` | Splits already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main. |
+| `thatch-pr-description` | Drafts PR descriptions with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, project-context research, clarity checks, and bold/italic emphasis for scanning. |
+| `thatch-ticket-description` | Drafts ticket or issue descriptions (Linear or Jira) with clear sections, project-context research, clarity checks, and bold/italic emphasis for scanning. |
+| `thatch-split-overlarge-pr` | Splits already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main. |
 
 ### opencode-only skills
 

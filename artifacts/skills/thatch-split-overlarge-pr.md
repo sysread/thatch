@@ -1,5 +1,5 @@
 ---
-name: split-overlarge-pr
+name: thatch-split-overlarge-pr
 description: Split already-completed work from an overlarge PR into human-reviewable, release-safe PRs. Use when the user asks to split a large existing branch/PR, break up completed work, or turn an oversized PR into multiple PRs. Do NOT use for planning brand-new work before code exists.
 ---
 

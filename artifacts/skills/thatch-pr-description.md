@@ -1,5 +1,5 @@
 ---
-name: pr-description
+name: thatch-pr-description
 description: Draft a PR description (SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES) with bold and italic emphasis on the phrases that carry the meaning, so a reviewer skimming only the emphasized fragments still gets the story. Use when the user asks you to write, draft, or update a PR description or PR body, or when running `gh pr create` and no body has been supplied. Do NOT use for commit messages, release notes, or changelog entries.
 ---
 

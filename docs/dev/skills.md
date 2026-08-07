@@ -44,9 +44,9 @@ description: Extract durable project facts ... Use when ...
 | `thatch-change-walkthrough` | Explain a change to the user as a teaching walkthrough: resolve the delta, research each affected workflow at the merge-base, teach current behavior, then overlay the modifications with file:line citations and analogies. |
 | `thatch-code-walkthrough` | Explain a feature, module, or workflow to the user as a teaching walkthrough: identify the code area (optionally from a branch or PR), research how it works, teach it with file:line citations and analogies, list the key files. |
 | `thatch-session-reflection` | End-of-session memory recording (project, user, tools, self). |
-| `pr-description` | Draft PR descriptions with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, project-context research, clarity checks, and bold+italic emphasis for scanning. |
-| `ticket-description` | Draft ticket/issue descriptions with clear sections, project-context research, clarity checks, and bold+italic emphasis for scanning. |
-| `split-overlarge-pr` | Split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main. |
+| `thatch-pr-description` | Draft PR descriptions with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, project-context research, clarity checks, and bold+italic emphasis for scanning. |
+| `thatch-ticket-description` | Draft ticket/issue descriptions with clear sections, project-context research, clarity checks, and bold+italic emphasis for scanning. |
+| `thatch-split-overlarge-pr` | Split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main. |
 
 **opencode-only (1)** — the coordinator needs sub-agent support:
 
@@ -104,8 +104,14 @@ and `--cursor` pass only the shared set.
 - **Drift detection**: `installSkills` only writes when the on-disk content
   differs from the definition. This is how skill improvements ship with new
   versions without users manually deleting files.
+- **Stale cleanup**: before installing, `installSkills` removes stale skill
+  directories. Any `thatch-*` directory not in the current install set is
+  deleted (the `thatch-` prefix is our namespace). Three skills renamed from
+  non-prefixed to `thatch-`-prefixed in v0.1.27 (pr-description, ticket-description,
+  split-overlarge-pr) are also cleaned up through v0.1.35; after that, those
+  names are fair game for third parties and the cleanup stops.
 - **Idempotent**: re-running init or setup overwrites drifted content but leaves
-  unrelated skill files alone.
+  unrelated (non-`thatch-*`) skill files alone.
 
 ## Adding a skill
 
