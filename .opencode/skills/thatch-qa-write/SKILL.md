@@ -11,13 +11,17 @@ opencode session.
 
 ## Where to put it
 
-- `tests/qa/auto/uc-NNN-name.test.ts` — if the scenario can be verified
+- `tests/qa/auto/uc-NNN-name.ts` — if the scenario can be verified
   without a live LLM. No model tokens, runs in seconds.
-- `tests/qa/live/uc-NNN-name.test.ts` — if the scenario needs a live agent
+- `tests/qa/live/uc-NNN-name.ts` — if the scenario needs a live agent
   to read a prompt, make tool calls, and respond. Costs tokens, up to 10
   min each.
 - Set `manualOnly: true` if it cannot be automated at all (visual TUI,
   compaction, real Claude Code/Cursor sessions).
+- **Add an `import "./uc-NNN-name";` line to the corresponding
+  `index.test.ts` barrel file.** Bun's `--concurrent` parallelizes tests
+  within a single file, not across files. The barrel file ensures all
+  use cases run in parallel.
 
 When in doubt, start with `auto/`. You can always move it to `live/` later.
 
@@ -128,7 +132,7 @@ registerUseCase(useCase);
   Use a name like `"echo external-hook"`, not `"echo non-thatch-hook"`.
 - **Import paths from `auto/` or `live/`:** use `../runner` for the runner
   library, `../../src/<module>` for source modules.
-- **The name field must match the filename** without the `.test.ts`
+- **The name field must match the filename** without the `.ts`
   extension (e.g., `"UC-004-cli-inspection"`).
 - **Join string arrays with `\n`** so preconditions, steps, and expected
   become multi-line strings.

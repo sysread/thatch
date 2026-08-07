@@ -42,17 +42,17 @@ run = "bin/release"
 
 [tasks.qa]
 description = "Run QA use-case scenarios in isolated temp environments (auto first, then live)"
-run = "bun test tests/qa/auto/ --concurrent --max-concurrency 5 && bun test tests/qa/live/ --concurrent --max-concurrency 5"
+run = "bun test tests/qa/auto/index.test.ts --concurrent --max-concurrency 5 && bun test tests/qa/live/index.test.ts --concurrent --max-concurrency 5"
 
 [tasks.qa-dry-run]
 description = "List QA use cases without spawning opencode sessions"
-run = "QA_DRY_RUN=1 bun test tests/qa/auto/ tests/qa/live/ --concurrent --max-concurrency 5"
+run = "QA_DRY_RUN=1 bun test tests/qa/auto/index.test.ts tests/qa/live/index.test.ts --concurrent --max-concurrency 5"
 
 [tasks.qa-auto]
 description = "Run only automatable QA use cases (no LLM, fast)"
-run = "bun test tests/qa/auto/ --concurrent --max-concurrency 5"
+run = "bun test tests/qa/auto/index.test.ts --concurrent --max-concurrency 5"
 
 [tasks.qa-live]
 description = "Run only live-session QA use cases (spawns opencode, costs model tokens)"
-run = "bun test tests/qa/live/ --concurrent --max-concurrency 5"
+run = "bun test tests/qa/live/index.test.ts --concurrent --max-concurrency 5"
 
