@@ -159,7 +159,7 @@ export async function ensureMaster(): Promise<void> {
   });
 
   masterReady = true;
-  console.log(`  [setup] Master copy ready at ${QA_ROOT}/master (model: ${MODEL})`);
+  console.log(`  [setup] Master copy ready (model: ${MODEL}) \u2713`);
 }
 
 // --- Per-use-case fixture ---------------------------------------------------
