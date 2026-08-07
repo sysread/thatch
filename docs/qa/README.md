@@ -152,7 +152,24 @@ correctness on `README.md` and `docs/` excluding `docs/plans/`; see
   mocking `fs` to force a write error).
 - `bin/thatch` has no automated tests; it is a thin shell over `db.ts`.
 
-## Use cases
+## QA use-case suite
 
-See `docs/qa/use-cases/` for manual end-to-end scenarios with preconditions,
-steps, and expected results.
+End-to-end QA scenarios live in `tests/qa/` as bun test files, not docs.
+Each use case is a `uc-NNN-*.test.ts` file that defines preconditions,
+steps, and expected results as string constants, then registers itself
+via `registerUseCase` from `tests/qa/runner.ts`.
+
+Most use cases shell out to `opencode run` with an isolated repo copy
+(temp DB, temp config, temp home). Automatable use cases override the
+`run` function with direct CLI/bun assertions. Manual-only use cases
+(compaction, visual TUI) are skipped automatically.
+
+Run the suite:
+
+```bash
+mise run qa          # full run (spawns opencode sessions, costs model tokens)
+mise run qa-dry-run  # list use cases without spawning sessions
+```
+
+The regular test suite (`mise run check`) excludes `tests/qa/` by using
+a flat glob (`bun test tests/*.test.ts`).

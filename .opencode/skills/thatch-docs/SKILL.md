@@ -1,6 +1,6 @@
 ---
 name: thatch-docs
-description: Documentation conventions for the thatch project. Use when writing or updating docs in docs/dev, docs/qa/use-cases, docs/user, docs/plans, or the root README.
+description: Documentation conventions for the thatch project. Use when writing or updating docs in docs/dev, docs/qa, docs/user, docs/plans, or the root README.
 ---
 
 # Thatch Documentation Conventions
@@ -13,16 +13,16 @@ contributors can find what they need.
 
 ```
 docs/dev/           Architecture and internals for contributors
-docs/qa/            Test plan and manual QA use-case scenarios
-docs/qa/use-cases/  Numbered use-case docs (UC-NNN-title.md)
+docs/qa/            Test plan (automated suite coverage, known gaps)
 docs/user/          User-facing install and usage guide
 docs/plans/         Design-decision snapshots (temporary, see graduation below)
 docs/in-progress/   Work-in-progress docs for features being built (ignored by markdownlint)
+tests/qa/           QA use-case suite (uc-NNN-*.test.ts, run via mise run qa)
 ```
 
 When a feature in `docs/in-progress/` is complete, graduate it: move
-durable architecture into `docs/dev/`, add use-case docs to
-`docs/qa/use-cases/`, then delete the in-progress file. An empty
+durable architecture into `docs/dev/`, add a use-case test to
+`tests/qa/`, then delete the in-progress file. An empty
 `docs/in-progress/` directory can be removed; it will be recreated when
 needed.
 
@@ -44,30 +44,22 @@ needed.
   (SHARED_SKILLS, OPENCODE_ONLY_SKILLS), REVIEW_COMMON interpolation, install
   mechanics, and the procedure for adding a skill. Update the skill count and
   table when skills are added or removed.
-- **docs/qa/use-cases/** holds manual end-to-end QA scenarios. Each file is
-  UC-NNN-title.md following the template below.
+- **tests/qa/** holds end-to-end QA use-case scenarios as bun test files.
+  Each file is `uc-NNN-name.test.ts` following the pattern in
+  `tests/qa/runner.ts`. Run with `mise run qa`.
 - **docs/user/README.md** is the user-facing guide: installation, tool
   reference, skill list. Write for someone who has never seen the codebase.
 
-## Use-case template
+## Adding a QA use case
 
-```markdown
-# UC-NNN: Title
+Create `tests/qa/uc-NNN-name.test.ts` following the pattern of existing
+use case files. Import `registerUseCase` and `UseCase` from `./runner`,
+define the scenario with `preconditions`, `steps`, and `expected` as
+string arrays joined by `\n`, then call `registerUseCase(useCase)`.
 
-**Preconditions**
-- State of the system before the test
-
-**Steps**
-1. Action
-2. Action
-
-**Expected**
-- Observable outcome
-```
-
-Newer use cases carry an _Automatable_ note flagging which are pure
-file/IPC/CLI contracts ready to graduate into bun:test integration tests.
-Add this note after the title when the scenario needs no LLM or live session.
+Most use cases use the default `runViaOpencode` (no custom `run`).
+Automatable use cases override `run` with direct CLI/bun assertions.
+Manual-only use cases set `manualOnly: true`.
 
 ## Plan and in-progress graduation
 
@@ -77,7 +69,7 @@ are temporary. When a plan or in-progress feature is fully implemented:
 1. Remove the plan or in-progress file.
 2. Ensure the final architecture is documented in `docs/dev/` (update
    existing docs or create a new one).
-3. Ensure end-to-end use-case scenarios exist in `docs/qa/use-cases/`.
+3. Ensure a use-case test exists in `tests/qa/`.
 4. The dev docs and use-case docs are the permanent record. Git history
    preserves the original file if someone needs the design reasoning.
 
@@ -123,9 +115,8 @@ added or removed. Touch all of these when the count changes:
 1. `docs/dev/README.md` — skills.ts description line
 2. `docs/dev/skills.md` — skill count and table
 3. `docs/user/README.md` — skill tables and category sections
-4. `docs/qa/use-cases/README.md` — UC-014 count reference
-5. `docs/qa/use-cases/UC-005-setup-install.md` — shared skill count
-6. `docs/qa/use-cases/UC-014-skill-install-drift.md` — shared vs opencode counts
+4. `tests/qa/uc-005-setup-install.test.ts` — shared skill count in expected string
+5. `tests/qa/uc-014-skill-install-drift.test.ts` — shared vs opencode counts in expected string
 
 ## Before committing doc changes
 
