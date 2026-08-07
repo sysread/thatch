@@ -201,7 +201,7 @@ describe("setupClaudeCode (project-local)", () => {
 
     // Shared skills only — opencode-only skills (thatch-code-review) are not
     // installed for Claude Code because they require sub-agent support.
-    expect(result.skills.length).toBe(20);
+    expect(result.skills.length).toBe(21);
     const skillNames = result.skills.map((s) => s.name);
     expect(skillNames).toContain("thatch-fact-extractor");
     expect(skillNames).toContain("thatch-dedup-classifier");
@@ -495,7 +495,7 @@ describe("setupCursor (project-local)", () => {
   test("installs skill files to ~/.cursor/skills/", () => {
     const result = setupCursor("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
-    expect(result.skills.length).toBe(20);
+    expect(result.skills.length).toBe(21);
     const skillNames = result.skills.map((s) => s.name);
     expect(skillNames).toContain("thatch-fact-extractor");
     expect(skillNames).toContain("thatch-dedup-classifier");

@@ -28,9 +28,9 @@ description: Extract durable project facts ... Use when ...
 - `description` drives when the agent loads the skill (both opencode and
   Cursor auto-discover skills and use the description for relevance).
 
-## The 21 skills
+## The 22 skills
 
-**Shared (20)** — installed everywhere; no sub-agents required:
+**Shared (21)** — installed everywhere; no sub-agents required:
 
 | Skill | Role |
 |-------|------|
@@ -51,6 +51,7 @@ description: Extract durable project facts ... Use when ...
 | `thatch-change-walkthrough` | Explain a change to the user as a teaching walkthrough: resolve the delta, research each affected workflow at the merge-base, teach current behavior, then overlay the modifications with file:line citations and analogies. |
 | `thatch-code-walkthrough` | Explain a feature, module, or workflow to the user as a teaching walkthrough: identify the code area (optionally from a branch or PR), research how it works, teach it with file:line citations and analogies, list the key files. |
 | `thatch-session-reflection` | End-of-session memory recording (project, user, tools, self). |
+| `thatch-coding-workflow` | Plan and execute code changes with a task-list-driven workflow. Use when implementing features, fixing bugs, or making multi-file changes. |
 | `thatch-pr-description` | Draft PR descriptions with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, project-context research, clarity checks, and bold+italic emphasis for scanning. |
 | `thatch-ticket-description` | Draft ticket/issue descriptions with clear sections, project-context research, clarity checks, and bold+italic emphasis for scanning. |
 | `thatch-split-overlarge-pr` | Split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main. |
@@ -93,7 +94,7 @@ The synthesizer reuses the same verification rigor but has its own structure
 ## The two arrays
 
 ```ts
-const SHARED_SKILLS: SkillDef[] = [ /* 20 skills above */ ];
+const SHARED_SKILLS: SkillDef[] = [ /* 21 skills above */ ];
 const OPENCODE_ONLY_SKILLS: SkillDef[] = [ /* code-review coordinator */ ];
 ```
 

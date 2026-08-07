@@ -13,16 +13,16 @@
 5. Check whether the `thatch-code-review` coordinator skill is present.
 
 **Expected**
-- Claude Code and Cursor install exactly **20 shared skills** to the skills
+- Claude Code and Cursor install exactly **21 shared skills** to the skills
   dir — the coordinator (`thatch-code-review`) is **absent** (it needs
   sub-agents, which those hosts lack).
-- opencode installs **21** — the 20 shared plus the coordinator.
+- opencode installs **22** — the 21 shared plus the coordinator.
 - The locally edited `SKILL.md` is **overwritten** with the canonical content
   on the next `setup`/init (drift detection: a file is only rewritten when its
   content differs from the definition). Unrelated skill files are untouched.
 - Skills never land in the worktree — always under the user-scoped config dir
   (`~/.claude/skills`, `~/.cursor/skills`, `$XDG_CONFIG_HOME/opencode/skills`).
 
-_Automatable: yes — file presence, count (20 vs 21), content-diff-overwrite, and
+_Automatable: yes — file presence, count (21 vs 22), content-diff-overwrite, and
 coordinator host-gating are all file assertions (`setup.test.ts` already covers
 the unit contract)._

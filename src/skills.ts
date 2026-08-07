@@ -48,6 +48,7 @@ function loadSharedSkills(): SkillDef[] {
     "thatch-change-walkthrough",
     "thatch-code-walkthrough",
     "thatch-session-reflection",
+    "thatch-coding-workflow",
     "thatch-pr-description",
     "thatch-ticket-description",
     "thatch-split-overlarge-pr",
