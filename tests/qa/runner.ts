@@ -103,16 +103,11 @@ async function doEnsureMaster(): Promise<void> {
     }
   });
 
-  // Copy .opencode (gitignored, so git archive skips it).
-  await step("Copying .opencode directory", async () => {
-    const opencodeDir = join(REPO_ROOT, ".opencode");
-    if (existsSync(opencodeDir)) {
-      await $`cp -r ${opencodeDir} ${join(masterDir, ".opencode")}`;
-      for (const cruft of ["node_modules", "package.json", "package-lock.json", "bun.lock"]) {
-        rmSync(join(masterDir, ".opencode", cruft), { recursive: true, force: true });
-      }
-    }
-  });
+  // .opencode/skills/ is git-tracked, so git archive already includes it.
+  // We only need to create the plugins directory (the skills are already
+  // in the archive). The old "copy .opencode" step created a nested
+  // .opencode/.opencode/ when the destination already existed from the
+  // archive.
 
   // Write the opencode config with {env:VENICE_API_KEY} (key never on disk).
   await step("Writing opencode config", () => {
@@ -141,11 +136,16 @@ async function doEnsureMaster(): Promise<void> {
     return Promise.resolve();
   });
 
-  // Pre-initialize opencode config by copying node_modules and skills from
-  // the real opencode config dir. This avoids a slow opencode warm-up run
-  // (~30-60s for npm install + LLM call). The thatch plugin's installSkills
-  // drift detection will see the skills already present and skip the install.
-  // opencode's startup will see node_modules already present and skip npm install.
+  // Pre-initialize opencode config by copying skills and symlinking
+  // node_modules from the real opencode config dir. This avoids a slow
+  // opencode warm-up run (~30-60s for npm install + LLM call). The thatch
+  // plugin's installSkills drift detection will see the skills already
+  // present and skip the install. opencode's startup will see node_modules
+  // already present and skip npm install.
+  //
+  // node_modules is symlinked (not copied) to keep the master small —
+  // a real copy would make each createFixture cp -r slow and produce
+  // macOS xattr errors on thousands of files.
   await step("Initializing opencode config (node_modules, skills from real config)", async () => {
     const masterConfig = join(masterDir, "config");
     const masterOpencodeConfig = join(masterConfig, "opencode");
@@ -153,10 +153,9 @@ async function doEnsureMaster(): Promise<void> {
 
     const realOpencodeConfig = join(process.env.HOME ?? "", ".config", "opencode");
 
-    // Copy node_modules and package.json from the real opencode config.
-    // These are opencode's own runtime deps (AI SDK, Venice provider, etc).
+    // Symlink node_modules and copy package.json from the real opencode config.
     if (existsSync(join(realOpencodeConfig, "node_modules"))) {
-      await $`cp -r ${join(realOpencodeConfig, "node_modules")} ${join(masterOpencodeConfig, "node_modules")}`;
+      await $`ln -s ${join(realOpencodeConfig, "node_modules")} ${join(masterOpencodeConfig, "node_modules")}`;
       await $`cp ${join(realOpencodeConfig, "package.json")} ${join(masterOpencodeConfig, "package.json")}`;
     }
 
@@ -181,7 +180,12 @@ async function doEnsureMaster(): Promise<void> {
 export async function createFixture(name: string): Promise<QaContext> {
   const masterDir = join(QA_ROOT, "master");
   const dir = join(QA_ROOT, name);
-  await $`cp -r ${masterDir} ${dir}`;
+  // Use .nothrow() because macOS cp produces non-fatal xattr warnings that
+  // still set exit code 1. Check the destination exists instead.
+  await $`cp -r ${masterDir} ${dir}`.nothrow();
+  if (!existsSync(join(dir, "src", "index.ts"))) {
+    throw new Error(`createFixture: cp -r failed — ${dir}/src/index.ts missing`);
+  }
 
   // The master already has config/ and home/ from the warm-up run.
   // Just ensure the remaining per-UC dirs exist.
