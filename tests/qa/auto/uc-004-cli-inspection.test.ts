@@ -1,5 +1,5 @@
 import { $ } from "bun";
-import { registerUseCase, type UseCase, type QaContext } from "./runner";
+import { registerUseCase, type UseCase, type QaContext } from "../runner";
 
 /**
  * UC-004: Inspecting stores from the shell.
