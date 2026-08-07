@@ -132,6 +132,24 @@ Dispatch use cases to sub-agents in batches of 3. Each sub-agent:
 Wait for each batch to complete before dispatching the next. This keeps
 the parallelism bounded and makes result collection manageable.
 
+### Safety constraints for sub-agents
+
+Tell every sub-agent these rules explicitly in the prompt:
+
+- **Never run `git commit`, `git push`, `git tag`, or `git reset` in the
+  repo.** The sub-agent is verifying behavior, not making changes. A
+  sub-agent that commits to the real repo can destroy work (this
+  happened: a QA sub-agent overwrote README.md with "test" and committed
+  it as "init").
+- **Never write to files inside the repo checkout.** All writes go to
+  the temp environment (`$QA_ROOT`). The repo is read-only for QA
+  purposes.
+- **The only git command allowed in the repo is read-only inspection**
+  (`git log`, `git show`, `git diff`, `git status`). No mutating git
+  commands.
+- **If a use case step says to edit a file, do it inside `$QA_ROOT`**,
+  not in the repo. Copy the file to the temp dir first if needed.
+
 ### Sub-agent prompt template
 
 Give each sub-agent:
