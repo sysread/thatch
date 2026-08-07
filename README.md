@@ -103,6 +103,6 @@ embeddings, no network.
 
 ## License
 
-MIT
+[MIT](LICENSE)
 
 [Bun]: https://bun.sh
