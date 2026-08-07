@@ -34,7 +34,7 @@ run = "bunx markdownlint-cli2"
 
 [tasks.check]
 description = "Typecheck, run tests, and lint markdown docs"
-run = "bunx tsc -p tsconfig.check.json && bun test && bunx markdownlint-cli2"
+run = "bunx tsc -p tsconfig.check.json && bun test tests/*.test.ts && bunx markdownlint-cli2"
 
 [tasks.release]
 description = "Bump version, commit, tag, and push (args: patch|minor|major)"
@@ -42,5 +42,9 @@ run = "bin/release"
 
 [tasks.qa]
 description = "Run QA use-case scenarios in isolated temp environments"
-run = "bin/qa"
+run = "bun test tests/qa/ --concurrency 5"
+
+[tasks.qa-dry-run]
+description = "List QA use cases without spawning opencode sessions"
+run = "QA_DRY_RUN=1 bun test tests/qa/ --concurrency 5"
 
