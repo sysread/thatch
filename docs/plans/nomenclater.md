@@ -1,4 +1,4 @@
-# Plan 005 — Nomenclater
+# Nomenclater
 
 ## Synopsis
 
@@ -19,7 +19,7 @@ or resumed sessions.
 
 ## Session detection
 
-Same mechanism as plan 004 (intuition). See that plan for full detail.
+Same mechanism as the intuition-drives plan. See that plan for full detail.
 
 `session.created` fires only on brand-new session creation (fresh or fork). It
 does not fire when resuming an existing conversation. Detection: track
@@ -74,7 +74,7 @@ per batch to avoid clustering.
 | opencode-only | Requires plugin hooks for generation and injection |
 | One name per session, cached in memory | No DB writes; name is ephemeral, tied to session lifecycle |
 | Gated to first message of new sessions | Must not rename mid-conversation or trigger on resumed sessions |
-| Detection via session.created + chat.message | Same mechanism as plan 004 (intuition) |
+| Detection via session.created + chat.message | Same mechanism as the intuition-drives plan |
 
 ## Dependencies
 

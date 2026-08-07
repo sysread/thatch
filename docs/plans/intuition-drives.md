@@ -1,4 +1,4 @@
-# Plan 004 — Intuition Drives
+# Intuition Drives
 
 ## Synopsis
 
