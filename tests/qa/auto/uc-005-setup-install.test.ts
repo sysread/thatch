@@ -238,15 +238,17 @@ const useCase: UseCase = {
     // --- Step 4: Non-thatch hooks preserved on re-run ---
 
     // Inject a non-thatch hook into Claude settings.json.
+    // Use a name that does NOT contain the substring "thatch" — the hook
+    // replacement filters by command.includes("thatch").
     const settingsParsed = JSON.parse(readFileSync(settingsPath, "utf8"));
     settingsParsed.hooks.SessionStart.push({
-      hooks: [{ type: "command", command: "echo non-thatch-claude" }],
+      hooks: [{ type: "command", command: "echo external-hook" }],
     });
     writeFileSync(settingsPath, JSON.stringify(settingsParsed, null, 2) + "\n");
 
     // Inject a non-thatch hook into Cursor hooks.json.
     const cursorHooksParsed = JSON.parse(readFileSync(cursorHooksPath, "utf8"));
-    cursorHooksParsed.hooks.sessionStart.push({ command: "echo non-thatch-cursor" });
+    cursorHooksParsed.hooks.sessionStart.push({ command: "echo external-hook" });
     writeFileSync(cursorHooksPath, JSON.stringify(cursorHooksParsed, null, 2) + "\n");
 
     await run(["setup", "--claude"]);
@@ -255,14 +257,14 @@ const useCase: UseCase = {
     // Non-thatch hooks should survive.
     const settingsAfter = JSON.parse(readFileSync(settingsPath, "utf8"));
     if (!settingsAfter.hooks.SessionStart?.some(
-      (g: any) => g.hooks?.some((h: any) => h.command?.includes("non-thatch-claude")),
+      (g: any) => g.hooks?.some((h: any) => h.command?.includes("external-hook")),
     )) {
       console.log("  FAIL: non-thatch hook not preserved in .claude/settings.json");
       return "FAIL";
     }
     const cursorHooksAfter = JSON.parse(readFileSync(cursorHooksPath, "utf8"));
     if (!cursorHooksAfter.hooks.sessionStart?.some(
-      (e: any) => e.command?.includes("non-thatch-cursor"),
+      (e: any) => e.command?.includes("external-hook"),
     )) {
       console.log("  FAIL: non-thatch hook not preserved in .cursor/hooks.json");
       return "FAIL";
