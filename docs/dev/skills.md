@@ -4,6 +4,13 @@ Thatch installs SKILL.md files that give the agent task-specific workflows. All
 skill content lives in `artifacts/skills/*.md` and is loaded by `src/skills.ts` and installed to a host-specific
 directory. See `mcp-parity.md` for which skills each host gets.
 
+## Naming convention
+
+All plugin skills use the `thatch-` prefix. This brands them as part of the
+thatch plugin and makes them easy to identify in the skills directory. The
+`cleanupStaleSkills` function uses this prefix as its namespace: any
+`thatch-*` directory not in the current install set is deleted on install.
+
 ## Skill file format
 
 Each skill is a single `SKILL.md` with YAML frontmatter:
