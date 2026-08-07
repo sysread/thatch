@@ -12,7 +12,11 @@ or without a live LLM session.
 tests/qa/
   runner.ts          Shared library: UseCase interface, fixture setup, opencode runner
   auto/              Automatable use cases — no LLM, no model tokens, ~90 seconds
+    index.test.ts    Barrel file that imports all auto use cases (for parallel execution)
+    uc-NNN-name.ts   Individual use case definitions
   live/              Live-session use cases — spawn opencode run, cost tokens, up to 10 min each
+    index.test.ts    Barrel file that imports all live use cases (for parallel execution)
+    uc-NNN-name.ts   Individual use case definitions
 ```
 
 ## auto/ vs live/
@@ -46,8 +50,9 @@ Override the model with `QA_MODEL=venice/<model-id>`.
 
 ## Adding a use case
 
-1. Create `tests/qa/auto/uc-NNN-name.test.ts` or
-   `tests/qa/live/uc-NNN-name.test.ts`.
+1. Create `tests/qa/auto/uc-NNN-name.ts` or
+   `tests/qa/live/uc-NNN-name.ts` (no `.test.ts` extension — only the
+   barrel file uses that).
 2. Import `registerUseCase` and `UseCase` (and `QaContext` if automatable)
    from `../runner`.
 3. Define the scenario with `name`, `preconditions`, `steps`, and
@@ -55,9 +60,20 @@ Override the model with `QA_MODEL=venice/<model-id>`.
 4. For automatable use cases, add a `run(ctx: QaContext)` function that
    verifies the scenario and returns `"PASS"`, `"FAIL"`, or `"PARTIAL"`.
 5. Call `registerUseCase(useCase)`.
+6. Add an `import "./uc-NNN-name";` line to the corresponding
+   `index.test.ts` barrel file.
 
 The runner handles fixture setup (isolated repo copy, temp DB, env vars),
 dry-run skipping, manual-only skipping, timeouts, and result assertions.
+
+## Why barrel files?
+
+Bun's `--concurrent` flag parallelizes tests *within a single file*, not
+across files. Each use case file calls `registerUseCase()` which calls
+`test.concurrent()`, but if each lives in its own `.test.ts` file, bun
+runs them one at a time. The `index.test.ts` barrel imports all use case
+modules so their `test.concurrent()` calls register in one file, and
+`--concurrent --max-concurrency 5` runs 5 at once.
 
 ## Isolation
 

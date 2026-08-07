@@ -48,11 +48,22 @@ export interface UseCase {
 // --- Master copy management -------------------------------------------------
 
 let masterReady = false;
+// Mutex: the first caller starts setup; concurrent callers await the same
+// promise instead of racing into rmSync(QA_ROOT) and clobbering each other.
+let masterPromise: Promise<void> | null = null;
 
-export async function ensureMaster(): Promise<void> {
+export function ensureMaster(): Promise<void> {
   if (masterReady && existsSync(join(QA_ROOT, "master", "src", "index.ts"))) {
-    return;
+    return Promise.resolve();
   }
+  if (masterPromise) {
+    return masterPromise;
+  }
+  masterPromise = doEnsureMaster();
+  return masterPromise;
+}
+
+async function doEnsureMaster(): Promise<void> {
 
   const masterDir = join(QA_ROOT, "master");
 
@@ -224,20 +235,45 @@ Evidence:
   - What was observed
   - What matched or didn't match the expected outcome`;
 
-  const result = await $`opencode run --dir ${ctx.dir} --model ${MODEL} --auto ${prompt}`
-    .env(ctx.env)
-    .quiet()
-    .nothrow();
+  // Race the opencode session against a timeout. If it wins, kill the
+  // spawned process so we don't leave orphaned opencode sessions after
+  // bun abandons the test. The test-level timeout (600s) fires first;
+  // this is a backstop that also cleans up the process.
+  const timeoutMs = 590_000; // 9 min 50s — just under the 10-min test timeout
 
-  const output = result.stdout.toString() + result.stderr.toString();
-  const match = output.match(/^Result:\s*(PASS|FAIL|PARTIAL|MANUAL-ONLY)/m);
-  const status = match ? match[1] as UseCaseResult : "FAIL";
+  const proc = Bun.spawn(["opencode", "run", "--dir", ctx.dir, "--model", MODEL, "--auto", prompt], {
+    env: ctx.env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
 
-  if (status === "FAIL") {
-    console.log(`  ${uc.name}: FAIL\n  Output: ${output.slice(0, 500)}`);
+  const timer = setTimeout(() => {
+    try { proc.kill("SIGTERM"); } catch { /* already dead */ }
+  }, timeoutMs);
+
+  try {
+    const [, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+
+    const output = stdout + stderr;
+    const match = output.match(/^Result:\s*(PASS|FAIL|PARTIAL|MANUAL-ONLY)/m);
+    const status = match ? match[1] as UseCaseResult : "FAIL";
+
+    if (status === "FAIL") {
+      console.log(`  ${uc.name}: FAIL\n  Output: ${output.slice(0, 500)}`);
+    }
+
+    return status;
+  } catch (err) {
+    console.log(`  ${uc.name}: FAIL (opencode session error: ${err})`);
+    return "FAIL";
+  } finally {
+    clearTimeout(timer);
+    try { proc.kill("SIGKILL"); } catch { /* already dead */ }
   }
-
-  return status;
 }
 
 // --- Test registration ------------------------------------------------------
