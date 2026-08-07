@@ -40,3 +40,7 @@ run = "bunx tsc -p tsconfig.check.json && bun test && bunx markdownlint-cli2"
 description = "Bump version, commit, tag, and push (args: patch|minor|major)"
 run = "bin/release"
 
+[tasks.qa]
+description = "Run QA use-case scenarios in isolated temp environments"
+run = "bin/qa"
+
