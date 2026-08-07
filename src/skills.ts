@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import pkg from "../package.json";
 
@@ -122,26 +122,37 @@ function cleanupStaleSkills(skillsDir: string, currentNames: string[]): void {
     compareVersions(pkg.version, RENAME_MIGRATION_MAX_VERSION) <= 0;
 
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    // isDirectory() returns false for symlinks (even symlinked dirs), so
+    // check isSymbolicLink() too — a symlinked skill dir is just as stale
+    // as a regular one.
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     const name = entry.name;
+    const fullPath = join(skillsDir, name);
 
-    // Rule 1: stale thatch-* dirs (our namespace, always safe to remove).
-    if (name.startsWith("thatch-") && !currentSet.has(name)) {
+    // Remove a stale entry. For symlinks, unlink the symlink itself — never
+    // follow the link, which could delete the target (e.g. a shared skill
+    // directory the user still wants). For regular dirs, recursive rm.
+    const remove = () => {
       try {
-        rmSync(join(skillsDir, name), { recursive: true, force: true });
+        if (entry.isSymbolicLink()) {
+          unlinkSync(fullPath);
+        } else {
+          rmSync(fullPath, { recursive: true, force: true });
+        }
       } catch {
         // best-effort — don't block install on cleanup failure
       }
+    };
+
+    // Rule 1: stale thatch-* dirs (our namespace, always safe to remove).
+    if (name.startsWith("thatch-") && !currentSet.has(name)) {
+      remove();
       continue;
     }
 
     // Rule 2: renamed non-prefixed dirs (version-gated, third-party risk).
     if (RENAMED_SKILLS.has(name) && withinMigrationWindow) {
-      try {
-        rmSync(join(skillsDir, name), { recursive: true, force: true });
-      } catch {
-        // best-effort
-      }
+      remove();
     }
   }
 }

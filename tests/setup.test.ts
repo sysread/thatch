@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, symlinkSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import yaml from "yaml";
@@ -846,5 +846,22 @@ describe("stale skill cleanup on install", () => {
     expect(existsSync(join(dir, "thatch-fact-extractor", "SKILL.md"))).toBe(true);
     expect(existsSync(join(dir, "thatch-pr-description", "SKILL.md"))).toBe(true);
     expect(existsSync(join(dir, "thatch-code-walkthrough", "SKILL.md"))).toBe(true);
+  });
+
+  test("removes symlinked stale skill dirs without following the link", () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-cleanup-"));
+    // Create a real directory outside the skills dir to serve as the
+    // symlink target — this represents a shared skill dir the user still
+    // wants. The cleanup must remove the symlink, not the target.
+    const targetDir = mkdtempSync(join(tmpdir(), "thatch-symlink-target-"));
+    writeFileSync(join(targetDir, "SKILL.md"), "shared content");
+    symlinkSync(targetDir, join(dir, "pr-description"));
+
+    installSkills(dir, SHARED_SKILLS);
+
+    // The symlink is gone.
+    expect(existsSync(join(dir, "pr-description"))).toBe(false);
+    // The target directory the symlink pointed to is still intact.
+    expect(existsSync(join(targetDir, "SKILL.md"))).toBe(true);
   });
 });
