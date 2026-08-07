@@ -43,7 +43,7 @@ afterAll(() => {
 
 describe("QA use cases", () => {
   for (const uc of useCases) {
-    test(uc.name, async () => {
+    test.concurrent(uc.name, async () => {
       if (DRY_RUN) {
         console.log(`  [DRY RUN] ${uc.name} — skipped`);
         return;
