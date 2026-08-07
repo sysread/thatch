@@ -4,15 +4,16 @@ Numbered plan documents capture design decisions that span multiple sessions.
 Each plan is a snapshot of the reasoning at the time — subsequent plans may
 supersede earlier ones as the project evolves.
 
-## Active plans
+Plans are temporary. When a plan is fully implemented, it **graduates**:
 
-| Plan | Description |
-|------|-------------|
-| [001 — Memory Store](001-memory-store.md) | Initial memory feature: stores, embeddings, tools |
-| [002 — Agent-Driven Pipelines](002-agent-driven-pipelines.md) | Extraction/dedup through the agent; hook wiring specifics; supersedes 001's "no CLI" |
-| [003 — Memory Hygiene](003-memory-hygiene.md) | Write-time collision warning, recall telemetry, session heartbeat, cluster dedup |
-| [004 — Intuition Drives](004-intuition-drives.md) | Pre-response deliberation layer: perception, parallel drives, synthesis; first-message-only; opencode-only |
-| [005 — Nomenclater](005-nomenclater.md) | Per-session agent naming; geeky/sci-fi names generated on first message of new sessions; opencode-only |
+1. The plan file is removed from this folder.
+2. The final architecture is documented in `docs/dev/` — either updated into
+   existing dev docs or captured in a new one.
+3. End-to-end use-case scenarios are added to `docs/qa/use-cases/`.
+
+Once graduated, the dev docs and use-case docs are the permanent record. The
+plan file is no longer needed — git history preserves it if someone needs the
+original design reasoning.
 
 ## Plan format
 
