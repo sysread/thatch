@@ -149,6 +149,10 @@ Tell every sub-agent these rules explicitly in the prompt:
   commands.
 - **If a use case step says to edit a file, do it inside `$QA_ROOT`**,
   not in the repo. Copy the file to the temp dir first if needed.
+- **Do not fix anything.** QA is read-only verification. If a use case
+  fails, report it — do not edit code, fix tests, update docs, or make
+  any changes to the repo. The user decides what to fix after reviewing
+  the aggregated findings.
 
 ### Sub-agent prompt template
 
