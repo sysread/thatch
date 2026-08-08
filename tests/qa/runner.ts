@@ -1,6 +1,7 @@
 import { $ } from "bun";
 import { cpSync, copyFileSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 /**
  * QA runner library. Each use case file imports from here to define its
@@ -11,6 +12,10 @@ import { join } from "node:path";
  * assertions. Manual-only use cases set `manualOnly: true` and are skipped.
  */
 
+// Master copy lives outside /tmp/ so opencode sessions (which have
+// external_directory "/tmp/**": "allow") cannot delete or corrupt it.
+// os.tmpdir() on macOS returns /var/folders/... which is not under /tmp/.
+const MASTER_ROOT = join(tmpdir(), "thatch-qa-master");
 const QA_ROOT = "/tmp/thatch-qa";
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const MODEL = process.env.QA_MODEL ?? "venice/mistral-small-2603";
@@ -53,7 +58,7 @@ let masterReady = false;
 let masterPromise: Promise<void> | null = null;
 
 export function ensureMaster(): Promise<void> {
-  if (masterReady && existsSync(join(QA_ROOT, "master", "src", "index.ts"))) {
+  if (masterReady && existsSync(join(MASTER_ROOT, "src", "index.ts"))) {
     return Promise.resolve();
   }
   if (masterPromise) {
@@ -65,7 +70,7 @@ export function ensureMaster(): Promise<void> {
 
 async function doEnsureMaster(): Promise<void> {
 
-  const masterDir = join(QA_ROOT, "master");
+  const masterDir = MASTER_ROOT;
 
   // Helper: print a step message, run an async fn, then print a checkmark
   // or x on the same line when it completes.
@@ -83,13 +88,15 @@ async function doEnsureMaster(): Promise<void> {
 
   await step("Cleaning previous QA artifacts", () => {
     rmSync(QA_ROOT, { recursive: true, force: true });
+    rmSync(MASTER_ROOT, { recursive: true, force: true });
     mkdirSync(masterDir, { recursive: true });
+    mkdirSync(QA_ROOT, { recursive: true });
     return Promise.resolve();
   });
 
   // git archive: tracked files only, no .git, no node_modules.
   await step("Creating master copy via git archive", async () => {
-    const archivePath = join(QA_ROOT, "master.tar");
+    const archivePath = join(MASTER_ROOT, "master.tar");
     await $`git archive HEAD -o ${archivePath}`.cwd(REPO_ROOT).quiet();
     await $`tar -xf ${archivePath} -C ${masterDir}`;
     rmSync(archivePath, { force: true });
@@ -179,7 +186,7 @@ async function doEnsureMaster(): Promise<void> {
 // --- Per-use-case fixture ---------------------------------------------------
 
 export async function createFixture(name: string): Promise<QaContext> {
-  const masterDir = join(QA_ROOT, "master");
+  const masterDir = MASTER_ROOT;
   const dir = join(QA_ROOT, name);
   // fs.cpSync with recursive:true copies directories, preserving symlinks
   // by default (dereference: false). The master's node_modules symlink
@@ -190,9 +197,37 @@ export async function createFixture(name: string): Promise<QaContext> {
     throw new Error(`createFixture: cpSync failed — ${dir}/src/index.ts missing`);
   }
 
-  // The master already has config/ and home/ from the warm-up run.
-  // Just ensure the remaining per-UC dirs exist.
-  for (const sub of ["claude", "queue"]) {
+  // Write a per-fixture opencode.json that scopes external_directory
+  // permission to ONLY this fixture's directory. The master's opencode.json
+  // has "/tmp/**": "allow" which lets a confused model in one session
+  // delete files from other fixtures or the master. Narrowing to the
+  // fixture's own path prevents cross-fixture damage.
+  writeFileSync(
+    join(dir, "opencode.json"),
+    JSON.stringify({
+      $schema: "https://opencode.ai/config.json",
+      autoupdate: false,
+      snapshot: false,
+      model: MODEL,
+      provider: {
+        venice: {
+          options: { apiKey: "{env:VENICE_API_KEY}" },
+        },
+      },
+      permission: {
+        external_directory: { [`${dir}/**`]: "allow" },
+      },
+    }, null, 2) + "\n",
+  );
+
+  // Ensure the per-UC dirs exist. These provide isolated XDG paths for
+  // opencode: data (session DB), state (lock files), cache, and config.
+  // Without these, opencode may fall back to shared global paths, causing
+  // "Session not found" errors when multiple sessions run concurrently.
+  for (const sub of [
+    "claude", "queue",
+    "home", "home/.local", "home/.local/share", "home/.local/state", "home/.cache",
+  ]) {
     mkdirSync(join(dir, sub), { recursive: true });
   }
 
@@ -204,7 +239,11 @@ export async function createFixture(name: string): Promise<QaContext> {
       THATCH_QUEUE_DIR: join(dir, "queue"),
       CLAUDE_CONFIG_DIR: join(dir, "claude"),
       XDG_CONFIG_HOME: join(dir, "config"),
+      XDG_DATA_HOME: join(dir, "home", ".local", "share"),
+      XDG_STATE_HOME: join(dir, "home", ".local", "state"),
+      XDG_CACHE_HOME: join(dir, "home", ".cache"),
       HOME: join(dir, "home"),
+      OPENCODE_TEST_HOME: join(dir, "home"),
       OPENCODE_DISABLE_CLAUDE_CODE: "1",
       OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
       OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
@@ -334,7 +373,7 @@ export function checkEnv(): void {
 
 export function printCleanupNotice(): void {
   if (!DRY_RUN) {
-    console.log(`\nQA artifacts left in ${QA_ROOT}`);
+    console.log(`\nQA artifacts left in ${QA_ROOT} and ${MASTER_ROOT}`);
     console.log(`Remove with: rm -rf ${QA_ROOT}`);
   }
 }
