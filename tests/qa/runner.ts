@@ -13,8 +13,10 @@ import { tmpdir } from "node:os";
  */
 
 // Master copy lives outside /tmp/ so opencode sessions (which have
-// external_directory "/tmp/**": "allow") cannot delete or corrupt it.
-// os.tmpdir() on macOS returns /var/folders/... which is not under /tmp/.
+// external_directory "/tmp/**": "allow" in the master config) cannot
+// delete or corrupt it. Fixtures live under /tmp/thatch-qa/ for
+// compatibility with bun test --concurrent (os.tmpdir() paths caused
+// unexplained hangs).
 const MASTER_ROOT = join(tmpdir(), "thatch-qa-master");
 const QA_ROOT = "/tmp/thatch-qa";
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -202,6 +204,10 @@ export async function createFixture(name: string): Promise<QaContext> {
   // has "/tmp/**": "allow" which lets a confused model in one session
   // delete files from other fixtures or the master. Narrowing to the
   // fixture's own path prevents cross-fixture damage.
+  //
+  // Deny rules take precedence over allow rules and over --auto. By
+  // denying "/tmp/**" but allowing the fixture's own dir, a confused
+  // model cannot rm -rf sibling fixtures or the master copy.
   writeFileSync(
     join(dir, "opencode.json"),
     JSON.stringify({
@@ -215,7 +221,9 @@ export async function createFixture(name: string): Promise<QaContext> {
         },
       },
       permission: {
-        external_directory: { [`${dir}/**`]: "allow" },
+        external_directory: {
+          [`${dir}/**`]: "allow",
+        },
       },
     }, null, 2) + "\n",
   );
