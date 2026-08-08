@@ -164,7 +164,7 @@ async function doEnsureMaster(): Promise<void> {
     // The plugin's drift detection compares on-disk content to the artifact
     // definitions; if they match, the install is a no-op.
     if (existsSync(join(realOpencodeConfig, "skills"))) {
-      await $`cp -r ${join(realOpencodeConfig, "skills")} ${join(masterOpencodeConfig, "skills")}`;
+      await $`cp -R ${join(realOpencodeConfig, "skills")} ${join(masterOpencodeConfig, "skills")}`;
     }
   });
 
@@ -180,11 +180,14 @@ async function doEnsureMaster(): Promise<void> {
 export async function createFixture(name: string): Promise<QaContext> {
   const masterDir = join(QA_ROOT, "master");
   const dir = join(QA_ROOT, name);
-  // Use .nothrow() because macOS cp produces non-fatal xattr warnings that
-  // still set exit code 1. Check the destination exists instead.
-  await $`cp -r ${masterDir} ${dir}`.nothrow();
+  // Use -R (uppercase) not -r (lowercase): BSD cp -R preserves symlinks,
+  // while cp -r follows them. The master has node_modules as a symlink;
+  // cp -r would dereference it and copy thousands of real files (slow,
+  // and fails under concurrent load). cp -R copies the symlink itself.
+  // .nothrow() handles non-fatal xattr warnings (exit code 1).
+  await $`cp -R ${masterDir} ${dir}`.nothrow();
   if (!existsSync(join(dir, "src", "index.ts"))) {
-    throw new Error(`createFixture: cp -r failed — ${dir}/src/index.ts missing`);
+    throw new Error(`createFixture: cp -R failed — ${dir}/src/index.ts missing`);
   }
 
   // The master already has config/ and home/ from the warm-up run.
