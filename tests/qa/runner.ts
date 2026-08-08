@@ -1,5 +1,5 @@
 import { $ } from "bun";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, copyFileSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -96,11 +96,12 @@ async function doEnsureMaster(): Promise<void> {
   });
 
   // Symlink node_modules from the real repo.
-  await step("Symlinking node_modules", async () => {
+  await step("Symlinking node_modules", () => {
     const realNodeModules = join(REPO_ROOT, "node_modules");
     if (existsSync(realNodeModules)) {
-      await $`ln -s ${realNodeModules} ${join(masterDir, "node_modules")}`;
+      symlinkSync(realNodeModules, join(masterDir, "node_modules"));
     }
+    return Promise.resolve();
   });
 
   // .opencode/skills/ is git-tracked, so git archive already includes it.
@@ -155,8 +156,8 @@ async function doEnsureMaster(): Promise<void> {
 
     // Symlink node_modules and copy package.json from the real opencode config.
     if (existsSync(join(realOpencodeConfig, "node_modules"))) {
-      await $`ln -s ${join(realOpencodeConfig, "node_modules")} ${join(masterOpencodeConfig, "node_modules")}`;
-      await $`cp ${join(realOpencodeConfig, "package.json")} ${join(masterOpencodeConfig, "package.json")}`;
+      symlinkSync(join(realOpencodeConfig, "node_modules"), join(masterOpencodeConfig, "node_modules"));
+      copyFileSync(join(realOpencodeConfig, "package.json"), join(masterOpencodeConfig, "package.json"));
     }
 
     // Copy skills from the real opencode config. The thatch plugin already
@@ -164,7 +165,7 @@ async function doEnsureMaster(): Promise<void> {
     // The plugin's drift detection compares on-disk content to the artifact
     // definitions; if they match, the install is a no-op.
     if (existsSync(join(realOpencodeConfig, "skills"))) {
-      await $`cp -R ${join(realOpencodeConfig, "skills")} ${join(masterOpencodeConfig, "skills")}`;
+      cpSync(join(realOpencodeConfig, "skills"), join(masterOpencodeConfig, "skills"), { recursive: true });
     }
   });
 
@@ -180,14 +181,13 @@ async function doEnsureMaster(): Promise<void> {
 export async function createFixture(name: string): Promise<QaContext> {
   const masterDir = join(QA_ROOT, "master");
   const dir = join(QA_ROOT, name);
-  // Use -R (uppercase) not -r (lowercase): BSD cp -R preserves symlinks,
-  // while cp -r follows them. The master has node_modules as a symlink;
-  // cp -r would dereference it and copy thousands of real files (slow,
-  // and fails under concurrent load). cp -R copies the symlink itself.
-  // .nothrow() handles non-fatal xattr warnings (exit code 1).
-  await $`cp -R ${masterDir} ${dir}`.nothrow();
+  // fs.cpSync with recursive:true copies directories, preserving symlinks
+  // by default (dereference: false). The master's node_modules symlink
+  // stays a symlink instead of copying thousands of real files.
+  // OS-agnostic, no BSD/GNU cp flag differences.
+  cpSync(masterDir, dir, { recursive: true });
   if (!existsSync(join(dir, "src", "index.ts"))) {
-    throw new Error(`createFixture: cp -R failed — ${dir}/src/index.ts missing`);
+    throw new Error(`createFixture: cpSync failed — ${dir}/src/index.ts missing`);
   }
 
   // The master already has config/ and home/ from the warm-up run.
