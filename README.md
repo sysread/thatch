@@ -70,9 +70,9 @@ Include thatch's instructions in your agent's system prompt manually; see
 - **Prediction engine**: a statistical model of user decision-making
   preferences. When a prompt matches learned contexts, predictions fire
   alongside the recall nudge.
-- **Skills**: 21 skills for memory workflows, structured multi-specialist
-  code review, change walkthroughs, and writing tasks (PR descriptions,
-  tickets, PR splitting).
+- **Skills**: 23 skills for memory workflows, structured multi-specialist
+  code review, review response, change walkthroughs, and writing tasks (PR
+  descriptions, tickets, PR splitting).
 
 See the [user guide](docs/user/README.md) for the full tool list, CLI
 commands, configuration, environment variables, and detailed setup for each
