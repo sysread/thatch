@@ -28,9 +28,9 @@ description: Extract durable project facts ... Use when ...
 - `description` drives when the agent loads the skill (both opencode and
   Cursor auto-discover skills and use the description for relevance).
 
-## The 22 skills
+## The 23 skills
 
-**Shared (21)** — installed everywhere; no sub-agents required:
+**Shared (22)** — installed everywhere; no sub-agents required:
 
 | Skill | Role |
 |-------|------|
@@ -55,6 +55,7 @@ description: Extract durable project facts ... Use when ...
 | `thatch-pr-description` | Draft PR descriptions with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, project-context research, clarity checks, and bold+italic emphasis for scanning. |
 | `thatch-ticket-description` | Draft ticket/issue descriptions with clear sections, project-context research, clarity checks, and bold+italic emphasis for scanning. |
 | `thatch-split-overlarge-pr` | Split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main. |
+| `thatch-review-response` | Author-side review response: triage findings, fix bugs one by one, reply on each thread, post a top-level summary comment. |
 
 **opencode-only (1)** — the coordinator needs sub-agent support:
 
@@ -138,6 +139,11 @@ and `--cursor` pass only the shared set.
   has responded or pushed changes after your initial review. It verifies whether
   your prior findings were adequately addressed, offers to reply on resolved
   items, then optionally hands off to `thatch-code-review` for a fresh round.
+- **Author-side review response**: load `thatch-review-response` when responding
+  to review comments on your own PR. It triages findings, collapses comments
+  sharing a root cause, fixes bugs one by one with the user, drafts per-thread
+  replies, and posts a top-level summary comment. Works on all hosts (no
+  sub-agents required).
 
 The coordinator is the only skill that can't be used without sub-agents; that's
 why it lives in `OPENCODE_ONLY_SKILLS`.
