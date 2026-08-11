@@ -306,6 +306,49 @@ section like:
 If the PR description already has a "How this PR got here" footer, add the
 new bullet to the existing list.
 
+## Retrospective mode
+
+When a PR has been through multiple review rounds, a per-round summary may
+not be enough. A retrospective synthesizes the full evolution of the PR
+across all rounds into a single narrative.
+
+### When to use
+
+The user requests it explicitly, or after the third or later review round
+on the same PR. A retrospective is a deliberate synthesis, not an automatic
+output. Offer it. Do not produce it without the user's go-ahead.
+
+### What it produces
+
+A top-level comment (or a section appended to the PR description) titled
+"How this PR got to this shape." It covers:
+
+- **The reverted predecessor or earlier attempt** (if any) — what was
+  tried, why it failed, what it taught.
+- **Each review round's effect** — what the review found, what changed as a
+  result, and which design decisions pivoted.
+- **False starts across rounds** — fixes that were themselves wrong and
+  had to be revised again. These are the most instructive parts.
+- **Deliberately not done** — scope boundaries that held across all rounds.
+- **The tests as deliverable** — if the review process produced or fixed
+  tests, note what they cover and why.
+
+### Prose rules
+
+Same as the per-round summary: plain English, one idea per sentence, no
+buzzwords, define jargon on first use, conclusion-first. But the
+retrospective is longer because the value is in the evolution, not just the
+final state. Scale to the number of rounds and the complexity of the
+pivots. A PR with one pivot gets a paragraph. A PR with five pivots gets
+sections.
+
+### Relationship to per-round summaries
+
+The retrospective does not replace per-round summaries. It synthesizes
+them. If per-round summaries exist as comments, the retrospective links to
+them. If they do not (because the user skipped them in earlier rounds), the
+retrospective covers those rounds from git history and review comments.
+
 ## Prediction material
 
 Review response discussions are high-signal material for the user decision
