@@ -110,6 +110,10 @@ Keep this section short. Aim for 3-6 steps per workflow. If there are multiple a
 
 Apply the same clarity rules as the writing skills: prefer concrete terms over ambiguous ones, translate project-private labels before using them, name object/action/effect for process words, show both sides of contrasts, and show causal middle steps. Do not copy code-comment shorthand when reader-facing behavior is clearer.
 
+### Tone when posting review comments
+
+When the user asks you to draft comments for posting on the PR, use a tone that is playful in delivery, precise in substance. The light touch reduces defensiveness for less experienced authors who may feel sensitive about findings. The precision earns respect from experienced ones who care about correctness. The humor is in the insight itself: a sharp technical observation that happens to be funny. Not a joke next to the insight. Not sycophancy. Not "great catch!" The playfulness signals engagement, not approval.
+
 ### Scope
 
 - Branch/range reviewed

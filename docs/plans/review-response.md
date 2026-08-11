@@ -230,21 +230,16 @@ Phase 7: Update PR description footer
 
 ## Open questions
 
-1. **Retrospective mode.** "How this PR got to this shape" is a heavier
-   version of the summary, covering the full evolution across multiple
-   review rounds. Is this a separate mode the user requests, or does the
-   skill offer it after N review rounds? Martin's reads like a
-   deliberate synthesis, not an automatic output.
+1. **Monitoring mode.** The user mentioned the possibility of asking the bot
+   to monitor for comments. That would make the skill fire automatically
+   when new review comments arrive, rather than on explicit request. This
+   is out of scope for the initial skill. A hook or polling mechanism would
+   be needed. Future direction.
 
-2. **Monitoring mode.** The user mentioned the possibility of asking
-   the bot to monitor for comments. That would make the skill fire
-   automatically when new review comments arrive, rather than on
-   explicit request. This is out of scope for the initial skill but
-   worth designing toward.
-
-3. **Skill placement.** This skill works on all hosts (opencode, Claude
+2. **Skill placement.** This skill works on all hosts (opencode, Claude
    Code, Cursor) since it does not require sub-agent dispatch. It goes
-   in `SHARED_SKILLS`, not `OPENCODE_ONLY_SKILLS`.
+   in `SHARED_SKILLS`, not `OPENCODE_ONLY_SKILLS`. (Resolved: implemented
+   as shared skill.)
 
 ## Dependencies
 
