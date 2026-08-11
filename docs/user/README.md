@@ -201,6 +201,7 @@ Seven specialist review lenses, each a self-contained static-analysis pass:
 | `thatch-review-context` | Gathers project context (PR descriptions, git archaeology, ticket references, memory) before a review. Prevents false positives about intentionally deferred work. |
 | `thatch-workflow-research` | Researches code workflows and features affected by a change or planned change. Reads code flows, comments, git history, and produces a guide for reviewers or planners. |
 | `thatch-review-followup` | Alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed your prior findings, offers to reply on resolved items, then optionally re-runs the full structured review. |
+| `thatch-review-response` | Author-side review response: triage findings on your own PR, fix bugs one by one, reply on each thread, post a top-level summary comment. |
 | `thatch-change-walkthrough` | Explains a change to the user as a teaching walkthrough: researches each affected workflow at the merge-base, teaches current behavior, then overlays the modifications with file:line citations. |
 | `thatch-code-walkthrough` | Explains a feature, module, or workflow to the user as a teaching walkthrough with file:line citations. Also used to draft high-level docs for new or undocumented features. |
 
@@ -227,6 +228,7 @@ Seven specialist review lenses, each a self-contained static-analysis pass:
 | Review synthesizer | Yes | Yes | Yes |
 | Review context + workflow research | Yes | Yes | Yes |
 | Review followup | Yes | Yes | Yes |
+| Review response (author-side) | Yes | Yes | Yes |
 | Walkthrough skills (2) | Yes | Yes | Yes |
 | Writing skills (3) | Yes | Yes | Yes |
 | Code review coordinator | Yes | No (requires sub-agents) | No (requires sub-agents) |
@@ -271,6 +273,18 @@ on this PR were adequately addressed.
 It verifies whether each finding was resolved (by code change, proof, or
 follow-up ticket with a risk explanation), offers to reply on the resolved
 ones, then optionally hands off to the coordinator for a fresh full review.
+
+For **responding to review on your own PR**, load the author-side skill:
+
+```text
+Load thatch-review-response and help me work through the review comments
+on my PR.
+```
+
+It triages every finding (legitimate, intentional, false positive, unlikely
+edge case), collapses comments sharing a root cause, works through each bug
+with you, drafts replies on each thread, then posts a top-level summary
+comment so reviewers can see what changed without re-reading the full diff.
 
 These files are plugin-owned: local edits are overwritten the next time the
 plugin initializes (this is how skill improvements ship with new versions).

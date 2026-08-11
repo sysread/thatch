@@ -52,6 +52,7 @@ function loadSharedSkills(): SkillDef[] {
     "thatch-pr-description",
     "thatch-ticket-description",
     "thatch-split-overlarge-pr",
+    "thatch-review-response",
   ];
   return names.map((name) => ({ name, content: loadSkillFile(name) }));
 }

@@ -50,6 +50,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-pr-description\` — draft a PR description with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis on the phrases that carry the meaning.
 - \`thatch-ticket-description\` — draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
 - \`thatch-split-overlarge-pr\` — split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
+- \`thatch-review-response\` — respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 
 ## When to Write
 
@@ -253,6 +254,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-pr-description\` — draft a PR description with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis on the phrases that carry the meaning.
 - \`thatch-ticket-description\` — draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
 - \`thatch-split-overlarge-pr\` — split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
+- \`thatch-review-response\` — respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 
 ## When to Write
 
@@ -522,6 +524,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-pr-description\` — draft a PR description with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis on the phrases that carry the meaning.
 - \`thatch-ticket-description\` — draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
 - \`thatch-split-overlarge-pr\` — split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
+- \`thatch-review-response\` — respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 
 ## When to Write
 
