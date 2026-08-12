@@ -192,6 +192,35 @@ Group findings by status. For each finding:
 
 For each finding classified as `ADEQUATELY ADDRESSED`, use your judgement to decide whether a reply is appropriate and what form it should take.
 
+### Writing replies
+
+The same prose rules apply to replies as to initial review comments:
+plain English, short sentences, one idea per sentence, no convoluted
+conditionals, no buzzwords, no escape hatches. The author is still
+holding the bug context in their head. Do not make them work to parse
+your acknowledgment.
+
+The author's response tells you something about how they react to
+review comments. Record it:
+
+1. Did the author engage with the technical content directly? Did they
+   push back on tone? Did they fix silently? Did they ask for more
+   context? Did they exceed what you asked for?
+2. Save a brief observation via `thatch_memory_remember` (label
+   `review-author-<username>`, project store or global if the author
+   appears across repos). Focus on communication style, not skill
+   level. "Engages thoroughly, often exceeds the ask" is useful. "Is
+   a junior" is not. Skill level changes, and the label will outlive
+   the context that created it.
+3. If you have no prior observations about this author, ask the user:
+   "I haven't reviewed <author>'s PRs before. Do you know how
+   experienced they are and how they tend to react to review findings?"
+   Use the answer to calibrate the reply's social framing. The
+   technical content stays the same. What changes is the wrapper:
+   direct for a senior who wants you to get to the point; a sentence of
+   context for someone who may not know why the pattern matters; dense
+   technical prose for a bot.
+
 ### Reply decision guide
 
 - **Code change that solved it well**: "Oh, nice. I didn't think of solving it that way." or a thumbs-up reaction. Do not over-explain. If the fix was obvious, a reaction alone is enough.
@@ -218,7 +247,6 @@ For each finding classified as `ADEQUATELY ADDRESSED`, use your judgement to dec
 Propose the replies (or reactions) to the user before posting. After the user approves:
 - Post comments via the VCS CLI (`gh pr comment` or equivalent) or the oink draft-review tool when available.
 - Post reactions via the VCS API (GitHub: `gh api repos/{owner}/{repo}/issues/comments/{id}/reactions` with `content` field).
-- When responding on behalf of the user, prefix the response with `Landru is thinking on behalf of Jeff: ` (in bold, using the correct markup for the platform).
 - Build the draft review once at the end after all replies have been decided, not incrementally after each finding.
 
 ## Step 6: Handle unaddressed findings

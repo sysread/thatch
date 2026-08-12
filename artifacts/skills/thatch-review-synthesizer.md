@@ -110,9 +110,92 @@ Keep this section short. Aim for 3-6 steps per workflow. If there are multiple a
 
 Apply the same clarity rules as the writing skills: prefer concrete terms over ambiguous ones, translate project-private labels before using them, name object/action/effect for process words, show both sides of contrasts, and show causal middle steps. Do not copy code-comment shorthand when reader-facing behavior is clearer.
 
-### Tone when posting review comments
+### Writing review comments
 
-When the user asks you to draft comments for posting on the PR, use a tone that is playful in delivery, precise in substance. The light touch reduces defensiveness for less experienced authors who may feel sensitive about findings. The precision earns respect from experienced ones who care about correctness. The humor is in the insight itself: a sharp technical observation that happens to be funny. Not a joke next to the insight. Not sycophancy. Not "great catch!" The playfulness signals engagement, not approval.
+The author is already holding the bug mechanics, the state flow, and the
+code context in their head when they read your comment. Write so the
+prose itself takes no effort to parse. The author should spend their
+slow deliberate thinking on the bug, not on decoding your sentences.
+
+Think of it as two cognitive systems (Kahneman, *Thinking, Fast and
+Slow*). The author reads the comment with System 1: fast, automatic,
+low-effort pattern matching. They think through the bug mechanics with
+System 2: slow, deliberate, effortful reasoning. Your job is to make
+the comment consumable by System 1 so the author's System 2 budget is
+spent entirely on the technical problem, not on parsing prose.
+
+Rules:
+
+- **Plain English.** Short sentences. One idea per sentence. If a
+  sentence has three clauses, split it into three sentences.
+- **No convoluted conditionals.** If the logic branches, write each
+  branch as its own sentence. "If X then Y, unless Z, in which case W"
+  forces the reader to hold the entire tree in their head. Three
+  sentences let them read sequentially.
+- **Name the file and line.** If the root cause is outside the PR diff,
+  say where it is and what the code there does. The author cannot check
+  a claim against code they cannot find. "See the guard in
+  `auth.go:142` that skips validation when `mode == cached`" is
+  scannable. "There's a guard elsewhere that skips validation" is not.
+- **State the bug, then the evidence, then the fix.** Do not make the
+  author read three paragraphs to learn what is wrong. Lead with the
+  claim. Follow with the proof. End with the remedy.
+- **No buzzwords.** No hedges ("worth considering", "arguably"). No
+  escape hatches ("wdyt?", "not blocking", "happy to leave it"). The
+  author gets two doors: make the change, or justify not making it.
+- **Translate project-private labels.** If you reference a component by
+  its internal name, say what it does in plain English on first use.
+  "The reaper (the background goroutine that deletes expired sessions)"
+  not just "the reaper."
+- **Playful in delivery, precise in substance.** The humor is in the
+  insight itself: a sharp technical observation that happens to be
+  funny. Not a joke next to the insight. Not sycophancy. Not "great
+  catch!" The playfulness signals engagement, not approval.
+
+### Author sensitivity
+
+Authors react to review comments differently. Some are juniors who have
+never had a senior say "this is broken" and may read a blunt finding as
+a judgment on their competence. Some are experienced engineers who are
+simply happy the bug was caught before production. Some are bots that
+want dense, verb-free technical text with maximum semantic content and
+zero social warmth.
+
+Before drafting comments, check your memory for observations about the
+PR author:
+
+1. `thatch_memory_recall` with the author's username and "review
+   comment reaction" or "review tone sensitivity."
+2. If you have prior observations, calibrate the comment's social
+   framing to the author. The technical content stays the same: the
+   finding, the evidence, and the fix do not change. What changes is
+   the wrapper: a sentence of context for a junior who may not know
+   why the pattern matters; a direct open for a senior who wants you
+   to get to the point; dense technical prose for a bot.
+3. If you have no prior observations about this author, ask the user:
+   "I haven't reviewed <author>'s PRs before. Do you know how
+   experienced they are and how they tend to react to review findings?"
+   Use the answer to calibrate. Save the observation after the review
+   round (see below).
+4. After the author responds to your comments, record what you
+   observed. Did they engage with the technical content directly? Did
+   they push back on tone? Did they fix it without comment? Save a
+   brief observation via `thatch_memory_remember` so future reviews of
+   this author's PRs can calibrate from the start:
+
+   - Label: `review-author-<username>` (in the project store for the
+     repo, or global if the author appears across repos).
+   - Content: one or two sentences about how this author reacts to
+     review findings. Note their seniority if apparent, but focus on
+     behavior: do they engage with the finding, push back on framing,
+     fix silently, or ask for more context?
+   - Confidence: 5-6 for a single observation, higher as you
+     accumulate evidence across reviews.
+
+Do not record a judgment of the author's skill. Record their
+communication style. "Engages thoroughly with findings, often exceeds
+the ask" is useful. "Is a junior" is not. Skill level changes, and
+the label will outlive the context that created it.
 
 ### Scope
 
