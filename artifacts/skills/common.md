@@ -36,7 +36,7 @@ If your briefing includes a project context brief (from the coordinator or from 
 - **Relevant constraints** may explain why code is structured a certain way. Consider them before flagging design choices.
 
 ## Workflow context awareness
-If your briefing includes a workflow guide (from the coordinator or from loading thatch-workflow-research), use it to understand the purpose and evolution of the code you are reviewing:
+If your briefing includes a workflow guide (from the coordinator or from loading thatch-code-archaeology), use it to understand the purpose and evolution of the code you are reviewing:
 - **Purpose** sections explain why the workflow exists, which helps distinguish intentional behavior from bugs.
 - **Major evolutions** sections explain how the code reached its current state, which helps distinguish recent changes from long-standing design decisions.
 - **Constraints and design decisions** sections explain tradeoffs and intentional choices, which prevents flagging known design decisions as issues.

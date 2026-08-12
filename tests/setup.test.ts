@@ -215,7 +215,7 @@ describe("setupClaudeCode (project-local)", () => {
     expect(skillNames).toContain("thatch-review-highlights");
     expect(skillNames).toContain("thatch-review-synthesizer");
     expect(skillNames).toContain("thatch-review-context");
-    expect(skillNames).toContain("thatch-workflow-research");
+    expect(skillNames).toContain("thatch-code-archaeology");
     expect(skillNames).toContain("thatch-review-followup");
     expect(skillNames).toContain("thatch-change-walkthrough");
     expect(skillNames).toContain("thatch-code-walkthrough");
