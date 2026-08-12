@@ -31,12 +31,12 @@ const useCase: UseCase = {
     "  appends a thatch block to `CLAUDE.md` bracketed by start/end markers (replaced, not",
     "  duplicated, on re-run), writes `.claude/settings.json` hooks (`SessionStart` -> `thatch reminder`,",
     "  `PostToolBatch` -> `thatch buffer-batch`, `UserPromptSubmit` -> `thatch flush-tools`), and installs",
-    "  **21 shared skills** (no code-review coordinator) to `$CLAUDE_CONFIG_DIR/skills/` — user-scoped",
+    "  **22 shared skills** (no code-review coordinator) to `$CLAUDE_CONFIG_DIR/skills/` — user-scoped",
     "  even in project-local mode.",
     "- `--cursor` project-local writes `.cursor/mcp.json`, appends to `AGENTS.md`, writes",
     "  `.cursor/hooks.json` in the **flat format** (`{version:1, hooks:{...}}`): `sessionStart` ->",
     "  `thatch reminder --json`, `postToolUse` -> `thatch buffer-tool`, `beforeSubmitPrompt` ->",
-    "  `thatch flush-tools --json`; and installs 21 shared skills to `~/.cursor/skills/`.",
+    "  `thatch flush-tools --json`; and installs 22 shared skills to `~/.cursor/skills/`.",
     "- Re-run is idempotent: instructions are not duplicated, thatch hooks are replaced (not appended),",
     "  and non-thatch hooks are preserved. A legacy `thatch echo` hook is replaced with `flush-tools`.",
     "- `--global` (Claude) writes `~/.claude/CLAUDE.md` + `~/.claude/settings.json` but **no project",
@@ -113,7 +113,7 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // Claude skills: 21 shared, no coordinator, under $CLAUDE_CONFIG_DIR/skills/
+    // Claude skills: 22 shared, no coordinator, under $CLAUDE_CONFIG_DIR/skills/
     const claudeSkillsDir = join(env.CLAUDE_CONFIG_DIR, "skills");
     if (!existsSync(claudeSkillsDir)) {
       console.log("  FAIL: Claude skills dir not created");
@@ -123,8 +123,8 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (claudeSkillNames.length !== 21) {
-      console.log(`  FAIL: Claude skills count is ${claudeSkillNames.length}, expected 21`);
+    if (claudeSkillNames.length !== 22) {
+      console.log(`  FAIL: Claude skills count is ${claudeSkillNames.length}, expected 22`);
       return "FAIL";
     }
     if (claudeSkillNames.includes("thatch-code-review")) {
@@ -189,7 +189,7 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // Cursor skills: 21 shared, no coordinator, under ~/.cursor/skills/
+    // Cursor skills: 22 shared, no coordinator, under ~/.cursor/skills/
     const cursorSkillsDir = join(env.HOME, ".cursor", "skills");
     if (!existsSync(cursorSkillsDir)) {
       console.log("  FAIL: Cursor skills dir not created");
@@ -199,8 +199,8 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (cursorSkillNames.length !== 21) {
-      console.log(`  FAIL: Cursor skills count is ${cursorSkillNames.length}, expected 21`);
+    if (cursorSkillNames.length !== 22) {
+      console.log(`  FAIL: Cursor skills count is ${cursorSkillNames.length}, expected 22`);
       return "FAIL";
     }
     if (cursorSkillNames.includes("thatch-code-review")) {
