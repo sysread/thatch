@@ -170,7 +170,7 @@ async function doEnsureMaster(): Promise<void> {
     }
 
     // Copy skills from the real opencode config. The thatch plugin already
-    // installed these there (21 shared + 1 opencode-only = 22 skills).
+    // installed these there (22 shared + 1 opencode-only = 23 skills).
     // The plugin's drift detection compares on-disk content to the artifact
     // definitions; if they match, the install is a no-op.
     if (existsSync(join(realOpencodeConfig, "skills"))) {
@@ -316,8 +316,8 @@ Evidence:
     const match = output.match(/^Result:\s*(PASS|FAIL|PARTIAL|MANUAL-ONLY)/m);
     const status = match ? match[1] as UseCaseResult : "FAIL";
 
-    if (status === "FAIL") {
-      console.log(`  ${uc.name}: FAIL\n  Output: ${output.slice(0, 500)}`);
+    if (status !== "PASS") {
+      console.log(`  ${uc.name}: ${status}\n  Output: ${output.slice(0, 2000)}`);
     }
 
     return status;
