@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 const MASTER_ROOT = join(tmpdir(), "thatch-qa-master");
 const QA_ROOT = "/tmp/thatch-qa";
 const REPO_ROOT = join(import.meta.dir, "..", "..");
-const MODEL = process.env.QA_MODEL ?? "venice/mistral-small-2603";
+const MODEL = process.env.QA_MODEL ?? "venice/zai-org-glm-5-2";
 const DRY_RUN = process.env.QA_DRY_RUN === "1";
 
 // --- Types ------------------------------------------------------------------
