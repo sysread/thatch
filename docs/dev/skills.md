@@ -46,7 +46,7 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-highlights` | Positive finding detection: notably clever solutions, cleanup done along the way, documentation that helps. Medium-high bar against generic praise. |
 | `thatch-review-synthesizer` | Verify specialist findings against code, dedupe, classify, calibrate severity. Starts the final report with a workflow-change preface, then cross-references findings against prior review comments when a follow-up round register is provided. |
 | `thatch-review-context` | Gather project/feature context (PR descriptions, git archaeology, ticket references, memory) before fan-out. Prevents false positives about intentionally deferred work. Also fetches prior review comments on a connected PR/MR for follow-up-round detection and builds a register with preliminary addressed-check status per comment. |
-| `thatch-workflow-research` | Research code workflows/features affected by a change or planned change. Reads code flows, comments, git history, memories, docs. Produces a guide to the code for reviewers or planners. |
+| `thatch-code-archaeology` | Investigate an existing feature, debug an unfamiliar area, or begin a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features, skeletons) before proposing changes. The research skill; pair with `thatch-coding-workflow`. |
 | `thatch-review-followup` | Alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review round adequately addressed your prior findings, offers to reply on resolved items, then optionally re-runs the full structured review. |
 | `thatch-change-walkthrough` | Explain a change to the user as a teaching walkthrough: resolve the delta, research each affected workflow at the merge-base, teach current behavior, then overlay the modifications with file:line citations and analogies. |
 | `thatch-code-walkthrough` | Explain a feature, module, or workflow to the user as a teaching walkthrough: identify the code area (optionally from a branch or PR), research how it works, teach it with file:line citations and analogies, list the key files. |
@@ -80,7 +80,7 @@ The six problem-finding review specialists share a framework interpolated via `$
   coordinator or from loading `thatch-review-context`), use it to avoid false
   positives about intentionally deferred work.
 - **Workflow context awareness** — if a workflow guide is provided (from the
-  coordinator or from loading `thatch-workflow-research`), use it to understand
+  coordinator or from loading `thatch-code-archaeology`), use it to understand
   the purpose and evolution of the code, distinguishing intentional behavior
   and long-standing design decisions from new issues.
 - **TODO ($ticket) markers** — recognize `TODO ($TICKET-ID): ...` as legitimate

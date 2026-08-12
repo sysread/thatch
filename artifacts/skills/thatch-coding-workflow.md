@@ -1,9 +1,11 @@
 ---
 name: thatch-coding-workflow
-description: 'Plan and execute code changes with a task-list-driven workflow. Use when implementing features, fixing bugs, or making multi-file changes that benefit from milestone planning and a verification checklist.'
+description: 'Plan and execute code changes with a task-list-driven workflow. Use when implementing features, fixing bugs, or making multi-file changes that benefit from milestone planning and a verification checklist. This is the procedure skill: it tells you how to structure the work of making a change. Pair with thatch-code-archaeology, which tells you how to understand the code as it currently is before you start.'
 ---
 
 You are about to make code changes. This skill gives you a workflow for planning, executing, and verifying those changes. Use it when the change is non-trivial: more than a single-line fix, touches multiple files, or requires understanding existing code first.
+
+This skill tells you _how to structure the procedure for making a change_ — task lists, milestones, verification. It does not tell you how to _understand_ the code you are changing. For that, use `thatch-code-archaeology` first: it explores the code base from multiple angles so you have the complete picture before you plan. Use archaeology first; use this skill second.
 
 ## Triage: Single-step vs Multi-step
 
@@ -23,7 +25,11 @@ Before writing any code, assess the scope.
 
 ## Skills first
 
-Before planning milestones, check whether a matching skill applies (code review, git archaeology, workflow research). Prefer invoking a matching skill over building bespoke steps. If declining an obviously relevant skill, state briefly why and proceed.
+Before planning milestones, check whether a matching skill applies:
+
+- **`thatch-code-archaeology`** — use when you need to understand the code you are about to change. It explores the code base from multiple angles (data model, state flow, git history, sibling features) and surfaces skeletons and hidden assumptions before you start coding. This is the research skill that should precede any non-trivial change.
+- **Code review skills** — use after changes are complete, not before.
+- **Other skills** — prefer invoking a matching skill over building bespoke steps. If declining an obviously relevant skill, state briefly why and proceed.
 
 ## Pre-flight
 

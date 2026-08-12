@@ -166,7 +166,7 @@ On request ("save this", "write it to a file", "put it in docs"): write the mark
 - It is not a PR description (that is `thatch-pr-description`). The audience here is the user, not an external reviewer; the goal is teaching the code in depth, not orienting someone to a diff.
 - It is not a code review. Do not flag issues or evaluate quality. That is the review specialist skills' job.
 - It is not a project context brief (that is `thatch-review-context`). Do not pull tickets, prior reviews, or deferred-work registers. The walkthrough teaches code mechanics using only light commit-message intent.
-- It is not a workflow research guide for specialist consumption (that is `thatch-workflow-research`). The output here is a human-readable teaching unit, not a briefing block.
+- It is not a pre-change investigation (that is `thatch-code-archaeology`). That skill investigates code before making changes, surfacing skeletons, hidden assumptions, and sibling-feature dependencies. The output here is a human-readable teaching unit for a specific diff, not an investigation report.
 - It is not a memory writer. Do not call `thatch_memory_remember`. If you discover durable facts, note them in the walkthrough's Notes; the session-reflection or fact-extractor skills persist them later.
 
 ## Worked example (one-workflow excerpt)

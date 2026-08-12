@@ -49,7 +49,7 @@ If context is sparse (no PR description, no ticket references, no relevant memor
 Dispatch a sub-agent using the Task tool to research the code workflows affected by this change. Pass the sub-agent:
 - The git range and changed files (from Step 1)
 - The project context brief (from Step 2)
-- Instructions to load the thatch-workflow-research skill and follow its methodology
+- Instructions to load the thatch-code-archaeology skill and follow its methodology
 
 The sub-agent produces a code guide with one section per affected workflow or feature. Wait for it to complete and collect the guide.
 

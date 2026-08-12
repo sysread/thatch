@@ -199,7 +199,7 @@ Seven specialist review lenses, each a self-contained static-analysis pass:
 | `thatch-review-highlights` | Positive finding detection: notably clever solutions, cleanup done along the way, documentation that helps. Medium-high bar against generic praise. |
 | `thatch-review-synthesizer` | Verifies and synthesizes findings from multiple specialists into a report that starts with workflow changes, then highlights, then deduplicated severity-grouped findings. |
 | `thatch-review-context` | Gathers project context (PR descriptions, git archaeology, ticket references, memory) before a review. Prevents false positives about intentionally deferred work. |
-| `thatch-workflow-research` | Researches code workflows and features affected by a change or planned change. Reads code flows, comments, git history, and produces a guide for reviewers or planners. |
+| `thatch-code-archaeology` | Investigates an existing feature, debugs an unfamiliar area, or begins a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features, skeletons) before proposing changes. Pairs with `thatch-coding-workflow`. |
 | `thatch-review-followup` | Alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed your prior findings, offers to reply on resolved items, then optionally re-runs the full structured review. |
 | `thatch-review-response` | Author-side review response: triage findings on your own PR, fix bugs one by one, reply on each thread, post a top-level summary comment. |
 | `thatch-change-walkthrough` | Explains a change to the user as a teaching walkthrough: researches each affected workflow at the merge-base, teaches current behavior, then overlays the modifications with file:line citations. |
@@ -226,7 +226,7 @@ Seven specialist review lenses, each a self-contained static-analysis pass:
 | Memory skills (4) | Yes | Yes | Yes |
 | Review specialists (7) | Yes | Yes | Yes |
 | Review synthesizer | Yes | Yes | Yes |
-| Review context + workflow research | Yes | Yes | Yes |
+| Review context + code archaeology | Yes | Yes | Yes |
 | Review followup | Yes | Yes | Yes |
 | Review response (author-side) | Yes | Yes | Yes |
 | Walkthrough skills (2) | Yes | Yes | Yes |
