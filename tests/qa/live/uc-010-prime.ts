@@ -3,8 +3,11 @@ import { registerUseCase, type UseCase } from "../runner";
 /**
  * UC-010: thatch prime.
  *
- * Automatable: partial — the CLI dispatch selection (which child, which flags, exit-code
- * pass-through) is automatable; the LLM's real investigation and memory writing are manual.
+ * Manual only — `thatch prime` spawns a nested opencode session
+ * (`opencode run` inside `opencode run`), which is too slow for the
+ * QA framework's 10-min timeout. The CLI dispatch logic is covered
+ * by the auto tests; the primer skill's investigation and memory
+ * writing are verified manually.
  */
 
 const useCase: UseCase = {
@@ -24,7 +27,7 @@ const useCase: UseCase = {
     "- `prime` exits with the **child process's exit code** (0 on success).",
     "- If no supported CLI is on PATH, `prime` fails fast with a clear error rather than spawning nothing.",
   ].join("\n"),
-  // No custom run — uses default runViaOpencode.
+  manualOnly: true,
 };
 
 registerUseCase(useCase);

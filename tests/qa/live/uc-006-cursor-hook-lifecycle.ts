@@ -3,9 +3,10 @@ import { registerUseCase, type UseCase } from "../runner";
 /**
  * UC-006: Cursor hook lifecycle.
  *
- * Automatable: partial — the `buffer-tool` and `flush-tools --json` CLI
- * contracts are fully automatable; the live Cursor agent loop (booting the
- * MCP server, the agent acting on a nudge) is manual.
+ * Manual only — requires a live Cursor agent session with the MCP
+ * server booted and the agent acting on nudges. The CLI contracts
+ * (`buffer-tool`, `flush-tools --json`) are covered by auto tests
+ * (UC-017, UC-009).
  */
 
 const useCase: UseCase = {
@@ -37,7 +38,7 @@ const useCase: UseCase = {
     "- `buffer-tool` and `flush-tools --json` output is the shape Cursor's `additional_context`",
     "  field consumes.",
   ].join("\n"),
-  // No custom run — uses default runViaOpencode.
+  manualOnly: true,
 };
 
 registerUseCase(useCase);
