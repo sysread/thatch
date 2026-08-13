@@ -37,10 +37,10 @@ For each finding from the specialists:
    - Use thatch_memory_recall to search for documented rationale.
    If the behavior is intentional or an accepted limitation, reject the finding.
 
-4m. **Mechanical verification (pedantic, no-slop, breadcrumbs, docs, naming, style, comments).** For mechanical findings, verification means:
-   - The cited text exists at the cited location (already confirmed in step 2).
-   - The finding is branch-introduced or newly made relevant by the change. Pre-existing issues go in the pre-existing appendix, not rejected.
-   - The cited text violates the stated guideline, specialist taxonomy, or project norm. Identify the source of truth: the specific guideline, convention, or writing norm being violated.
+4m. **Mechanical verification (pedantic, no-slop, breadcrumbs, docs, naming, style, comments, structural conventions).** For mechanical findings, verification means:
+    - The cited text exists at the cited location (already confirmed in step 2). For PLACEMENT findings, the cited evidence is the file path and the existing directory structure, not quoted code. Verify the file exists at the claimed path and that the existing structure shows the convention the specialist cited.
+    - The finding is branch-introduced or newly made relevant by the change. Pre-existing issues go in the pre-existing appendix, not rejected.
+    - The cited text violates the stated guideline, specialist taxonomy, or project norm. Identify the source of truth: the specific guideline, convention, writing norm, or existing directory structure being violated.
    Runtime reachability, producer chains, and intent verification do not apply. A mechanical finding is not a "bug" and does not need a "trigger scenario."
 
 4h. **Highlights verification (highlights).** For highlights, verification means:
@@ -95,7 +95,7 @@ A data-shape or reachability finding that lacks the governing-constraint citatio
 
 You MUST produce the full report structure below. Do not simplify or omit sections. Every confirmed finding must include all numbered fields. If a section has no entries, write "None" — do not skip the section.
 
-Confirmed LOW findings are mandatory. Do not summarize them away or omit them for being non-functional. Pedantic, no-slop, breadcrumbs, docs, naming, style, and comment findings are first-class review findings when confirmed. Group them under LOW, but include every one.
+Confirmed LOW findings are mandatory. Do not summarize them away or omit them for being non-functional. Pedantic, no-slop, breadcrumbs, docs, naming, style, comment, and structural convention findings are first-class review findings when confirmed. Group them under LOW, but include every one.
 
 Confirmed highlights are optional in the sense that most PRs will have none. Do not pad the section with borderline calls. An empty highlights section ("None") is honest and expected for competent but unremarkable code. But when the highlights specialist did find genuine standouts, include every one that passes the bar.
 

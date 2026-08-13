@@ -85,7 +85,7 @@ For changes estimated at 3 points or fewer, skip partitioning — dispatch one s
 
 For each review unit, dispatch sub-agents using the Task tool. Each sub-agent runs one specialist lens on one review unit. The seven specialists are:
 
-1. **Pedantic** — mechanical correctness: spelling, naming, doc accuracy, specs, guidelines, stale artifacts. Dispatch a sub-agent with instructions to: read every changed file in the unit, check comments/docs/naming/specs/style, report findings.
+1. **Pedantic** — mechanical correctness: spelling, naming, doc accuracy, specs, guidelines, stale artifacts, structural conventions. Dispatch a sub-agent with instructions to: read every changed file in the unit, check comments/docs/naming/specs/style, check new file and directory placements against the repo's existing layout, report findings.
 
 2. **Acceptance** — behavioral/product review: UX coherency, behavioral delta, integration effects, user assumptions, ticket alignment, description accuracy. Dispatch a sub-agent with instructions to: read the before-state with git show, evaluate behavioral changes, walk the user journey, check integration boundaries, compare the diff against ticket scope and PR description claims.
 
@@ -124,7 +124,7 @@ Pass the synthesizer:
 
 The final user-facing report MUST begin with a concise explanation of the workflow(s) this PR changes before listing findings. Use one `### Workflow changes` section, with one subheading per affected workflow when there are multiple. Use the before/now walkthrough shape from the thatch-pr-description skill: numbered step = existing behavior; `NOW` sub-bullet = what the PR changes; `N/A` for new stages. This gives the user a map of the change before the findings. Keep it short: 3-6 steps per workflow.
 
-Confirmed LOW findings are mandatory in the final report, including mechanical findings (pedantic, no-slop, breadcrumbs, docs, naming, style, comments). Do not omit them for being non-functional.
+Confirmed LOW findings are mandatory in the final report, including mechanical findings (pedantic, no-slop, breadcrumbs, docs, naming, style, comments, structural conventions). Do not omit them for being non-functional.
 
 Confirmed highlights (from the highlights specialist) appear in a `### Highlights` section after the workflow changes and before the confirmed findings. Most PRs will have none — that is expected. Do not pad with borderline calls. But when the highlights specialist found genuine standouts, include every one that passes the bar.
 
