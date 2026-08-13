@@ -113,6 +113,14 @@ For each comment, attempt to determine whether it has been addressed in the **cu
 
 The register produced here is a **preliminary** classification. The synthesizer produces the final cross-reference, including any prelim-status overrides when new findings from the specialist round reproduce or refute a prior comment.
 
+### 9. Repo structure conventions (implicit)
+Directory structure conventions are often undocumented. They live in the repo's layout itself, not in a CONTRIBUTING.md. Look at the directory tree to identify how the repo organizes code:
+- `git ls-files | head -50` or `ls` at the top level to see the organizational pattern
+- For multi-app repos, identify whether shared packages live inside app directories or at the repo root
+- Note the pattern in the context brief under "Relevant constraints"
+
+This gives the pedantic specialist the structural context without having to discover the pattern independently.
+
 ## Context brief format
 
 Produce a structured brief:
@@ -139,6 +147,7 @@ List each deferred piece:
 ### Relevant constraints
 - Design decisions or architectural constraints from memories or docs
 - Conventions that reviewers should be aware of
+- **Structural conventions**: Where packages, modules, and components belong in the repo's directory layout. From docs if documented, from the directory tree if implicit. Note the specificity rule: if the repo has a top-level pattern but a specific app has its own layout, the app's layout governs files within that app.
 
 ### Prior review comments (only when the change has a connected PR/MR with prior reviews)
 
