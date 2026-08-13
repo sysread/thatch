@@ -37,20 +37,20 @@ you're working in. Prior sessions may have already investigated it.
 Thatch ships skills for code review, project investigation, and memory
 workflows. The host auto-discovers them, but reach for them proactively:
 
-- \`thatch-code-review\` — full multi-agent code review (dispatches 7 specialists + synthesizer). Requires sub-agent support.
-- \`thatch-review-followup\` — alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed prior findings, offers to reply on resolved items, then optionally re-runs the full structured review.
-- \`thatch-code-archaeology\` — investigate an existing feature, debug an unfamiliar area, or begin a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features) before proposing changes. The research skill; pair with \`thatch-coding-workflow\`.
-- \`thatch-change-walkthrough\` — produces a teaching walkthrough of a diff with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + change overlay mirroring the same numbers) and calibrated prose rules. Load the skill for the format and prose rules, not just for the research method.
-- \`thatch-code-walkthrough\` — produces a teaching walkthrough for a feature/workflow as it stands today with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + Key files) and calibrated prose rules. Also use proactively to draft high-level docs for new or undocumented features (suitable for pkg/README.md or docs/features/<name>.md). Load the skill for the format and prose rules, not just for the research method.
-- \`thatch-review-context\` — gather project context (PRs, tickets, TODOs, deferred work) before a review.
-- \`thatch-project-primer\` — investigate a new project and write foundational memories.
-- \`thatch-session-reflection\` — record what you learned at end of session.
-- \`thatch-fact-extractor\` — extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
-- \`thatch-dedup-classifier\` — resolve duplicate memory pairs from \`thatch_find_duplicates\`.
-- \`thatch-pr-description\` — draft a PR description with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis on the phrases that carry the meaning.
-- \`thatch-ticket-description\` — draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
-- \`thatch-split-overlarge-pr\` — split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
-- \`thatch-review-response\` — respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
+- \`thatch-code-review\` - full multi-agent code review (dispatches 7 specialists + synthesizer). Requires sub-agent support.
+- \`thatch-review-followup\` - alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed prior findings, offers to reply on resolved items, then optionally re-runs the full structured review.
+- \`thatch-code-archaeology\` - investigate an existing feature, debug an unfamiliar area, or begin a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features) before proposing changes. The research skill; pair with \`thatch-coding-workflow\`.
+- \`thatch-change-walkthrough\` - produces a teaching walkthrough of a diff with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + change overlay mirroring the same numbers) and calibrated prose rules. Load the skill for the format and prose rules, not just for the research method.
+- \`thatch-code-walkthrough\` - produces a teaching walkthrough for a feature/workflow as it stands today with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + Key files) and calibrated prose rules. Also use proactively to draft high-level docs for new or undocumented features (suitable for pkg/README.md or docs/features/<name>.md). Load the skill for the format and prose rules, not just for the research method.
+- \`thatch-review-context\` - gather project context (PRs, tickets, TODOs, deferred work) before a review.
+- \`thatch-project-primer\` - investigate a new project and write foundational memories.
+- \`thatch-session-reflection\` - record what you learned at end of session.
+- \`thatch-fact-extractor\` - extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
+- \`thatch-dedup-classifier\` - resolve duplicate memory pairs from \`thatch_find_duplicates\`.
+- \`thatch-pr-description\` - draft a PR description with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis on the phrases that carry the meaning.
+- \`thatch-ticket-description\` - draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
+- \`thatch-split-overlarge-pr\` - split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
+- \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 
 ## When to Write
 
@@ -62,8 +62,8 @@ current state of the code).
 
 ## Before Responding
 
-Before composing a final response after substantial work this turn — multiple
-rounds of tool calls for investigation, debugging, or code-writing — check
+Before composing a final response after substantial work this turn - multiple
+rounds of tool calls for investigation, debugging, or code-writing - check
 whether you've discovered knowledge worth persisting. Use thatch_memory_recall
 to check for duplicates, then thatch_memory_remember for new findings. Then
 deliver your response.
@@ -71,7 +71,7 @@ deliver your response.
 ## Background Task Completions
 
 When a background task completes and its result is injected into the session,
-the completion is informational — it is not user input and not approval to
+the completion is informational - it is not user input and not approval to
 proceed with anything you were discussing. Do not narrate what the task did or
 summarize its output. If you were mid-conversation with the user, continue
 that thread. If the user's last message has been fully addressed, stop and
@@ -80,7 +80,7 @@ not greenlit.
 
 If a background task was cancelled after timing out, re-dispatch it once with
 the same prompt. If the re-dispatch also fails or times out, note the gap and
-move on. Do not retry more than once — repeated failures indicate an
+move on. Do not retry more than once - repeated failures indicate an
 intractable prompt, not a transient hang.
 
 ## User Decision Model
@@ -148,7 +148,7 @@ do not save it. Do not store:
 
 ## Archived Memories
 
-Memories can be marked \`archived\` — a flag for stable, long-term historical
+Memories can be marked \`archived\` - a flag for stable, long-term historical
 records that should not trigger hygiene nudges (stale, orphaned, duplicate).
 Archived memories are excluded from search/recall results by default; pass
 \`includeArchived: true\` to surface them for archaeological dives.
@@ -156,25 +156,25 @@ Archived memories are excluded from search/recall results by default; pass
 When a branch is merged or about to be deleted, consolidate its branch-scoped
 memories into a single archived memory scoped to that same branch (preserving
 provenance). Capture intent, design decisions, review back-and-forth, PR
-number, unexpected pivots — the kind of git-archaeology context that explains
+number, unexpected pivots - the kind of git-archaeology context that explains
 _why_ the code looks the way it does a year from now. Then memory_forget the
 originals. The archived record outlives the branch. Future sessions searching
 with \`includeArchived: true\` can pull it up when investigating ambiguous code.
 
-Updating an archived memory requires passing \`archived\` explicitly — omit it
+Updating an archived memory requires passing \`archived\` explicitly - omit it
 and the tool returns an error. Pass \`archived: true\` to keep it archived,
 \`archived: false\` to unarchive.
 
 ## Explicit Requests
 
-"Remember X" — save immediately.
-"Forget X" — thatch_memory_recall to find it, then thatch_memory_forget.`;
+"Remember X" - save immediately.
+"Forget X" - thatch_memory_recall to find it, then thatch_memory_forget.`;
 }
 
 export function compactionContext(repo: string): string {
   return `Thatch persistent memory is active with stores "${repo}" and "global".
 When summarizing, preserve context about what's been learned and decided
-this session — conventions, architectural decisions, and prior knowledge
+this session - conventions, architectural decisions, and prior knowledge
 retrieved from memory. This ensures continuity after compaction.`;
 }
 
@@ -200,7 +200,7 @@ When convenient this session (not before addressing the user's request), tend th
  * start. The repo store name is auto-detected at runtime by the MCP server, so
  * the instructions don't need it.
  *
- * Tool names use the bare form (memory_remember, memory_recall, etc.) — in
+ * Tool names use the bare form (memory_remember, memory_recall, etc.) - in
  * Claude Code they're prefixed as mcp__thatch__memory_remember, but the bare
  * names are what the agent searches for and what the instructions reference.
  */
@@ -241,20 +241,20 @@ you're working in. Prior sessions may have already investigated it.
 Thatch ships skills for code review, project investigation, and memory
 workflows. The host auto-discovers them, but reach for them proactively:
 
-- \`thatch-code-archaeology\` — investigate an existing feature, debug an unfamiliar area, or begin a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features) before proposing changes. The research skill; pair with \`thatch-coding-workflow\`.
-- \`thatch-change-walkthrough\` — produces a teaching walkthrough of a diff with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + change overlay mirroring the same numbers) and calibrated prose rules. Load the skill for the format and prose rules, not just for the research method.
-- \`thatch-code-walkthrough\` — produces a teaching walkthrough for a feature/workflow as it stands today with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + Key files) and calibrated prose rules. Also use proactively to draft high-level docs for new or undocumented features (suitable for pkg/README.md or docs/features/<name>.md). Load the skill for the format and prose rules, not just for the research method.
-- \`thatch-review-context\` — gather project context (PRs, tickets, TODOs, deferred work) before a review.
-- \`thatch-review-followup\` — alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed prior findings, offers to reply on resolved items, then optionally re-runs the full structured review.
-- \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-no-slop\` / \`-breadcrumbs\` / \`-mark-and-sweep\` / \`-highlights\` — seven specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
-- \`thatch-project-primer\` — investigate a new project and write foundational memories.
-- \`thatch-session-reflection\` — record what you learned at end of session.
-- \`thatch-fact-extractor\` — extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
-- \`thatch-dedup-classifier\` — resolve duplicate memory pairs from \`find_duplicates\`.
-- \`thatch-pr-description\` — draft a PR description with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis on the phrases that carry the meaning.
-- \`thatch-ticket-description\` — draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
-- \`thatch-split-overlarge-pr\` — split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
-- \`thatch-review-response\` — respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
+- \`thatch-code-archaeology\` - investigate an existing feature, debug an unfamiliar area, or begin a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features) before proposing changes. The research skill; pair with \`thatch-coding-workflow\`.
+- \`thatch-change-walkthrough\` - produces a teaching walkthrough of a diff with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + change overlay mirroring the same numbers) and calibrated prose rules. Load the skill for the format and prose rules, not just for the research method.
+- \`thatch-code-walkthrough\` - produces a teaching walkthrough for a feature/workflow as it stands today with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + Key files) and calibrated prose rules. Also use proactively to draft high-level docs for new or undocumented features (suitable for pkg/README.md or docs/features/<name>.md). Load the skill for the format and prose rules, not just for the research method.
+- \`thatch-review-context\` - gather project context (PRs, tickets, TODOs, deferred work) before a review.
+- \`thatch-review-followup\` - alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed prior findings, offers to reply on resolved items, then optionally re-runs the full structured review.
+- \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-no-slop\` / \`-breadcrumbs\` / \`-mark-and-sweep\` / \`-highlights\` - seven specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
+- \`thatch-project-primer\` - investigate a new project and write foundational memories.
+- \`thatch-session-reflection\` - record what you learned at end of session.
+- \`thatch-fact-extractor\` - extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
+- \`thatch-dedup-classifier\` - resolve duplicate memory pairs from \`find_duplicates\`.
+- \`thatch-pr-description\` - draft a PR description with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis on the phrases that carry the meaning.
+- \`thatch-ticket-description\` - draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
+- \`thatch-split-overlarge-pr\` - split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
+- \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 
 ## When to Write
 
@@ -266,8 +266,8 @@ current state of the code).
 
 ## Before Responding
 
-Before composing a final response after substantial work this turn — multiple
-rounds of tool calls for investigation, debugging, or code-writing — check
+Before composing a final response after substantial work this turn - multiple
+rounds of tool calls for investigation, debugging, or code-writing - check
 whether you've discovered knowledge worth persisting. Use memory_recall to
 check for duplicates, then memory_remember for new findings. Then deliver
 your response.
@@ -337,7 +337,7 @@ do not save it. Do not store:
 
 ## Archived Memories
 
-Memories can be marked \`archived\` — a flag for stable, long-term historical
+Memories can be marked \`archived\` - a flag for stable, long-term historical
 records that should not trigger hygiene nudges (stale, orphaned, duplicate).
 Archived memories are excluded from search/recall results by default; pass
 \`includeArchived: true\` to surface them for archaeological dives.
@@ -345,19 +345,19 @@ Archived memories are excluded from search/recall results by default; pass
 When a branch is merged or about to be deleted, consolidate its branch-scoped
 memories into a single archived memory scoped to that same branch (preserving
 provenance). Capture intent, design decisions, review back-and-forth, PR
-number, unexpected pivots — the kind of git-archaeology context that explains
+number, unexpected pivots - the kind of git-archaeology context that explains
 _why_ the code looks the way it does a year from now. Then memory_forget the
 originals. The archived record outlives the branch. Future sessions searching
 with \`includeArchived: true\` can pull it up when investigating ambiguous code.
 
-Updating an archived memory requires passing \`archived\` explicitly — omit it
+Updating an archived memory requires passing \`archived\` explicitly - omit it
 and the tool returns an error. Pass \`archived: true\` to keep it archived,
 \`archived: false\` to unarchive.
 
 ## Explicit Requests
 
-"Remember X" — save immediately.
-"Forget X" — \`memory_recall\` to find it, then \`memory_forget\`.`;
+"Remember X" - save immediately.
+"Forget X" - \`memory_recall\` to find it, then \`memory_forget\`.`;
 }
 
 /**
@@ -405,7 +405,7 @@ export function extractionNudge(
   const plural = count === 1 ? "" : "s";
   // opencode's task tool has a `background` parameter (requires
   // OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true) that launches the sub-agent
-  // asynchronously — the call returns immediately and the session is notified
+  // asynchronously - the call returns immediately and the session is notified
   // on completion. Naming the parameter gives the model a direct hit on the tool
   // schema it sees. MCP hosts (Claude Code, Cursor) keep generic sub-agent
   // wording because their background mechanisms differ and are not exposed as a
@@ -445,7 +445,7 @@ export function extractionNudge(
  * Prompt text sent directly to a child session the plugin created for
  * extraction. Unlike extractionNudge (which tells the model to dispatch a
  * sub-agent and call extraction_done), this prompt is already inside the
- * child — the model just runs the fact-extractor skill and saves facts.
+ * child - the model just runs the fact-extractor skill and saves facts.
  * The payload format is identical to the nudge path so the skill receives
  * the same contract either way.
  */
@@ -469,7 +469,7 @@ export function claudeExtractionNudge(count: number, payload: string): string {
 
 /**
  * Static instructions for Cursor's AGENTS.md. Same contract as
- * claudeInstructions() — the host loads this at every session start, and the
+ * claudeInstructions() - the host loads this at every session start, and the
  * repo store name is auto-detected at runtime by the MCP server. Tool names
  * use the same mcp__thatch__ prefix since Cursor discovers MCP tools via the
  * same protocol.
@@ -511,20 +511,20 @@ you're working in. Prior sessions may have already investigated it.
 Thatch ships skills for code review, project investigation, and memory
 workflows. The host auto-discovers them, but reach for them proactively:
 
-- \`thatch-code-archaeology\` — investigate an existing feature, debug an unfamiliar area, or begin a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features) before proposing changes. The research skill; pair with \`thatch-coding-workflow\`.
-- \`thatch-change-walkthrough\` — produces a teaching walkthrough of a diff with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + change overlay mirroring the same numbers) and calibrated prose rules. Load the skill for the format and prose rules, not just for the research method.
-- \`thatch-code-walkthrough\` — produces a teaching walkthrough for a feature/workflow as it stands today with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + Key files) and calibrated prose rules. Also use proactively to draft high-level docs for new or undocumented features (suitable for pkg/README.md or docs/features/<name>.md). Load the skill for the format and prose rules, not just for the research method.
-- \`thatch-review-context\` — gather project context (PRs, tickets, TODOs, deferred work) before a review.
-- \`thatch-review-followup\` — alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed prior findings, offers to reply on resolved items, then optionally re-runs the full structured review.
-- \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-no-slop\` / \`-breadcrumbs\` / \`-mark-and-sweep\` / \`-highlights\` — seven specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
-- \`thatch-project-primer\` — investigate a new project and write foundational memories.
-- \`thatch-session-reflection\` — record what you learned at end of session.
-- \`thatch-fact-extractor\` — extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
-- \`thatch-dedup-classifier\` — resolve duplicate memory pairs from \`find_duplicates\`.
-- \`thatch-pr-description\` — draft a PR description with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis on the phrases that carry the meaning.
-- \`thatch-ticket-description\` — draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
-- \`thatch-split-overlarge-pr\` — split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
-- \`thatch-review-response\` — respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
+- \`thatch-code-archaeology\` - investigate an existing feature, debug an unfamiliar area, or begin a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features) before proposing changes. The research skill; pair with \`thatch-coding-workflow\`.
+- \`thatch-change-walkthrough\` - produces a teaching walkthrough of a diff with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + change overlay mirroring the same numbers) and calibrated prose rules. Load the skill for the format and prose rules, not just for the research method.
+- \`thatch-code-walkthrough\` - produces a teaching walkthrough for a feature/workflow as it stands today with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + Key files) and calibrated prose rules. Also use proactively to draft high-level docs for new or undocumented features (suitable for pkg/README.md or docs/features/<name>.md). Load the skill for the format and prose rules, not just for the research method.
+- \`thatch-review-context\` - gather project context (PRs, tickets, TODOs, deferred work) before a review.
+- \`thatch-review-followup\` - alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed prior findings, offers to reply on resolved items, then optionally re-runs the full structured review.
+- \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-no-slop\` / \`-breadcrumbs\` / \`-mark-and-sweep\` / \`-highlights\` - seven specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
+- \`thatch-project-primer\` - investigate a new project and write foundational memories.
+- \`thatch-session-reflection\` - record what you learned at end of session.
+- \`thatch-fact-extractor\` - extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
+- \`thatch-dedup-classifier\` - resolve duplicate memory pairs from \`find_duplicates\`.
+- \`thatch-pr-description\` - draft a PR description with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis on the phrases that carry the meaning.
+- \`thatch-ticket-description\` - draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
+- \`thatch-split-overlarge-pr\` - split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
+- \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 
 ## When to Write
 
@@ -536,8 +536,8 @@ current state of the code).
 
 ## Before Responding
 
-Before composing a final response after substantial work this turn — multiple
-rounds of tool calls for investigation, debugging, or code-writing — check
+Before composing a final response after substantial work this turn - multiple
+rounds of tool calls for investigation, debugging, or code-writing - check
 whether you've discovered knowledge worth persisting. Use memory_recall to
 check for duplicates, then memory_remember for new findings. Then deliver
 your response.
@@ -607,7 +607,7 @@ do not save it. Do not store:
 
 ## Archived Memories
 
-Memories can be marked \`archived\` — a flag for stable, long-term historical
+Memories can be marked \`archived\` - a flag for stable, long-term historical
 records that should not trigger hygiene nudges (stale, orphaned, duplicate).
 Archived memories are excluded from search/recall results by default; pass
 \`includeArchived: true\` to surface them for archaeological dives.
@@ -615,23 +615,23 @@ Archived memories are excluded from search/recall results by default; pass
 When a branch is merged or about to be deleted, consolidate its branch-scoped
 memories into a single archived memory scoped to that same branch (preserving
 provenance). Capture intent, design decisions, review back-and-forth, PR
-number, unexpected pivots — the kind of git-archaeology context that explains
+number, unexpected pivots - the kind of git-archaeology context that explains
 _why_ the code looks the way it does a year from now. Then memory_forget the
 originals. The archived record outlives the branch. Future sessions searching
 with \`includeArchived: true\` can pull it up when investigating ambiguous code.
 
-Updating an archived memory requires passing \`archived\` explicitly — omit it
+Updating an archived memory requires passing \`archived\` explicitly - omit it
 and the tool returns an error. Pass \`archived: true\` to keep it archived,
 \`archived: false\` to unarchive.
 
 ## Explicit Requests
 
-"Remember X" — save immediately.
-"Forget X" — \`memory_recall\` to find it, then \`memory_forget\`.`;
+"Remember X" - save immediately.
+"Forget X" - \`memory_recall\` to find it, then \`memory_forget\`.`;
 }
 
 // ---------------------------------------------------------------------------
-// Prompt-aware recall nudge — fires when the user's prompt semantically
+// Prompt-aware recall nudge - fires when the user's prompt semantically
 // matches existing memories. Injected via opencode's chat.message hook
 // (in-process, warm model) or via the sideband socket for Claude Code/Cursor
 // (flush-tools CLI subcommand).

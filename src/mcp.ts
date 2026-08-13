@@ -39,14 +39,14 @@ const SERVER_VERSION = pkg.version;
 
 /**
  * MCP capabilities declared in the initialize response. Thatch is a tools-only
- * server — no resources, prompts, or subscriptions.
+ * server - no resources, prompts, or subscriptions.
  */
 const CAPABILITIES = {
   tools: { listChanged: false },
 };
 
 // ---------------------------------------------------------------------------
-// Tool index — builds validators and JSON Schema once at server startup
+// Tool index - builds validators and JSON Schema once at server startup
 // ---------------------------------------------------------------------------
 
 interface CompiledTool {
@@ -74,7 +74,7 @@ function compileTools(): Map<string, CompiledTool> {
 
 /**
  * Runs the thatch MCP server over stdio. Reads newline-delimited JSON-RPC from
- * stdin, writes responses to stdout. All diagnostics go to stderr — any stray
+ * stdin, writes responses to stdout. All diagnostics go to stderr - any stray
  * output on stdout corrupts the protocol.
  *
  * Repo identity is resolved from CLAUDE_PROJECT_DIR (set by Claude Code for
@@ -113,7 +113,7 @@ export async function runMcpServer(): Promise<void> {
   }
 
   // The sideband socket lets one-shot hook processes (flush-tools) ask the
-  // warm MCP server to embed a prompt and search for matches — without
+  // warm MCP server to embed a prompt and search for matches - without
   // loading the ~34 MB model themselves. If the socket can't be opened
   // (permissions, tmpdir issues), the MCP server still works; only the
   // prompt-aware recall nudge degrades.
@@ -146,7 +146,7 @@ export async function runMcpServer(): Promise<void> {
         continue;
       }
 
-      // Notifications (no id) are fire-and-forget — no response expected.
+      // Notifications (no id) are fire-and-forget - no response expected.
       const isNotification = req.id === null || req.id === undefined;
       const res = await dispatch(req, tools, ctx);
       if (res === null || isNotification) continue;

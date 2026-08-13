@@ -66,7 +66,7 @@ export class SidebandServer {
     try {
       unlinkSync(this.#path);
     } catch {
-      // No stale socket — expected on first run.
+      // No stale socket - expected on first run.
     }
 
     this.#server = createServer((socket) => {
@@ -103,7 +103,7 @@ export class SidebandServer {
       this.#handleRequest(line, socket);
     });
     socket.on("error", () => {
-      // Client disconnected abruptly — nothing to do.
+      // Client disconnected abruptly - nothing to do.
     });
   }
 
@@ -155,7 +155,7 @@ export class SidebandServer {
 
 /**
  * Connect to the sideband server and request semantic matches for a prompt.
- * Returns null on any failure (server not running, stale socket, timeout) —
+ * Returns null on any failure (server not running, stale socket, timeout) -
  * callers must treat null as "skip the recall nudge" and fall back gracefully.
  */
 export function sidebandMatch(

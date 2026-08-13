@@ -64,7 +64,7 @@ export function truncate(text: string, maxLen: number): string {
  * thatch-fact-extractor skill expects. Shared by the opencode plugin path
  * (in-memory buffer) and the Claude Code CLI path (file-backed queue) so the
  * extractor sees an identical contract regardless of host. The agent itself
- * does the actual fact extraction — this function only collects and serializes.
+ * does the actual fact extraction - this function only collects and serializes.
  */
 export function buildExtractionPayload(
   interactions: ToolInteraction[],
@@ -113,7 +113,7 @@ export class ExtractionPipeline {
 
   /**
    * Accept the session's buffer: move it to a holding area so the nudge
-   * stops replaying while a dispatched extractor works. AMQP-style accept —
+   * stops replaying while a dispatched extractor works. AMQP-style accept -
    * the entries are not dropped until a completion signal arrives (the
    * extractor writes a memory, calls extraction_done, or goes idle). If the
    * extractor dies first, requeueAccepted puts them back.
@@ -135,7 +135,7 @@ export class ExtractionPipeline {
    * Move accepted entries back to pending: the extractor errored or its
    * session was deleted before completing, so the facts were never
    * processed. Prepended so they replay in original order. Not capped at
-   * maxBuffer — a silent drop here would defeat the point of requeueing;
+   * maxBuffer - a silent drop here would defeat the point of requeueing;
    * the next push trims back to the cap.
    */
   requeueAccepted(sessionID: string): void {
@@ -155,7 +155,7 @@ export class ExtractionPipeline {
    * Remove entries that were in the snapshot (by reference identity), keeping
    * any that arrived after the snapshot was taken. Used by the child-parent
    * drain: when a sub-agent writes a memory, only the entries present at
-   * dispatch time should be drained — not the entire buffer, which may now
+   * dispatch time should be drained - not the entire buffer, which may now
    * contain interleaved-turn entries the parent accumulated while the
    * sub-agent was running.
    */

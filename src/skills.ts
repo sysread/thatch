@@ -67,7 +67,7 @@ export const SHARED_SKILLS: SkillDef[] = loadSharedSkills();
 export const OPENCODE_ONLY_SKILLS: SkillDef[] = loadOpencodeOnlySkills();
 
 // ---------------------------------------------------------------------------
-// Stale skill cleanup — runs before install on every skillsDir
+// Stale skill cleanup - runs before install on every skillsDir
 // ---------------------------------------------------------------------------
 
 // Skills renamed from non-prefixed to thatch-prefixed in v0.1.27. The old
@@ -101,7 +101,7 @@ function compareVersions(a: string, b: string): number {
  * Two cleanup rules:
  *
  * 1. Always: delete any `thatch-*` skill directory that is not in the current
- *    install set. The `thatch-` prefix is our namespace — no third party should
+ *    install set. The `thatch-` prefix is our namespace - no third party should
  *    use it, so unconditional removal is safe. This catches skills we've
  *    renamed or removed in any release.
  *
@@ -117,7 +117,7 @@ function cleanupStaleSkills(skillsDir: string, currentNames: string[]): void {
   try {
     entries = readdirSync(skillsDir, { withFileTypes: true });
   } catch {
-    return; // dir doesn't exist or isn't readable — nothing to clean
+    return; // dir doesn't exist or isn't readable - nothing to clean
   }
 
   const withinMigrationWindow =
@@ -125,13 +125,13 @@ function cleanupStaleSkills(skillsDir: string, currentNames: string[]): void {
 
   for (const entry of entries) {
     // isDirectory() returns false for symlinks (even symlinked dirs), so
-    // check isSymbolicLink() too — a symlinked skill dir is just as stale
+    // check isSymbolicLink() too - a symlinked skill dir is just as stale
     // as a regular one.
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     const name = entry.name;
     const fullPath = join(skillsDir, name);
 
-    // Remove a stale entry. For symlinks, unlink the symlink itself — never
+    // Remove a stale entry. For symlinks, unlink the symlink itself - never
     // follow the link, which could delete the target (e.g. a shared skill
     // directory the user still wants). For regular dirs, recursive rm.
     const remove = () => {
@@ -142,7 +142,7 @@ function cleanupStaleSkills(skillsDir: string, currentNames: string[]): void {
           rmSync(fullPath, { recursive: true, force: true });
         }
       } catch {
-        // best-effort — don't block install on cleanup failure
+        // best-effort - don't block install on cleanup failure
       }
     };
 
@@ -176,7 +176,7 @@ export function installSkills(
     try {
       current = readFileSync(file, "utf8");
     } catch {
-      // missing file — first install
+      // missing file - first install
     }
 
     if (current !== skill.content) {

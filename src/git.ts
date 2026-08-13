@@ -84,7 +84,7 @@ export async function detectRepo(cwd?: string): Promise<string> {
 /**
  * Local branch names in the given directory's repository. Used to detect
  * branch-scoped memories whose branch no longer exists. Returns [] outside
- * a git repo — callers must treat that as "unknown", not "no branches",
+ * a git repo - callers must treat that as "unknown", not "no branches",
  * or every branch-scoped memory would look orphaned.
  */
 export async function listBranches(cwd: string): Promise<string[]> {

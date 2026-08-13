@@ -27,7 +27,7 @@ export async function hygieneReport(
   }
 
   // listBranches returns [] outside a git repo, which would make every
-  // branch-scoped memory look orphaned — skip the check in that case.
+  // branch-scoped memory look orphaned - skip the check in that case.
   const scoped = db.branchesInStore(repo);
   if (scoped.length > 0) {
     const live = await listBranches(worktree);

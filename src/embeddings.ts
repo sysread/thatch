@@ -1,5 +1,5 @@
 // BGE-small-en-v1.5 requires a query prefix for asymmetric search.
-// Passage (memory content) gets no prefix — the model was trained
+// Passage (memory content) gets no prefix - the model was trained
 // to encode passages without instruction.
 const QUERY_PREFIX =
   "Represent this sentence for searching relevant passages: ";
@@ -86,7 +86,7 @@ export class BgeEmbeddingModel implements EmbeddingModel {
 /**
  * Mock embedding model for tests. Returns deterministic vectors derived from
  * a hash of the input text via xorshift, so identical texts embed identically
- * and distinct texts land near-orthogonal — mirroring how unrelated content
+ * and distinct texts land near-orthogonal - mirroring how unrelated content
  * behaves in a real embedding space. Never loads a model or touches the network.
  */
 export class MockEmbeddingModel implements EmbeddingModel {
