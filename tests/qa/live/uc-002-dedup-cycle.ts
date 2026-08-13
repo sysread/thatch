@@ -30,7 +30,7 @@ const useCase: UseCase = {
     "  the pair becomes eligible for re-reporting.",
     "- Forgetting a memory clears all verdicts involving it.",
   ].join("\n"),
-  // No custom run — uses default runViaOpencode.
+  manualOnly: true,
 };
 
 registerUseCase(useCase);

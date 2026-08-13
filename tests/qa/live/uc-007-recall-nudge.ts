@@ -36,7 +36,7 @@ const useCase: UseCase = {
     "  returned labels become a nudge using the bare `memory_recall` name. With the MCP server down,",
     "  the recall nudge is absent (UC-009 covers the write-nudge fallback).",
   ].join("\n"),
-  // No custom run — uses default runViaOpencode.
+  manualOnly: true,
 };
 
 registerUseCase(useCase);
