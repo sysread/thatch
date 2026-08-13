@@ -41,7 +41,7 @@ const useCase: UseCase = {
     "- `find_duplicates` does not surface archived memories as candidates.",
     "- `staleEntryCount` (hygiene) does not count archived memories as stale.",
   ].join("\n"),
-  // No custom run — uses default runViaOpencode.
+  manualOnly: true,
 };
 
 registerUseCase(useCase);
