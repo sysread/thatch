@@ -22,7 +22,7 @@ interface SetupPaths {
 
 /**
  * Resolve the Claude config directory. `CLAUDE_CONFIG_DIR` overrides the
- * default `~/.claude` location — used by people running multiple accounts
+ * default `~/.claude` location - used by people running multiple accounts
  * side by side (per Claude Code env-vars docs). Settings, CLAUDE.md, and
  * skills are all stored under this path in global scope. Project-local
  * installs only use it for skills (which are always user-scoped); the
@@ -41,7 +41,7 @@ function resolvePaths(global: boolean, projectDir: string, homeDir: string): Set
       mcpConfigPath: null,
       // Per Claude Code settings docs, user-scope CLAUDE.md lives at
       // `~/.claude/CLAUDE.md` (or `$CLAUDE_CONFIG_DIR/CLAUDE.md` when the
-      // env var is set) — NOT `~/CLAUDE.md`. Honoring CLAUDE_CONFIG_DIR
+      // env var is set) - NOT `~/CLAUDE.md`. Honoring CLAUDE_CONFIG_DIR
       // here also fixes a pre-existing bug where we wrote to `~/CLAUDE.md`.
       claudeMdPath: join(configDir, "CLAUDE.md"),
       settingsPath: join(configDir, "settings.json"),
@@ -55,14 +55,14 @@ function resolvePaths(global: boolean, projectDir: string, homeDir: string): Set
     claudeMdPath: join(projectDir, "CLAUDE.md"),
     settingsPath: join(projectDir, ".claude", "settings.json"),
     // Skills are always user-scoped, so they always live under the config
-    // dir — even when settings and CLAUDE.md are project-local.
+    // dir - even when settings and CLAUDE.md are project-local.
     skillsDir,
     global: false,
   };
 }
 
 // ---------------------------------------------------------------------------
-// .mcp.json — MCP server registration
+// .mcp.json - MCP server registration
 // ---------------------------------------------------------------------------
 
 function writeMcpConfig(path: string, thatchBin: string): void {
@@ -71,7 +71,7 @@ function writeMcpConfig(path: string, thatchBin: string): void {
     try {
       config = JSON.parse(readFileSync(path, "utf8"));
     } catch {
-      // Corrupt or empty — start fresh.
+      // Corrupt or empty - start fresh.
     }
   }
   if (!config.mcpServers) config.mcpServers = {};
@@ -87,11 +87,11 @@ function writeMcpConfig(path: string, thatchBin: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// CLAUDE.md — append thatch instructions (idempotent)
+// CLAUDE.md - append thatch instructions (idempotent)
 // ---------------------------------------------------------------------------
 
 const THATCH_MARKER = "# Persistence\n\nThatch provides persistent memory across Claude Code sessions.";
-const THATCH_END_MARKER = '"Forget X" — `memory_recall` to find it, then `memory_forget`.';
+const THATCH_END_MARKER = '"Forget X" - `memory_recall` to find it, then `memory_forget`.';
 const CURSOR_MARKER = "# Persistence\n\nThatch provides persistent memory across Cursor sessions.";
 const CURSOR_END_MARKER = THATCH_END_MARKER;
 
@@ -119,7 +119,7 @@ function appendBlock(
           return;
         }
       }
-      // Marker found but block boundaries didn't parse — leave it alone.
+      // Marker found but block boundaries didn't parse - leave it alone.
       return;
     }
     // Append to existing file.
@@ -140,7 +140,7 @@ function appendCursorInstructions(path: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// settings.json — hook installation
+// settings.json - hook installation
 // ---------------------------------------------------------------------------
 
 interface HookEntry {
@@ -163,14 +163,14 @@ function writeHooks(path: string, thatchBin: string): void {
     try {
       settings = JSON.parse(readFileSync(path, "utf8"));
     } catch {
-      // Corrupt — start fresh.
+      // Corrupt - start fresh.
     }
   }
   if (!settings.hooks) settings.hooks = {};
 
   const sessionStartCmd = `${thatchBin} reminder`;
   // PostToolBatch silently buffers tool interactions to the file-backed queue
-  // (see src/extract-queue.ts). No stdout — the next model call must not block
+  // (see src/extract-queue.ts). No stdout - the next model call must not block
   // on a payload that should be invisible to the agent until UserPromptSubmit.
   const bufferCmd = `${thatchBin} buffer-batch`;
   // UserPromptSubmit peeks the queue. With buffered interactions, it prints
@@ -209,7 +209,7 @@ function replaceThatchHooks(
 }
 
 // ---------------------------------------------------------------------------
-// Skills — install to $CLAUDE_CONFIG_DIR/skills/ (or ~/.claude/skills/ by default)
+// Skills - install to $CLAUDE_CONFIG_DIR/skills/ (or ~/.claude/skills/ by default)
 // ---------------------------------------------------------------------------
 
 function installClaudeSkills(skillsDir: string): SkillFile[] {
@@ -233,7 +233,7 @@ export interface SetupResult {
 /**
  * Installs thatch into Claude Code. Writes MCP config, appends instructions to
  * CLAUDE.md, installs SessionStart + PostToolBatch + UserPromptSubmit hooks,
- * and installs skill files. All operations are idempotent — re-running setup
+ * and installs skill files. All operations are idempotent - re-running setup
  * updates content that has drifted without clobbering unrelated configuration.
  *
  * Honors `CLAUDE_CONFIG_DIR` for all user-scoped paths (settings, CLAUDE.md,
@@ -276,7 +276,7 @@ export function setupClaudeCode(
 }
 
 // ---------------------------------------------------------------------------
-// Cursor setup — .cursor/mcp.json, AGENTS.md, .cursor/hooks.json, skills
+// Cursor setup - .cursor/mcp.json, AGENTS.md, .cursor/hooks.json, skills
 // ---------------------------------------------------------------------------
 
 /**
@@ -303,7 +303,7 @@ function resolveCursorPaths(global: boolean, projectDir: string, homeDir: string
 
   if (global) {
     return {
-      // Cursor's global MCP config is a simple file — no equivalent of
+      // Cursor's global MCP config is a simple file - no equivalent of
       // `claude mcp add --scope user`. Writing ~/.cursor/mcp.json is enough.
       mcpConfigPath: join(configDir, "mcp.json"),
       agentsMdPath: join(configDir, "AGENTS.md"),
@@ -340,7 +340,7 @@ function writeCursorHooks(path: string, thatchBin: string): void {
     try {
       config = JSON.parse(readFileSync(path, "utf8"));
     } catch {
-      // Corrupt — start fresh.
+      // Corrupt - start fresh.
     }
   }
   if (!config.version) config.version = 1;
@@ -351,7 +351,7 @@ function writeCursorHooks(path: string, thatchBin: string): void {
   // Code style) and Cursor would not parse it.
   const sessionStartCmd = `${thatchBin} reminder --json`;
   // postToolUse fires per-tool (Cursor has no PostToolBatch equivalent).
-  // Silent — no stdout — so the agent loop is not delayed.
+  // Silent - no stdout - so the agent loop is not delayed.
   const bufferCmd = `${thatchBin} buffer-tool`;
   // beforeSubmitPrompt is Cursor's UserPromptSubmit equivalent. Drains the
   // queue and prints the extraction nudge as JSON additional_context.
@@ -422,7 +422,7 @@ export function setupCursor(
 }
 
 // ---------------------------------------------------------------------------
-// Setup detection — check whether setup was completed for the current host
+// Setup detection - check whether setup was completed for the current host
 // ---------------------------------------------------------------------------
 
 export type HostKind = "claude" | "cursor";
@@ -449,7 +449,7 @@ function checkInstructionsFile(path: string, startMarker: string, endMarker: str
  * CLAUDE_PROJECT_DIR for Claude Code) and checks whether `thatch setup` was
  * run for that host. Checks local instructions (in the project dir) first,
  * then global (in the config dir). Returns null if the host cannot be
- * determined (neither env var is set — e.g. manual `thatch mcp` invocation).
+ * determined (neither env var is set - e.g. manual `thatch mcp` invocation).
  */
 export function checkSetup(projectDir: string, homeDir?: string): SetupStatus | null {
   const home = homeDir ?? process.env.HOME ?? "/tmp";

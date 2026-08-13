@@ -27,7 +27,7 @@ export function queueDir(): string {
   return join(cacheHome, "thatch", "queue");
 }
 
-/** Sanitize a session id for use as a filename — UUIDs are already safe. */
+/** Sanitize a session id for use as a filename - UUIDs are already safe. */
 function safeName(sessionID: string): string {
   return sessionID.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
@@ -38,9 +38,9 @@ function queuePath(sessionID: string): string {
 
 /**
  * Buffer a batch of tool calls for later extraction. Filters out:
- * - thatch's own MCP tools (mcp__thatch__*) to avoid self-echo — extracting
+ * - thatch's own MCP tools (mcp__thatch__*) to avoid self-echo - extracting
  *   facts from memory operations would just write the store back into itself.
- * - skill/task/agent meta-tools — these orchestrate agent behavior (loading
+ * - skill/task/agent meta-tools - these orchestrate agent behavior (loading
  *   skills, dispatching sub-agents) and buffering them creates a feedback
  *   loop where the extraction nudge triggers a skill load, which gets
  *   buffered, which triggers another nudge on the next turn.
@@ -116,7 +116,7 @@ function readQueueFile(path: string): ToolInteraction[] {
 }
 
 // ---------------------------------------------------------------------------
-// Missed-nudge counter — file-backed per-session escalation state. Tracks
+// Missed-nudge counter - file-backed per-session escalation state. Tracks
 // consecutive extraction nudges delivered without any memory_remember call.
 // Reset by appendBatch when the agent writes a memory. Read and incremented
 // by flush-tools when the nudge is delivered.

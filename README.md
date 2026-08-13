@@ -27,10 +27,10 @@ immediately. For async extraction (child sessions run in the background):
 export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
 ```
 
-Without this env var, extraction still works — the child session runs
+Without this env var, extraction still works - the child session runs
 synchronously (fire-and-forget) instead of asynchronously.
 
-Then **prime your project memory** with by running `thatch prime` in your project directory.
+Then **prime your project memory** by running `thatch prime` in your project directory.
 This will launch an `opencode` session to build an initial map of the code base and its architecture to seed the memory.
 
 ### Claude Code and Cursor
@@ -99,7 +99,7 @@ embeddings, no network.
 - [Development](docs/dev/README.md) -- architecture, module responsibilities
 - [MCP parity](docs/dev/mcp-parity.md) -- OpenCode plugin vs MCP feature comparison
 - [QA & tests](docs/qa/README.md) -- test conventions, use cases
-- [Design docs](docs/in-progress/) -- in-progress design notes
+- [Design docs](docs/plans/) -- design-decision snapshots and in-progress plans
 
 ## License
 

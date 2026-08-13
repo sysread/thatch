@@ -19,7 +19,7 @@ import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
 import { hygieneReport } from "./hygiene";
 
 // ---------------------------------------------------------------------------
-// V1 server export — tools, prompt injection, session hooks
+// V1 server export - tools, prompt injection, session hooks
 // ---------------------------------------------------------------------------
 
 // Minimum cosine score for the prompt-aware recall nudge. Lower than
@@ -27,7 +27,7 @@ import { hygieneReport } from "./hygiene";
 // than "duplicate." Tunable via THATCH_RECALL_THRESHOLD.
 const RECALL_THRESHOLD = parseFloat(process.env.THATCH_RECALL_THRESHOLD ?? "0.55");
 
-// Prompts shorter than this skip the recall nudge — trivially short prompts
+// Prompts shorter than this skip the recall nudge - trivially short prompts
 // like "yes" or "ok" match too broadly to be useful.
 const MIN_PROMPT_LEN = 10;
 
@@ -50,12 +50,12 @@ export const server: Plugin = async ({ client, worktree }) => {
   const extraction = new ExtractionPipeline();
 
   // Sessions currently being compacted. chat.message nudges are skipped while
-  // a session is in this set — the agent can't call tools during summary
+  // a session is in this set - the agent can't call tools during summary
   // generation, so a recall or extraction nudge would cause a blocked-tool
   // error. Cleared by experimental.compaction.autocontinue (success), the
   // session.compacted event (redundant belt-and-suspenders), or chat.message
   // itself when a non-compaction message arrives (compaction failure fallback
-  // — autocontinue never fired, so the next real user message clears the
+  // - autocontinue never fired, so the next real user message clears the
   // stale flag). If all three somehow miss, the flag leaks (graceful
   // degradation: nudges stay off for that session, but no crash).
   const compacting = new Set<string>();
@@ -78,7 +78,7 @@ export const server: Plugin = async ({ client, worktree }) => {
   // When the child writes a memory, consumeSnapshot drains only these entries
   // (by reference identity), preserving interleaved-turn entries that arrived
   // while the sub-agent was running. Without this, the child's memory_remember
-  // would drain the parent's ENTIRE buffer — silently dropping facts from
+  // would drain the parent's ENTIRE buffer - silently dropping facts from
   // any tool calls the parent made concurrently with the sub-agent.
   const parentSnapshots = new Map<string, ToolInteraction[]>();
 
@@ -108,7 +108,7 @@ export const server: Plugin = async ({ client, worktree }) => {
   // Keyed by child session ID. Cleaned up on child idle, error, or deletion.
   const childMetrics = new Map<string, { new: number; updated: number; deleted: number }>();
 
-  // Skills always install to the global opencode config — installing into the
+  // Skills always install to the global opencode config - installing into the
   // worktree would mutate the user's repo (untracked files in git status).
   // A failed install degrades the nudge workflow but must not kill the plugin.
   try {
@@ -129,7 +129,7 @@ export const server: Plugin = async ({ client, worktree }) => {
   // drain machinery handles buffer cleanup. The nudge path is a fallback if
   // this throws.
   //
-  // Does NOT call extraction.accept — entries stay in pending so consumeSnapshot
+  // Does NOT call extraction.accept - entries stay in pending so consumeSnapshot
   // can drain them by reference identity when the child writes a memory. The
   // extracting set (not accept) suppresses the nudge in chat.message.
   //
@@ -183,7 +183,7 @@ export const server: Plugin = async ({ client, worktree }) => {
         throw err;
       }
     } else {
-      // Fire and forget — the parent is already idle, so blocking the event
+      // Fire and forget - the parent is already idle, so blocking the event
       // handler would only delay other event processing. The child runs to
       // completion and its idle event triggers cleanup.
       client.session
@@ -203,12 +203,12 @@ export const server: Plugin = async ({ client, worktree }) => {
   return {
     tool: createTools(db, model, repo),
 
-    // 1. System prompt — always in context.
+    // 1. System prompt - always in context.
     "experimental.chat.system.transform": async (_input, output) => {
       output.system.push(sys);
     },
 
-    // 2. Compaction context — re-familiarizes after compaction. The flag
+    // 2. Compaction context - re-familiarizes after compaction. The flag
     //    suppresses chat.message nudges during summary generation (tool
     //    calls are blocked there).
     "experimental.session.compacting": async (input, output) => {
@@ -222,15 +222,15 @@ export const server: Plugin = async ({ client, worktree }) => {
       compacting.delete(input.sessionID);
     },
 
-    // 3. Tool buffering — feeds the extraction pipeline (direct extraction
+    // 3. Tool buffering - feeds the extraction pipeline (direct extraction
     //    via SDK or nudge fallback). Excluded tools:
     //    - thatch_*: extracting facts from memory ops would echo the store
     //    - skill/task: meta-tools that orchestrate agent behavior (loading
     //      skills, dispatching sub-agents). Buffering them creates a feedback
-    //      loop — extraction triggers a skill load, which gets buffered, which
+    //      loop - extraction triggers a skill load, which gets buffered, which
     //      triggers another extraction on the next turn.
     //    Memory writes consume the buffer and reset the missed-nudge counter.
-    //    The buffer is NOT drained on nudge delivery — it persists until the
+    //    The buffer is NOT drained on nudge delivery - it persists until the
     //    agent writes a memory, so ignored nudges accumulate and the payload
     //    grows with each missed cycle.
     //
@@ -247,7 +247,7 @@ export const server: Plugin = async ({ client, worktree }) => {
     //      session errors or is deleted before completing.
     //
     //    A memory_remember call in a child session (sub-agent) also drains
-    //    the parent's pending buffer — but only the entries that existed at
+    //    the parent's pending buffer - but only the entries that existed at
     //    dispatch time (the snapshot). Entries from interleaved turns survive
     //    so their facts aren't silently dropped.
     "tool.execute.after": async (input, output) => {
@@ -269,7 +269,7 @@ export const server: Plugin = async ({ client, worktree }) => {
           // from the pending buffer. If no snapshot was recorded (unreachable
           // when childToParent has the entry, since both are set together in
           // session.created), skip the drain rather than dropping the entire
-          // buffer — interleaved-turn entries that arrived while the child
+          // buffer - interleaved-turn entries that arrived while the child
           // was running must survive for the next extraction cycle.
           extraction.completeAccepted(parentID);
           const snapshot = parentSnapshots.get(input.sessionID);
@@ -300,7 +300,7 @@ export const server: Plugin = async ({ client, worktree }) => {
         return;
       }
       // Track memory deletions in child sessions for the toast metrics.
-      // Same scoping as the remember handler above — only child sessions,
+      // Same scoping as the remember handler above - only child sessions,
       // not the parent or manual memory writes from the user's session.
       if (input.tool === "thatch_memory_forget" && childToParent.has(input.sessionID)) {
         const metrics = childMetrics.get(input.sessionID) ?? { new: 0, updated: 0, deleted: 0 };
@@ -318,7 +318,7 @@ export const server: Plugin = async ({ client, worktree }) => {
       });
     },
 
-    // 4. Per-message nudge — two priority tiers:
+    // 4. Per-message nudge - two priority tiers:
     //   a. Extraction nudge: prior tool interactions are queued for fact
     //      extraction (carries the JSON payload for thatch-fact-extractor).
     //   b. Recall + prediction nudge: when no extraction is pending, embed
@@ -337,17 +337,17 @@ export const server: Plugin = async ({ client, worktree }) => {
       if (compacting.has(input.sessionID)) {
         // The session is marked as compacting. If this message is the
         // compaction summary generation itself (has a compaction-type part),
-        // suppress nudges — tools are blocked during summary generation and a
+        // suppress nudges - tools are blocked during summary generation and a
         // nudge would cause a blocked-tool error. If it is NOT a compaction
         // message, compaction has already failed (autocontinue never fired)
         // and the user is sending a new message. Clear the stale flag and
-        // proceed normally — tools are available again.
+        // proceed normally - tools are available again.
         const isCompactionMsg = (output.parts as any[]).some((p) => p.type === "compaction");
         if (isCompactionMsg) return;
         compacting.delete(input.sessionID);
       }
       // Extraction nudge (fallback path). Skipped when the extracting set
-      // is active — that means a direct-extraction child session is running
+      // is active - that means a direct-extraction child session is running
       // and the plugin is handling extraction via the SDK. The nudge fires
       // here only when direct extraction was never triggered or threw.
       if (!extracting.has(input.sessionID) && extraction.pending(input.sessionID)) {
@@ -368,7 +368,7 @@ export const server: Plugin = async ({ client, worktree }) => {
         return;
       }
 
-      // No extraction pending — try the prompt-aware recall nudge. Extract
+      // No extraction pending - try the prompt-aware recall nudge. Extract
       // the user's prompt text from the message parts, embed it with the
       // warm in-process model, and search for matches. Best-effort: any
       // failure (no text, model not loaded, empty store) silently skips.
@@ -469,7 +469,7 @@ export const server: Plugin = async ({ client, worktree }) => {
         if (info.parentID) {
           childToParent.set(info.id, info.parentID);
           parentSnapshots.set(info.id, [...extraction.peek(info.parentID)]);
-          // Child sessions don't need the session-start reminder — only
+          // Child sessions don't need the session-start reminder - only
           // top-level sessions do. Returning here prevents extraction
           // children from receiving the hygiene report and tool overview.
           return;
@@ -499,23 +499,23 @@ export const server: Plugin = async ({ client, worktree }) => {
           // - Task-dispatched sub-agent (code review specialist, nudge-path
           //   fact-extractor, any model-dispatched task): complete the
           //   parent's accepted entries and reset missedNudges. Do NOT drain
-          //   the buffer or delete the session — the task tool that
+          //   the buffer or delete the session - the task tool that
           //   dispatched the sub-agent needs to read its output.
           if (extractionChildren.has(sessionID)) {
             // Drain the parent's snapshot entries from the pending buffer.
             // If the child wrote memories, consumeSnapshot already ran in
-            // tool.execute.after and the snapshot is gone — nothing to
+            // tool.execute.after and the snapshot is gone - nothing to
             // drain. If the child did a no-save run, the snapshot entries
             // are still in the buffer and need to be drained here so they
             // don't replay as a nudge on the next chat.message. Never drain
-            // the entire buffer — interleaved-turn entries must survive.
+            // the entire buffer - interleaved-turn entries must survive.
             const snapshot = parentSnapshots.get(sessionID);
             if (snapshot) {
               extraction.consumeSnapshot(parentID, snapshot);
             }
 
             // Fire a toast with the extraction metrics. Only show a toast
-            // when memories were actually written — no toast for no-save
+            // when memories were actually written - no toast for no-save
             // runs to avoid notification fatigue.
             const metrics = childMetrics.get(sessionID);
             const parts: string[] = [];
@@ -546,7 +546,7 @@ export const server: Plugin = async ({ client, worktree }) => {
             try {
               await client.session.delete({ path: { id: sessionID } });
             } catch {
-              // Best-effort — the child is idle and harmless if not deleted.
+              // Best-effort - the child is idle and harmless if not deleted.
             }
           } else {
             // Task-dispatched sub-agent went idle. Complete the parent's
@@ -557,7 +557,7 @@ export const server: Plugin = async ({ client, worktree }) => {
           }
           return;
         }
-        // Parent went idle — trigger direct extraction if there are pending
+        // Parent went idle - trigger direct extraction if there are pending
         // tool interactions and no extraction is already running. Falls
         // back to the nudge path on the next chat.message if this throws.
         if (

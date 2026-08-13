@@ -344,7 +344,7 @@ export class ThatchDB {
   /**
    * Brute-force cosine similarity search across the given stores.
    * When branch is specified, includes project-wide (branch IS NULL) plus
-   * branch-specific entries. Does NOT stamp recall telemetry — the prompt-aware
+   * branch-specific entries. Does NOT stamp recall telemetry - the prompt-aware
    * nudge uses this to check whether memories relate to a prompt without
    * polluting recall_count/last_recalled_at (the agent hasn't actually read
    * them yet, only the plugin has checked for relevance).
@@ -388,7 +388,7 @@ export class ThatchDB {
 
     // Entries embedded by a different model live in a different vector space;
     // comparing them would produce NaN or nonsense scores, so they're skipped
-    // rather than ranked. Dimension is the discriminator — model tags are
+    // rather than ranked. Dimension is the discriminator - model tags are
     // informational only.
     const scored = rows.flatMap((row) => {
       row.archived = !!row.archived;
@@ -403,7 +403,7 @@ export class ThatchDB {
 
   /**
    * Semantic recall for agent-initiated searches. Delegates to search() for
-   * cosine scoring, then stamps recall telemetry — retrieval is the "used
+   * cosine scoring, then stamps recall telemetry - retrieval is the "used
    * recently" signal hygiene reporting keys on.
    */
   recall(
@@ -427,7 +427,7 @@ export class ThatchDB {
   }
 
   /**
-   * Entries in a store semantically close to the given embedding — the
+   * Entries in a store semantically close to the given embedding - the
    * write-time collision check. Unlike recall(), this records no telemetry:
    * it's the plugin looking, not the agent using.
    */
@@ -931,7 +931,7 @@ export class ThatchDB {
   }
 
   // ---------------------------------------------------------------------------
-  // Hygiene — signals for the session-start heartbeat. Staleness means
+  // Hygiene - signals for the session-start heartbeat. Staleness means
   // neither written nor recalled since the cutoff; recall telemetry keeps
   // actively-used old memories out of the count.
   // ---------------------------------------------------------------------------
@@ -1002,7 +1002,7 @@ function blobToVector(blob: Uint8Array): Float32Array {
 /**
  * Cosine similarity between two Float32Array vectors of equal dimension.
  * Returns a value in [-1, 1]. Normalized embeddings will be close to [0, 1].
- * Throws on dimension mismatch — comparing vectors from different embedding
+ * Throws on dimension mismatch - comparing vectors from different embedding
  * spaces is always a caller bug; callers filter by length first.
  */
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {

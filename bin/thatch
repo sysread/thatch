@@ -105,7 +105,7 @@ switch (command) {
   case "search": {
     if (!args[0]) usage();
     if (args.length > 2) {
-      console.error(`error: too many arguments — quote multi-word queries: thatch search "${args.join(" ")}"`);
+      console.error(`error: too many arguments - quote multi-word queries: thatch search "${args.join(" ")}"`);
       process.exit(1);
     }
     const query = args[0];
@@ -221,7 +221,7 @@ switch (command) {
 
     // Resolve the thatch binary path for hooks and MCP config.
     // If `thatch` is on PATH (npm global install, opencode plugin install),
-    // use the bare name — it survives updates and works across machines.
+    // use the bare name - it survives updates and works across machines.
     // If not on PATH (local dev checkout), use the absolute path to this script.
     const thatchOnPath = Bun.which("thatch");
     const thatchBin = thatchOnPath ?? resolve(process.argv[1] ?? process.execPath);
@@ -271,7 +271,7 @@ switch (command) {
 
   case "buffer-batch": {
     // PostToolBatch hook: append the batch's tool_calls to the session's
-    // JSONL queue. Silent on success — no stdout — so the next model call
+    // JSONL queue. Silent on success - no stdout - so the next model call
     // is not delayed waiting for an exit code-driven message.
     try {
       const raw = await Bun.stdin.text();
@@ -327,12 +327,12 @@ switch (command) {
   case "flush-tools": {
     // UserPromptSubmit (Claude Code) / beforeSubmitPrompt (Cursor) hook.
     // Three priority tiers:
-    //   1. Extraction nudge — buffered tool interactions are queued for fact
+    //   1. Extraction nudge - buffered tool interactions are queued for fact
     //      extraction (carries the JSON payload for thatch-fact-extractor).
-    //   2. Recall nudge — the user's prompt semantically matches existing
+    //   2. Recall nudge - the user's prompt semantically matches existing
     //      memories. Uses the sideband socket to ask the warm MCP server to
     //      embed the prompt and search, avoiding a cold model load here.
-    //   3. Write nudge — static "did you learn anything?" fallback for
+    //   3. Write nudge - static "did you learn anything?" fallback for
     //      conversational turns with no tool use and no memory matches.
     // --json wraps output as { additional_context: "..." } for Cursor hooks.
     // Without --json, stdout is plain text (Claude Code style).
@@ -357,7 +357,7 @@ switch (command) {
       let repo = "unknown";
       try { repo = await detectRepo(); } catch {}
 
-      // Tier 1: extraction nudge. Peek (don't drain) — the queue persists
+      // Tier 1: extraction nudge. Peek (don't drain) - the queue persists
       // until the agent calls memory_remember, which triggers consumeQueue.
       // If the agent ignores the nudge, the payload grows on the next flush.
       const interactions = sessionID ? peekQueue(sessionID) : [];
@@ -416,7 +416,7 @@ switch (command) {
           console.log(fallback);
         }
       } catch {
-        // If even the fallback import fails, do nothing — silent failure is
+        // If even the fallback import fails, do nothing - silent failure is
         // preferable to blocking the user's prompt over an unrelated hook.
       }
     }

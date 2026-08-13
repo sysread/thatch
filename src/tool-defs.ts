@@ -14,7 +14,7 @@ const PREDICTION_DEDUP_COSINE = 0.85;
 const PREDICTION_QUERY_THRESHOLD = 0.45;
 
 /**
- * Shared context passed to every tool's execute function. Framework-agnostic —
+ * Shared context passed to every tool's execute function. Framework-agnostic -
  * neither opencode nor MCP specific. The plugin wires real defaults; tests and
  * the MCP server inject whatever they need.
  */
@@ -25,7 +25,7 @@ export interface CoreContext {
 }
 
 /**
- * A tool definition — the single source of truth shared by the opencode plugin
+ * A tool definition - the single source of truth shared by the opencode plugin
  * wrapper (tools.ts) and the MCP server (mcp.ts). The `args` field is a ZodRawShape
  * (a plain object of Zod types), which opencode's `tool()` accepts directly and
  * the MCP server wraps in `z.object()` for validation and `z.toJSONSchema()` for
@@ -39,7 +39,7 @@ export interface ToolDef {
 }
 
 // ---------------------------------------------------------------------------
-// Formatting helpers — shared by all tools that render entries
+// Formatting helpers - shared by all tools that render entries
 // ---------------------------------------------------------------------------
 
 function formatEntry(
@@ -68,7 +68,7 @@ function formatRecallResult(entry: any): string {
 /**
  * Groups candidate pairs into connected components over the similarity graph,
  * so a topic fragmented across N entries reads as one cluster instead of
- * O(N²) pairs. Verdicts stay pairwise (markChecked) — this is presentation only.
+ * O(N²) pairs. Verdicts stay pairwise (markChecked) - this is presentation only.
  */
 function renderClusters(candidates: DedupCandidate[]): string {
   const parent = new Map<string, string>();
@@ -114,7 +114,7 @@ const rememberDef: ToolDef = {
     "reference material for a future instance of yourself with zero context.",
   args: {
     label: z.string().describe(
-      "Short descriptive title. Used for deduplication — same label in the same store is the same entry.",
+      "Short descriptive title. Used for deduplication - same label in the same store is the same entry.",
     ),
     content: z.string().describe(
       "The information to remember. Self-contained, understandable without session context.",
@@ -133,7 +133,7 @@ const rememberDef: ToolDef = {
     ),
     archived: z.boolean().optional().describe(
       "Mark this memory as a stable, long-term record that should not trigger hygiene nudges. " +
-      "When updating an already-archived memory, this param is REQUIRED — " +
+      "When updating an already-archived memory, this param is REQUIRED - " +
       "pass archived: true to keep it archived, or archived: false to unarchive.",
     ),
   },
@@ -189,7 +189,7 @@ const recallDef: ToolDef = {
       "Maximum number of results. Default 10.",
     ),
     includeArchived: z.boolean().optional().describe(
-      "Include archived memories in results. Default false — archived memories are excluded.",
+      "Include archived memories in results. Default false - archived memories are excluded.",
     ),
   },
   async execute(args, ctx) {
@@ -299,7 +299,7 @@ const findDuplicatesDef: ToolDef = {
   description:
     "Find memories with unusually similar content that may be candidates " +
     "for consolidation. Uses cosine similarity on embeddings. Related pairs " +
-    "are grouped into clusters — a cluster of three or more usually means " +
+    "are grouped into clusters - a cluster of three or more usually means " +
     "one topic fragmented across entries that should be consolidated into " +
     "a single memory. Pairs already reviewed via dedup_mark_checked " +
     "are skipped.",
@@ -357,13 +357,13 @@ const markCheckedDef: ToolDef = {
  * Called in a PARENT session after dispatching the fact-extractor, it accepts
  * the buffer: entries move to a holding area and the nudge quiets, but they
  * are not dropped until the extractor completes. Called in a CHILD extractor
- * at the end of its run, it completes the parent's accepted entries —
+ * at the end of its run, it completes the parent's accepted entries -
  * including no-save runs that write no memory. If the child errors or is
  * deleted before either signal, the host requeues the entries so the facts
  * are not lost.
  *
  * The actual state changes happen in the host's post-tool hook
- * (tool.execute.after for opencode, PostToolBatch/appendBatch for MCP) —
+ * (tool.execute.after for opencode, PostToolBatch/appendBatch for MCP) -
  * this tool's execute function is a no-op confirmation. The tool exists so
  * the model has a recognizable tool name to key on. In the MCP path the
  * file-backed queue is consumed on this call (or on any memory_remember),
@@ -502,7 +502,7 @@ const predictionUpdateDef: ToolDef = {
 
       // "create" on an existing prediction means the agent re-observed
       // the same preference in a new context. Link the edge and record
-      // provenance, but do NOT adjust confidence — "create" is
+      // provenance, but do NOT adjust confidence - "create" is
       // confidence-neutral, not a disconfirm.
       if (signal === "create") {
         ctx.db.addProvenance(predictionId, "create", rationale);
