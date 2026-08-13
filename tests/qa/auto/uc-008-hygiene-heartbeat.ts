@@ -1,5 +1,7 @@
 import { $ } from "bun";
 import { Database } from "bun:sqlite";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 import { ThatchDB } from "../../../src/db";
 import { MockEmbeddingModel } from "../../../src/embeddings";
@@ -74,12 +76,21 @@ const useCase: UseCase = {
     rawDb.close();
 
     // --- Test 1: All three signals fire from a real git repo ---
+    // Create a temp git repo with a known branch so the orphaned-branch
+    // check has live branches to compare against. In CI, the checked-out
+    // repo has a detached HEAD with no local branches, so listBranches
+    // returns [] and the hygiene code correctly skips the orphaned check.
+    // Using a dedicated repo makes the test deterministic.
+    const gitRepo = join(ctx.dir, "git-repo");
+    mkdirSync(gitRepo, { recursive: true });
+    await $`git init`.cwd(gitRepo).quiet();
+    await $`git config user.email test@test.com`.cwd(gitRepo).quiet();
+    await $`git config user.name test`.cwd(gitRepo).quiet();
+    writeFileSync(join(gitRepo, "README"), "init");
+    await $`git add -A && git commit -m init`.cwd(gitRepo).quiet();
 
-    // ctx.repoRoot is the thatch repo itself — a git repo with live branches.
-    // The seeded branch "feature/deleted" is not among them, so the
-    // orphaned-branch signal should fire.
     const db1 = new ThatchDB(dbPath);
-    const report1 = await hygieneReport(db1, store, ctx.repoRoot);
+    const report1 = await hygieneReport(db1, store, gitRepo);
     db1.close();
 
     if (!report1) {
