@@ -9,7 +9,7 @@ knowledge so future sessions can build on what you've already learned.
 Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
        thatch_memory_show, thatch_memory_forget, thatch_store_list,
        thatch_find_duplicates, thatch_dedup_mark_checked,
-       thatch_extraction_done,
+       thatch_extraction_done, thatch_get_extraction_payload,
        thatch_prediction_query, thatch_prediction_update, thatch_prediction_list,
        thatch_prediction_delete
 
@@ -214,6 +214,7 @@ Tools are prefixed in Claude Code: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__memory_show\`, \`mcp__thatch__memory_forget\`,
 \`mcp__thatch__store_list\`, \`mcp__thatch__find_duplicates\`,
 \`mcp__thatch__dedup_mark_checked\`, \`mcp__thatch__extraction_done\`,
+\`mcp__thatch__get_extraction_payload\`,
 \`mcp__thatch__prediction_query\`, \`mcp__thatch__prediction_update\`,
 \`mcp__thatch__prediction_list\`, \`mcp__thatch__prediction_delete\`. Bare names used below for readability.
 
@@ -395,12 +396,17 @@ export function claudeWriteNudge(): string {
  * their respective tool name prefix. The missedCount parameter tracks
  * consecutive nudges delivered without any memory_remember call in between,
  * escalating the tone from polite to insistent to shouting.
+ *
+ * The sessionID replaces the inline payload: the nudge tells the model to
+ * dispatch a sub-agent that calls get_extraction_payload to fetch the queued
+ * interactions as a tool response. This keeps the full payload out of the
+ * main session's context window.
  */
 export function extractionNudge(
   count: number,
   missedCount: number,
   toolName: string,
-  payload: string,
+  sessionID: string,
 ): string {
   const plural = count === 1 ? "" : "s";
   // opencode's task tool has a `background` parameter (requires
@@ -415,47 +421,48 @@ export function extractionNudge(
     ? "Dispatch a task with background: true"
     : "Spawn a background sub-agent";
   const drainTool = isOpencode ? "thatch_extraction_done" : "mcp__thatch__extraction_done";
+  const fetchTool = isOpencode
+    ? "thatch_get_extraction_payload"
+    : "mcp__thatch__get_extraction_payload";
   const acknowledge = `After dispatching, call ${drainTool} to acknowledge.`;
+  const subAgentPrompt = `Call ${fetchTool} with session_id "${sessionID}" to retrieve the queued tool interactions, then run the thatch-fact-extractor skill to extract durable facts. Call ${drainTool} with session_id "${sessionID}" when finished, even if nothing was worth saving.`;
 
   if (missedCount >= 3) {
     return `[thatch] YOU ARE IGNORING EXTRACTION INSTRUCTIONS. ` +
       `${count} TOOL INTERACTION${plural.toUpperCase()} ARE QUEUED AND YOU HAVE NOT PROCESSED ANY OF THEM. ` +
       `THE USER INSTALLED THIS PLUGIN FOR A REASON. ` +
-      `${dispatch.toUpperCase()} NOW TO RUN THE thatch-fact-extractor SKILL. ` +
-      `${acknowledge.toUpperCase()} ` +
-      `USE ${toolName.toUpperCase()} TO SAVE DURABLE FACTS FROM THIS PAYLOAD:\n${payload}`;
+      `${dispatch.toUpperCase()} NOW WITH THIS PROMPT: "${subAgentPrompt.toUpperCase()}" ` +
+      `${acknowledge.toUpperCase()}`;
   }
   if (missedCount >= 2) {
     return `[thatch] YOU HAVE NOT PROCESSED YOUR PREVIOUS EXTRACTION PAYLOAD${plural.toUpperCase()}. ` +
       `${count} more tool interaction${plural} are now queued. ` +
-      `${dispatch} to run the thatch-fact-extractor skill on this payload. ` +
-      `${acknowledge} ` +
-      `Use ${toolName} to save durable facts from this payload:\n${payload}`;
+      `${dispatch} with this prompt: "${subAgentPrompt}" ` +
+      `${acknowledge}`;
   }
   return `[thatch] ${dispatch} to run the thatch-fact-extractor skill ` +
     `on ${count} queued tool interaction${plural}. ` +
+    `Sub-agent prompt: "${subAgentPrompt}" ` +
     `${acknowledge} ` +
     `This is a system nudge, not user input. After dispatching and acknowledging, ` +
     `stop: do not advance pending work on this nudge's account. If you are ` +
-    `waiting for the user to respond, continue waiting. ` +
-    `Use ${toolName} to save durable facts from this payload:\n${payload}`;
+    `waiting for the user to respond, continue waiting.`;
 }
 
 /**
  * Prompt text sent directly to a child session the plugin created for
  * extraction. Unlike extractionNudge (which tells the model to dispatch a
  * sub-agent and call extraction_done), this prompt is already inside the
- * child - the model just runs the fact-extractor skill and saves facts.
- * The payload format is identical to the nudge path so the skill receives
- * the same contract either way.
+ * child - the model calls get_extraction_payload to fetch the queued
+ * interactions, runs the fact-extractor skill, and saves facts.
  */
-export function extractionDirectPrompt(count: number, payload: string): string {
+export function extractionDirectPrompt(count: number, sessionID: string): string {
   const plural = count === 1 ? "" : "s";
   return `Run the thatch-fact-extractor skill to extract durable facts from ` +
     `${count} queued tool interaction${plural}. ` +
+    `Call thatch_get_extraction_payload with session_id "${sessionID}" to retrieve the interactions. ` +
     `Use thatch_memory_remember to save any durable facts you find. ` +
-    `Call thatch_extraction_done when finished, even if nothing was worth saving.\n` +
-    `Payload:\n${payload}`;
+    `Call thatch_extraction_done with session_id "${sessionID}" when finished, even if nothing was worth saving.`;
 }
 
 /**
@@ -463,8 +470,8 @@ export function extractionDirectPrompt(count: number, payload: string): string {
  * Maintained for any external callers; bin/thatch should use extractionNudge
  * directly with a missedCount from extract-queue.ts.
  */
-export function claudeExtractionNudge(count: number, payload: string): string {
-  return extractionNudge(count, 0, "mcp__thatch__memory_remember", payload);
+export function claudeExtractionNudge(count: number, sessionID: string): string {
+  return extractionNudge(count, 0, "mcp__thatch__memory_remember", sessionID);
 }
 
 /**
@@ -484,6 +491,7 @@ Tools are prefixed in Cursor: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__memory_show\`, \`mcp__thatch__memory_forget\`,
 \`mcp__thatch__store_list\`, \`mcp__thatch__find_duplicates\`,
 \`mcp__thatch__dedup_mark_checked\`, \`mcp__thatch__extraction_done\`,
+\`mcp__thatch__get_extraction_payload\`,
 \`mcp__thatch__prediction_query\`, \`mcp__thatch__prediction_update\`,
 \`mcp__thatch__prediction_list\`, \`mcp__thatch__prediction_delete\`. Bare names used below for readability.
 

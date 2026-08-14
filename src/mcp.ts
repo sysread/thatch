@@ -5,6 +5,8 @@ import { detectRepo } from "./git";
 import { checkSetup } from "./setup";
 import { TOOL_DEFS, type CoreContext, type ToolDef } from "./tool-defs";
 import { SidebandServer, sidebandSocketPath } from "./sideband";
+import { peekQueue, consumeQueue, resetMissedCount } from "./extract-queue";
+import { buildExtractionPayload } from "./extraction";
 import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
@@ -98,7 +100,33 @@ export async function runMcpServer(): Promise<void> {
 
   const db = new ThatchDB(dbPath);
   const model = new BgeEmbeddingModel(modelName);
-  const ctx: CoreContext = { db, model, defaultStore: repo };
+
+  // Extraction payload provider: peeks the file-backed queue and returns the
+  // serialized JSON payload. Called by the get_extraction_payload tool when a
+  // sub-agent needs to fetch the parent's queued interactions. Returns null
+  // when no interactions are queued.
+  const extractionPayloadProvider = (sessionID: string): string | null => {
+    const interactions = peekQueue(sessionID);
+    if (interactions.length === 0) return null;
+    return buildExtractionPayload(interactions, repo);
+  };
+
+  // Drain a session's file-backed queue and reset its missed-nudge counter.
+  // Called by extraction_done when a sub-agent passes the parent's session_id.
+  // Without this, the MCP path's appendBatch self-detection would drain the
+  // sub-agent's (empty) queue instead of the parent's.
+  const drainExtractionQueue = (sessionID: string): void => {
+    resetMissedCount(sessionID);
+    consumeQueue(sessionID);
+  };
+
+  const ctx: CoreContext = {
+    db,
+    model,
+    defaultStore: repo,
+    extractionPayloadProvider,
+    drainExtractionQueue,
+  };
   const tools = compileTools();
 
   // Check whether `thatch setup` was run for the current host. If not, or if

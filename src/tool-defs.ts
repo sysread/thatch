@@ -22,6 +22,18 @@ export interface CoreContext {
   db: ThatchDB;
   model: EmbeddingModel;
   defaultStore: string;
+  /** Peeks the extraction buffer for a session and returns the serialized
+   *  JSON payload (same shape as buildExtractionPayload). Returns null when
+   *  no interactions are queued. Used by the get_extraction_payload tool so
+   *  the sub-agent fetches the payload as a tool response instead of
+   *  receiving it inline in the nudge text. */
+  extractionPayloadProvider?: (sessionID: string) => string | null;
+  /** Drains a session's extraction queue. On the MCP path this deletes the
+   *  file-backed queue and resets the missed-nudge counter. On the opencode
+   *  path this is unused (the tool.execute.after hook handles drain via
+   *  childToParent). Called by extraction_done when the sub-agent passes
+   *  the parent's session_id. */
+  drainExtractionQueue?: (sessionID: string) => void;
 }
 
 /**
@@ -370,6 +382,61 @@ const markCheckedDef: ToolDef = {
  * which is durable across interruption because the queue persists on disk
  * until then.
  */
+/**
+ * Fetches the queued extraction payload for a session. The sub-agent calls
+ * this with the parent's session ID to retrieve the tool interactions that
+ * need fact extraction, instead of receiving them inline in the nudge text.
+ * This keeps the full payload out of the main session's context window.
+ */
+const getExtractionPayloadDef: ToolDef = {
+  name: "get_extraction_payload",
+  description:
+    "Retrieve the queued tool interactions for extraction. Call this with " +
+    "the session_id from the extraction nudge to get the JSON payload " +
+    "(interactions, projectStore, globalStore). Then run the " +
+    "thatch-fact-extractor skill on the returned payload.",
+  args: {
+    session_id: z.string().describe(
+      "The session ID from the extraction nudge. This is the parent session " +
+      "whose tool interactions are queued for extraction.",
+    ),
+  },
+  async execute(args, ctx) {
+    if (!ctx.extractionPayloadProvider) {
+      return "Extraction payload retrieval is not available in this host.";
+    }
+    const payload = ctx.extractionPayloadProvider(args.session_id as string);
+    if (!payload) {
+      return "No queued tool interactions found for this session.";
+    }
+    return payload;
+  },
+};
+
+/**
+ * Extraction-buffer acknowledgment, with AMQP-style accept/complete roles.
+ *
+ * Called in a PARENT session after dispatching the fact-extractor, it accepts
+ * the buffer: entries move to a holding area and the nudge quiets, but they
+ * are not dropped until the extractor completes. Called in a CHILD extractor
+ * at the end of its run, it completes the parent's accepted entries -
+ * including no-save runs that write no memory. If the child errors or is
+ * deleted before either signal, the host requeues the entries so the facts
+ * are not lost.
+ *
+ * The actual state changes happen in the host's post-tool hook
+ * (tool.execute.after for opencode, PostToolBatch/appendBatch for MCP) -
+ * this tool's execute function is a no-op confirmation. The tool exists so
+ * the model has a recognizable tool name to key on. In the MCP path the
+ * file-backed queue is consumed on this call (or on any memory_remember),
+ * which is durable across interruption because the queue persists on disk
+ * until then.
+ *
+ * The optional session_id parameter lets a sub-agent drain the PARENT's
+ * file-backed queue on the MCP path, where the sub-agent's session ID
+ * differs from the parent's and appendBatch's self-detection would drain
+ * the wrong (empty) queue.
+ */
 const extractionDoneDef: ToolDef = {
   name: "extraction_done",
   description:
@@ -377,9 +444,20 @@ const extractionDoneDef: ToolDef = {
     "dispatching the fact-extractor to a sub-agent: accepts the buffer " +
     "(quiets the nudge) while keeping entries until the extractor completes. " +
     "In the fact-extractor sub-agent, call at the end of the run to mark the " +
-    "entries complete, even when nothing was worth saving.",
-  args: {},
-  async execute() {
+    "entries complete, even when nothing was worth saving. Pass session_id " +
+    "when running as a sub-agent to drain the parent session's queue.",
+  args: {
+    session_id: z.string().optional().describe(
+      "The parent session's ID, when called from a sub-agent on the MCP " +
+      "path. Drains the parent's file-backed queue. Omit when called from " +
+      "the parent session itself (opencode path handles drain via hooks).",
+    ),
+  },
+  async execute(args, ctx) {
+    const sessionID = args.session_id as string | undefined;
+    if (sessionID && ctx.drainExtractionQueue) {
+      ctx.drainExtractionQueue(sessionID);
+    }
     return "[acknowledged]";
   },
 };
@@ -587,6 +665,7 @@ export const TOOL_DEFS: ToolDef[] = [
   findDuplicatesDef,
   markCheckedDef,
   extractionDoneDef,
+  getExtractionPayloadDef,
   predictionQueryDef,
   predictionUpdateDef,
   predictionListDef,

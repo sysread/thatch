@@ -13,8 +13,18 @@ export function createTools(
   db: ThatchDB,
   model: EmbeddingModel,
   defaultStore: string,
+  extensions?: {
+    extractionPayloadProvider?: CoreContext["extractionPayloadProvider"];
+    drainExtractionQueue?: CoreContext["drainExtractionQueue"];
+  },
 ): Record<string, ReturnType<typeof tool>> {
-  const ctx: CoreContext = { db, model, defaultStore };
+  const ctx: CoreContext = {
+    db,
+    model,
+    defaultStore,
+    extractionPayloadProvider: extensions?.extractionPayloadProvider,
+    drainExtractionQueue: extensions?.drainExtractionQueue,
+  };
 
   const tools: Record<string, ReturnType<typeof tool>> = {};
   for (const def of TOOL_DEFS) {

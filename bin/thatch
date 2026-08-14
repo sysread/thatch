@@ -351,7 +351,6 @@ switch (command) {
       const sessionID = data.session_id ?? data.conversation_id;
 
       const { peekQueue, getMissedCount, incrementMissedCount } = await import("../src/extract-queue");
-      const { buildExtractionPayload } = await import("../src/extraction");
       const { extractionNudge, claudeWriteNudge, claudeRecallNudge, predictionNudge } = await import("../src/prompts");
 
       let repo = "unknown";
@@ -360,11 +359,13 @@ switch (command) {
       // Tier 1: extraction nudge. Peek (don't drain) - the queue persists
       // until the agent calls memory_remember, which triggers consumeQueue.
       // If the agent ignores the nudge, the payload grows on the next flush.
+      // The nudge carries the session ID, not the full payload — the
+      // sub-agent fetches it via get_extraction_payload.
       const interactions = sessionID ? peekQueue(sessionID) : [];
       if (interactions.length > 0) {
         const missed = sessionID ? getMissedCount(sessionID) : 0;
         if (sessionID) incrementMissedCount(sessionID);
-        const output = extractionNudge(interactions.length, missed, "mcp__thatch__memory_remember", buildExtractionPayload(interactions, repo));
+        const output = extractionNudge(interactions.length, missed, "mcp__thatch__memory_remember", sessionID ?? "");
         if (isJson) console.log(JSON.stringify({ additional_context: output }));
         else console.log(output);
         break;
