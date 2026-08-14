@@ -98,6 +98,7 @@ describe("plugin entry", () => {
       "thatch_dedup_mark_checked",
       "thatch_extraction_done",
       "thatch_find_duplicates",
+      "thatch_get_extraction_payload",
       "thatch_memory_forget",
       "thatch_memory_list",
       "thatch_memory_recall",
@@ -185,14 +186,16 @@ describe("plugin entry", () => {
     await hooks["chat.message"]!({ sessionID: "ses_b" } as any, otherOutput);
     expect(otherOutput.parts.length).toBe(0);
 
-    // The originating session gets the nudge with the actual payload.
+    // The originating session gets the nudge with the session ID and fetch tool.
     const output: any = { message: { id: "msg_1" }, parts: [] };
     await hooks["chat.message"]!({ sessionID: "ses_a", messageID: "msg_1" } as any, output);
     expect(output.parts.length).toBe(1);
     expect(output.parts[0].type).toBe("text");
     expect(output.parts[0].sessionID).toBe("ses_a");
     expect(output.parts[0].text).toContain("thatch-fact-extractor");
-    expect(output.parts[0].text).toContain('"tool":"bash"');
+    expect(output.parts[0].text).toContain("ses_a");
+    expect(output.parts[0].text).toContain("thatch_get_extraction_payload");
+    expect(output.parts[0].text).not.toContain('"tool":"bash"');
 
     // The buffer is NOT drained — it persists until the agent calls
     // memory_remember. A second chat.message delivers the same nudge again
@@ -201,7 +204,7 @@ describe("plugin entry", () => {
     await hooks["chat.message"]!({ sessionID: "ses_a" } as any, output2);
     expect(output2.parts.length).toBe(1);
     expect(output2.parts[0].text).toContain("thatch-fact-extractor");
-    expect(output2.parts[0].text).toContain('"tool":"bash"');
+    expect(output2.parts[0].text).toContain("ses_a");
 
     // After the agent writes a memory, the buffer is consumed.
     await hooks["tool.execute.after"]!(
@@ -406,11 +409,12 @@ describe("plugin entry", () => {
       properties: { sessionID: "ses_child_requeue", error: { name: "APIError", message: "boom" } } } as any,
     });
 
-    // The nudge replays with the original payload — facts are not lost
+    // The nudge replays with the session ID — facts are not lost
     const out: any = { message: { id: "msg_rq1" }, parts: [] };
     await hooks["chat.message"]!({ sessionID: "ses_requeue", messageID: "msg_rq1" } as any, out);
     expect(out.parts.length).toBe(1);
-    expect(out.parts[0].text).toContain('"tool":"bash"');
+    expect(out.parts[0].text).toContain("ses_requeue");
+    expect(out.parts[0].text).toContain("thatch_get_extraction_payload");
   });
 
   test("accept/requeue: child session deleted before completing returns entries", async () => {
@@ -434,7 +438,8 @@ describe("plugin entry", () => {
     const out: any = { message: { id: "msg_dq1" }, parts: [] };
     await hooks["chat.message"]!({ sessionID: "ses_delq", messageID: "msg_dq1" } as any, out);
     expect(out.parts.length).toBe(1);
-    expect(out.parts[0].text).toContain('"tool":"bash"');
+    expect(out.parts[0].text).toContain("ses_delq");
+    expect(out.parts[0].text).toContain("thatch_get_extraction_payload");
   });
 
   test("accept/complete: child extraction_done completes the parent's accepted entries", async () => {
@@ -1225,73 +1230,93 @@ describe("claudeWriteNudge", () => {
 });
 
 describe("claudeExtractionNudge", () => {
+  const sessionID = "sess-123";
+
   test("singular form for one interaction", () => {
-    const nudge = claudeExtractionNudge(1, '{"tool":"bash"}');
-    expect(nudge).toContain("1 queued tool interaction");
-    expect(nudge).not.toContain("interactions");
+    const nudge = claudeExtractionNudge(1, sessionID);
+    expect(nudge).toContain("1 queued tool interaction.");
+    expect(nudge).not.toContain("1 queued tool interactions");
     expect(nudge).toContain("thatch-fact-extractor");
-    expect(nudge).toContain("mcp__thatch__memory_remember");
-    expect(nudge).toContain('{"tool":"bash"}');
+    expect(nudge).toContain("mcp__thatch__get_extraction_payload");
+    expect(nudge).toContain(sessionID);
   });
 
   test("plural form for multiple interactions", () => {
-    const nudge = claudeExtractionNudge(3, '{"tool":"bash"}');
+    const nudge = claudeExtractionNudge(3, sessionID);
     expect(nudge).toContain("3 queued tool interactions");
     expect(nudge).toContain("thatch-fact-extractor");
   });
 });
 
 describe("extractionNudge escalation", () => {
-  const payload = '{"tool":"bash"}';
+  const sessionID = "sess-abc";
   const tool = "thatch_memory_remember";
 
   test("tier 0 (missedCount 0-1): leads with verb, mentions background dispatch", () => {
-    const nudge = extractionNudge(3, 0, tool, payload);
+    const nudge = extractionNudge(3, 0, tool, sessionID);
     expect(nudge).toContain("Dispatch a task with background: true");
     expect(nudge).toContain("thatch_extraction_done");
     expect(nudge).toContain("not user input");
     expect(nudge).toContain("continue waiting");
     expect(nudge).not.toContain("YOU HAVE NOT");
     expect(nudge).not.toContain("IGNORING");
-    expect(nudge).not.toContain("if your harness");
+  });
+
+  test("tier 0 includes session ID and fetch tool name, not payload", () => {
+    const nudge = extractionNudge(3, 0, tool, sessionID);
+    expect(nudge).toContain(sessionID);
+    expect(nudge).toContain("thatch_get_extraction_payload");
+    expect(nudge).not.toContain('"interactions"');
+    expect(nudge).not.toContain('"projectStore"');
   });
 
   test("tier 0 MCP path: uses generic sub-agent wording, not background: true", () => {
-    const nudge = extractionNudge(3, 0, "mcp__thatch__memory_remember", payload);
+    const nudge = extractionNudge(3, 0, "mcp__thatch__memory_remember", sessionID);
     expect(nudge).toContain("Spawn a background sub-agent");
     expect(nudge).not.toContain("background: true");
     expect(nudge).toContain("mcp__thatch__extraction_done");
+    expect(nudge).toContain("mcp__thatch__get_extraction_payload");
   });
 
   test("tier 1 (missedCount 2): directive prefix, no shouting", () => {
-    const nudge = extractionNudge(3, 2, tool, payload);
+    const nudge = extractionNudge(3, 2, tool, sessionID);
     expect(nudge).toContain("YOU HAVE NOT PROCESSED");
     expect(nudge).not.toContain("IGNORING");
   });
 
   test("tier 2 (missedCount 3+): all caps, harsh", () => {
-    const nudge = extractionNudge(3, 3, tool, payload);
+    const nudge = extractionNudge(3, 3, tool, sessionID);
     expect(nudge).toContain("IGNORING EXTRACTION INSTRUCTIONS");
     expect(nudge).toContain("INSTALLED THIS PLUGIN FOR A REASON");
   });
 
   test("tier 2 escalates further with higher counts", () => {
-    const nudge = extractionNudge(5, 10, tool, payload);
+    const nudge = extractionNudge(5, 10, tool, sessionID);
     expect(nudge).toContain("IGNORING");
   });
 
-  test("all tiers include the payload", () => {
+  test("all tiers include the session ID (case-insensitive for ALL-CAPS tier)", () => {
     for (const missed of [0, 2, 3]) {
-      expect(extractionNudge(1, missed, tool, payload)).toContain(payload);
+      const nudge = extractionNudge(1, missed, tool, sessionID);
+      expect(nudge.toLowerCase()).toContain(sessionID.toLowerCase());
+    }
+  });
+
+  test("no tier includes the raw JSON payload", () => {
+    for (const missed of [0, 2, 3]) {
+      const nudge = extractionNudge(1, missed, tool, sessionID);
+      expect(nudge).not.toContain('"interactions"');
+      expect(nudge).not.toContain('"projectStore"');
+      expect(nudge).not.toContain('"globalStore"');
     }
   });
 });
 
 describe("extractionDirectPrompt", () => {
-  const payload = '{"tool":"bash"}';
+  const sessionID = "sess-direct";
 
   test("tells the model to run the skill directly, no task dispatch", () => {
-    const prompt = extractionDirectPrompt(3, payload);
+    const prompt = extractionDirectPrompt(3, sessionID);
     expect(prompt).toContain("thatch-fact-extractor");
     expect(prompt).toContain("thatch_memory_remember");
     expect(prompt).toContain("thatch_extraction_done");
@@ -1299,19 +1324,26 @@ describe("extractionDirectPrompt", () => {
     expect(prompt).not.toContain("background: true");
   });
 
-  test("includes the payload", () => {
-    const prompt = extractionDirectPrompt(1, payload);
-    expect(prompt).toContain(payload);
+  test("includes the session ID and fetch tool name", () => {
+    const prompt = extractionDirectPrompt(1, sessionID);
+    expect(prompt).toContain(sessionID);
+    expect(prompt).toContain("thatch_get_extraction_payload");
+  });
+
+  test("does not include the raw JSON payload", () => {
+    const prompt = extractionDirectPrompt(1, sessionID);
+    expect(prompt).not.toContain('"interactions"');
+    expect(prompt).not.toContain('"projectStore"');
   });
 
   test("singular form for one interaction", () => {
-    const prompt = extractionDirectPrompt(1, payload);
-    expect(prompt).toContain("1 queued tool interaction");
-    expect(prompt).not.toContain("interactions");
+    const prompt = extractionDirectPrompt(1, sessionID);
+    expect(prompt).toContain("1 queued tool interaction.");
+    expect(prompt).not.toContain("1 queued tool interactions");
   });
 
   test("plural form for multiple interactions", () => {
-    const prompt = extractionDirectPrompt(5, payload);
+    const prompt = extractionDirectPrompt(5, sessionID);
     expect(prompt).toContain("5 queued tool interactions");
   });
 });

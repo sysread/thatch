@@ -28,7 +28,7 @@ const useCase: UseCase = {
     "",
     "**Expected (fallback nudge path — opencode when direct extraction fails,",
     "and all MCP hosts)**",
-    "- The agent's context for the next message includes a `[thatch]` nudge carrying a JSON payload summarizing the buffered tool interactions (tool name, title, truncated args/output).",
+    "- The agent's context for the next message includes a `[thatch]` nudge carrying the session ID and a fetch tool name — the sub-agent calls `get_extraction_payload` with that session ID to retrieve the queued tool interactions as a tool response, keeping the full payload out of the main session's context window.",
     "- The buffer is **not** drained on nudge delivery — it persists until the agent writes a memory or accepts it by calling `thatch_extraction_done`. Accepting quiets the nudge while holding the entries until the extractor completes; a child extractor that errors or is deleted requeues them. If the nudge is ignored, the next message carries a repeat nudge, escalating in urgency:",
     "  - 1st-2nd miss: polite tone",
     "  - 3rd consecutive miss (missedCount=2): insistent (directive) tone",
@@ -36,7 +36,7 @@ const useCase: UseCase = {
     "  The counter resets when the buffer drains (memory write) or is accepted (`thatch_extraction_done`).",
     "- A `thatch_memory_remember` call in a child sub-agent session also drains the parent's buffer (via the `childToParent` Map), so dispatching the fact-extractor as a background task clears the parent's queue.",
     "- Two concurrent sessions never see each other's interactions in a nudge.",
-    "- The agent's own `thatch_*` tool calls never appear in a payload (no feedback loop). `skill` and `task` tool calls are also excluded (buffering them would create a nudge → skill load → buffer → nudge loop).",
+    "- The agent's own `thatch_*` tool calls never appear in the queued interactions (no feedback loop). `skill` and `task` tool calls are also excluded (buffering them would create a nudge → skill load → buffer → nudge loop).",
   ].join("\n"),
   manualOnly: true,
 };

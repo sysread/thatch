@@ -27,7 +27,7 @@ const useCase: UseCase = {
   ].join("\n"),
   expected: [
     "- Tiers fire in strict priority — **extraction > recall > write** — at most one nudge per call:",
-    "  - extraction: queue non-empty -> JSON payload. The queue is peeked, not deleted; it persists until a memory write or `extraction_done` (drains via `consumeQueue` in `appendBatch`).",
+    "  - extraction: queue non-empty -> nudge with session ID and fetch tool name. The queue is peeked, not deleted; it persists until a memory write or `extraction_done` (drains via `consumeQueue` in `appendBatch`).",
     "  - recall: queue empty, socket live, match at or above `THATCH_RECALL_THRESHOLD` (default 0.55) -> nudge with match labels; below threshold -> no nudge.",
     '  - write: socket unavailable, no matches, or socket error -> static "did you learn anything worth persisting?" nudge.',
     "- Sideband failure **never blocks** the agent: server down, a stale socket file, and a > 2 s timeout all degrade to the write nudge. A stale socket file left by a crash is cleaned up on connection error.",
@@ -74,6 +74,10 @@ const useCase: UseCase = {
     const extractOut = extractResult.stdout.toString();
     if (!extractOut.includes("fact-extractor") || !extractOut.includes("queued tool interaction")) {
       console.log(`  FAIL: extraction tier output unexpected: ${extractOut.slice(0, 200)}`);
+      return "FAIL";
+    }
+    if (!extractOut.includes("uc009-extract") || !extractOut.includes("get_extraction_payload")) {
+      console.log(`  FAIL: extraction tier should include session ID and fetch tool name: ${extractOut.slice(0, 200)}`);
       return "FAIL";
     }
 

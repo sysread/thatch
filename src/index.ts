@@ -141,8 +141,7 @@ export const server: Plugin = async ({ client, worktree }) => {
     extracting.add(parentID);
 
     const batch = extraction.peek(parentID);
-    const payload = extraction.buildPayload(batch, repo);
-    const promptText = extractionDirectPrompt(batch.length, payload);
+    const promptText = extractionDirectPrompt(batch.length, parentID);
 
     const result = await client.session.create({
       body: { parentID, title: "thatch-extraction" },
@@ -201,7 +200,15 @@ export const server: Plugin = async ({ client, worktree }) => {
   }
 
   return {
-    tool: createTools(db, model, repo),
+    tool: createTools(db, model, repo, {
+      extractionPayloadProvider: (sessionID: string): string | null => {
+        const interactions = extraction.peek(sessionID);
+        const accepted = extraction.peekAccepted(sessionID);
+        const all = [...accepted, ...interactions];
+        if (all.length === 0) return null;
+        return extraction.buildPayload(all, repo);
+      },
+    }),
 
     // 1. System prompt - always in context.
     "experimental.chat.system.transform": async (_input, output) => {
@@ -352,9 +359,8 @@ export const server: Plugin = async ({ client, worktree }) => {
       // here only when direct extraction was never triggered or threw.
       if (!extracting.has(input.sessionID) && extraction.pending(input.sessionID)) {
         const batch = extraction.peek(input.sessionID);
-        const payload = extraction.buildPayload(batch, repo);
         const missed = missedNudges.get(input.sessionID) ?? 0;
-        const text = extractionNudge(batch.length, missed, "thatch_memory_remember", payload);
+        const text = extractionNudge(batch.length, missed, "thatch_memory_remember", input.sessionID);
         missedNudges.set(input.sessionID, missed + 1);
 
         output.parts.push({
