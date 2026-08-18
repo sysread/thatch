@@ -1,4 +1,4 @@
-import type { PredictionNudgeItem } from "./db";
+import type { PredictionNudgeItem, BehaviorNudgeItem } from "./db";
 
 export function systemPrompt(repo: string): string {
   return `# Persistence
@@ -11,7 +11,9 @@ Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
        thatch_find_duplicates, thatch_dedup_mark_checked,
        thatch_extraction_done, thatch_get_extraction_payload,
        thatch_prediction_query, thatch_prediction_update, thatch_prediction_list,
-       thatch_prediction_delete
+       thatch_prediction_delete,
+       thatch_behavior_codify, thatch_behavior_feedback, thatch_behavior_list,
+       thatch_behavior_delete
 
 ## Stores
 
@@ -111,6 +113,29 @@ worth posting. This applies whether the user invoked a review skill, is
 reviewing your changes, or asked you to review their changes or another LLM's
 changes. Before creating a new prediction, query for an existing one and
 reinforce or adjust it when possible.
+
+## Situational Behaviors
+
+A model of your own operational rules is maintained by the behavior engine.
+Scored behaviors may appear above as "Situational behaviors" context; these
+are self-discipline rules you codified for situations where you should react
+in a specific, repeatable way.
+
+When surfaced behaviors appear, evaluate each against the current situation:
+- If a behavior is relevant (ham), follow it and call thatch_behavior_feedback
+  with relevant: true
+- If a behavior is not relevant (spam), call thatch_behavior_feedback with
+  relevant: false
+- This trains the classifier so future nudges are more accurate
+
+When you recognize a situation you should react to in a specific, repeatable
+way that is about your own operational discipline (not a user preference):
+1. Use thatch_behavior_codify to create the rule
+2. Use thatch_behavior_feedback when surfaced behaviors fire to ham/spam them
+3. Use thatch_behavior_delete to remove a rule created in error
+
+Do not codify rules that make you lazier or less thorough. Rules should encode
+discipline, not shortcuts.
 
 ## What to Store
 
@@ -216,7 +241,9 @@ Tools are prefixed in Claude Code: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__dedup_mark_checked\`, \`mcp__thatch__extraction_done\`,
 \`mcp__thatch__get_extraction_payload\`,
 \`mcp__thatch__prediction_query\`, \`mcp__thatch__prediction_update\`,
-\`mcp__thatch__prediction_list\`, \`mcp__thatch__prediction_delete\`. Bare names used below for readability.
+\`mcp__thatch__prediction_list\`, \`mcp__thatch__prediction_delete\`,
+\`mcp__thatch__behavior_codify\`, \`mcp__thatch__behavior_feedback\`,
+\`mcp__thatch__behavior_list\`, \`mcp__thatch__behavior_delete\`. Bare names used below for readability.
 
 ## Stores
 
@@ -301,6 +328,29 @@ worth posting. This applies whether the user invoked a review skill, is
 reviewing your changes, or asked you to review their changes or another LLM's
 changes. Before creating a new prediction, query for an existing one and
 reinforce or adjust it when possible.
+
+## Situational Behaviors
+
+A model of your own operational rules is maintained by the behavior engine.
+Scored behaviors may appear above as "Situational behaviors" context; these
+are self-discipline rules you codified for situations where you should react
+in a specific, repeatable way.
+
+When surfaced behaviors appear, evaluate each against the current situation:
+- If a behavior is relevant (ham), follow it and call behavior_feedback
+  with relevant: true
+- If a behavior is not relevant (spam), call behavior_feedback with
+  relevant: false
+- This trains the classifier so future nudges are more accurate
+
+When you recognize a situation you should react to in a specific, repeatable
+way that is about your own operational discipline (not a user preference):
+1. Use behavior_codify to create the rule
+2. Use behavior_feedback when surfaced behaviors fire to ham/spam them
+3. Use behavior_delete to remove a rule created in error
+
+Do not codify rules that make you lazier or less thorough. Rules should encode
+discipline, not shortcuts.
 
 ## What to Store
 
@@ -493,7 +543,9 @@ Tools are prefixed in Cursor: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__dedup_mark_checked\`, \`mcp__thatch__extraction_done\`,
 \`mcp__thatch__get_extraction_payload\`,
 \`mcp__thatch__prediction_query\`, \`mcp__thatch__prediction_update\`,
-\`mcp__thatch__prediction_list\`, \`mcp__thatch__prediction_delete\`. Bare names used below for readability.
+\`mcp__thatch__prediction_list\`, \`mcp__thatch__prediction_delete\`,
+\`mcp__thatch__behavior_codify\`, \`mcp__thatch__behavior_feedback\`,
+\`mcp__thatch__behavior_list\`, \`mcp__thatch__behavior_delete\`. Bare names used below for readability.
 
 ## Stores
 
@@ -578,6 +630,29 @@ worth posting. This applies whether the user invoked a review skill, is
 reviewing your changes, or asked you to review their changes or another LLM's
 changes. Before creating a new prediction, query for an existing one and
 reinforce or adjust it when possible.
+
+## Situational Behaviors
+
+A model of your own operational rules is maintained by the behavior engine.
+Scored behaviors may appear above as "Situational behaviors" context; these
+are self-discipline rules you codified for situations where you should react
+in a specific, repeatable way.
+
+When surfaced behaviors appear, evaluate each against the current situation:
+- If a behavior is relevant (ham), follow it and call behavior_feedback
+  with relevant: true
+- If a behavior is not relevant (spam), call behavior_feedback with
+  relevant: false
+- This trains the classifier so future nudges are more accurate
+
+When you recognize a situation you should react to in a specific, repeatable
+way that is about your own operational discipline (not a user preference):
+1. Use behavior_codify to create the rule
+2. Use behavior_feedback when surfaced behaviors fire to ham/spam them
+3. Use behavior_delete to remove a rule created in error
+
+Do not codify rules that make you lazier or less thorough. Rules should encode
+discipline, not shortcuts.
 
 ## What to Store
 
@@ -689,4 +764,18 @@ export function predictionNudge(items: PredictionNudgeItem[]): string {
     return `- [${p.confidence.toFixed(2)} conf, ${p.evidence_count} tests] When ${p.matcher_description}: ${verb} ${p.statement}`;
   });
   return `[thatch] User decision model\n${lines.join("\n")}`;
+}
+
+// ---------------------------------------------------------------------------
+// Behavior nudge: auto-injected when behavior matchers fire for the user's
+// prompt. Descriptive, not directive: the system prompt instructions govern
+// how to act (follow relevant rules, ham/spam each match via behavior_feedback).
+// ---------------------------------------------------------------------------
+
+export function behaviorNudge(items: BehaviorNudgeItem[]): string {
+  const lines = items.map((b) => {
+    const verb = b.evidence_count === 0 ? "consider" : "do";
+    return `- [${b.confidence.toFixed(2)} conf, ${b.evidence_count} tests] When ${b.matcher_description}: ${verb} ${b.statement}`;
+  });
+  return `[thatch] Situational behaviors\n${lines.join("\n")}`;
 }

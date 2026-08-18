@@ -1,8 +1,9 @@
+import { resolve } from "node:path";
 import { z } from "zod";
 import { ThatchDB } from "./db";
 import { BgeEmbeddingModel } from "./embeddings";
 import { detectRepo } from "./git";
-import { checkSetup } from "./setup";
+import { checkSetup, setupClaudeCode, setupCursor } from "./setup";
 import { TOOL_DEFS, type CoreContext, type ToolDef } from "./tool-defs";
 import { SidebandServer, sidebandSocketPath } from "./sideband";
 import { peekQueue, consumeQueue, resetMissedCount } from "./extract-queue";
@@ -138,6 +139,31 @@ export async function runMcpServer(): Promise<void> {
   if (setupStatus && setupStatus.status !== "installed") {
     setupWarning = setupStatus.message;
     console.error(`[thatch] ${setupWarning}`);
+  }
+
+  // Auto-refresh: if setup was previously run (markers exist), re-run the
+  // install functions to update skills, instructions, and hooks that may have
+  // drifted since the last `thatch setup`. All operations are idempotent --
+  // they only write when content differs. This keeps MCP-host installations
+  // up to date without requiring the user to manually re-run setup after
+  // upgrading thatch. The MCP config itself is also re-written, but it
+  // writes the same command that's already running, so it's a no-op in
+  // practice.
+  if (setupStatus && setupStatus.status === "installed") {
+    const thatchBin = resolve(process.argv[1] ?? process.execPath);
+    const isGlobal = setupStatus.scope === "global";
+    try {
+      if (setupStatus.host === "claude") {
+        setupClaudeCode(thatchBin, isGlobal, projectDir);
+      } else if (setupStatus.host === "cursor") {
+        setupCursor(thatchBin, isGlobal, projectDir);
+      }
+    } catch (err) {
+      // Auto-refresh is best-effort. A failure here does not affect the
+      // MCP server's ability to serve tool calls -- it just means skills
+      // or instructions may be stale until the user re-runs setup.
+      console.error(`[thatch] auto-refresh of skills/instructions failed: ${err}`);
+    }
   }
 
   // The sideband socket lets one-shot hook processes (flush-tools) ask the

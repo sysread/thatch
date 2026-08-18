@@ -35,8 +35,8 @@ threw an error (the `extracting` set is cleared on failure).
 
 `client.tui.showToast` is called from the `event` hook (on child idle, with
 extraction metrics: new/updated/deleted counts) and from `chat.message` (on
-recall and prediction matches). Best-effort — silently ignored if the TUI is
-not connected (headless mode).
+recall, prediction, and behavior matches). Best-effort — silently ignored if
+the TUI is not connected (headless mode).
 
 ## Claude Code (MCP server + hooks)
 

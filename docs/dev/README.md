@@ -58,11 +58,11 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `setup.ts` | `thatch setup --claude` installer. Writes .mcp.json, appends to CLAUDE.md (idempotent), installs hooks in settings.json, installs skills. |
 | `hygiene.ts` | Hygiene report: pending dedup pairs, stale count, orphaned branch memories. Shared by the plugin's session-start hook and the CLI's `thatch reminder` command. |
 | `git.ts` | Parse `owner/repo` from git remote. Worktree-safe fallback chain. |
-| `db.ts` | SQLite schema, CRUD for entries/stores, brute-force cosine search (`search` = pure scoring, `recall` = search + telemetry stamping), dedup-pair verdict tracking. Prediction tables: matchers, predictions, edges, provenance. `scorePredictionNudge` is the shared auto-fire entry point for both host paths. |
+| `db.ts` | SQLite schema, CRUD for entries/stores, brute-force cosine search (`search` = pure scoring, `recall` = search + telemetry stamping), dedup-pair verdict tracking. Prediction tables: matchers, predictions, edges, provenance. `scorePredictionNudge` is the shared auto-fire entry point for both host paths. Behavior tables: same four-table shape (matchers, behaviors, edges, provenance) with `scoreBehaviorNudge` as the shared entry point. |
 | `embeddings.ts` | Lazy-load the embedding model. Expose `queryEmbed`/`passageEmbed` and the model `name` (stored as an informational tag). `MockEmbeddingModel` for tests. |
 | `extraction.ts` | Per-session in-memory ring buffer (cap 20) that buffers non-thatch tool interactions and serializes them into the JSON payload the `get_extraction_payload` tool returns. The in-memory pipeline is opencode-only, but the payload builders (`buildExtractionPayload`, `deriveTitle`) are shared by both paths — `extract-queue.ts` imports `deriveTitle`, `mcp.ts` imports `buildExtractionPayload` for the extraction payload provider. `summarizeArgs` is used internally by `buildExtractionPayload`. |
 | `extract-queue.ts` | File-backed per-session JSONL queue (caps 20, oldest dropped). Shared by the Claude Code and Cursor hook paths, which fire one-shot per event with no cross-call state. This is the MCP-side equivalent of `extraction.ts`. |
-| `sideband.ts` | Unix domain socket server + client. The MCP server (long-lived, warm model) runs `SidebandServer` so one-shot hook processes can ask it to embed a prompt and search for matches without loading the model themselves. Handles two methods: `match` (recall nudge) and `predictions` (prediction auto-fire). Socket path is a hash of the DB path — both processes compute it independently. |
+| `sideband.ts` | Unix domain socket server + client. The MCP server (long-lived, warm model) runs `SidebandServer` so one-shot hook processes can ask it to embed a prompt and search for matches without loading the model themselves. Handles three methods: `match` (recall nudge), `predictions` (prediction auto-fire), and `behaviors` (behavior auto-fire). Socket path is a hash of the DB path — both processes compute it independently. |
 | `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, prompt-aware recall nudge (`recallNudge` / `claudeRecallNudge`), Claude Code CLAUDE.md instructions, Cursor AGENTS.md instructions, Claude Code hook text. |
 | `skills.ts` | `SKILL.md` content for all thatch skills, plus the installer. Skills are split into `SHARED_SKILLS` (22 skills: fact-extractor, dedup-classifier, project-primer, 7 review specialists, review synthesizer, review context, code archaeology, review followup, review response, change walkthrough, code walkthrough, session reflection, coding-workflow, thatch-pr-description, thatch-ticket-description, thatch-split-overlarge-pr — work on both opencode and Claude Code) and `OPENCODE_ONLY_SKILLS` (1 skill: code-review coordinator — requires sub-agent support, not installed for Claude Code). `installSkills(dir, skills)` defaults to `SHARED_SKILLS`; the opencode plugin passes `[...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]`. |
 
@@ -76,7 +76,7 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `experimental.session.compacting` | Marks the session as compacting and appends re-familiarization context so a compacted session still knows thatch exists. |
 | `experimental.compaction.autocontinue` | Clears the compacting flag so `chat.message` nudges resume. Without this, nudges that instruct tool calls would fire during summary generation where tools are blocked. The `chat.message` hook also clears the flag if it fires for a session still in the compacting set but the incoming message has no compaction-type part — this handles compaction failure, where the session would otherwise be stuck with nudges off forever. |
 | `tool.execute.after` | Buffers every non-`thatch_*`, non-`skill`, non-`task` tool call into the session's extraction buffer. (Skill/task are excluded — buffering them creates a feedback loop where the nudge triggers a skill load, which gets buffered, which triggers another nudge.) Memory writes (`thatch_memory_remember`) and `thatch_extraction_done` drain the buffer and reset the missed-nudge counter. For child sessions (`childToParent.has(sessionID)`), also tracks metrics: `remember` with `overwrite:false` → new++, `overwrite:true` → updated++, `forget` → deleted++. This is a plugin hook, NOT a bus event — do not move it into the `event` handler; the event bus has no such event and it will silently never fire. |
-| `chat.message` | Two priority tiers: (a) if extraction buffer has interactions and the session is NOT in the `extracting` set (direct extraction in progress), **peeks** the buffer (does NOT drain it) and injects a synthetic text part carrying the extraction nudge with the session ID and fetch tool name (not the full payload) — the sub-agent calls `thatch_get_extraction_payload` to retrieve the interactions as a tool response, keeping the full payload out of the main session's context window. The buffer persists until the agent writes a memory or calls `thatch_extraction_done`, so ignored nudges repeat and escalate (polite → insistent → ALL-CAPS) via the `missedNudges` counter; (b) otherwise, embeds the user's prompt text with the in-process warm model, searches `db.search()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55). The same embedding also feeds the prediction auto-fire: `db.scorePredictionNudge` scores the prompt against prediction matchers and injects a separate `[thatch] User decision model` nudge if any matchers clear the 0.45 threshold. Recall and prediction nudges fire independently (separate try/catch blocks, separate synthetic parts). Skipped entirely while the session is compacting (tool calls are blocked during summary generation). |
+| `chat.message` | Two priority tiers: (a) if extraction buffer has interactions and the session is NOT in the `extracting` set (direct extraction in progress), **peeks** the buffer (does NOT drain it) and injects a synthetic text part carrying the extraction nudge with the session ID and fetch tool name (not the full payload) — the sub-agent calls `thatch_get_extraction_payload` to retrieve the interactions as a tool response, keeping the full payload out of the main session's context window. The buffer persists until the agent writes a memory or calls `thatch_extraction_done`, so ignored nudges repeat and escalate (polite → insistent → ALL-CAPS) via the `missedNudges` counter; (b) otherwise, embeds the user's prompt text with the in-process warm model, searches `db.search()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55). The same embedding also feeds the prediction auto-fire (`db.scorePredictionNudge`, injects `[thatch] User decision model`) and the behavior auto-fire (`db.scoreBehaviorNudge`, injects `[thatch] Situational behaviors`). All three nudges (recall, prediction, behavior) fire independently in separate try/catch blocks with separate synthetic parts. Skipped entirely while the session is compacting (tool calls are blocked during summary generation). |
 | `event` | Subscribes to all session bus events. `session.created`: records `childToParent` + `parentSnapshots` (shallow copy of the parent's buffer for snapshot-aware drain), then sends the session-start reminder via `client.session.prompt` carrying the hygiene heartbeat (pending dedup pairs, stale count, orphaned branch memories) when any signal is non-zero. `session.status` (idle): if the session is a child, drains its snapshot, fires a toast with `childMetrics`, and deletes the child session; if the session is a parent with pending tool interactions and not already extracting, calls `triggerExtraction` to create a direct-extraction child. `session.error`: requeues the parent's buffer (child died without draining). `session.deleted`: cleans up `childToParent`, `parentSnapshots`, `childMetrics`, and `extracting`. `session.compacted`: clears the compacting flag so `chat.message` nudges resume. |
 | `dispose` | Closes the DB. |
 
@@ -138,6 +138,18 @@ Two of these hooks were dead for weeks because failures were invisible.
     relevance-gated (being tested moves it, not being ignored). See the
     prediction DB tables, auto-fire in `chat.message`, and the sideband
     `predictions` method for the MCP path.
+12. **Behavior engine mirrors the prediction engine but is self-graded.** Same
+    four-table data model, same Bayesian confidence, same auto-fire pipeline.
+    The difference: predictions model what the USER wants (graded by user
+    feedback); behaviors model what the LLM should do (graded by the LLM's own
+    ham/spam relevance judgment via `behavior_feedback`). The firewall
+    principle from predictions (the model that uses predictions cannot grade
+    them) does not apply: the LLM grading its own behavioral rules is the
+    point, not a violation. The ham/spam is a relevance judgment ("does this
+    rule apply here?"), not a value judgment ("is this a good rule?"). An
+    anti-laziness guard in the prompt prevents the agent from codifying
+    shortcuts. See the behavior DB tables, auto-fire in `chat.message`, and
+    the sideband `behaviors` method for the MCP path.
 
 ## Data flow
 
@@ -207,7 +219,9 @@ toast notifications (opencode-only, TUI-rendered)
   → recall matches: `[thatch] recalled N memories` (info variant, 3s) —
     fires when chat.message matches stored memories
   → prediction matches: `[thatch] N predictions surfaced` (info variant,
-    3s) — fires when chat.message matches decision-model patterns
+     3s) — fires when chat.message matches decision-model patterns
+  → behavior matches: `[thatch] N behaviors surfaced` (info variant,
+     3s) — fires when chat.message matches codified behavior matchers
 
 prompt-aware recall nudge (both paths)
   → opencode: chat.message hook embeds prompt text with warm in-process model,
@@ -237,7 +251,7 @@ prediction cycle (agent-driven, statistical model)
     confidence is relevance-gated (being tested moves it, not being ignored).
   → auto-fire (opencode): chat.message reuses the prompt embedding already
     computed for the recall nudge. db.scorePredictionNudge([repo, global],
-    embedding, 0.45) finds matchers above threshold, follows edges to
+     embedding, 0.60) finds matchers above threshold, follows edges to
     predictions, scores by cosine * weight * confidence, dedups by
     prediction_id, and returns top 5. Injects a separate synthetic part
     with a [thatch] User decision model block. 0-evidence predictions use
@@ -252,6 +266,29 @@ prediction cycle (agent-driven, statistical model)
     thatch_prediction_list inspects the model with provenance;
     thatch_prediction_delete removes bad predictions (cascade clears edges
     and provenance).
+
+behavior cycle (agent-driven, self-graded)
+  → formation: agent calls thatch_behavior_codify(situation, behavior, rationale)
+    when it recognizes a situation it should react to in a specific, repeatable
+    way. The tool embeds the situation text, finds or creates a behavior matcher
+    (0.85 dedup), finds or creates a behavior (0.85 store-wide dedup), links
+    them via an edge. Confidence starts at p0 (0.5) with 0 evidence.
+  → auto-fire (opencode): chat.message reuses the prompt embedding. db.
+     scoreBehaviorNudge([repo, global], embedding, 0.60) finds behavior matchers
+    above threshold, follows edges to behaviors, scores by cosine * weight *
+    confidence, dedups by behavior_id, returns top 5. Injects a separate
+    synthetic part with a [thatch] Situational behaviors block. 0-evidence
+    behaviors use "consider"; behaviors with evidence use "do".
+  → auto-fire (Claude Code/Cursor): flush-tools fires the behavior query via
+    the sideband socket's `behaviors` method in parallel with recall and
+    predictions. Same scoreBehaviorNudge entry point prevents scoring drift.
+  → consumption: agent evaluates each surfaced behavior against the current
+    situation. If relevant (ham), follows it and calls behavior_feedback with
+    relevant: true (confirm). If not relevant (spam), calls behavior_feedback
+    with relevant: false (disconfirm). The feedback adjusts the Bayesian
+    confidence the same way prediction signals do. thatch_behavior_list
+    inspects with provenance; thatch_behavior_delete removes bad rules
+    (cascade clears edges and provenance).
 ```
 
 ## Database
@@ -266,7 +303,11 @@ prediction cycle (agent-driven, statistical model)
   `prediction_matchers(id PK, store, description, embedding BLOB, model, created_at, updated_at)`,
   `predictions(id PK, store, statement, rationale, embedding BLOB, model, confidence REAL, confirm_count REAL, disconfirm_count REAL, created_at, updated_at)`,
   `prediction_edges(matcher_id, prediction_id, weight REAL, PK(matcher_id, prediction_id), FK CASCADE)`,
-  `prediction_provenance(id PK, prediction_id, signal, detail, created_at, FK CASCADE)`.
+  `prediction_provenance(id PK, prediction_id, signal, detail, created_at, FK CASCADE)`,
+  `behavior_matchers(id PK, store, description, embedding BLOB, model, created_at, updated_at)`,
+  `behaviors(id PK, store, statement, rationale, embedding BLOB, model, confidence REAL, confirm_count REAL, disconfirm_count REAL, created_at, updated_at)`,
+  `behavior_edges(matcher_id, behavior_id, weight REAL, PK(matcher_id, behavior_id), FK CASCADE)`,
+  `behavior_provenance(id PK, behavior_id, signal, detail, created_at, FK CASCADE)`.
 - `recall_count`, `last_recalled_at`, and `archived` are added to pre-existing
   databases by an idempotent column migration at init (`PRAGMA table_info` +
   `ALTER TABLE`). The `archived` column is `INTEGER NOT NULL DEFAULT 0` (0 =

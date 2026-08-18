@@ -91,7 +91,7 @@ correctness on `README.md` and `docs/` excluding `docs/plans/`; see
 
 ### `tests/plugin.test.ts`
 
-- `server` export shape: all thirteen tools, every hook present, tools carry
+- `server` export shape: all eighteen tools, every hook present, tools carry
   description/args/execute
 - System transform and compaction hooks append their text
 - `tool.execute.after` → `chat.message` extraction round-trip: nudge carries
@@ -106,10 +106,12 @@ correctness on `README.md` and `docs/` excluding `docs/plans/`; see
 - Prediction auto-fire via `chat.message`: surfaces when prompt matches a
   stored matcher, no nudge for unrelated prompts, prediction and recall
   nudges fire independently as separate synthetic parts
+- Behavior auto-fire via `chat.message`: surfaces when prompt matches a
+  stored behavior matcher, no nudge for unrelated prompts
 
 ### `tests/tool-defs.test.ts`
 
-- Tool count (13) and name list
+- Tool count (18) and name list
 - Zod schema validation for each tool's args
 - Execute functions: `memory_remember` save/duplicate/overwrite/archived,
   `memory_recall` default/empty/archived, `memory_list`/`show`/`forget`,
@@ -133,6 +135,20 @@ correctness on `README.md` and `docs/` excluding `docs/plans/`; see
   cascade to edges and provenance
 - `listPredictions`: sorted by confidence, matchers included
 - `populationP0`: under-20 fallback, population hit rate with sufficient evidence
+
+### `tests/behavior.test.ts`
+
+- Schema: tables exist after init
+- Behavior matcher creation and lookup: `findBehaviorMatchers` ranking,
+  `findNearestBehaviorMatcher` threshold/dedup
+- Behavior creation: `createBehavior` seeds at p0, `adjustBehaviorConfidence`
+  confirm/disconfirm/soft/multiple, non-existent ID no-op
+- Edges and scoring: `createBehaviorEdge` links, `scoreBehaviors` empty/dedup/
+  weight-preservation, `scoreBehaviorNudge` threshold filtering + dedup
+- `findNearestBehavior`: store-wide search, threshold
+- Provenance: `addBehaviorProvenance` + `getBehaviorProvenance` read-back,
+  `deleteBehavior` cascade to edges and provenance
+- `listBehaviors`: sorted by confidence, matchers included
 
 ### `tests/hygiene.test.ts`
 

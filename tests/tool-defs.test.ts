@@ -28,8 +28,8 @@ afterEach(() => {
 });
 
 describe("TOOL_DEFS", () => {
-  test("exports all 14 tools", () => {
-    expect(TOOL_DEFS.length).toBe(14);
+  test("exports all 18 tools", () => {
+    expect(TOOL_DEFS.length).toBe(18);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -46,6 +46,10 @@ describe("TOOL_DEFS", () => {
       "prediction_update",
       "prediction_list",
       "prediction_delete",
+      "behavior_codify",
+      "behavior_feedback",
+      "behavior_list",
+      "behavior_delete",
     ]);
   });
 

@@ -18,3 +18,7 @@ import "./uc-021-prediction-autofire";
 import "./uc-022-prediction-dedup";
 import "./uc-023-prediction-confidence-model";
 import "./uc-024-prediction-delete";
+import "./uc-025-behavior-autofire";
+import "./uc-026-behavior-dedup";
+import "./uc-027-behavior-confidence-model";
+import "./uc-028-behavior-delete";

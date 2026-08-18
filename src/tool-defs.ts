@@ -2,16 +2,17 @@ import { z } from "zod";
 import type { ThatchDB, DedupCandidate } from "./db";
 import type { EmbeddingModel } from "./embeddings";
 
-// Near-duplicate thresholds for matcher/prediction dedup at creation time.
-// Matches the thatch_find_duplicates threshold (0.85).
+// Near-duplicate thresholds for matcher/prediction/behavior dedup at
+// creation time. Matches the thatch_find_duplicates threshold (0.85).
 const MATCHER_DEDUP_COSINE = 0.85;
 const PREDICTION_DEDUP_COSINE = 0.85;
+const BEHAVIOR_DEDUP_COSINE = 0.85;
 
 // Minimum matcher cosine to consider a prediction relevant. Matches the
 // auto-fire threshold in index.ts (PREDICTION_THRESHOLD). The query tool
 // should not return predictions from near-zero-similarity matchers that
 // would never fire in the auto-fire.
-const PREDICTION_QUERY_THRESHOLD = 0.45;
+const PREDICTION_QUERY_THRESHOLD = 0.60;
 
 /**
  * Shared context passed to every tool's execute function. Framework-agnostic -
@@ -650,6 +651,164 @@ const predictionDeleteDef: ToolDef = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Behavior engine: LLM self-discipline rules with ham/spam feedback
+// ---------------------------------------------------------------------------
+
+const behaviorCodifyDef: ToolDef = {
+  name: "behavior_codify",
+  description:
+    "Codify a self-discipline rule: when situation X arises, you should " +
+    "do Y. Use when you recognize a situation you should react to in a " +
+    "specific, repeatable way that is NOT a user preference (use " +
+    "prediction_update for those). The rule is about your own operational " +
+    "discipline, not what the user wants. Examples: check the whole " +
+    "codebase for a library before importing it; investigate disabled " +
+    "tests before touching the area; read a large function fully before " +
+    "editing it.",
+  args: {
+    situation: z.string().describe(
+      "Description of the situation that triggers this behavior. What context " +
+      "or task type makes this rule apply?",
+    ),
+    behavior: z.string().describe(
+      "The behavioral rule. What should you do when this situation arises?",
+    ),
+    rationale: z.string().describe(
+      "Why you are codifying this rule. What happened that made you realize " +
+      "this behavior is worth persisting?",
+    ),
+    store: z.string().optional().describe(
+      "Store to write to. Defaults to the project store.",
+    ),
+  },
+  async execute(args, ctx) {
+    const store = (args.store as string) || ctx.defaultStore;
+    const situationText = args.situation as string;
+    const behaviorText = args.behavior as string;
+    const rationale = args.rationale as string;
+
+    const matcherEmbed = await ctx.model.passageEmbed(situationText);
+    const behaviorEmbed = await ctx.model.passageEmbed(behaviorText);
+
+    return ctx.db.transaction(() => {
+      let matcherId = ctx.db.findNearestBehaviorMatcher(store, matcherEmbed, BEHAVIOR_DEDUP_COSINE)?.id;
+      if (!matcherId) matcherId = ctx.db.createBehaviorMatcher(store, situationText, matcherEmbed, ctx.model.name);
+
+      let behaviorId = ctx.db.findNearestBehavior(store, behaviorEmbed, BEHAVIOR_DEDUP_COSINE)?.id;
+      if (!behaviorId) {
+        behaviorId = ctx.db.createBehavior(store, behaviorText, rationale, behaviorEmbed, ctx.model.name);
+        ctx.db.createBehaviorEdge(matcherId, behaviorId, 1.0);
+        ctx.db.addBehaviorProvenance(behaviorId, "codify", rationale);
+        return `[codified] ${store} :: "${behaviorText}" for "${situationText}"`;
+      }
+
+      ctx.db.createBehaviorEdge(matcherId, behaviorId, 1.0);
+      ctx.db.addBehaviorProvenance(behaviorId, "codify", rationale);
+      const existing = ctx.db.getBehavior(behaviorId);
+      return `[linked] "${existing?.statement ?? behaviorText}" for "${situationText}" confidence=${(existing?.confidence ?? 0).toFixed(2)} (${existing?.confirm_count ?? 0}/${existing?.disconfirm_count ?? 0})`;
+    });
+  },
+};
+
+const behaviorFeedbackDef: ToolDef = {
+  name: "behavior_feedback",
+  description:
+    "Record ham/spam feedback on a surfaced behavior. When the behavior " +
+    "nudge surfaces rules and you evaluate each against the current " +
+    "situation, call this with relevant: true (ham) if the rule applies, " +
+    "or relevant: false (spam) if it does not. This trains the classifier " +
+    "so future nudges are more accurate. Also use when the user corrects " +
+    "your behavior and you realize a codified rule led you astray or " +
+    "should have been followed.",
+  args: {
+    behavior: z.string().describe(
+      "The behavior statement to provide feedback on. Use behavior_list " +
+      "to find the exact text; matching is semantic (cosine >= 0.85).",
+    ),
+    relevant: z.boolean().describe(
+      "true (ham) if the behavior is relevant to the current situation. " +
+      "false (spam) if it is not relevant.",
+    ),
+    context: z.string().describe(
+      "Brief description of the current situation, so the feedback is " +
+      "auditable in provenance.",
+    ),
+    store: z.string().optional().describe(
+      "Store to search. Defaults to the project store.",
+    ),
+  },
+  async execute(args, ctx) {
+    const store = (args.store as string) || ctx.defaultStore;
+    const behaviorText = args.behavior as string;
+    const relevant = args.relevant as boolean;
+    const contextText = args.context as string;
+
+    const behaviorEmbed = await ctx.model.passageEmbed(behaviorText);
+    const behavior = ctx.db.findNearestBehavior(store, behaviorEmbed, BEHAVIOR_DEDUP_COSINE);
+    if (!behavior) return `No behavior matching "${behaviorText}" found in "${store}".`;
+
+    const signal = relevant ? "confirm" : "disconfirm";
+    ctx.db.adjustBehaviorConfidence(behavior.id, signal);
+    ctx.db.addBehaviorProvenance(behavior.id, signal, `${relevant ? "ham" : "spam"}: ${contextText}`);
+    const updated = ctx.db.getBehavior(behavior.id);
+    return `[${signal}] "${updated?.statement ?? behaviorText}" confidence=${(updated?.confidence ?? 0).toFixed(2)} (${updated?.confirm_count ?? 0}/${updated?.disconfirm_count ?? 0})`;
+  },
+};
+
+const behaviorListDef: ToolDef = {
+  name: "behavior_list",
+  description:
+    "List all codified behaviors with their matchers, confidence, and " +
+    "evidence count. For inspection and debugging.",
+  args: {
+    store: z.string().optional().describe(
+      "Which store to list. Defaults to the project store.",
+    ),
+  },
+  async execute(args, ctx) {
+    const store = (args.store as string) || ctx.defaultStore;
+    const behaviors = ctx.db.listBehaviors(store);
+    if (behaviors.length === 0) return `No behaviors in "${store}".`;
+    return behaviors.map((b) => {
+      const matchers = b.matchers.map((m) => `    - "${m.description}" (w:${m.weight})`).join("\n");
+      const provenance = ctx.db.getBehaviorProvenance(b.id);
+      const provLines = provenance.map((pr) => `    - [${pr.created_at.slice(0, 10)}] ${pr.signal}: ${pr.detail ?? ""}`).join("\n");
+      return `[${b.confidence.toFixed(2)} conf, ${b.evidence_count} tests] ${b.statement}` +
+        (b.rationale ? `\n  rationale: ${b.rationale}` : "") +
+        (matchers ? `\n  matchers:\n${matchers}` : "") +
+        (provLines ? `\n  provenance:\n${provLines}` : "");
+    }).join("\n\n");
+  },
+};
+
+const behaviorDeleteDef: ToolDef = {
+  name: "behavior_delete",
+  description:
+    "Delete a codified behavior. Useful when a behavior was created in " +
+    "error or is no longer relevant. Edges and provenance are deleted " +
+    "automatically (cascade).",
+  args: {
+    statement: z.string().describe(
+      "The behavior statement to delete. Use behavior_list to find the " +
+      "exact text; matching is semantic (cosine >= 0.85).",
+    ),
+    store: z.string().optional().describe(
+      "Store to delete from. Defaults to the project store.",
+    ),
+  },
+  async execute(args, ctx) {
+    const store = (args.store as string) || ctx.defaultStore;
+    const statementText = args.statement as string;
+    const behaviorEmbed = await ctx.model.passageEmbed(statementText);
+    const behavior = ctx.db.findNearestBehavior(store, behaviorEmbed, BEHAVIOR_DEDUP_COSINE);
+    if (!behavior) return `No behavior matching "${statementText}" found in "${store}".`;
+    const deleted = ctx.db.deleteBehavior(behavior.id);
+    if (!deleted) return `Failed to delete behavior "${behavior.statement}".`;
+    return `[deleted] "${behavior.statement}" from "${store}"`;
+  },
+};
+
 /**
  * All tool definitions, in the order they should be presented to the agent.
  * The opencode plugin wraps each in `tool()`; the MCP server exposes them
@@ -670,4 +829,8 @@ export const TOOL_DEFS: ToolDef[] = [
   predictionUpdateDef,
   predictionListDef,
   predictionDeleteDef,
+  behaviorCodifyDef,
+  behaviorFeedbackDef,
+  behaviorListDef,
+  behaviorDeleteDef,
 ];

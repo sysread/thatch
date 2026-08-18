@@ -95,6 +95,10 @@ describe("plugin entry", () => {
     expect(hooks.tool).toBeDefined();
     const names = Object.keys(hooks.tool!);
     expect(names.sort()).toEqual([
+      "thatch_behavior_codify",
+      "thatch_behavior_delete",
+      "thatch_behavior_feedback",
+      "thatch_behavior_list",
       "thatch_dedup_mark_checked",
       "thatch_extraction_done",
       "thatch_find_duplicates",
@@ -1470,6 +1474,40 @@ describe("prediction auto-fire via chat.message", () => {
     const predPart = output.parts.find((p: any) => p.text?.includes("User decision model"));
     expect(recallPart).toBeDefined();
     expect(predPart).toBeDefined();
+  });
+});
+
+describe("behavior auto-fire via chat.message", () => {
+  test("surfaces a behavior nudge when prompt matches a stored behavior matcher", async () => {
+    // Seed a behavior via the server's own tool so embeddings come from
+    // the mocked BgeEmbeddingModel. Same pattern as the prediction auto-fire test.
+    await hooks.tool!.thatch_behavior_codify.execute({
+      situation: "about to import a new library into a project",
+      behavior: "check the whole codebase for an existing import of that library first",
+      rationale: "avoiding duplicate dependency imports",
+    } as any, {} as any);
+
+    const output: any = {
+      message: { id: "msg_behavior_1" },
+      parts: [{ type: "text", text: "about to import a new library into a project" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_behavior_1", messageID: "msg_behavior_1" } as any, output);
+    expect(output.parts.length).toBeGreaterThanOrEqual(2);
+    const behaviorPart = output.parts.find((p: any) => p.text?.includes("Situational behaviors"));
+    expect(behaviorPart).toBeDefined();
+    expect(behaviorPart.synthetic).toBe(true);
+    expect(behaviorPart.text).toContain("[thatch]");
+    expect(behaviorPart.text).toContain("consider"); // 0-evidence verb
+  });
+
+  test("no behavior nudge when prompt matches no behavior matcher above threshold", async () => {
+    const output: any = {
+      message: { id: "msg_behavior_2" },
+      parts: [{ type: "text", text: "completely unrelated topic about cooking pasta from scratch" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_behavior_2", messageID: "msg_behavior_2" } as any, output);
+    const behaviorPart = output.parts.find((p: any) => p.text?.includes("Situational behaviors"));
+    expect(behaviorPart).toBeUndefined();
   });
 });
 

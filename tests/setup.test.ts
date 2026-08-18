@@ -288,6 +288,10 @@ describe("claudeInstructions content", () => {
     expect(text).toContain("mcp__thatch__dedup_mark_checked");
     expect(text).toContain("mcp__thatch__extraction_done");
     expect(text).toContain("mcp__thatch__get_extraction_payload");
+    expect(text).toContain("mcp__thatch__behavior_codify");
+    expect(text).toContain("mcp__thatch__behavior_feedback");
+    expect(text).toContain("mcp__thatch__behavior_list");
+    expect(text).toContain("mcp__thatch__behavior_delete");
   });
 
   test("includes session startup instructions", () => {
@@ -578,6 +582,10 @@ describe("cursorInstructions content", () => {
     expect(text).toContain("mcp__thatch__dedup_mark_checked");
     expect(text).toContain("mcp__thatch__extraction_done");
     expect(text).toContain("mcp__thatch__get_extraction_payload");
+    expect(text).toContain("mcp__thatch__behavior_codify");
+    expect(text).toContain("mcp__thatch__behavior_feedback");
+    expect(text).toContain("mcp__thatch__behavior_list");
+    expect(text).toContain("mcp__thatch__behavior_delete");
   });
 
   test("references Cursor (not Claude Code)", () => {
@@ -611,6 +619,25 @@ describe("systemPrompt content", () => {
     const text = systemPrompt("test/repo");
     expect(text).toContain("Code review discussions are high-signal prediction material");
     expect(text).toContain("review threshold, severity, tone, evidence, scope, false positives");
+  });
+
+  test("includes situational behaviors section", () => {
+    const text = systemPrompt("test/repo");
+    expect(text).toContain("Situational Behaviors");
+    expect(text).toContain("behavior_codify");
+    expect(text).toContain("behavior_feedback");
+  });
+
+  test("claudeInstructions includes situational behaviors section", () => {
+    const text = claudeInstructions();
+    expect(text).toContain("Situational Behaviors");
+    expect(text).toContain("behavior_codify");
+  });
+
+  test("cursorInstructions includes situational behaviors section", () => {
+    const text = cursorInstructions();
+    expect(text).toContain("Situational Behaviors");
+    expect(text).toContain("behavior_codify");
   });
 
   test("does not use deprecated instructional-design wording for writing skills", () => {

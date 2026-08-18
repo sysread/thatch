@@ -3,7 +3,7 @@ import { unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, connect, type Server, type Socket } from "node:net";
-import type { ThatchDB, PredictionNudgeItem } from "./db";
+import type { ThatchDB, PredictionNudgeItem, BehaviorNudgeItem } from "./db";
 import type { EmbeddingModel } from "./embeddings";
 
 /**
@@ -24,7 +24,7 @@ export interface SidebandMatch {
 }
 
 interface MatchRequest {
-  method: "match" | "predictions";
+  method: "match" | "predictions" | "behaviors";
   text: string;
   stores: string[];
   threshold: number;
@@ -35,6 +35,7 @@ interface MatchResponse {
   ok: boolean;
   matches?: SidebandMatch[];
   predictions?: PredictionNudgeItem[];
+  behaviors?: BehaviorNudgeItem[];
   error?: string;
 }
 
@@ -116,7 +117,7 @@ export class SidebandServer {
       return;
     }
 
-    if (req.method !== "match" && req.method !== "predictions") {
+    if (req.method !== "match" && req.method !== "predictions" && req.method !== "behaviors") {
       this.#respond(socket, { ok: false, error: `Unknown method: ${req.method}` });
       return;
     }
@@ -129,6 +130,14 @@ export class SidebandServer {
           req.stores, embedding, req.threshold, 5,
         );
         this.#respond(socket, { ok: true, predictions });
+        return;
+      }
+
+      if (req.method === "behaviors") {
+        const behaviors = this.#db.scoreBehaviorNudge(
+          req.stores, embedding, req.threshold, 5,
+        );
+        this.#respond(socket, { ok: true, behaviors });
         return;
       }
 
@@ -186,8 +195,24 @@ export function sidebandPredictions(
     .then((res) => res?.predictions ?? null);
 }
 
+/**
+ * Connect to the sideband server and request scored behaviors for a prompt.
+ * Returns null on any failure; callers treat null as "skip the behavior nudge."
+ */
+export function sidebandBehaviors(
+  socketPath: string,
+  text: string,
+  stores: string[],
+  threshold: number,
+  limit: number,
+  timeoutMs = 2000,
+): Promise<BehaviorNudgeItem[] | null> {
+  return sidebandRequest("behaviors", socketPath, text, stores, threshold, limit, timeoutMs)
+    .then((res) => res?.behaviors ?? null);
+}
+
 function sidebandRequest(
-  method: "match" | "predictions",
+  method: "match" | "predictions" | "behaviors",
   socketPath: string,
   text: string,
   stores: string[],
