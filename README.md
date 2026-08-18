@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/sysread/thatch/actions/workflows/ci.yml/badge.svg)](https://github.com/sysread/thatch/actions/workflows/ci.yml)
 
-Persistent memory and useful dev skills for AI coding agents. Works with
+Persistent memory and operational methodology for AI coding agents. Works with
 **OpenCode** (as a plugin), **Claude Code** (as a local MCP server), and
 **Cursor** (as a local MCP server).
 
@@ -31,7 +31,8 @@ Without this env var, extraction still works - the child session runs
 synchronously (fire-and-forget) instead of asynchronously.
 
 Then **prime your project memory** by running `thatch prime` in your project directory.
-This will launch an `opencode` session to build an initial map of the code base and its architecture to seed the memory.
+This launches an `opencode` session to build an initial map of the code base
+and seed the memory.
 
 ### Claude Code and Cursor
 
@@ -65,14 +66,27 @@ Include thatch's instructions in your agent's system prompt manually; see
 
 ## What's inside
 
-- **Memory tools**: save, search, list, show, and forget memories with
-  semantic search (local embeddings, SQLite, brute-force cosine).
-- **Prediction engine**: a statistical model of user decision-making
+Thatch gives your agent three layers of persistent context:
+
+- **Memory** -- save, search, and recall knowledge across sessions with
+  local embeddings (bge-small-en-v1.5) and SQLite. Every project gets its
+  own store; a shared global store holds cross-project knowledge. The agent
+  writes and reads memories through tools -- thatch never saves anything on
+  its own.
+- **Prediction engine** -- a statistical model of the user's decision-making
   preferences. When a prompt matches learned contexts, predictions fire
-  alongside the recall nudge.
-- **Skills**: 23 skills for memory workflows, structured multi-specialist
-  code review, review response, change walkthroughs, and writing tasks (PR
-  descriptions, tickets, PR splitting).
+  alongside the recall nudge. Confidence is graded (Bayesian posterior) and
+  reinforced or weakened by user feedback. The agent follows strong
+  predictions silently and surfaces ambiguous ones to the user.
+- **Behavior engine** -- a self-discipline model where the agent codifies
+  its own operational rules ("when X, I do Y"). Rules auto-fire when similar
+  situations arise. The agent ham/spams each surfaced rule to train the
+  classifier. Confidence adjusts the same way as predictions. An anti-laziness
+  guard in the prompt prevents the agent from codifying shortcuts.
+
+Plus **23 skills** for memory workflows, structured multi-specialist code
+review, review response, change and feature walkthroughs, and writing tasks
+(PR descriptions, tickets, PR splitting).
 
 See the [user guide](docs/user/README.md) for the full tool list, CLI
 commands, configuration, environment variables, and detailed setup for each
