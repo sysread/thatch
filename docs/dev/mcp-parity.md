@@ -18,7 +18,7 @@ This document maps the feature parity and documents the remaining gaps.
 
 | Feature | OpenCode plugin | Claude Code MCP + hooks | Cursor MCP + hooks | Parity |
 |---------|----------------|------------------------|---------------------|--------|
-| **Tools** (13, single source of truth) | Plugin tool registration, `thatch_` prefix | MCP `tools/list` + `tools/call`, `mcp__thatch__` prefix | MCP `tools/list` + `tools/call`, `mcp__thatch__` prefix | **Full** |
+| **Tools** (18, single source of truth) | Plugin tool registration, `thatch_` prefix | MCP `tools/list` + `tools/call`, `mcp__thatch__` prefix | MCP `tools/list` + `tools/call`, `mcp__thatch__` prefix | **Full** |
 | **System prompt** (store names, usage rules) | `experimental.chat.system.transform` — dynamic, repo baked in at runtime | CLAUDE.md static text appended by `thatch setup`; repo auto-detected by the MCP server at startup | AGENTS.md static text appended by `thatch setup`; repo auto-detected at startup | **Approximate** — static text persists through compaction, so the agent retains the usage instructions, but the dynamic per-turn refresh is lost |
 | **Session-start reminder** (recall nudge + hygiene heartbeat) | `session.created` event → `client.session.prompt` injects a synthetic message | `SessionStart` hook → `thatch reminder`; stdout becomes context | `sessionStart` hook → `thatch reminder --json`; output is `additional_context` JSON | **Full** |
 | **Compaction context** (re-familiarize after compaction) | `experimental.session.compacting` hook appends context to the compaction output | `PostCompact` hook — side-effects only, **cannot inject context** | No equivalent hook | **Gapped** — see below |
@@ -26,6 +26,7 @@ This document maps the feature parity and documents the remaining gaps.
 | **Extraction feedback** (toast notifications) | `client.tui.showToast` fires when the extraction child goes idle — shows `[thatch] new: N, updated: M, deleted: K` (success) or `extraction complete — nothing to save` (info); best-effort, silently ignored in headless mode | No TUI connection — MCP hosts have no equivalent | No TUI connection | **Gapped** — MCP hosts cannot show toast notifications |
 | **Prompt-aware recall nudge** | `chat.message` hook embeds the prompt with the in-process warm model, searches `db.search()`, pushes a nudge part if matches ≥ threshold | `UserPromptSubmit` hook → `thatch flush-tools` connects to the MCP server's sideband socket; the warm server embeds + searches; hook prints the nudge or falls back to the write nudge | `beforeSubmitPrompt` hook → `thatch flush-tools --json` (same sideband path) | **Full** — sideband socket gives cold hook processes access to the warm MCP server's model |
 | **Prediction auto-fire** (user decision model) | `chat.message` hook scores the prompt embedding against prediction matchers; injects a `[thatch] User decision model` nudge alongside the recall nudge (separate synthetic part, same embedding call) | `UserPromptSubmit` hook → `thatch flush-tools` fires prediction query via the sideband socket's `predictions` method in parallel with the recall nudge | `beforeSubmitPrompt` hook → `thatch flush-tools --json` (same sideband path) | **Full** — same `scorePredictionNudge` entry point in both paths |
+| **Behavior auto-fire** (self-discipline rules) | `chat.message` hook scores the prompt embedding against behavior matchers; injects a `[thatch] Situational behaviors` nudge (separate synthetic part, same embedding call) | `UserPromptSubmit` hook → `thatch flush-tools` fires behavior query via the sideband socket's `behaviors` method in parallel with recall and predictions | `beforeSubmitPrompt` hook → `thatch flush-tools --json` (same sideband path) | **Full** — same `scoreBehaviorNudge` entry point in both paths |
 | **Skills** | Installed to `$XDG_CONFIG_HOME/opencode/skills` at plugin init (shared **+** opencode-only) | Installed to `$CLAUDE_CONFIG_DIR/skills/` by `thatch setup` (shared only) | Installed to `~/.cursor/skills/` by `thatch setup` (shared only) | **Full** — same SKILL.md format; the code-review coordinator is opencode-only (needs sub-agents) |
 | **Store detection** (repo identity from git remote) | `worktree` parameter from the opencode plugin | `CLAUDE_PROJECT_DIR` env (set by Claude Code for stdio MCP servers) | `CURSOR_PROJECT_DIR` then `CLAUDE_PROJECT_DIR` then cwd | **Full** |
 | **Setup detection at startup** | n/a — plugin auto-installs at init | `checkSetup` in MCP server: detects missing or broken instructions in CLAUDE.md | Same as Claude Code (checks AGENTS.md) | **Full** — warns the agent to tell the user to run `thatch setup` |
@@ -151,9 +152,10 @@ same socket path without out-of-band coordination. The path lives under
 `os.tmpdir()`.
 
 The protocol is newline-delimited JSON: one request per connection, one
-response. Requests are `{"method":"match","text":"...","stores":[...],
-"threshold":N,"limit":N}`. Responses are `{"ok":true,"matches":[...]}` or
-`{"ok":false,"error":"..."}`.
+response. Requests are `{"method":"match|predictions|behaviors",
+"text":"...","stores":[...],"threshold":N,"limit":N}`. Responses are
+`{"ok":true,"matches":[...]}` / `{"ok":true,"predictions":[...]}` /
+`{"ok":true,"behaviors":[...]}` or `{"ok":false,"error":"..."}`.
 
 Graceful degradation: if the socket isn't available (MCP server not running,
 old version, stale socket from a crash, or a >2 s timeout), `sidebandMatch`

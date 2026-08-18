@@ -116,6 +116,15 @@ Stores are created automatically — no setup required.
 | `thatch_prediction_list` | List all predictions in a store with matchers, confidence, and provenance. |
 | `thatch_prediction_delete` | Delete a prediction by semantic match. Edges and provenance are cascade-deleted. |
 
+### Behavior tools
+
+| Tool | What it does |
+|------|-------------|
+| `thatch_behavior_codify` | Codify a self-discipline rule: when situation X arises, the agent should do Y. For the agent's own operational discipline, not user preferences. |
+| `thatch_behavior_feedback` | Record ham/spam feedback on a surfaced behavior. `relevant: true` (ham) confirms the rule applies; `relevant: false` (spam) disconfirms. Trains the classifier. |
+| `thatch_behavior_list` | List all codified behaviors with matchers, confidence, and provenance. |
+| `thatch_behavior_delete` | Delete a behavior by semantic match. Edges and provenance are cascade-deleted. |
+
 ## Automatic behaviors
 
 Beyond the tools, thatch hooks into opencode itself:
@@ -142,19 +151,28 @@ Beyond the tools, thatch hooks into opencode itself:
   fallback. On Claude Code and Cursor, the nudge-and-acknowledge path is
   the only mechanism (no SDK client to create child sessions). The agent
   does the writing — thatch never saves memories on its own.
-- **Recall and prediction toasts.** When your prompt matches stored
-  memories or learned decision patterns, thatch injects a synthetic nudge
-  (invisible to you, visible to the agent) and fires a toast notification
-  (`[thatch] recalled 3 memories` or `[thatch] 2 predictions surfaced`).
-  The toast is ephemeral — it fades after a few seconds.
+- **Recall, prediction, and behavior toasts.** When your prompt matches stored
+  memories, learned decision patterns, or codified behaviors, thatch injects a
+  synthetic nudge (invisible to you, visible to the agent) and fires a toast
+  notification (`[thatch] recalled 3 memories`, `[thatch] 2 predictions
+  surfaced`, or `[thatch] 1 behavior surfaced`). The toast is ephemeral -- it
+  fades after a few seconds.
 - **Compaction context.** When opencode compacts a long session, thatch injects
   a reminder so the summarized session still knows memory tools exist.
 - **Prediction auto-fire.** When a prompt matches learned contexts, thatch
   injects a `User decision model` block alongside the recall nudge. The block
   lists scored predictions (confidence, evidence count) that the agent can
   follow silently (strong prediction), surface to the user (ambiguous), or
-  use to update the model after the user responds. No extra model call —
-  the prediction search reuses the same prompt embedding as the recall nudge.
+  use to update the model after the user responds. No extra model call -- the
+  prediction search reuses the same prompt embedding as the recall nudge.
+- **Behavior auto-fire.** When a prompt matches codified behavior matchers,
+  thatch injects a `Situational behaviors` block listing scored rules
+  (confidence, evidence count). The agent evaluates each rule against the
+  current situation: if relevant (ham), it follows the rule and calls
+  `behavior_feedback` with `relevant: true`; if not relevant (spam), it calls
+  `behavior_feedback` with `relevant: false`. This trains the classifier so
+  future nudges are more accurate. No extra model call -- reuses the same
+  embedding as recall and prediction.
 
 ### Setup detection (Claude Code and Cursor)
 
