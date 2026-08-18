@@ -12,7 +12,7 @@ const BEHAVIOR_DEDUP_COSINE = 0.85;
 // auto-fire threshold in index.ts (PREDICTION_THRESHOLD). The query tool
 // should not return predictions from near-zero-similarity matchers that
 // would never fire in the auto-fire.
-const PREDICTION_QUERY_THRESHOLD = 0.45;
+const PREDICTION_QUERY_THRESHOLD = 0.60;
 
 /**
  * Shared context passed to every tool's execute function. Framework-agnostic -

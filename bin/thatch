@@ -379,8 +379,8 @@ switch (command) {
         const { sidebandMatch, sidebandPredictions, sidebandBehaviors, sidebandSocketPath } = await import("../src/sideband");
         const sockPath = sidebandSocketPath(dbPath);
         const recallThreshold = parseFloat(process.env.THATCH_RECALL_THRESHOLD ?? "0.55");
-        const predThreshold = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.45");
-        const behaviorThreshold = parseFloat(process.env.THATCH_BEHAVIOR_THRESHOLD ?? "0.45");
+        const predThreshold = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.60");
+        const behaviorThreshold = parseFloat(process.env.THATCH_BEHAVIOR_THRESHOLD ?? "0.60");
 
         const [matches, predictions, behaviors] = await Promise.all([
           sidebandMatch(sockPath, promptText, [repo, "global"], recallThreshold, 5),
@@ -463,7 +463,7 @@ switch (command) {
       const { sidebandPredictions, sidebandSocketPath } = await import("../src/sideband");
       const { predictionNudge } = await import("../src/prompts");
       const sockPath = sidebandSocketPath(dbPath);
-      const threshold = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.45");
+      const threshold = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.60");
       const predictions = await sidebandPredictions(sockPath, promptText, [repo, "global"], threshold, 5);
 
       if (predictions && predictions.length > 0) {

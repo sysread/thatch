@@ -251,7 +251,7 @@ prediction cycle (agent-driven, statistical model)
     confidence is relevance-gated (being tested moves it, not being ignored).
   → auto-fire (opencode): chat.message reuses the prompt embedding already
     computed for the recall nudge. db.scorePredictionNudge([repo, global],
-    embedding, 0.45) finds matchers above threshold, follows edges to
+     embedding, 0.60) finds matchers above threshold, follows edges to
     predictions, scores by cosine * weight * confidence, dedups by
     prediction_id, and returns top 5. Injects a separate synthetic part
     with a [thatch] User decision model block. 0-evidence predictions use
@@ -274,7 +274,7 @@ behavior cycle (agent-driven, self-graded)
     (0.85 dedup), finds or creates a behavior (0.85 store-wide dedup), links
     them via an edge. Confidence starts at p0 (0.5) with 0 evidence.
   → auto-fire (opencode): chat.message reuses the prompt embedding. db.
-    scoreBehaviorNudge([repo, global], embedding, 0.45) finds behavior matchers
+     scoreBehaviorNudge([repo, global], embedding, 0.60) finds behavior matchers
     above threshold, follows edges to behaviors, scores by cosine * weight *
     confidence, dedups by behavior_id, returns top 5. Injects a separate
     synthetic part with a [thatch] Situational behaviors block. 0-evidence

@@ -32,13 +32,18 @@ const RECALL_THRESHOLD = parseFloat(process.env.THATCH_RECALL_THRESHOLD ?? "0.55
 // like "yes" or "ok" match too broadly to be useful.
 const MIN_PROMPT_LEN = 10;
 
-// Minimum cosine score for the prediction auto-fire. Lower than
-// RECALL_THRESHOLD because "this situation matches a known pattern" is
-// a weaker signal than "this prompt relates to a stored memory."
-const PREDICTION_THRESHOLD = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.45");
+// Minimum cosine score for the prediction auto-fire. Higher than the
+// recall nudge (0.55) because surfacing a user-preference nudge is more
+// disruptive than surfacing a memory -- the agent may act on it or
+// surface it to the user. 0.55 was the original default but produced
+// too many false fires in dense embedding spaces. 0.60 cuts the noise
+// while still catching genuinely related contexts.
+const PREDICTION_THRESHOLD = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.60");
 
-// Same threshold for behavior auto-fire. Uses the same env var pattern.
-const BEHAVIOR_THRESHOLD = parseFloat(process.env.THATCH_BEHAVIOR_THRESHOLD ?? "0.45");
+// Same threshold for behavior auto-fire. Same rationale: surfacing a
+// self-discipline rule is disruptive and should only fire when the
+// situation genuinely matches.
+const BEHAVIOR_THRESHOLD = parseFloat(process.env.THATCH_BEHAVIOR_THRESHOLD ?? "0.60");
 
 export const server: Plugin = async ({ client, worktree }) => {
   // The opencode server's cwd is wherever the server happened to start;
