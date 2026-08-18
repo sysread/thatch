@@ -12,6 +12,7 @@ import {
   extractionNudge,
   extractionDirectPrompt,
   predictionNudge,
+  behaviorNudge,
   type NudgeMatch,
 } from "./prompts";
 import { ExtractionPipeline, type ToolInteraction } from "./extraction";
@@ -35,6 +36,9 @@ const MIN_PROMPT_LEN = 10;
 // RECALL_THRESHOLD because "this situation matches a known pattern" is
 // a weaker signal than "this prompt relates to a stored memory."
 const PREDICTION_THRESHOLD = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.45");
+
+// Same threshold for behavior auto-fire. Uses the same env var pattern.
+const BEHAVIOR_THRESHOLD = parseFloat(process.env.THATCH_BEHAVIOR_THRESHOLD ?? "0.45");
 
 export const server: Plugin = async ({ client, worktree }) => {
   // The opencode server's cwd is wherever the server happened to start;
@@ -328,13 +332,14 @@ export const server: Plugin = async ({ client, worktree }) => {
     // 4. Per-message nudge - two priority tiers:
     //   a. Extraction nudge: prior tool interactions are queued for fact
     //      extraction (carries the JSON payload for thatch-fact-extractor).
-    //   b. Recall + prediction nudge: when no extraction is pending, embed
-    //      the user's prompt (shared embedding for both) and:
+    //   b. Recall + prediction + behavior nudge: when no extraction is pending, embed
+    //      the user's prompt (shared embedding for all three) and:
     //        - search memories by cosine (recall nudge)
     //        - search matchers by cosine, score predictions (prediction fire)
-    //      Both fire independently; either, both, or neither may inject.
-    //      The auto-fire reuses the embedding already computed for recall,
-    //      adding only one more cosine scan against the matchers table.
+    //        - search behavior matchers by cosine, score behaviors (behavior fire)
+    //      All three fire independently; any subset may inject.
+    //      The auto-fires reuse the embedding already computed for recall,
+    //      adding only cosine scans against the matchers tables.
     //      No extra model calls.
     //
     // Skipped during compaction: the agent can't call tools while generating
@@ -447,6 +452,35 @@ export const server: Plugin = async ({ client, worktree }) => {
           }
         } catch (err) {
           console.error(`[thatch] prediction nudge failed: ${err}`);
+        }
+
+        // Behavior fire: independent of recall and prediction. Same
+        // embedding, one more cosine scan against behavior_matchers.
+        try {
+          const behaviorItems = db.scoreBehaviorNudge([repo, "global"], embedding, BEHAVIOR_THRESHOLD);
+          if (behaviorItems.length > 0) {
+            output.parts.push({
+              id: `prt_thatch_${Math.random().toString(36).slice(2)}`,
+              sessionID: input.sessionID,
+              messageID: input.messageID ?? output.message.id,
+              type: "text",
+              text: behaviorNudge(behaviorItems),
+              synthetic: true,
+            });
+            try {
+              await client.tui.showToast({
+                body: {
+                  message: `\u{1F4AD} ${behaviorItems.length} behavior${behaviorItems.length === 1 ? "" : "s"} surfaced`,
+                  variant: "info",
+                  duration: 3000,
+                },
+              });
+            } catch {
+              // TUI may not be connected. Best-effort.
+            }
+          }
+        } catch (err) {
+          console.error(`[thatch] behavior nudge failed: ${err}`);
         }
       } catch (err) {
         console.error(`[thatch] nudge hook failed: ${err}`);

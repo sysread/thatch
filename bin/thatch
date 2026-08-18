@@ -351,7 +351,7 @@ switch (command) {
       const sessionID = data.session_id ?? data.conversation_id;
 
       const { peekQueue, getMissedCount, incrementMissedCount } = await import("../src/extract-queue");
-      const { extractionNudge, claudeWriteNudge, claudeRecallNudge, predictionNudge } = await import("../src/prompts");
+      const { extractionNudge, claudeWriteNudge, claudeRecallNudge, predictionNudge, behaviorNudge } = await import("../src/prompts");
 
       let repo = "unknown";
       try { repo = await detectRepo(); } catch {}
@@ -376,14 +376,16 @@ switch (command) {
       // Both recall and predictions share the same sideband round-trip.
       const promptText = data.prompt ?? data.message ?? data.text ?? data.user_input ?? data.input;
       if (promptText && promptText.length >= 10) {
-        const { sidebandMatch, sidebandPredictions, sidebandSocketPath } = await import("../src/sideband");
+        const { sidebandMatch, sidebandPredictions, sidebandBehaviors, sidebandSocketPath } = await import("../src/sideband");
         const sockPath = sidebandSocketPath(dbPath);
         const recallThreshold = parseFloat(process.env.THATCH_RECALL_THRESHOLD ?? "0.55");
         const predThreshold = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.45");
+        const behaviorThreshold = parseFloat(process.env.THATCH_BEHAVIOR_THRESHOLD ?? "0.45");
 
-        const [matches, predictions] = await Promise.all([
+        const [matches, predictions, behaviors] = await Promise.all([
           sidebandMatch(sockPath, promptText, [repo, "global"], recallThreshold, 5),
           sidebandPredictions(sockPath, promptText, [repo, "global"], predThreshold, 5),
+          sidebandBehaviors(sockPath, promptText, [repo, "global"], behaviorThreshold, 5),
         ]);
 
         const parts: string[] = [];
@@ -392,6 +394,9 @@ switch (command) {
         }
         if (predictions && predictions.length > 0) {
           parts.push(predictionNudge(predictions));
+        }
+        if (behaviors && behaviors.length > 0) {
+          parts.push(behaviorNudge(behaviors));
         }
 
         if (parts.length > 0) {
