@@ -10,7 +10,7 @@ import { registerUseCase, type UseCase } from "../runner";
 
 const useCase: UseCase = {
   name: "UC-007-recall-nudge",
-  preconditions: [
+  userDoc: "docs/user/memory.md",  preconditions: [
     '- A store with a memorable fact, e.g. "staging DB at staging-db.internal:5432"',
     "- An opencode session AND (separately) a Claude Code / Cursor session with the MCP server",
     "  running and the sideband socket live",

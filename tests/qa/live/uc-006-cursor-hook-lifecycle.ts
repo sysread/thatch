@@ -11,7 +11,7 @@ import { registerUseCase, type UseCase } from "../runner";
 
 const useCase: UseCase = {
   name: "UC-006-cursor-hook-lifecycle",
-  preconditions: [
+  userDoc: "docs/user/setup.md",  preconditions: [
     "- `thatch setup --cursor` has run; `.cursor/mcp.json` registers the thatch MCP server",
     "- A store with at least one memory (for the recall tier)",
   ].join("\n"),

@@ -14,7 +14,7 @@ import { registerUseCase, type UseCase } from "../runner";
 
 const useCase: UseCase = {
   name: "UC-001-memory-roundtrip",
-  preconditions: [
+  userDoc: "docs/user/memory.md",  preconditions: [
     "- thatch configured as a plugin in opencode (npm or local path)",
     "- Working directory is a git repo with an origin remote",
   ].join("\n"),

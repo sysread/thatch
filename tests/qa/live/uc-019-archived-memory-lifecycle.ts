@@ -9,7 +9,7 @@ import { registerUseCase, type UseCase } from "../runner";
 
 const useCase: UseCase = {
   name: "UC-019-archived-memory-lifecycle",
-  preconditions: [
+  userDoc: "docs/user/memory.md",  preconditions: [
     "- thatch plugin active in an opencode session (or CLI with a test store)",
   ].join("\n"),
   steps: [

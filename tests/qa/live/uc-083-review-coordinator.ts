@@ -9,7 +9,7 @@ import { registerUseCase, type UseCase } from "../runner";
 
 const useCase: UseCase = {
   name: "UC-083-review-coordinator",
-  preconditions: [
+  userDoc: "docs/user/code-review.md",  preconditions: [
     "- opencode with sub-agent support (the coordinator dispatches parallel specialists)",
     "- A branch, PR, or commit range with changes to review",
     "- The thatch-code-review skill installed and loadable",

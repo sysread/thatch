@@ -8,7 +8,7 @@ import { registerUseCase, type UseCase } from "../runner";
 
 const useCase: UseCase = {
   name: "UC-002-dedup-cycle",
-  preconditions: [
+  userDoc: "docs/user/deduplication.md",  preconditions: [
     "- A store containing at least two memories with near-identical content",
     '  (e.g. save "the API rate limit is 100 req/min" twice under different labels)',
   ].join("\n"),

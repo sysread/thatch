@@ -10,7 +10,7 @@ import { registerUseCase, type UseCase } from "../runner";
 
 const useCase: UseCase = {
   name: "UC-085-review-followup",
-  preconditions: [
+  userDoc: "docs/user/code-review.md",  preconditions: [
     "- A PR with prior review comments from a previous review round",
     "- The author has responded to comments or pushed new commits",
     "- The thatch-review-followup skill installed and loadable",

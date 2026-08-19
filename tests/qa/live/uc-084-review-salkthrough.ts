@@ -10,7 +10,7 @@ import { registerUseCase, type UseCase } from "../runner";
 
 const useCase: UseCase = {
   name: "UC-084-review-salkthrough",
-  preconditions: [
+  userDoc: "docs/user/code-review.md",  preconditions: [
     "- A host that can load skills (Claude Code, Cursor, or opencode without sub-agents)",
     "- A branch with changes to review",
     "- At least one specialist skill installed (e.g., thatch-review-pedantic, thatch-review-state-flow)",

@@ -12,7 +12,7 @@ import { registerUseCase, type UseCase } from "../runner";
 
 const useCase: UseCase = {
   name: "UC-010-prime",
-  preconditions: [
+  userDoc: "docs/user/skills.md",  preconditions: [
     "- Thatch installed and `bun` on PATH",
     "- At least one of: opencode (for `opencode run`), Cursor (`agent` CLI), or Claude Code (`claude`) on PATH",
   ].join("\n"),

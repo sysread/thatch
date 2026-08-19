@@ -10,7 +10,7 @@ import { registerUseCase, type UseCase } from "../runner";
 
 const useCase: UseCase = {
   name: "UC-020-extraction-escalation",
-  preconditions: [
+  userDoc: "docs/user/extraction.md",  preconditions: [
     "- thatch active in an opencode, Claude Code, or Cursor session",
     "- For the child-sub-agent path: opencode with",
     "  `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`",
