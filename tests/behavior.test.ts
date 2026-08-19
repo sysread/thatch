@@ -297,14 +297,18 @@ describe("seedDefaultBehaviors", () => {
     rmSync(seedDir, { recursive: true, force: true });
   });
 
-  test("seeds the wrap-up behavior into global store on first run", async () => {
+  test("seeds default behaviors into global store on first run", async () => {
     await seedDefaultBehaviors(seedDb, seedModel);
 
     const behaviors = seedDb.listBehaviors("global");
-    expect(behaviors.length).toBe(1);
-    expect(behaviors[0].statement).toContain("loose ends");
-    expect(behaviors[0].matchers.length).toBe(1);
-    expect(behaviors[0].matchers[0].description).toContain("wrapping up");
+    expect(behaviors.length).toBe(2);
+    const wrapUp = behaviors.find((b) => b.statement.includes("loose ends"));
+    expect(wrapUp).toBeDefined();
+    expect(wrapUp!.matchers.length).toBe(1);
+    expect(wrapUp!.matchers[0].description).toContain("wrapping up");
+    const finalize = behaviors.find((b) => b.matchers.some((m) => m.description.includes("committing")));
+    expect(finalize).toBeDefined();
+    expect(finalize!.matchers[0].description).toContain("committing");
   });
 
   test("is idempotent: second call does not duplicate", async () => {
@@ -312,7 +316,7 @@ describe("seedDefaultBehaviors", () => {
     await seedDefaultBehaviors(seedDb, seedModel);
 
     const behaviors = seedDb.listBehaviors("global");
-    expect(behaviors.length).toBe(1);
+    expect(behaviors.length).toBe(2);
   });
 
   test("does not seed into project store", async () => {
