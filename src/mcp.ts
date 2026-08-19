@@ -8,6 +8,7 @@ import { TOOL_DEFS, type CoreContext, type ToolDef } from "./tool-defs";
 import { SidebandServer, sidebandSocketPath } from "./sideband";
 import { peekQueue, consumeQueue, resetMissedCount } from "./extract-queue";
 import { buildExtractionPayload } from "./extraction";
+import { seedDefaultBehaviors } from "./seed-behaviors";
 import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
@@ -101,6 +102,8 @@ export async function runMcpServer(): Promise<void> {
 
   const db = new ThatchDB(dbPath);
   const model = new BgeEmbeddingModel(modelName);
+
+  await seedDefaultBehaviors(db, model);
 
   // Extraction payload provider: peeks the file-backed queue and returns the
   // serialized JSON payload. Called by the get_extraction_payload tool when a
