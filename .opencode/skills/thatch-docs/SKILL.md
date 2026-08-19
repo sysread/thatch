@@ -154,6 +154,13 @@ NOT caught by `mise run check` (flat glob excludes `tests/qa/`), so they
 only fail during `mise run qa-auto`. Always run `mise run qa-auto` after
 adding a skill to catch stale QA count assertions.
 
+## Running QA subsets
+
+`mise run qa-auto` and `mise run qa-live` accept UC name args to
+select a subset: `mise run qa-live uc-001 uc-003` runs only those two.
+No args runs all. Uses `bin/qa-run` which builds a `--test-name-pattern`
+regex from the args.
+
 ## When updating tool counts
 
 Tool counts live in `TOOL_DEFS` (`src/tool-defs.ts`). When tools are added
