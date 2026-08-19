@@ -239,6 +239,13 @@ export async function createFixture(name: string): Promise<QaContext> {
     mkdirSync(join(dir, sub), { recursive: true });
   }
 
+  // Initialize a git repo in the fixture so live use cases that need
+  // git context (branch, diff, commit, PR) have one. git archive HEAD
+  // produces a snapshot with no .git directory; git init restores it.
+  await $`git init`.cwd(dir).quiet().nothrow();
+  await $`git add -A`.cwd(dir).quiet().nothrow();
+  await $`git commit -m "QA fixture for ${name}"`.cwd(dir).quiet().nothrow();
+
   return {
     dir,
     repoRoot: REPO_ROOT,
@@ -370,7 +377,7 @@ export function registerUseCase(uc: UseCase): void {
     if (result === "FAIL" || result === "PARTIAL") {
       throw new Error(`${uc.name}: ${result}`);
     }
-  }, { timeout: 600_000 }); // 10 min per use case
+  }, { timeout: 1_200_000 }); // 20 min per use case (live sessions need model + tool latency)
 }
 
 // --- Pre-flight check ------------------------------------------------------
