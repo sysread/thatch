@@ -106,6 +106,7 @@ Stores are created automatically — no setup required.
 | Tool | What it does |
 |------|-------------|
 | `thatch_extraction_done` | Acknowledge extraction buffer work. In the nudge fallback path, quiets the nudge while holding entries until the extractor completes. In a child extractor session, marks entries complete. Called by the model after dispatching the fact-extractor skill. |
+| `thatch_get_extraction_payload` | Retrieve the queued tool interactions for the fact-extractor sub-agent. Fetches by session ID so the full payload stays out of the main session's context window. |
 
 ### Prediction tools
 
@@ -222,6 +223,7 @@ Seven specialist review lenses, each a self-contained static-analysis pass:
 | `thatch-review-response` | Author-side review response: triage findings on your own PR, fix bugs one by one, reply on each thread, post a top-level summary comment. |
 | `thatch-change-walkthrough` | Explains a change to the user as a teaching walkthrough: researches each affected workflow at the merge-base, teaches current behavior, then overlays the modifications with file:line citations. |
 | `thatch-code-walkthrough` | Explains a feature, module, or workflow to the user as a teaching walkthrough with file:line citations. Also used to draft high-level docs for new or undocumented features. |
+| `thatch-coding-workflow` | Plans and executes code changes with a task-list-driven workflow: complexity triage, milestone planning, research before coding, post-coding verification. Pairs with `thatch-code-archaeology` (research first, then plan). |
 
 ### Writing skills
 

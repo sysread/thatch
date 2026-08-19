@@ -127,7 +127,7 @@ export class SidebandServer {
 
       if (req.method === "predictions") {
         const predictions = this.#db.scorePredictionNudge(
-          req.stores, embedding, req.threshold, 5,
+          req.stores, embedding, req.threshold, req.limit,
         );
         this.#respond(socket, { ok: true, predictions });
         return;
@@ -135,7 +135,7 @@ export class SidebandServer {
 
       if (req.method === "behaviors") {
         const behaviors = this.#db.scoreBehaviorNudge(
-          req.stores, embedding, req.threshold, 5,
+          req.stores, embedding, req.threshold, req.limit,
         );
         this.#respond(socket, { ok: true, behaviors });
         return;

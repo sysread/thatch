@@ -71,7 +71,7 @@ in the repo; only skills are user-scoped.
 |-------|---------|--------|------|
 | `SessionStart` | `thatch reminder` | plain text to stdout (becomes context) | Recall instructions + hygiene heartbeat |
 | `PostToolBatch` | `thatch buffer-batch` | **silent** (no stdout) | Appends a batch of tool calls to the file-backed JSONL queue |
-| `UserPromptSubmit` | `thatch flush-tools` | nudge text to stdout | Peeks queue (extraction nudge), else recall nudge via sideband, else write nudge |
+| `UserPromptSubmit` | `thatch flush-tools` | nudge text to stdout | Peeks queue (extraction nudge), else fires recall, prediction, and behavior nudges via sideband in parallel, else write nudge |
 
 `PostToolBatch` is silent so the agent loop is not delayed; the buffered
 content is invisible until `UserPromptSubmit` peeks it.
@@ -111,7 +111,7 @@ is honored for symmetry and forward-compatibility. Cursor has no equivalent of
 |-------|---------|--------|------|
 | `sessionStart` | `thatch reminder --json` | `{ additional_context: "..." }` | Recall + heartbeat, JSON-wrapped for Cursor |
 | `postToolUse` | `thatch buffer-tool` | **silent** | Appends a **single** tool call to the file-backed queue |
-| `beforeSubmitPrompt` | `thatch flush-tools --json` | JSON `additional_context` | Peeks queue, else recall via sideband, else write nudge |
+| `beforeSubmitPrompt` | `thatch flush-tools --json` | JSON `additional_context` | Peeks queue, else recall, prediction, and behavior via sideband, else write nudge |
 
 Differences from Claude Code:
 

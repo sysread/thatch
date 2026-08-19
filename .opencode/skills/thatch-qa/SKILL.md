@@ -1,13 +1,13 @@
 ---
 name: thatch-qa
-description: Execute a single thatch QA use case in an isolated environment. Use when the QA runner script (bin/qa) dispatches you to verify one use case.
+description: Execute a single thatch QA use case in an isolated environment. Use when the QA test runner (tests/qa/runner.ts) dispatches you to verify one use case.
 ---
 
 # Thatch QA: Single Use-Case Executor
 
 You are executing ONE QA use case for the thatch project. The environment
-you are running in has already been set up by the QA runner script
-(`bin/qa`). Do not set up environments, create temp directories, or manage
+you are running in has already been set up by the QA test runner
+(`tests/qa/runner.ts`). Do not set up environments, create temp directories, or manage
 batching — the script handles all of that.
 
 ## Your working directory

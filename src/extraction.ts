@@ -11,7 +11,7 @@ export interface ToolInteraction {
  * opencode plugin (in-process) and the Claude Code CLI (file-backed queue) so
  * the payload the agent ultimately receives has the same shape from either path.
  */
-export function summarizeArgs(tool: string, args: Record<string, unknown>): string {
+function summarizeArgs(tool: string, args: Record<string, unknown>): string {
   const file = args.filePath ?? args.file_path;
   switch (tool.toLowerCase()) {
     case "read":
@@ -54,7 +54,7 @@ export function deriveTitle(tool: string, args: Record<string, unknown>): string
   }
 }
 
-export function truncate(text: string, maxLen: number): string {
+function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   return text.slice(0, maxLen) + "...";
 }
