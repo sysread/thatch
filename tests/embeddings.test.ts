@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { MockEmbeddingModel, BgeEmbeddingModel, type PipelineFactory } from "../src/embeddings";
+import { MockEmbeddingModel } from "./mocks/embeddings";
+import { BgeEmbeddingModel, type PipelineFactory } from "../src/embeddings";
 
 describe("MockEmbeddingModel", () => {
   test("reports dims correctly", () => {

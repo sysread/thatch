@@ -1,5 +1,15 @@
 import type { PredictionNudgeItem, BehaviorNudgeItem } from "./db";
 
+/**
+ * Shared verb selection for prediction formatting. 0-evidence predictions
+ * use the hedged "you may prefer"; predictions with any evidence use the
+ * confident "you tend to". Used by both the auto-fire nudge and the
+ * prediction_query tool output.
+ */
+export function predictionVerb(evidenceCount: number): string {
+  return evidenceCount === 0 ? "you may prefer" : "you tend to";
+}
+
 export function systemPrompt(repo: string): string {
   return `# Persistence
 
@@ -459,6 +469,10 @@ export function claudeWriteNudge(): string {
  * dispatch a sub-agent that calls get_extraction_payload to fetch the queued
  * interactions as a tool response. This keeps the full payload out of the
  * main session's context window.
+ *
+ * Call extractionNudgeOpencode for the opencode plugin path (task tool with
+ * background parameter) or extractionNudgeMcp for the Claude Code/Cursor
+ * CLI path (generic sub-agent wording).
  */
 export function extractionNudge(
   count: number,
@@ -466,22 +480,45 @@ export function extractionNudge(
   toolName: string,
   sessionID: string,
 ): string {
-  const plural = count === 1 ? "" : "s";
-  // opencode's task tool has a `background` parameter (requires
-  // OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true) that launches the sub-agent
-  // asynchronously - the call returns immediately and the session is notified
-  // on completion. Naming the parameter gives the model a direct hit on the tool
-  // schema it sees. MCP hosts (Claude Code, Cursor) keep generic sub-agent
-  // wording because their background mechanisms differ and are not exposed as a
-  // per-call parameter in the same way.
   const isOpencode = toolName.startsWith("thatch_");
-  const dispatch = isOpencode
-    ? "Dispatch a task with background: true"
-    : "Spawn a background sub-agent";
-  const drainTool = isOpencode ? "thatch_extraction_done" : "mcp__thatch__extraction_done";
-  const fetchTool = isOpencode
-    ? "thatch_get_extraction_payload"
-    : "mcp__thatch__get_extraction_payload";
+  return isOpencode
+    ? extractionNudgeOpencode(count, missedCount, sessionID)
+    : extractionNudgeMcp(count, missedCount, sessionID);
+}
+
+function extractionNudgeOpencode(
+  count: number,
+  missedCount: number,
+  sessionID: string,
+): string {
+  const plural = count === 1 ? "" : "s";
+  const dispatch = "Dispatch a task with background: true";
+  const drainTool = "thatch_extraction_done";
+  const fetchTool = "thatch_get_extraction_payload";
+  return buildExtractionNudge(count, missedCount, plural, dispatch, drainTool, fetchTool, sessionID);
+}
+
+function extractionNudgeMcp(
+  count: number,
+  missedCount: number,
+  sessionID: string,
+): string {
+  const plural = count === 1 ? "" : "s";
+  const dispatch = "Spawn a background sub-agent";
+  const drainTool = "mcp__thatch__extraction_done";
+  const fetchTool = "mcp__thatch__get_extraction_payload";
+  return buildExtractionNudge(count, missedCount, plural, dispatch, drainTool, fetchTool, sessionID);
+}
+
+function buildExtractionNudge(
+  count: number,
+  missedCount: number,
+  plural: string,
+  dispatch: string,
+  drainTool: string,
+  fetchTool: string,
+  sessionID: string,
+): string {
   const acknowledge = `After dispatching, call ${drainTool} to acknowledge.`;
   const subAgentPrompt = `Call ${fetchTool} with session_id "${sessionID}" to retrieve the queued tool interactions, then run the thatch-fact-extractor skill to extract durable facts. Call ${drainTool} with session_id "${sessionID}" when finished, even if nothing was worth saving.`;
 
@@ -581,7 +618,7 @@ function formatRecallNudge(matches: NudgeMatch[], toolName: string): string {
 
 export function predictionNudge(items: PredictionNudgeItem[]): string {
   const lines = items.map((p) => {
-    const verb = p.evidence_count === 0 ? "you may prefer" : "you tend to";
+    const verb = predictionVerb(p.evidence_count);
     return `- [${p.confidence.toFixed(2)} conf, ${p.evidence_count} tests] When ${p.matcher_description}: ${verb} ${p.statement}`;
   });
   return `[thatch] User decision model\n${lines.join("\n")}`;
