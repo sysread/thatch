@@ -30,6 +30,7 @@ const useCase: UseCase = {
     "- The optional handoff to the coordinator is offered only when the new changes are substantial enough.",
     "- The followup does not re-run findings that were already dismissed as false positives in the prior round.",
   ].join("\n"),
+  manualOnly: true,
 };
 
 registerUseCase(useCase);

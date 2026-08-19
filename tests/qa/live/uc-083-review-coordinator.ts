@@ -32,6 +32,7 @@ const useCase: UseCase = {
     "- Specialists run in parallel and produce structured findings.",
     "- The synthesized report deduplicates findings, groups by severity, and leads with a workflow-change preface.",
   ].join("\n"),
+  manualOnly: true,
 };
 
 registerUseCase(useCase);

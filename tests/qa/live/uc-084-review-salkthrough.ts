@@ -30,6 +30,7 @@ const useCase: UseCase = {
     "- The synthesizer aggregates findings from multiple specialists run in sequence.",
     "- The final report is equivalent to what the coordinator would produce, minus the parallelism.",
   ].join("\n"),
+  manualOnly: true,
 };
 
 registerUseCase(useCase);
