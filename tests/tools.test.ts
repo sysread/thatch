@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ThatchDB } from "../src/db";
-import { MockEmbeddingModel } from "../src/embeddings";
+import { MockEmbeddingModel } from "./mocks/embeddings";
 import { createTools } from "../src/tools";
 
 let dbPath: string;

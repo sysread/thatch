@@ -1,6 +1,6 @@
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 import { ThatchDB } from "../../../src/db";
-import { MockEmbeddingModel } from "../../../src/embeddings";
+import { MockEmbeddingModel } from "../../mocks/embeddings";
 
 /**
  * UC-028: Behavior delete and provenance inspection.

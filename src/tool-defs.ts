@@ -1,6 +1,7 @@
 import { z } from "zod";
-import type { ThatchDB, DedupCandidate } from "./db";
+import type { ThatchDB, DedupCandidate, MemoryRow } from "./db";
 import type { EmbeddingModel } from "./embeddings";
+import { predictionVerb } from "./prompts";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
 // creation time. Matches the thatch_find_duplicates threshold (0.85).
@@ -69,7 +70,7 @@ function formatEntry(
   return parts.join("\n");
 }
 
-function formatRecallResult(entry: any): string {
+function formatRecallResult(entry: MemoryRow & { _score: number }): string {
   let meta = `store:${entry.store}`;
   if (entry.branch) meta += ` branch:${entry.branch}`;
   if (entry.confidence) meta += ` confidence:${entry.confidence}`;
@@ -494,7 +495,7 @@ const predictionQueryDef: ToolDef = {
     const scored = ctx.db.scorePredictions(matchers);
     if (scored.length === 0) return "No matching predictions found.";
     return scored.map((s) => {
-      const verb = s.evidence_count === 0 ? "you may prefer" : "you tend to";
+      const verb = predictionVerb(s.evidence_count);
       return `[${s.confidence.toFixed(2)} conf, ${s.evidence_count} tests] ` +
         `When ${s.matcher_description}: ${verb} ${s.statement}`;
     }).join("\n");

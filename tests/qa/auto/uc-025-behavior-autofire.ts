@@ -1,6 +1,6 @@
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 import { ThatchDB } from "../../../src/db";
-import { MockEmbeddingModel } from "../../../src/embeddings";
+import { MockEmbeddingModel } from "../../mocks/embeddings";
 
 /**
  * UC-025: Behavior auto-fire.
