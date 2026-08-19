@@ -183,7 +183,8 @@ includes all of `tests/`), just not executed during `check`. See
 | `tests/qa/live/index.test.ts` | Live use case barrel — imports all live use case modules |
 | `tests/qa/auto/uc-NNN-*.ts` | 19 automatable use case files |
 | `tests/qa/live/uc-NNN-*.ts` | 9 live use case files |
-| `docs/qa/README.md` | QA documentation and use case index |
+
+No separate QA docs directory exists. QA use cases live in `tests/qa/` as executable tests, not docs.
 
 ## Key invariants
 

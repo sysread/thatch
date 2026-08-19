@@ -5,6 +5,22 @@ remember information across sessions using local embeddings and SQLite. It
 works with **OpenCode** (as a plugin), **Claude Code** (as an MCP server), and
 **Cursor** (as an MCP server).
 
+## Feature docs
+
+This README is the overview. Each feature has its own guide:
+
+- [memory.md](memory.md): persistent memory store
+- [extraction.md](extraction.md): automatic fact extraction from tool calls
+- [prediction-engine.md](prediction-engine.md): user decision model
+- [behavior-engine.md](behavior-engine.md): agent self-discipline rules
+- [default-behaviors.md](default-behaviors.md): what ships automatically
+- [hygiene.md](hygiene.md): store maintenance signals
+- [deduplication.md](deduplication.md): duplicate detection and resolution
+- [skills.md](skills.md): structured workflow skills
+- [code-review.md](code-review.md): multi-agent code review pipeline
+- [setup.md](setup.md): installation and configuration
+- [cli.md](cli.md): command-line tool reference
+
 ## Installation
 
 ### OpenCode
@@ -26,7 +42,7 @@ For async extraction (child sessions run in the background):
 export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
 ```
 
-Without this env var, extraction still works — the child session runs
+Without this env var, extraction still works. The child session runs
 fire-and-forget instead of asynchronously. Put it in your shell rc,
 `mise.toml` `[env]`, or `.envrc`.
 
@@ -47,8 +63,8 @@ thatch setup --claude            # project-local (writes .mcp.json, CLAUDE.md, .
 thatch setup --claude --global   # user-scoped (~/.claude/)
 ```
 
-`bun` must be on PATH (the thatch binary runs under bun). `setup` is idempotent
-— re-running it updates drifted content without clobbering unrelated config.
+`bun` must be on PATH (the thatch binary runs under bun). `setup` is idempotent.
+Re-running it updates drifted content without clobbering unrelated config.
 For a global install, `setup` prints the `claude mcp add --scope user` command
 to run instead of writing a project `.mcp.json`.
 
@@ -59,7 +75,7 @@ thatch setup --cursor            # project-local (.cursor/mcp.json, AGENTS.md, .
 thatch setup --cursor --global   # user-scoped (~/.cursor/)
 ```
 
-Cursor has no `claude mcp add` equivalent — `setup` writes `~/.cursor/mcp.json`
+Cursor has no `claude mcp add` equivalent. `setup` writes `~/.cursor/mcp.json`
 directly. Hook output is JSON-wrapped (`--json`) so Cursor injects it as
 `additional_context`.
 
@@ -76,7 +92,7 @@ Every git repo gets its own store, named after the repo's remote identity
 (e.g., `sysread/thatch`). There is also a shared `global` store for
 information that applies across all projects.
 
-Stores are created automatically — no setup required.
+Stores are created automatically. No setup required.
 
 ### Memory tools
 
@@ -138,25 +154,25 @@ Beyond the tools, thatch hooks into opencode itself:
   maintenance signals when there are any: duplicate candidates pending review,
   memories neither updated nor recalled in 90+ days, and memories scoped to
   git branches that no longer exist. The agent is asked to tend the store when
-  convenient — thatch never deletes memories on its own.
+  convenient. Thatch never deletes memories on its own.
 - **Write-time similarity warning.** Saving a memory that closely resembles an
   existing one succeeds, but the response warns the agent and lists the
   similar entries so it can merge them or record that they're distinct.
 - **Fact extraction.** Thatch buffers the session's recent tool calls (up
   to 20, per session). When the session goes idle, the plugin creates a
-  child session and prompts it to run the fact-extractor skill directly —
-  no nudge text in your conversation. The child writes memories via
+  child session and prompts it to run the fact-extractor skill directly. No
+  nudge text in your conversation. The child writes memories via
   `thatch_memory_remember` and is cleaned up when it finishes. A toast
   notification shows the results (`[thatch] new: 2, updated: 1`). If the
   direct path fails, a nudge is injected into the next message as a
   fallback. On Claude Code and Cursor, the nudge-and-acknowledge path is
   the only mechanism (no SDK client to create child sessions). The agent
-  does the writing — thatch never saves memories on its own.
+  does the writing. Thatch never saves memories on its own.
 - **Recall, prediction, and behavior toasts.** When your prompt matches stored
   memories, learned decision patterns, or codified behaviors, thatch injects a
   synthetic nudge (invisible to you, visible to the agent) and fires a toast
   notification (`[thatch] recalled 3 memories`, `[thatch] 2 predictions
-  surfaced`, or `[thatch] 1 behavior surfaced`). The toast is ephemeral -- it
+  surfaced`, or `[thatch] 1 behavior surfaced`). The toast is ephemeral. It
   fades after a few seconds.
 - **Compaction context.** When opencode compacts a long session, thatch injects
   a reminder so the summarized session still knows memory tools exist.
@@ -164,7 +180,7 @@ Beyond the tools, thatch hooks into opencode itself:
   injects a `User decision model` block alongside the recall nudge. The block
   lists scored predictions (confidence, evidence count) that the agent can
   follow silently (strong prediction), surface to the user (ambiguous), or
-  use to update the model after the user responds. No extra model call -- the
+  use to update the model after the user responds. No extra model call. The
   prediction search reuses the same prompt embedding as the recall nudge.
 - **Behavior auto-fire.** When a prompt matches codified behavior matchers,
   thatch injects a `Situational behaviors` block listing scored rules
@@ -172,7 +188,7 @@ Beyond the tools, thatch hooks into opencode itself:
   current situation: if relevant (ham), it follows the rule and calls
   `behavior_feedback` with `relevant: true`; if not relevant (spam), it calls
   `behavior_feedback` with `relevant: false`. This trains the classifier so
-  future nudges are more accurate. No extra model call -- reuses the same
+  future nudges are more accurate. No extra model call. It reuses the same
   embedding as recall and prediction.
 
 ### Setup detection (Claude Code and Cursor)
@@ -353,11 +369,11 @@ No configuration needed. The default behavior:
 
 **Changing `THATCH_MODEL` on an existing database:** memories embedded by a
 model with a different vector dimension are skipped by search (not corrupted,
-not deleted — just invisible) until re-saved. There is no automatic
+not deleted, just invisible) until re-saved. There is no automatic
 re-embedding.
 
 ## Privacy
 
 - All data stays on your machine. No network calls for embeddings or storage.
 - The embedding model is downloaded once from Hugging Face Hub on first use, then cached locally.
-- Your memories are stored in a local SQLite database — nothing is sent to any service.
+- Your memories are stored in a local SQLite database. Nothing is sent to any service.

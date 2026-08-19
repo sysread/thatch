@@ -269,3 +269,14 @@ TUI display. The opencode framework's history serializer filters on
 | `bin/thatch` | MCP: `flush-tools` and `flush-predictions` subcommands |
 | `src/sideband.ts` | MCP: sideband client helpers (`sidebandMatch`, `sidebandPredictions`, `sidebandBehaviors`) |
 | `src/prompts.ts` | All nudge formatting functions (`recallNudge`, `claudeRecallNudge`, `predictionNudge`, `behaviorNudge`, `extractionNudge`, `claudeWriteNudge`) |
+
+## Key invariants
+
+- Tier 1 (extraction) returns early. Tiers 2-4 are skipped when tier 1 fires.
+- Tiers 2-4 share one embedding computation. One embed, three cosine scans against different tables.
+- Each tier is wrapped in its own try/catch. A failure in one tier does not block the others.
+- The recall nudge uses `db.search()`, not `db.recall()`, to avoid inflating telemetry. The agent has not read the memories yet.
+- The recall threshold (0.55) is lower than prediction/behavior (0.60) because "relates to" is weaker than "should surface to user."
+- Nudges are suppressed during compaction. Tools are blocked during summary generation, so a nudge saying "call `memory_recall`" would trigger a blocked-tool error.
+- `synthetic` means TUI-invisible, not model-invisible. The model sees the nudge text; the user does not. Do not confuse with `ignored`, which drops the part from the LLM-bound message.
+- MCP host hooks must be silent on success. Only `flush-tools` prints. Any stdout from other hooks delays the agent loop.

@@ -55,7 +55,7 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `tools.ts` | Thin opencode wrappers. Imports tool-defs, wraps each in opencode's `tool()` with a `thatch_` prefix. |
 | `mcp.ts` | Stdio JSON-RPC 2.0 server. Compiles zod schemas to JSON Schema via `z.toJSONSchema()` for `tools/list`. Validates args via `z.object().parse()` in `tools/call`. All logging to stderr (stdout is the transport). |
 | `index.ts` | OpenCode plugin entry. Wires DB, model, extraction; registers tools and hooks; installs skills. Internal state beyond the extraction pipeline: `extracting` set (parent IDs with an active direct-extraction child), `childMetrics` map (new/updated/deleted counts per child session), and `triggerExtraction(parentID)` (creates a child session via the SDK client and prompts it with the extraction payload). |
-| `setup.ts` | `thatch setup --claude` installer. Writes .mcp.json, appends to CLAUDE.md (idempotent), installs hooks in settings.json, installs skills. |
+| `setup.ts` | `thatch setup --claude` / `--cursor` installer. Writes MCP config (`.mcp.json` / `.cursor/mcp.json`), appends to CLAUDE.md / AGENTS.md (idempotent), installs hooks in settings.json / hooks.json, installs skills. |
 | `hygiene.ts` | Hygiene report: pending dedup pairs, stale count, orphaned branch memories. Shared by the plugin's session-start hook and the CLI's `thatch reminder` command. |
 | `git.ts` | Parse `owner/repo` from git remote. Worktree-safe fallback chain. |
 | `db.ts` | SQLite schema, CRUD for entries/stores, brute-force cosine search (`search` = pure scoring, `recall` = search + telemetry stamping), dedup-pair verdict tracking. Prediction tables: matchers, predictions, edges, provenance. `scorePredictionNudge` is the shared auto-fire entry point for both host paths. Behavior tables: same four-table shape (matchers, behaviors, edges, provenance) with `scoreBehaviorNudge` as the shared entry point. |
@@ -64,7 +64,7 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `extract-queue.ts` | File-backed per-session JSONL queue (caps 20, oldest dropped). Shared by the Claude Code and Cursor hook paths, which fire one-shot per event with no cross-call state. This is the MCP-side equivalent of `extraction.ts`. |
 | `sideband.ts` | Unix domain socket server + client. The MCP server (long-lived, warm model) runs `SidebandServer` so one-shot hook processes can ask it to embed a prompt and search for matches without loading the model themselves. Handles three methods: `match` (recall nudge), `predictions` (prediction auto-fire), and `behaviors` (behavior auto-fire). Socket path is a hash of the DB path — both processes compute it independently. |
 | `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, prompt-aware recall nudge (`recallNudge` / `claudeRecallNudge`), Claude Code CLAUDE.md instructions, Cursor AGENTS.md instructions, Claude Code hook text. |
-| `skills.ts` | `SKILL.md` content for all thatch skills, plus the installer. Skills are split into `SHARED_SKILLS` (22 skills: fact-extractor, dedup-classifier, project-primer, 7 review specialists, review synthesizer, review context, code archaeology, review followup, review response, change walkthrough, code walkthrough, session reflection, coding-workflow, thatch-pr-description, thatch-ticket-description, thatch-split-overlarge-pr — work on both opencode and Claude Code) and `OPENCODE_ONLY_SKILLS` (1 skill: code-review coordinator — requires sub-agent support, not installed for Claude Code). `installSkills(dir, skills)` defaults to `SHARED_SKILLS`; the opencode plugin passes `[...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]`. |
+| `skills.ts` | `SKILL.md` content for all thatch skills, plus the installer. Skills are split into `SHARED_SKILLS` (22 skills: fact-extractor, dedup-classifier, project-primer, 7 review specialists, review synthesizer, review context, code archaeology, review followup, review response, change walkthrough, code walkthrough, session reflection, coding-workflow, thatch-pr-description, thatch-ticket-description, thatch-split-overlarge-pr — work on all three hosts) and `OPENCODE_ONLY_SKILLS` (1 skill: code-review coordinator — requires sub-agent support, not installed for Claude Code or Cursor). `installSkills(dir, skills)` defaults to `SHARED_SKILLS`; the opencode plugin passes `[...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]`. |
 
 ## Plugin hooks
 
@@ -100,12 +100,14 @@ Two of these hooks were dead for weeks because failures were invisible.
 5. **Store creation is implicit.** First `remember` to a new store creates it.
 6. **Default recall scope is repo + global.** The tool layer hardcodes this.
 7. **Skills are plugin-owned files.** Installed to
-   `$XDG_CONFIG_HOME/opencode/skills` (opencode) or `~/.claude/skills/`
-   (Claude Code) — never into the worktree; drifted content is overwritten
-   on plugin init or re-running `thatch setup`. Skills are split into
-   `SHARED_SKILLS` (work on both hosts) and `OPENCODE_ONLY_SKILLS` (require
-   sub-agent support, not installed for Claude Code). The opencode plugin
-   installs both arrays; `thatch setup --claude` installs only shared.
+   `$XDG_CONFIG_HOME/opencode/skills` (opencode), `~/.claude/skills/`
+   (Claude Code), or `~/.cursor/skills/` (Cursor) — never into the
+   worktree; drifted content is overwritten on plugin init or re-running
+   `thatch setup`. Skills are split into `SHARED_SKILLS` (work on all
+   three hosts) and `OPENCODE_ONLY_SKILLS` (require sub-agent support,
+   not installed for Claude Code or Cursor). The opencode plugin
+   installs both arrays; `thatch setup --claude` and `--cursor` install
+   only shared.
 8. **Tool definitions are the single source of truth.** `tool-defs.ts` defines
    each tool once (name, zod schema, execute function). The opencode plugin
    wraps them in `tool()` with a `thatch_` prefix; the MCP server wraps them

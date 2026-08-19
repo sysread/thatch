@@ -89,3 +89,8 @@ window.
 - Skill content is markdown read at runtime, not compiled into the
   binary. If the skill file is missing or corrupted, the skill will
   not load (silent failure).
+
+See [code-review.md](code-review.md) for the review pipeline,
+[extraction.md](extraction.md) for the fact-extractor skill,
+[memory.md](memory.md) for the memory skills, and
+[setup.md](setup.md) for installation.
