@@ -350,6 +350,16 @@ export function registerUseCase(uc: UseCase): void {
       return;
     }
 
+    // Live use cases (no custom run) need the opencode binary on PATH.
+    // Skip if it's not available instead of hard-failing with ENOENT.
+    if (!uc.run && !DRY_RUN) {
+      const check = await $`command -v opencode`.quiet().nothrow();
+      if (check.exitCode !== 0) {
+        console.log(`  [MANUAL] ${uc.name} — skipped (opencode not on PATH)`);
+        return;
+      }
+    }
+
     await ensureMaster();
     const ctx = await createFixture(uc.name);
     const runFn = uc.run ?? ((c: QaContext) => runViaOpencode(uc, c));

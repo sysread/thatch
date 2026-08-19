@@ -27,7 +27,6 @@ const useCase: UseCase = {
     "- No orphaned state remains in missedNudges, parentSnapshots, or other maps referencing the parent.",
     "- Unlike child deletion (requeueAccepted), parent deletion uses completeAccepted because there is no session to replay into.",
   ].join("\n"),
-  manualOnly: true,
 };
 
 registerUseCase(useCase);

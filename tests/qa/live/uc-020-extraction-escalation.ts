@@ -60,7 +60,6 @@ const useCase: UseCase = {
     "  `childToParent` Map — the `missedNudges` counter resets for the parent",
     "  session.",
   ].join("\n"),
-  manualOnly: true,
 };
 
 registerUseCase(useCase);

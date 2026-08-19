@@ -26,7 +26,6 @@ const useCase: UseCase = {
     "- If the message is NOT a compaction message, the stale flag is cleared and nudges proceed normally.",
     "- After experimental.compaction.autocontinue clears the flag, nudges fire normally on subsequent messages.",
   ].join("\n"),
-  manualOnly: true,
 };
 
 registerUseCase(useCase);

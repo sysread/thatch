@@ -30,7 +30,6 @@ const useCase: UseCase = {
     "- The synthesizer is installed and loadable for manual aggregation.",
     "- MCP hosts can run the solo review path but not the coordinator path.",
   ].join("\n"),
-  manualOnly: true,
 };
 
 registerUseCase(useCase);

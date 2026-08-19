@@ -38,7 +38,6 @@ const useCase: UseCase = {
     "- Two concurrent sessions never see each other's interactions in a nudge.",
     "- The agent's own `thatch_*` tool calls never appear in the queued interactions (no feedback loop). `skill` and `task` tool calls are also excluded (buffering them would create a nudge → skill load → buffer → nudge loop).",
   ].join("\n"),
-  manualOnly: true,
 };
 
 registerUseCase(useCase);
