@@ -301,7 +301,7 @@ describe("seedDefaultBehaviors", () => {
     await seedDefaultBehaviors(seedDb, seedModel);
 
     const behaviors = seedDb.listBehaviors("global");
-    expect(behaviors.length).toBe(2);
+    expect(behaviors.length).toBe(9);
     const wrapUp = behaviors.find((b) => b.statement.includes("loose ends"));
     expect(wrapUp).toBeDefined();
     expect(wrapUp!.matchers.length).toBe(1);
@@ -309,6 +309,14 @@ describe("seedDefaultBehaviors", () => {
     const finalize = behaviors.find((b) => b.matchers.some((m) => m.description.includes("committing")));
     expect(finalize).toBeDefined();
     expect(finalize!.matchers[0].description).toContain("committing");
+    const research = behaviors.find((b) => b.matchers.some((m) => m.description.includes("new project")));
+    expect(research).toBeDefined();
+    const snag = behaviors.find((b) => b.matchers.some((m) => m.description.includes("dead end")));
+    expect(snag).toBeDefined();
+    const debugArch = behaviors.find((b) => b.matchers.some((m) => m.description.includes("debugging")));
+    expect(debugArch).toBeDefined();
+    const planArch = behaviors.find((b) => b.matchers.some((m) => m.description.includes("planning a change")));
+    expect(planArch).toBeDefined();
   });
 
   test("is idempotent: second call does not duplicate", async () => {
@@ -316,7 +324,7 @@ describe("seedDefaultBehaviors", () => {
     await seedDefaultBehaviors(seedDb, seedModel);
 
     const behaviors = seedDb.listBehaviors("global");
-    expect(behaviors.length).toBe(2);
+    expect(behaviors.length).toBe(9);
   });
 
   test("does not seed into project store", async () => {
@@ -338,7 +346,7 @@ describe("seedDefaultBehaviors", () => {
     // Seed with current version
     await seedDefaultBehaviors(seedDb, seedModel);
     const before = seedDb.listBehaviors("global");
-    expect(before.length).toBe(2);
+    expect(before.length).toBe(9);
 
     // Manually corrupt one behavior's rationale to simulate an old version
     const target = before[0];
@@ -362,7 +370,7 @@ describe("seedDefaultBehaviors", () => {
     await seedDefaultBehaviors(seedDb, seedModel);
 
     const after = seedDb.listBehaviors("global");
-    expect(after.length).toBe(2);
+    expect(after.length).toBe(9);
     // The replaced behavior should have the version stamp
     const replaced = after.find((b) =>
       b.matchers.some((m) => m.description === target.matchers[0].description),
