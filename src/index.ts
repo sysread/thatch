@@ -18,6 +18,7 @@ import {
 import { ExtractionPipeline, type ToolInteraction } from "./extraction";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
 import { hygieneReport } from "./hygiene";
+import { seedDefaultBehaviors } from "./seed-behaviors";
 
 // ---------------------------------------------------------------------------
 // V1 server export - tools, prompt injection, session hooks
@@ -57,6 +58,12 @@ export const server: Plugin = async ({ client, worktree }) => {
   const db = new ThatchDB(dbPath);
   const model = new BgeEmbeddingModel(modelName);
   const extraction = new ExtractionPipeline();
+
+  // Seed default behaviors into the global store on first run. Idempotent:
+  // if the behavior matcher already exists (cosine >= 0.85), skip. This
+  // ensures the session-wrap-up check is present for every new install
+  // without requiring the user to codify it manually.
+  await seedDefaultBehaviors(db, model);
 
   // Sessions currently being compacted. chat.message nudges are skipped while
   // a session is in this set - the agent can't call tools during summary

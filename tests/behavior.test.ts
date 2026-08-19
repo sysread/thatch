@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ThatchDB } from "../src/db";
+import { MockEmbeddingModel } from "./mocks/embeddings";
+import { seedDefaultBehaviors } from "../src/seed-behaviors";
 
 let dbPath: string;
 let dbDir: string;
@@ -276,5 +278,46 @@ describe("scoreBehaviorNudge", () => {
 
     const items = db.scoreBehaviorNudge([store], makeEmbed(1), 0.0, 5);
     expect(items.length).toBe(1);
+  });
+});
+
+describe("seedDefaultBehaviors", () => {
+  let seedDb: ThatchDB;
+  let seedDir: string;
+  let seedModel: MockEmbeddingModel;
+
+  beforeEach(() => {
+    seedDir = mkdtempSync(join(tmpdir(), "thatch-seed-"));
+    seedDb = new ThatchDB(join(seedDir, "test.db"));
+    seedModel = new MockEmbeddingModel();
+  });
+
+  afterEach(() => {
+    seedDb.close();
+    rmSync(seedDir, { recursive: true, force: true });
+  });
+
+  test("seeds the wrap-up behavior into global store on first run", async () => {
+    await seedDefaultBehaviors(seedDb, seedModel);
+
+    const behaviors = seedDb.listBehaviors("global");
+    expect(behaviors.length).toBe(1);
+    expect(behaviors[0].statement).toContain("loose ends");
+    expect(behaviors[0].matchers.length).toBe(1);
+    expect(behaviors[0].matchers[0].description).toContain("wrapping up");
+  });
+
+  test("is idempotent: second call does not duplicate", async () => {
+    await seedDefaultBehaviors(seedDb, seedModel);
+    await seedDefaultBehaviors(seedDb, seedModel);
+
+    const behaviors = seedDb.listBehaviors("global");
+    expect(behaviors.length).toBe(1);
+  });
+
+  test("does not seed into project store", async () => {
+    await seedDefaultBehaviors(seedDb, seedModel);
+
+    expect(seedDb.listBehaviors(store).length).toBe(0);
   });
 });
