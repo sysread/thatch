@@ -1,7 +1,7 @@
 import { registerUseCase, type UseCase } from "../runner";
 
 /**
- * UC-084: Review solo.
+ * UC-084: Review walkthrough.
  *
  * Live session: requires a host that can load skills. On hosts without
  * sub-agent support (Claude Code, Cursor), load a specialist skill
@@ -9,7 +9,7 @@ import { registerUseCase, type UseCase } from "../runner";
  */
 
 const useCase: UseCase = {
-  name: "UC-084-review-salkthrough",
+  name: "UC-084-review-walkthrough",
   userDoc: "docs/user/code-review.md",  preconditions: [
     "- A host that can load skills (Claude Code, Cursor, or opencode without sub-agents)",
     "- A branch with changes to review",

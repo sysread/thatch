@@ -366,25 +366,6 @@ const markCheckedDef: ToolDef = {
 };
 
 /**
- * Extraction-buffer acknowledgment, with AMQP-style accept/complete roles.
- *
- * Called in a PARENT session after dispatching the fact-extractor, it accepts
- * the buffer: entries move to a holding area and the nudge quiets, but they
- * are not dropped until the extractor completes. Called in a CHILD extractor
- * at the end of its run, it completes the parent's accepted entries -
- * including no-save runs that write no memory. If the child errors or is
- * deleted before either signal, the host requeues the entries so the facts
- * are not lost.
- *
- * The actual state changes happen in the host's post-tool hook
- * (tool.execute.after for opencode, PostToolBatch/appendBatch for MCP) -
- * this tool's execute function is a no-op confirmation. The tool exists so
- * the model has a recognizable tool name to key on. In the MCP path the
- * file-backed queue is consumed on this call (or on any memory_remember),
- * which is durable across interruption because the queue persists on disk
- * until then.
- */
-/**
  * Fetches the queued extraction payload for a session. The sub-agent calls
  * this with the parent's session ID to retrieve the tool interactions that
  * need fact extraction, instead of receiving them inline in the nudge text.
@@ -750,8 +731,10 @@ const behaviorFeedbackDef: ToolDef = {
     if (!behavior) return `No behavior matching "${behaviorText}" found in "${store}".`;
 
     const signal = relevant ? "confirm" : "disconfirm";
-    ctx.db.adjustBehaviorConfidence(behavior.id, signal);
-    ctx.db.addBehaviorProvenance(behavior.id, signal, `${relevant ? "ham" : "spam"}: ${contextText}`);
+    ctx.db.transaction(() => {
+      ctx.db.adjustBehaviorConfidence(behavior.id, signal);
+      ctx.db.addBehaviorProvenance(behavior.id, signal, `${relevant ? "ham" : "spam"}: ${contextText}`);
+    });
     const updated = ctx.db.getBehavior(behavior.id);
     return `[${signal}] "${updated?.statement ?? behaviorText}" confidence=${(updated?.confidence ?? 0).toFixed(2)} (${updated?.confirm_count ?? 0}/${updated?.disconfirm_count ?? 0})`;
   },

@@ -46,9 +46,12 @@ interface MatchResponse {
  * the ~34 MB model themselves.
  *
  * The protocol is newline-delimited JSON: one request per connection, one
- * response per connection. Requests are `{"method":"match","text":"...",
- * "stores":[...],"threshold":N,"limit":N}`. Responses are `{"ok":true,
- * "matches":[...]}` or `{"ok":false,"error":"..."}`.
+ * response per connection. Requests are `{"method":"match|predictions|
+ * behaviors","text":"...","stores":[...],"threshold":N,"limit":N}`.
+ * The `match` method searches memories; `predictions` and `behaviors`
+ * score prediction/behavior nudges. Responses are `{"ok":true,
+ * "matches":[...]}` (or `"predictions":[...]"` / `"behaviors":[...]`)
+ * or `{"ok":false,"error":"..."}`.
  */
 export class SidebandServer {
   #server: Server | null = null;

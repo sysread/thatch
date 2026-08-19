@@ -38,7 +38,6 @@ describe("prediction engine schema", () => {
     const tables = db.listPredictions(store);
     expect(tables).toEqual([]);
   });
-
 });
 
 describe("matcher creation and lookup", () => {

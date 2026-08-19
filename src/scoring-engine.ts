@@ -33,6 +33,23 @@ export interface NudgeItem {
   statement: string;
 }
 
+/**
+ * Raw row from the items table (predictions or behaviors). Returned by
+ * findNearestItem and getItem. The wrapper engines cast this to their
+ * own PredictionRow / BehaviorRow types, which have the same shape.
+ */
+export interface ItemRow {
+  id: string;
+  store: string;
+  statement: string;
+  rationale: string | null;
+  confidence: number;
+  confirm_count: number;
+  disconfirm_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface EngineConfig {
   matchersTable: string;
   itemsTable: string;
@@ -81,6 +98,8 @@ export class ScoringEngine {
       const emb = blobToVector(r.embedding);
       if (emb.length !== queryEmbedding.length) continue;
       const score = cosineSimilarity(queryEmbedding, emb);
+      // Noise floor: filter near-zero and negative cosine scores.
+      // Callers apply the actual relevance threshold (e.g., 0.60).
       if (score >= 0.01) {
         scored.push({ id: r.id, description: r.description, score: Math.round(score * 1000) / 1000 });
       }
@@ -129,6 +148,10 @@ export class ScoringEngine {
     }
     scored.sort((a, b) => b.score - a.score);
 
+    // Dedup by item ID: multiple matchers may link to the same item
+    // via separate edges. Keep only the highest-scoring entry per item
+    // so the nudge does not repeat the same item with different matcher
+    // contexts.
     const seen = new Set<string>();
     return scored.filter((s) => {
       if (seen.has(s.item_id)) return false;
@@ -199,7 +222,7 @@ export class ScoringEngine {
     store: string,
     embedding: Float32Array,
     threshold: number,
-  ): Omit<ScoredItem, "matcher_id" | "matcher_description" | "score"> | null {
+  ): ItemRow | null {
     const { itemsTable } = this.#cfg;
     const rows = this.#db
       .query(
@@ -254,11 +277,19 @@ export class ScoringEngine {
   }
 
   adjustConfidence(itemId: string, signal: "confirm" | "disconfirm" | "soft"): void {
+    // The asymmetry (soft is a weak disconfirm, not a weak confirm) is
+    // intentional: a soft signal means the user partially disagreed, not
+    // partially agreed. There is no soft confirm; use "confirm" for weak
+    // agreement.
     const deltaConfirm = signal === "confirm" ? 1 : 0;
     const deltaDisconfirm = signal === "disconfirm" ? 1 : (signal === "soft" ? PREDICTION_W_SOFT : 0);
     const k = PREDICTION_K;
     const p0 = PREDICTION_P0;
     const now = new Date().toISOString();
+    // Atomic UPDATE: SQLite evaluates SET clause expressions using
+    // pre-update column values, so (confirm_count + ?) equals the new
+    // confirm_count in both the SET assignment and the confidence
+    // expression. No read-modify-write race between connections.
     this.#db.run(
       `UPDATE ${this.#cfg.itemsTable}
        SET confirm_count = confirm_count + ?,
@@ -270,7 +301,7 @@ export class ScoringEngine {
     );
   }
 
-  getItem(itemId: string): Omit<ScoredItem, "matcher_id" | "matcher_description" | "score"> | null {
+  getItem(itemId: string): ItemRow | null {
     const row = this.#db
       .query(
         `SELECT id, store, statement, rationale, confidence, confirm_count, disconfirm_count, created_at, updated_at FROM ${this.#cfg.itemsTable} WHERE id = ?`,

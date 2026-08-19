@@ -36,8 +36,7 @@ const MIN_PROMPT_LEN = 10;
 // Minimum cosine score for the prediction auto-fire. Higher than the
 // recall nudge (0.55) because surfacing a user-preference nudge is more
 // disruptive than surfacing a memory -- the agent may act on it or
-// surface it to the user. 0.55 was the original default but produced
-// too many false fires in dense embedding spaces. 0.60 cuts the noise
+// surface it to the user. 0.60 cuts noise in dense embedding spaces
 // while still catching genuinely related contexts.
 const PREDICTION_THRESHOLD = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.60");
 
@@ -59,10 +58,11 @@ export const server: Plugin = async ({ client, worktree }) => {
   const model = new BgeEmbeddingModel(modelName);
   const extraction = new ExtractionPipeline();
 
-  // Seed default behaviors into the global store on first run. Idempotent:
-  // if the behavior matcher already exists (cosine >= 0.85), skip. This
-  // ensures the session-wrap-up check is present for every new install
-  // without requiring the user to codify it manually.
+  // Seed default behaviors into the global store on first run, and
+  // update them when their content changes across releases. Idempotent:
+  // behaviors are matched by key stamp, not by cosine similarity, so
+  // user-codified behaviors are never overwritten. See seed-behaviors.ts
+  // for the full mechanism.
   await seedDefaultBehaviors(db, model);
 
   // Sessions currently being compacted. chat.message nudges are skipped while

@@ -26,7 +26,7 @@ const useCase: UseCase = {
   ].join("\n"),
   expected: [
     '- Step 2: Agent calls `thatch_prediction_update` with a matcher describing the context ("writing functions", "error handling") and a prediction describing the preference ("handle errors before happy paths"). The tool returns `[created]` and seeds confidence at 0.50 with 0 evidence.',
-    '- Step 4: The `chat.message` hook embeds the prompt, finds matchers above the 0.45 threshold, scores linked predictions, and injects a `[thatch] User decision model` nudge. The 0-evidence prediction uses "you may prefer" (not "you tend to"). The agent may follow the prediction, surface it, or ignore it.',
+    '- Step 4: The `chat.message` hook embeds the prompt, finds matchers above the 0.60 threshold, scores linked predictions, and injects a `[thatch] User decision model` nudge. The 0-evidence prediction uses "you may prefer" (not "you tend to"). The agent may follow the prediction, surface it, or ignore it.',
     "- Step 5: No prediction nudge (cosine below threshold). No extra synthetic parts.",
     "- Claude Code / Cursor: The `flush-tools` hook fires predictions alongside the recall nudge via the sideband socket. The `flush-predictions` CLI subcommand provides standalone prediction-only output.",
   ].join("\n"),

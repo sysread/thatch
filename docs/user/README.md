@@ -221,7 +221,8 @@ With `thatch setup --claude`, skills install to `~/.claude/skills/` (or
 
 ### Code review skills
 
-Seven specialist review lenses, each a self-contained static-analysis pass:
+Seven specialist review lenses, plus the synthesizer, context, followup,
+response, walkthrough, and workflow skills that support the review pipeline:
 
 | Skill | Focus |
 |-------|-------|

@@ -118,6 +118,7 @@ const useCase: UseCase = {
     // check to avoid false positives. Dedup and stale signals still appear.
     const nonGitDir = join(tmpdir(), "thatch-qa-nogit");
     mkdirSync(nonGitDir, { recursive: true });
+    try {
     const db2 = new ThatchDB(dbPath);
     const report2 = await hygieneReport(db2, store, nonGitDir);
     db2.close();
@@ -173,9 +174,10 @@ const useCase: UseCase = {
     }
 
     // Clean up the non-git temp dir.
-    rmSync(nonGitDir, { recursive: true, force: true });
-
     return "PASS";
+    } finally {
+      rmSync(nonGitDir, { recursive: true, force: true });
+    }
   },
 };
 

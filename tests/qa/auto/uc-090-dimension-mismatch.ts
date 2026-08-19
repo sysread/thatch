@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerUseCase, type UseCase } from "../runner";
@@ -124,6 +124,7 @@ const useCase: UseCase = {
       return "PASS";
     } finally {
       db.close();
+      rmSync(tmpDir, { recursive: true, force: true });
     }
   },
 };
