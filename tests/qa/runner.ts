@@ -25,7 +25,7 @@ const DRY_RUN = process.env.QA_DRY_RUN === "1";
 
 // --- Types ------------------------------------------------------------------
 
-export type UseCaseResult = "PASS" | "FAIL" | "PARTIAL" | "MANUAL-ONLY";
+export type UseCaseResult = "PASS" | "FAIL" | "PARTIAL" | "MANUAL-ONLY" | "DOCS_MISMATCH";
 
 export interface QaContext {
   /** Path to the isolated repo copy for this use case. */
@@ -41,6 +41,13 @@ export interface UseCase {
   preconditions: string;
   steps: string;
   expected: string;
+  /**
+   * Path to a user doc (relative to repo root) that describes the
+   * feature being tested. When set, runViaOpencode includes the
+   * doc content in the prompt so the agent can compare observed
+   * behavior against the documented spec.
+   */
+  userDoc?: string;
   /**
    * Custom run function. If omitted, defaults to runViaOpencode.
    * Automatable use cases override this with direct CLI assertions.
@@ -275,6 +282,16 @@ export async function createFixture(name: string): Promise<QaContext> {
  * the prompt, then parses the result from the output.
  */
 export async function runViaOpencode(uc: UseCase, ctx: QaContext): Promise<UseCaseResult> {
+  // Read the user doc (if set) and include it in the prompt so the
+  // agent can compare observed behavior against the documented spec.
+  let userDocSection = "";
+  if (uc.userDoc) {
+    const docPath = join(REPO_ROOT, uc.userDoc);
+    if (existsSync(docPath)) {
+      userDocSection = `\n## User doc (${uc.userDoc})\n\n${await Bun.file(docPath).text()}\n\nCompare your observations against this doc. If the behavior you observe contradicts what the doc says, report Result: DOCS_MISMATCH with evidence.\n`;
+    }
+  }
+
   const prompt = `Load the thatch-qa skill. Then execute this use case and report results:
 
 # ${uc.name}
@@ -286,11 +303,10 @@ ${uc.preconditions}
 ${uc.steps}
 
 ## Expected
-${uc.expected}
-
+${uc.expected}${userDocSection}
 Report your result in this format:
 UC-NNN: <title>
-Result: PASS | FAIL | PARTIAL | MANUAL-ONLY
+Result: PASS | FAIL | PARTIAL | MANUAL-ONLY | DOCS_MISMATCH
 Evidence:
   - What was run
   - What was observed
@@ -320,7 +336,7 @@ Evidence:
     ]);
 
     const output = stdout + stderr;
-    const match = output.match(/^Result:\s*(PASS|FAIL|PARTIAL|MANUAL-ONLY)/m);
+    const match = output.match(/^Result:\s*(PASS|FAIL|PARTIAL|MANUAL-ONLY|DOCS_MISMATCH)/m);
     const status = match ? match[1] as UseCaseResult : "FAIL";
 
     if (status !== "PASS") {

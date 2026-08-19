@@ -1,3 +1,6 @@
+import { mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 import { ThatchDB } from "../../../src/db";
 import { MockEmbeddingModel } from "../../mocks/embeddings";
@@ -35,6 +38,13 @@ const useCase: UseCase = {
     const model = new MockEmbeddingModel();
     const store = "test-store";
 
+    // Temp dir OUTSIDE ctx.dir so listBranches can't walk up
+    // to ctx.dir's .git. hygieneReport skips the
+    // orphaned-branch check. Created before the try block so
+    // the finally can clean it up.
+    const nonGitDir = join(tmpdir(), "thatch-qa-nogit");
+    mkdirSync(nonGitDir, { recursive: true });
+
     try {
       // Seed two identical memories (duplicate signal).
       const dupEmb = await model.passageEmbed("the CI pipeline runs on every push to main");
@@ -61,11 +71,14 @@ const useCase: UseCase = {
       );
       rawDb.close();
 
-      // ctx.dir is a git archive extract (no .git directory).
-      // listBranches returns [], so hygieneReport skips the orphaned-branch
+      // ctx.dir is now a git repo (createFixture runs git init).
+      // Use a temp dir OUTSIDE ctx.dir so listBranches can't walk up
+      // to ctx.dir's .git. hygieneReport skips the orphaned-branch
       // check. Dedup and stale signals should still appear.
+      const nonGitDir = join(tmpdir(), "thatch-qa-nogit");
+      mkdirSync(nonGitDir, { recursive: true });
       const db2 = new ThatchDB(ctx.env.THATCH_DB_PATH);
-      const report = await hygieneReport(db2, store, ctx.dir);
+      const report = await hygieneReport(db2, store, nonGitDir);
       db2.close();
 
       if (!report) {
@@ -94,6 +107,7 @@ const useCase: UseCase = {
       return "PASS";
     } finally {
       db.close();
+      rmSync(nonGitDir, { recursive: true, force: true });
     }
   },
 };

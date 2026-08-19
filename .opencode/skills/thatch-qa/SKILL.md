@@ -45,21 +45,27 @@ results, not to make changes.
    - Read source files for verification
 
 3. Verify the expected outcomes. Check each item in the **Expected**
-   section against what you observed.
+   section against what you observed. If a user doc was included in
+   your prompt, compare your observations against it. If the behavior
+   you observe contradicts what the doc says, report DOCS_MISMATCH.
 
 4. Report your result in this exact format:
 
 ```
 UC-NNN: <title>
-Result: PASS | FAIL | PARTIAL | MANUAL-ONLY
+Result: PASS | FAIL | PARTIAL | MANUAL-ONLY | DOCS_MISMATCH
 Evidence:
   - What was run
   - What was observed
   - What matched or didn't match the expected outcome
 ```
 
+Use **DOCS_MISMATCH** when the behavior you observe contradicts the
+user doc that was included in your prompt. Report what the doc says
+and what you observed, with evidence from both.
+
 Use **MANUAL-ONLY** for use cases that require visual TUI verification,
-real Claude Code/Cursor sessions, or compaction triggers — things a
+real Claude Code/Cursor sessions, or compaction triggers -- things a
 headless session cannot verify.
 
 ## What NOT to do
@@ -68,6 +74,7 @@ headless session cannot verify.
 - Do not commit or push anything
 - Do not create files in the repo
 - Do not run `git init`, `git commit`, `git add`, or `git push`
+  (the runner already initializes a git repo in the fixture)
 - Do not generate `AGENTS.md` or run `/init`
 - Do not set up additional environments or temp directories
 - Do not run other use cases

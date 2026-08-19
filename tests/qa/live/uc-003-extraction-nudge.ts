@@ -9,7 +9,7 @@ import { registerUseCase, type UseCase } from "../runner";
 
 const useCase: UseCase = {
   name: "UC-003-extraction-nudge",
-  preconditions: [
+  userDoc: "docs/user/extraction.md",  preconditions: [
     "- thatch plugin active in an opencode session",
   ].join("\n"),
   steps: [

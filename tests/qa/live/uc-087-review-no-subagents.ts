@@ -10,7 +10,7 @@ import { registerUseCase, type UseCase } from "../runner";
 
 const useCase: UseCase = {
   name: "UC-087-review-no-subagents",
-  preconditions: [
+  userDoc: "docs/user/code-review.md",  preconditions: [
     "- A Claude Code or Cursor environment (no sub-agent support)",
     "- The MCP host skill directories (~/.claude/skills/, ~/.cursor/skills/)",
     "- The thatch plugin installed via thatch setup --claude or --cursor",

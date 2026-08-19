@@ -10,7 +10,7 @@ import { registerUseCase, type UseCase } from "../runner";
 
 const useCase: UseCase = {
   name: "UC-038-no-save-run",
-  preconditions: [
+  userDoc: "docs/user/extraction.md",  preconditions: [
     "- Thatch plugin active in an opencode session with OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true",
     "- The session has buffered tool interactions that contain only routine operations (no durable facts)",
   ].join("\n"),

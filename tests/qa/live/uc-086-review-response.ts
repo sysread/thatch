@@ -10,7 +10,7 @@ import { registerUseCase, type UseCase } from "../runner";
 
 const useCase: UseCase = {
   name: "UC-086-review-response",
-  preconditions: [
+  userDoc: "docs/user/code-review.md",  preconditions: [
     "- A PR with incoming review comments from another reviewer",
     "- The thatch-review-response skill installed and loadable",
     "- Write access to the PR branch (to push fixes)",

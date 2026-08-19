@@ -69,8 +69,10 @@ export async function detectRepo(cwd?: string): Promise<string> {
   try {
     const gitDir = await $`git rev-parse --git-common-dir`.cwd(dir).quiet();
     if (gitDir.exitCode === 0) {
+      // Handle both "/path/to/.git" (absolute) and ".git" (relative,
+      // when cwd is the repo root itself).
       const d = gitDir.stdout.toString().trim();
-      const parent = d.endsWith("/.git") ? d.slice(0, -5) : d;
+      const parent = d.endsWith("/.git") ? d.slice(0, -5) : (d === ".git" ? "" : d);
       const name = parent.split("/").pop() || "unknown";
       if (name !== "unknown") return name;
     }

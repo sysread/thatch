@@ -1,7 +1,8 @@
 import { $ } from "bun";
 import { Database } from "bun:sqlite";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 import { ThatchDB } from "../../../src/db";
 import { MockEmbeddingModel } from "../../mocks/embeddings";
@@ -111,12 +112,14 @@ const useCase: UseCase = {
     }
 
     // --- Test 2: Branch check is skipped outside a git repo ---
-
-    // ctx.dir is a git archive extract (no .git directory). listBranches
-    // returns [], so hygieneReport skips the orphaned-branch check to avoid
-    // false-positives. Dedup and stale signals should still appear.
+    // ctx.dir is now a git repo (createFixture runs git init).
+    // Use a temp dir OUTSIDE ctx.dir so listBranches can't walk up
+    // to ctx.dir's .git. hygieneReport skips the orphaned-branch
+    // check to avoid false positives. Dedup and stale signals still appear.
+    const nonGitDir = join(tmpdir(), "thatch-qa-nogit");
+    mkdirSync(nonGitDir, { recursive: true });
     const db2 = new ThatchDB(dbPath);
-    const report2 = await hygieneReport(db2, store, ctx.dir);
+    const report2 = await hygieneReport(db2, store, nonGitDir);
     db2.close();
 
     if (!report2) {
@@ -161,13 +164,16 @@ const useCase: UseCase = {
     // --- Test 4: A store with no entries returns null (healthy) ---
 
     const db4 = new ThatchDB(dbPath);
-    const healthyReport = await hygieneReport(db4, "global", ctx.dir);
+    const healthyReport = await hygieneReport(db4, "global", nonGitDir);
     db4.close();
 
     if (healthyReport !== null) {
       console.log(`  FAIL: healthy store should return null, got: ${healthyReport}`);
       return "FAIL";
     }
+
+    // Clean up the non-git temp dir.
+    rmSync(nonGitDir, { recursive: true, force: true });
 
     return "PASS";
   },

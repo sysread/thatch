@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Wrapper for running a subset of QA use cases by UC name.
+# Usage: qa-run <auto|live> [uc-NNN ...]
+# Examples:
+#   qa-run auto uc-004 uc-008
+#   qa-run live uc-001 uc-003
+
+mode="${1:-auto}"
+shift
+
+if [ "$#" -eq 0 ]; then
+  # No args: run all
+  if [ "$mode" = "auto" ]; then
+    exec bun test tests/qa/auto/index.test.ts --concurrent --max-concurrency 5
+  else
+    exec bun test tests/qa/live/index.test.ts
+  fi
+fi
+
+# Build a regex from UC name args: uc-004 uc-008 -> ^(UC-004|UC-008)
+# Test names are capitalized (UC-NNN), args may be lowercase.
+pattern=""
+for arg in "$@"; do
+  # Capitalize the first two chars (uc -> UC) to match test names
+  uc=$(echo "$arg" | sed 's/^uc/UC/')
+  if [ -n "$pattern" ]; then
+    pattern="${pattern}|"
+  fi
+  pattern="${pattern}${uc}"
+done
+
+if [ "$mode" = "auto" ]; then
+  exec bun test tests/qa/auto/index.test.ts --concurrent --max-concurrency 5 --test-name-pattern "^(${pattern})"
+else
+  exec bun test tests/qa/live/index.test.ts --test-name-pattern "^(${pattern})"
+fi
