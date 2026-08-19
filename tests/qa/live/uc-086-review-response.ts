@@ -32,7 +32,6 @@ const useCase: UseCase = {
     "- The top-level summary gives the reviewer a clear picture of what was addressed and how.",
     "- Responses on behalf of the user are prefixed with 'Landru is thinking on behalf of Jeff:'.",
   ].join("\n"),
-  manualOnly: true,
 };
 
 registerUseCase(useCase);

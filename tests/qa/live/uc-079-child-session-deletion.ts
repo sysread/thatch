@@ -29,7 +29,6 @@ const useCase: UseCase = {
     "- All maps for the child are cleaned up.",
     "- The extracting flag for the parent is cleared.",
   ].join("\n"),
-  manualOnly: true,
 };
 
 registerUseCase(useCase);

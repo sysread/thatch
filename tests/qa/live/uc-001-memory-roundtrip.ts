@@ -34,7 +34,6 @@ const useCase: UseCase = {
     "- Saving the same label again without `overwrite: true` is rejected with an",
     "  error naming the label and store.",
   ].join("\n"),
-  manualOnly: true,
 };
 
 registerUseCase(useCase);

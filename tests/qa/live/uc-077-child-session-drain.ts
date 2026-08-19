@@ -33,7 +33,6 @@ const useCase: UseCase = {
     "- All internal maps for the child are cleaned up.",
     "- completeAccepted(parentID) is called and missedNudges is reset.",
   ].join("\n"),
-  manualOnly: true,
 };
 
 registerUseCase(useCase);

@@ -30,7 +30,6 @@ const useCase: UseCase = {
     "  the pair becomes eligible for re-reporting.",
     "- Forgetting a memory clears all verdicts involving it.",
   ].join("\n"),
-  manualOnly: true,
 };
 
 registerUseCase(useCase);

@@ -30,7 +30,6 @@ const useCase: UseCase = {
     "- On the next chat.message, no extraction nudge appears — the buffer is empty.",
     "- The parent's missedNudges counter is reset.",
   ].join("\n"),
-  manualOnly: true,
 };
 
 registerUseCase(useCase);
