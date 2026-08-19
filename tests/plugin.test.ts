@@ -36,7 +36,6 @@ import {
   claudeRecallNudge,
   claudeSessionStartReminder,
   claudeWriteNudge,
-  claudeExtractionNudge,
   extractionNudge,
   extractionDirectPrompt,
   type NudgeMatch,
@@ -1187,7 +1186,7 @@ describe("claudeRecallNudge (Claude Code / Cursor)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// claudeSessionStartReminder / claudeWriteNudge / claudeExtractionNudge
+// claudeSessionStartReminder / claudeWriteNudge
 // ---------------------------------------------------------------------------
 
 describe("claudeSessionStartReminder", () => {
@@ -1230,25 +1229,6 @@ describe("claudeWriteNudge", () => {
     expect(nudge).toContain("[thatch]");
     expect(nudge).toContain("After responding");
     expect(nudge).toContain("save to thatch");
-  });
-});
-
-describe("claudeExtractionNudge", () => {
-  const sessionID = "sess-123";
-
-  test("singular form for one interaction", () => {
-    const nudge = claudeExtractionNudge(1, sessionID);
-    expect(nudge).toContain("1 queued tool interaction.");
-    expect(nudge).not.toContain("1 queued tool interactions");
-    expect(nudge).toContain("thatch-fact-extractor");
-    expect(nudge).toContain("mcp__thatch__get_extraction_payload");
-    expect(nudge).toContain(sessionID);
-  });
-
-  test("plural form for multiple interactions", () => {
-    const nudge = claudeExtractionNudge(3, sessionID);
-    expect(nudge).toContain("3 queued tool interactions");
-    expect(nudge).toContain("thatch-fact-extractor");
   });
 });
 

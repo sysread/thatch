@@ -212,10 +212,6 @@ function replaceThatchHooks(
 // Skills - install to $CLAUDE_CONFIG_DIR/skills/ (or ~/.claude/skills/ by default)
 // ---------------------------------------------------------------------------
 
-function installClaudeSkills(skillsDir: string): SkillFile[] {
-  return installSkills(skillsDir);
-}
-
 // ---------------------------------------------------------------------------
 // Main setup entry point
 // ---------------------------------------------------------------------------
@@ -261,7 +257,7 @@ export function setupClaudeCode(
 
   appendInstructions(paths.claudeMdPath);
   writeHooks(paths.settingsPath, thatchBin);
-  const skills = installClaudeSkills(paths.skillsDir);
+  const skills = installSkills(paths.skillsDir);
 
   return {
     mcpConfig: paths.mcpConfigPath,
@@ -410,7 +406,7 @@ export function setupCursor(
   writeMcpConfig(paths.mcpConfigPath, thatchBin);
   appendCursorInstructions(paths.agentsMdPath);
   writeCursorHooks(paths.hooksPath, thatchBin);
-  const skills = installClaudeSkills(paths.skillsDir);
+  const skills = installSkills(paths.skillsDir);
 
   return {
     mcpConfig: paths.mcpConfigPath,

@@ -17,7 +17,7 @@ docs/qa/            Test plan (automated suite coverage, known gaps)
 docs/user/          User-facing install and usage guide
 docs/plans/         Design-decision snapshots (temporary, see graduation below)
 docs/in-progress/   Work-in-progress docs for features being built (ignored by markdownlint)
-tests/qa/           QA use-case suite (uc-NNN-*.test.ts, run via mise run qa)
+tests/qa/           QA use-case suite (auto/ and live/ subdirs, uc-NNN-*.ts, run via mise run qa)
 ```
 
 When a feature in `docs/in-progress/` is complete, graduate it: move
@@ -45,15 +45,16 @@ needed.
   mechanics, and the procedure for adding a skill. Update the skill count and
   table when skills are added or removed.
 - **tests/qa/** holds end-to-end QA use-case scenarios as bun test files.
-  Each file is `uc-NNN-name.test.ts` following the pattern in
-  `tests/qa/runner.ts`. Run with `mise run qa`.
+  Each file is `uc-NNN-name.ts` in `tests/qa/auto/` or `tests/qa/live/`
+  following the pattern in `tests/qa/runner.ts`. Run with `mise run qa`.
 - **docs/user/README.md** is the user-facing guide: installation, tool
   reference, skill list. Write for someone who has never seen the codebase.
 
 ## Adding a QA use case
 
-Create `tests/qa/uc-NNN-name.test.ts` following the pattern of existing
-use case files. Import `registerUseCase` and `UseCase` from `./runner`,
+Create `tests/qa/auto/uc-NNN-name.ts` (or `tests/qa/live/` for live tests)
+following the pattern of existing use case files. Import `registerUseCase`
+and `UseCase` from `../runner`,
 define the scenario with `preconditions`, `steps`, and `expected` as
 string arrays joined by `\n`, then call `registerUseCase(useCase)`.
 
@@ -115,8 +116,8 @@ added or removed. Touch all of these when the count changes:
 1. `docs/dev/README.md` — skills.ts description line
 2. `docs/dev/skills.md` — skill count and table
 3. `docs/user/README.md` — skill tables and category sections
-4. `tests/qa/uc-005-setup-install.test.ts` — shared skill count in expected string
-5. `tests/qa/uc-014-skill-install-drift.test.ts` — shared vs opencode counts in expected string
+4. `tests/qa/auto/uc-005-setup-install.ts` — shared skill count in expected string
+5. `tests/qa/auto/uc-014-skill-install-drift.ts` — shared vs opencode counts in expected string
 
 ## Before committing doc changes
 

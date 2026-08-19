@@ -229,12 +229,16 @@ When convenient this session (not before addressing the user's request), tend th
  * Claude Code they're prefixed as mcp__thatch__memory_remember, but the bare
  * names are what the agent searches for and what the instructions reference.
  */
-export function claudeInstructions(): string {
+/**
+ * Shared MCP host instructions. Claude Code and Cursor use the same prompt
+ * body; only the host name and config file reference differ.
+ */
+function mcpInstructions(host: string, configFile: string): string {
   return `# Persistence
 
-Thatch provides persistent memory across Claude Code sessions. Use it to persist
+Thatch provides persistent memory across ${host} sessions. Use it to persist
 knowledge so future sessions can build on what you've already learned.
-Tools are prefixed in Claude Code: \`mcp__thatch__memory_remember\`,
+Tools are prefixed in ${host}: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__memory_recall\`, \`mcp__thatch__memory_list\`,
 \`mcp__thatch__memory_show\`, \`mcp__thatch__memory_forget\`,
 \`mcp__thatch__store_list\`, \`mcp__thatch__find_duplicates\`,
@@ -374,7 +378,7 @@ discipline, not shortcuts.
 ## What NOT to Store
 
 Session-specific context, incomplete/unverified info, anything already in
-CLAUDE.md, speculative conclusions.
+${configFile}, speculative conclusions.
 
 Apply the durability test: will this still be true and useful in a future
 session that knows nothing about this branch, commit, or session? If not,
@@ -409,6 +413,10 @@ and the tool returns an error. Pass \`archived: true\` to keep it archived,
 
 "Remember X" - save immediately.
 "Forget X" - \`memory_recall\` to find it, then \`memory_forget\`.`;
+}
+
+export function claudeInstructions(): string {
+  return mcpInstructions("Claude Code", "CLAUDE.md");
 }
 
 /**
@@ -516,15 +524,6 @@ export function extractionDirectPrompt(count: number, sessionID: string): string
 }
 
 /**
- * Backwards-compatible wrapper for the Claude Code/Cursor CLI path.
- * Maintained for any external callers; bin/thatch should use extractionNudge
- * directly with a missedCount from extract-queue.ts.
- */
-export function claudeExtractionNudge(count: number, sessionID: string): string {
-  return extractionNudge(count, 0, "mcp__thatch__memory_remember", sessionID);
-}
-
-/**
  * Static instructions for Cursor's AGENTS.md. Same contract as
  * claudeInstructions() - the host loads this at every session start, and the
  * repo store name is auto-detected at runtime by the MCP server. Tool names
@@ -532,185 +531,7 @@ export function claudeExtractionNudge(count: number, sessionID: string): string 
  * same protocol.
  */
 export function cursorInstructions(): string {
-  return `# Persistence
-
-Thatch provides persistent memory across Cursor sessions. Use it to persist
-knowledge so future sessions can build on what you've already learned.
-Tools are prefixed in Cursor: \`mcp__thatch__memory_remember\`,
-\`mcp__thatch__memory_recall\`, \`mcp__thatch__memory_list\`,
-\`mcp__thatch__memory_show\`, \`mcp__thatch__memory_forget\`,
-\`mcp__thatch__store_list\`, \`mcp__thatch__find_duplicates\`,
-\`mcp__thatch__dedup_mark_checked\`, \`mcp__thatch__extraction_done\`,
-\`mcp__thatch__get_extraction_payload\`,
-\`mcp__thatch__prediction_query\`, \`mcp__thatch__prediction_update\`,
-\`mcp__thatch__prediction_list\`, \`mcp__thatch__prediction_delete\`,
-\`mcp__thatch__behavior_codify\`, \`mcp__thatch__behavior_feedback\`,
-\`mcp__thatch__behavior_list\`, \`mcp__thatch__behavior_delete\`. Bare names used below for readability.
-
-## Stores
-
-- \`global\`: user preferences, personality, system environment (shared across projects)
-- Per-project stores: project-specific knowledge (auto-detected from git remote)
-- Use \`mcp__thatch__store_list\` to see active stores
-
-Memories can be scoped to a git branch via the \`branch\` param (feature design,
-WIP, PR status). Unscoped memories are project-wide and always included in search.
-
-## Session Startup
-
-1. \`memory_recall\` "user preferences and personality" (global store)
-2. \`memory_recall\` "project architecture and conventions" (project store)
-3. If on a non-main branch, \`memory_recall\` with the branch name
-4. \`memory_list\` and \`store_list\` to see what's available
-
-Before diving into code, \`memory_recall\` with a query relevant to the area
-you're working in. Prior sessions may have already investigated it.
-
-## Skills
-
-Thatch ships skills for code review, project investigation, and memory
-workflows. The host auto-discovers them, but reach for them proactively:
-
-- \`thatch-code-archaeology\` - investigate an existing feature, debug an unfamiliar area, or begin a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features) before proposing changes. The research skill; pair with \`thatch-coding-workflow\`.
-- \`thatch-change-walkthrough\` - produces a teaching walkthrough of a diff with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + change overlay mirroring the same numbers) and calibrated prose rules. Load the skill for the format and prose rules, not just for the research method.
-- \`thatch-code-walkthrough\` - produces a teaching walkthrough for a feature/workflow as it stands today with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + Key files) and calibrated prose rules. Also use proactively to draft high-level docs for new or undocumented features (suitable for pkg/README.md or docs/features/<name>.md). Load the skill for the format and prose rules, not just for the research method.
-- \`thatch-review-context\` - gather project context (PRs, tickets, TODOs, deferred work) before a review.
-- \`thatch-review-followup\` - alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed prior findings, offers to reply on resolved items, then optionally re-runs the full structured review.
-- \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-no-slop\` / \`-breadcrumbs\` / \`-mark-and-sweep\` / \`-highlights\` - seven specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
-- \`thatch-project-primer\` - investigate a new project and write foundational memories.
-- \`thatch-session-reflection\` - record what you learned at end of session.
-- \`thatch-fact-extractor\` - extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
-- \`thatch-dedup-classifier\` - resolve duplicate memory pairs from \`find_duplicates\`.
-- \`thatch-pr-description\` - draft a PR description with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis on the phrases that carry the meaning.
-- \`thatch-ticket-description\` - draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
-- \`thatch-split-overlarge-pr\` - split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
-- \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
-
-## When to Write
-
-**One signal is enough.** Do not wait for confirmation.
-Save immediately on: feedback, preferences, corrections, emotional signals,
-new project knowledge, conventions, architectural decisions, investigation
-results that produced durable knowledge (not point-in-time facts about the
-current state of the code).
-
-## Before Responding
-
-Before composing a final response after substantial work this turn - multiple
-rounds of tool calls for investigation, debugging, or code-writing - check
-whether you've discovered knowledge worth persisting. Use memory_recall to
-check for duplicates, then memory_remember for new findings. Then deliver
-your response.
-
-## User Decision Model
-
-A statistical model of the user's decision-making preferences is maintained by
-the prediction engine. Scored predictions may appear above as "User decision
-model" context; these are learned patterns about what the user tends to
-prefer in specific situations.
-
-When facing a judgment call about scope, appropriateness, or methodology:
-- If a prediction is strong (high confidence, sufficient evidence), follow it
-- If predictions conflict or confidence is thin, surface the uncertainty
-  naturally: "I think you usually prefer X here, but I'm not sure; what do
-  you want?"
-- When the user responds to a surfaced prediction, use prediction_update
-  to reinforce or weaken the model
-
-When the user corrects you, answers your question, or provides a clear signal
-about their preferences:
-1. Use prediction_query to check for existing matchers and predictions
-2. Use prediction_update to create, reinforce, or weaken a prediction
-3. Use prediction_delete to remove a prediction created in error
-
-Code review discussions are high-signal prediction material. When working
-through potential review comments with the user, watch for preferences about
-review threshold, severity, tone, evidence, scope, false positives, or what is
-worth posting. This applies whether the user invoked a review skill, is
-reviewing your changes, or asked you to review their changes or another LLM's
-changes. Before creating a new prediction, query for an existing one and
-reinforce or adjust it when possible.
-
-## Situational Behaviors
-
-A model of your own operational rules is maintained by the behavior engine.
-Scored behaviors may appear above as "Situational behaviors" context; these
-are self-discipline rules you codified for situations where you should react
-in a specific, repeatable way.
-
-When surfaced behaviors appear, evaluate each against the current situation:
-- If a behavior is relevant (ham), follow it and call behavior_feedback
-  with relevant: true
-- If a behavior is not relevant (spam), call behavior_feedback with
-  relevant: false
-- This trains the classifier so future nudges are more accurate
-
-When you recognize a situation you should react to in a specific, repeatable
-way that is about your own operational discipline (not a user preference):
-1. Use behavior_codify to create the rule
-2. Use behavior_feedback when surfaced behaviors fire to ham/spam them
-3. Use behavior_delete to remove a rule created in error
-
-Do not codify rules that make you lazier or less thorough. Rules should encode
-discipline, not shortcuts.
-
-## What to Store
-
-- **Global store**: user observations, agent personality, system environment
-- **Project store**: repo organization, infrastructure, languages/frameworks,
-  component relationships, conventions, operational playbooks
-- **Branch-scoped**: branch purpose, feature design decisions, PR status,
-  temporary workarounds
-- **Insights**: Save non-obvious gotchas, patterns, and architectural
-  lessons discovered during implementation, but only if they remain true
-  across sessions. Never prompt the user; just do it.
-
-## How to Write
-
-- \`memory_recall\` first to check for duplicates. Use overwrite: true to
-  update rather than creating a new entry.
-- One topic per memory. Write for a future instance with zero current context.
-- Confidence 1-2: single signal. 5-6: moderate. 9: explicitly stated.
-  10: hard constraint.
-
-## What NOT to Store
-
-Session-specific context, incomplete/unverified info, anything already in
-AGENTS.md, speculative conclusions.
-
-Apply the durability test: will this still be true and useful in a future
-session that knows nothing about this branch, commit, or session? If not,
-do not save it. Do not store:
-- Point-in-time values (migration indices, line numbers, file counts) that
-  will be stale by next session
-- Commit hashes and branch-specific history narratives. Git is the source
-  of truth for this; do not duplicate it in memory
-- Anything re-derivable from the codebase faster than recalling it (current
-  file locations, type signatures, function names)
-
-## Archived Memories
-
-Memories can be marked \`archived\` - a flag for stable, long-term historical
-records that should not trigger hygiene nudges (stale, orphaned, duplicate).
-Archived memories are excluded from search/recall results by default; pass
-\`includeArchived: true\` to surface them for archaeological dives.
-
-When a branch is merged or about to be deleted, consolidate its branch-scoped
-memories into a single archived memory scoped to that same branch (preserving
-provenance). Capture intent, design decisions, review back-and-forth, PR
-number, unexpected pivots - the kind of git-archaeology context that explains
-_why_ the code looks the way it does a year from now. Then memory_forget the
-originals. The archived record outlives the branch. Future sessions searching
-with \`includeArchived: true\` can pull it up when investigating ambiguous code.
-
-Updating an archived memory requires passing \`archived\` explicitly - omit it
-and the tool returns an error. Pass \`archived: true\` to keep it archived,
-\`archived: false\` to unarchive.
-
-## Explicit Requests
-
-"Remember X" - save immediately.
-"Forget X" - \`memory_recall\` to find it, then \`memory_forget\`.`;
+  return mcpInstructions("Cursor", "AGENTS.md");
 }
 
 // ---------------------------------------------------------------------------

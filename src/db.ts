@@ -920,24 +920,6 @@ export class ThatchDB {
   }
 
   /**
-   * Returns the population prior p0 for a store. Falls back to
-   * PREDICTION_P0 (0.5) when total evidence < 20; otherwise returns
-   * confirm_count / total_evidence. v2 feature: not yet wired into
-   * createPrediction, which uses flat PREDICTION_P0. v1 uses the
-   * flat prior until enough evidence exists to derive a population rate.
-   */
-  populationP0(store: string): number {
-    const row = this.#db
-      .query(
-        `SELECT SUM(confirm_count) AS c, SUM(disconfirm_count) AS d FROM predictions WHERE store = ?`,
-      )
-      .get(store) as { c: number | null; d: number | null } | null;
-    const total = (row?.c ?? 0) + (row?.d ?? 0);
-    if (total < 20) return ThatchDB.PREDICTION_P0;
-    return row!.c! / total;
-  }
-
-  /**
    * Returns a prediction's metadata by id. Does not return the
    * embedding/model columns (creation-only, used by findNearestPrediction
    * for dedup at write time, not needed for display or scoring).

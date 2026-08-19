@@ -41,7 +41,7 @@ here first. These are the things that have already cost time.
   a memory, write it with `archived: true`; to unarchive, `archived: false`.
 - **Updating an archived memory requires explicit `archived` param.** If the
   entry is already archived and a `remember` call omits the `archived` param,
-  the tool returns an error (`db.ts:211`). Pass `archived: true` to keep it
+  the tool returns an error (`db.ts:395`). Pass `archived: true` to keep it
   archived or `archived: false` to unarchive. This guard prevents accidental
   unarchival via an unrelated content update.
 
@@ -61,7 +61,7 @@ here first. These are the things that have already cost time.
 - **`chat.message` has two priority tiers**: extraction nudge first (returns
   early), then the prompt-aware recall nudge. Don't run both in one turn.
 - **The extraction nudge peeks, never flushes.** The buffer is NOT drained
-  on nudge delivery (`index.ts:169` — `peek()` call). It persists until the
+  on nudge delivery (`index.ts:366` — `peek()` call). It persists until the
   agent writes a memory or calls `thatch_extraction_done`. Ignored nudges
   accumulate; the `missedNudges` counter escalates the tone (polite at 0-1
   misses, insistent at 2, ALL-CAPS at 3+). The counter resets when the
@@ -71,7 +71,7 @@ here first. These are the things that have already cost time.
   is active. The peek-not-drain semantics still hold for the fallback nudge
   path (MCP hosts and any `triggerExtraction` failure).
 - **A child sub-agent's `thatch_memory_remember` drains the parent's buffer**
-  via the `childToParent` Map (`index.ts:65` declaration, `index.ts:131`
+  via the `childToParent` Map (`index.ts:79` declaration, `index.ts:272`
   lookup). Two paths reach this machinery: (a) the **plugin-initiated child
   session** — `triggerExtraction` calls `client.session.create` with a
   `parentID`, the primary opencode path; (b) the **agent-initiated background

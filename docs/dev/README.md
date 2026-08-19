@@ -44,7 +44,7 @@ MCP server path
                         CLAUDE.md / AGENTS.md, settings/hooks JSON, installs skills
 
 bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygiene|
-                        prime|buffer-batch|buffer-tool|flush-tools|setup
+                        prime|buffer-batch|buffer-tool|flush-tools|flush-predictions|setup
 ```
 
 ## Module responsibilities

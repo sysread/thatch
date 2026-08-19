@@ -39,9 +39,6 @@ describe("prediction engine schema", () => {
     expect(tables).toEqual([]);
   });
 
-  test("populationP0 returns fallback on empty store", () => {
-    expect(db.populationP0(store)).toBe(0.5);
-  });
 });
 
 describe("matcher creation and lookup", () => {
@@ -271,27 +268,6 @@ describe("listPredictions", () => {
 
   test("empty store returns empty list", () => {
     expect(db.listPredictions(store)).toEqual([]);
-  });
-});
-
-describe("populationP0", () => {
-  test("returns 0.5 with under 20 total evidence", () => {
-    const predId = db.createPrediction(store, "skip", "r", makeEmbed(1), "m");
-    db.adjustConfidence(predId, "confirm");
-    db.adjustConfidence(predId, "confirm");
-    expect(db.populationP0(store)).toBe(0.5);
-  });
-
-  test("returns population hit rate with sufficient evidence", () => {
-    for (let i = 0; i < 15; i++) {
-      const predId = db.createPrediction(store, `pred-${i}`, "r", makeEmbed(i + 10), "m");
-      db.adjustConfidence(predId, "confirm");
-    }
-    for (let i = 0; i < 5; i++) {
-      const predId = db.createPrediction(store, `dis-${i}`, "r", makeEmbed(i + 100), "m");
-      db.adjustConfidence(predId, "disconfirm");
-    }
-    expect(db.populationP0(store)).toBeCloseTo(15 / 20, 2);
   });
 });
 
