@@ -2,11 +2,9 @@ import { Database } from "bun:sqlite";
 import { blobToVector, cosineSimilarity } from "./vector-math";
 import {
   PredictionEngine,
-  PREDICTION_K,
-  PREDICTION_P0,
-  PREDICTION_W_SOFT,
 } from "./prediction";
 import { BehaviorEngine } from "./behavior";
+import { PREDICTION_K, PREDICTION_P0, PREDICTION_W_SOFT } from "./scoring-engine";
 
 export { cosineSimilarity } from "./vector-math";
 export type { PredictionNudgeItem, MatcherRow, PredictionRow, ScoredPrediction } from "./prediction";
