@@ -324,4 +324,50 @@ describe("seedDefaultBehaviors", () => {
 
     expect(seedDb.listBehaviors(store).length).toBe(0);
   });
+
+  test("stamps rationale with seed-version tag", async () => {
+    await seedDefaultBehaviors(seedDb, seedModel);
+
+    const behaviors = seedDb.listBehaviors("global");
+    for (const b of behaviors) {
+      expect(b.rationale).toContain("seed-version:");
+    }
+  });
+
+  test("replaces outdated behavior on version mismatch", async () => {
+    // Seed with current version
+    await seedDefaultBehaviors(seedDb, seedModel);
+    const before = seedDb.listBehaviors("global");
+    expect(before.length).toBe(2);
+
+    // Manually corrupt one behavior's rationale to simulate an old version
+    const target = before[0];
+    const oldBehaviorEmbed = await seedModel.passageEmbed(target.statement);
+    const oldBehavior = seedDb.findNearestBehavior("global", oldBehaviorEmbed, 0.85);
+    if (oldBehavior) {
+      seedDb.deleteBehavior(oldBehavior.id);
+    }
+    const sitEmbed = await seedModel.passageEmbed(target.matchers[0].description);
+    const matcherId = seedDb.findNearestBehaviorMatcher("global", sitEmbed, 0.85)!.id;
+    const behaviorId = seedDb.createBehavior(
+      "global",
+      target.statement,
+      "old rationale without version stamp",
+      oldBehaviorEmbed,
+      seedModel.name,
+    );
+    seedDb.createBehaviorEdge(matcherId, behaviorId, 1.0);
+
+    // Re-seed: should detect the missing version stamp and replace
+    await seedDefaultBehaviors(seedDb, seedModel);
+
+    const after = seedDb.listBehaviors("global");
+    expect(after.length).toBe(2);
+    // The replaced behavior should have the version stamp
+    const replaced = after.find((b) =>
+      b.matchers.some((m) => m.description === target.matchers[0].description),
+    );
+    expect(replaced).toBeDefined();
+    expect(replaced!.rationale).toContain("seed-version:");
+  });
 });
