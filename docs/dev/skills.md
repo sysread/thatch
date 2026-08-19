@@ -25,8 +25,9 @@ description: Extract durable project facts ... Use when ...
 ```
 
 - `name` must match the directory name (`<skillsDir>/<name>/SKILL.md`).
-- `description` drives when the agent loads the skill (both opencode and
-  Cursor auto-discover skills and use the description for relevance).
+- `description` drives when the agent loads the skill (opencode, Claude
+  Code, and Cursor all auto-discover skills and use the description for
+  relevance).
 
 ## The 23 skills
 

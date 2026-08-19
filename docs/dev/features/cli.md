@@ -70,3 +70,12 @@ Inherits stdio, exits with the child's exit code. Errors and exits 1 if none fou
 - Extraction ([extraction.md](extraction.md)): `buffer-batch`, `buffer-tool`, `flush-tools` subcommands
 - Hygiene ([hygiene.md](hygiene.md)): `hygiene`, `reminder` subcommands
 - Multi-host ([multi-host.md](multi-host.md)): `mcp` subcommand starts the MCP server for Claude Code and Cursor
+
+## Key invariants
+
+- No arg-parsing library. Args are positional, parsed by hand from `process.argv.slice(2)`.
+- No `--version`, `--help`, `-h`, or short flags. No subcommand aliases.
+- DB opened once at startup, closed at end (except `mcp` which closes early).
+- Store name auto-detected from git remote. "global" is the shared store. "all" (search only) means project + global.
+- Unknown command or missing required arg calls `usage()` and exits 1.
+- `prime` searches PATH in order: `opencode`, `agent`, `claude`. Uses the first found.

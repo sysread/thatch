@@ -218,3 +218,11 @@ the opencode-only skills require sub-agent dispatch or in-process hooks.
 | `src/tools.ts` | Thin opencode tool wrappers---imports tool-defs, adds `thatch_` prefix via `tool()` |
 | `src/tool-defs.ts` | Single source of truth for all 18 tool definitions---name, description, zod schema, execute |
 | `bin/thatch` | CLI hook commands for MCP hosts---`reminder`, `buffer-tool`, `flush-tools`, `setup` |
+
+## Key invariants
+
+- All three hosts share the same 18 tool definitions from `src/tool-defs.ts`. Adding a tool requires updating `TOOL_DEFS` and all three prompt functions.
+- The MCP server always exposes bare names. The `mcp__thatch__` prefix is applied by the MCP client, not thatch.
+- The three system prompt variants are independent string constants in `src/prompts.ts` with no shared template. Editing shared prose in one requires mirroring in the other two, or they drift.
+- The tool list line in all three prompts must match `TOOL_DEFS` in `src/tool-defs.ts`. The historical failure mode: a tool is added to `TOOL_DEFS` but only two of three prompts are updated.
+- opencode-only features (direct extraction, compaction recovery, code-review coordinator, background sub-agents, TUI toasts) have no MCP counterpart.

@@ -112,7 +112,7 @@ embeddings, no network.
 - [User guide](docs/user/README.md) -- setup, tools, configuration, CLI
 - [Development](docs/dev/README.md) -- architecture, module responsibilities
 - [MCP parity](docs/dev/mcp-parity.md) -- OpenCode plugin vs MCP feature comparison
-- [QA & tests](docs/qa/README.md) -- test conventions, use cases
+- [QA tests](tests/qa/) -- executable use cases (auto/ and live/ subdirs)
 - [Design docs](docs/plans/) -- design-decision snapshots and in-progress plans
 
 ## License

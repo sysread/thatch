@@ -78,3 +78,12 @@ Steps:
 - `mise.toml` — task definitions, tool pins, env vars
 - `.markdownlint-cli2.jsonc` — markdownlint config
 - `tsconfig.check.json` — typecheck config (includes tests)
+
+## Key invariants
+
+- `mise run check` (typecheck + tests + markdownlint) must pass before any release. The release helper enforces this in step 5.
+- OIDC publishing uses no stored npm token. The workflow sets NO `registry-url` because it would write a token-expecting `.npmrc` that preempts the OIDC exchange.
+- npm is pinned to 11.x. npm 12 shipped a sigstore bug that broke OIDC publishing.
+- The release helper checks for tagged-but-not-published state (tag exists, npm returns E404) and refuses to proceed with recovery instructions.
+- CI runs on push/PR to main. Publish runs only on `v*` tags. The release helper bridges them: tag + push triggers publish.
+- `tsconfig.check.json` includes test files for typecheck. The build's `tsconfig.json` excludes them.
