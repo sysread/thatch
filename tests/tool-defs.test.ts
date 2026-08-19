@@ -310,6 +310,119 @@ describe("prediction tool execute functions", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Behavior tool execute functions
+// ---------------------------------------------------------------------------
+
+describe("behavior tool execute functions", () => {
+  const findTool = (name: string) => TOOL_DEFS.find((t) => t.name === name)!;
+
+  test("behavior_codify seeds at p0 with 0 evidence", async () => {
+    const result = await findTool("behavior_codify").execute({
+      situation: "about to commit changes to the thatch repo",
+      behavior: "run mise run check before committing",
+      rationale: "never commit code that fails the quality gate",
+    }, ctx);
+    expect(result).toContain("[codified]");
+    expect(result).toContain("run mise run check before committing");
+
+    const list = await findTool("behavior_list").execute({}, ctx);
+    expect(list).toContain("[0.50 conf, 0 tests]");
+  });
+
+  test("behavior_codify links to existing behavior without duplicate", async () => {
+    // Codify first
+    const first = await findTool("behavior_codify").execute({
+      situation: "investigating a new codebase",
+      behavior: "use sub-agents to explore in parallel",
+      rationale: "saves context window space",
+    }, ctx);
+    expect(first).toContain("[codified]");
+
+    // Codify with a different situation that links to the same behavior
+    const result = await findTool("behavior_codify").execute({
+      situation: "starting a new ticket in an unfamiliar area",
+      behavior: "use sub-agents to explore in parallel",
+      rationale: "same discipline, new context",
+    }, ctx);
+    expect(result).toContain("[linked]");
+    expect(result).toContain("(0/0)"); // confidence unchanged
+
+    // behavior_list should show two matchers linked to the same behavior
+    const list = await findTool("behavior_list").execute({}, ctx);
+    expect(list).toContain("investigating a new codebase");
+    expect(list).toContain("starting a new ticket in an unfamiliar area");
+  });
+
+  test("behavior_feedback ham confirms a behavior", async () => {
+    await findTool("behavior_codify").execute({
+      situation: "writing code comments",
+      behavior: "write comments for a future coder who knows the stack",
+      rationale: "narrate intent, not implementation",
+    }, ctx);
+
+    const result = await findTool("behavior_feedback").execute({
+      behavior: "write comments for a future coder who knows the stack",
+      relevant: true,
+      context: "reviewing comment quality",
+    }, ctx);
+    expect(result).toContain("[confirm]");
+    expect(result).toContain("(1/0)"); // 1 confirm, 0 disconfirm
+  });
+
+  test("behavior_feedback spam disconfirms a behavior", async () => {
+    await findTool("behavior_codify").execute({
+      situation: "choosing variable names",
+      behavior: "prefer descriptive names over short ones",
+      rationale: "clarity wins",
+    }, ctx);
+
+    const result = await findTool("behavior_feedback").execute({
+      behavior: "prefer descriptive names over short ones",
+      relevant: false,
+      context: "rule fired but was not relevant here",
+    }, ctx);
+    expect(result).toContain("[disconfirm]");
+    expect(result).toContain("(0/1)"); // 0 confirm, 1 disconfirm
+  });
+
+  test("behavior_delete removes a behavior", async () => {
+    await findTool("behavior_codify").execute({
+      situation: "choosing a testing strategy",
+      behavior: "prefer integration tests over unit tests",
+      rationale: "user said",
+    }, ctx);
+
+    const result = await findTool("behavior_delete").execute({
+      statement: "prefer integration tests over unit tests",
+    }, ctx);
+    expect(result).toContain("[deleted]");
+
+    const list = await findTool("behavior_list").execute({}, ctx);
+    expect(list).toContain("No behaviors");
+  });
+
+  test("behavior_delete returns not-found for unknown statement", async () => {
+    const result = await findTool("behavior_delete").execute({
+      statement: "this behavior does not exist at all",
+    }, ctx);
+    expect(result).toContain("No behavior matching");
+  });
+
+  test("behavior_list includes provenance entries", async () => {
+    await findTool("behavior_codify").execute({
+      situation: "reviewing code for separation of concerns",
+      behavior: "check for god modules before reviewing the diff",
+      rationale: "SoC is the prime directive",
+    }, ctx);
+
+    const list = await findTool("behavior_list").execute({}, ctx);
+    expect(list).toContain("provenance:");
+    expect(list).toContain("codify:");
+    expect(list).toContain("separation of concerns");
+  });
+});
+
 describe("tool-defs validation", () => {
   test("memory_remember requires label", () => {
     const def = TOOL_DEFS.find((t) => t.name === "memory_remember")!;

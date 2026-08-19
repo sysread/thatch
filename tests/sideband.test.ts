@@ -7,6 +7,8 @@ import { MockEmbeddingModel } from "./mocks/embeddings";
 import {
   SidebandServer,
   sidebandMatch,
+  sidebandPredictions,
+  sidebandBehaviors,
   sidebandSocketPath,
 } from "../src/sideband";
 
@@ -93,6 +95,62 @@ describe("SidebandServer + sidebandMatch", () => {
 
     const matches = await sidebandMatch(sockPath, "global-mem", ["s", "global"], 0.99, 5);
     expect(matches!.some((m) => m.label === "global-mem" && m.store === "global")).toBe(true);
+  });
+});
+
+describe("SidebandServer + sidebandPredictions", () => {
+  test("round-trip: returns matching predictions above threshold", async () => {
+    const matcherEmbed = await model.passageEmbed("deciding on test coverage");
+    const predEmbed = await model.passageEmbed("aim for 90 percent coverage");
+    db.createMatcher("s", "deciding on test coverage", matcherEmbed, "mock");
+    const predId = db.createPrediction("s", "aim for 90 percent coverage", "user stated", predEmbed, "mock");
+    db.createEdge(db.findMatchers(["s"], matcherEmbed)[0].id, predId, 1.0);
+
+    const predictions = await sidebandPredictions(sockPath, "deciding on test coverage", ["s", "global"], 0.0, 5);
+    expect(predictions).not.toBeNull();
+    expect(predictions!.length).toBeGreaterThanOrEqual(1);
+    expect(predictions![0].statement).toBe("aim for 90 percent coverage");
+    expect(predictions![0].matcher_description).toBe("deciding on test coverage");
+  });
+
+  test("returns empty array when no matchers match", async () => {
+    const predictions = await sidebandPredictions(sockPath, "unrelated context", ["s"], 0.0, 5);
+    expect(predictions).not.toBeNull();
+    expect(predictions).toEqual([]);
+  });
+
+  test("returns null when server is not running", async () => {
+    server.stop();
+    const predictions = await sidebandPredictions(sockPath, "test", ["s"], 0.0, 5);
+    expect(predictions).toBeNull();
+  });
+});
+
+describe("SidebandServer + sidebandBehaviors", () => {
+  test("round-trip: returns matching behaviors above threshold", async () => {
+    const matcherEmbed = await model.passageEmbed("about to commit changes");
+    const behaviorEmbed = await model.passageEmbed("run mise run check before committing");
+    db.createBehaviorMatcher("s", "about to commit changes", matcherEmbed, "mock");
+    const behaviorId = db.createBehavior("s", "run mise run check before committing", "quality gate", behaviorEmbed, "mock");
+    db.createBehaviorEdge(db.findBehaviorMatchers(["s"], matcherEmbed)[0].id, behaviorId, 1.0);
+
+    const behaviors = await sidebandBehaviors(sockPath, "about to commit changes", ["s", "global"], 0.0, 5);
+    expect(behaviors).not.toBeNull();
+    expect(behaviors!.length).toBeGreaterThanOrEqual(1);
+    expect(behaviors![0].statement).toBe("run mise run check before committing");
+    expect(behaviors![0].matcher_description).toBe("about to commit changes");
+  });
+
+  test("returns empty array when no matchers match", async () => {
+    const behaviors = await sidebandBehaviors(sockPath, "unrelated context", ["s"], 0.0, 5);
+    expect(behaviors).not.toBeNull();
+    expect(behaviors).toEqual([]);
+  });
+
+  test("returns null when server is not running", async () => {
+    server.stop();
+    const behaviors = await sidebandBehaviors(sockPath, "test", ["s"], 0.0, 5);
+    expect(behaviors).toBeNull();
   });
 });
 
