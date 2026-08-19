@@ -198,7 +198,7 @@ that user preferences are stable, not time-sensitive.
 
 ```sql
 prediction_matchers(
-    id          INTEGER PRIMARY KEY,
+    id          TEXT PRIMARY KEY,
     store       TEXT,
     description TEXT,
     embedding   BLOB,
@@ -208,7 +208,7 @@ prediction_matchers(
 )
 
 predictions(
-    id               INTEGER PRIMARY KEY,
+    id               TEXT PRIMARY KEY,
     store            TEXT,
     statement        TEXT,
     rationale        TEXT,
@@ -231,7 +231,7 @@ prediction_edges(
 )
 
 prediction_provenance(
-    id           INTEGER PRIMARY KEY,
+    id           TEXT PRIMARY KEY,
     prediction_id INTEGER,
     signal       TEXT,
     detail       TEXT,

@@ -26,7 +26,7 @@ const useCase: UseCase = {
   ].join("\n"),
   expected: [
     '- Step 2: Agent calls `thatch_behavior_codify` with a situation describing the context ("importing a new library") and a behavior describing the rule ("check the whole codebase for an existing import first"). The tool returns `[codified]` and seeds confidence at 0.50 with 0 evidence.',
-    '- Step 4: The `chat.message` hook embeds the prompt, finds behavior matchers above the 0.45 threshold, scores linked behaviors, and injects a `[thatch] Situational behaviors` nudge. The 0-evidence behavior uses "consider" (not "do"). The agent evaluates the rule for relevance and calls `behavior_feedback`.',
+    '- Step 4: The `chat.message` hook embeds the prompt, finds behavior matchers above the 0.60 threshold, scores linked behaviors, and injects a `[thatch] Situational behaviors` nudge. The 0-evidence behavior uses "consider" (not "do"). The agent evaluates the rule for relevance and calls `behavior_feedback`.',
     "- Step 5: No behavior nudge (cosine below threshold). No extra synthetic parts.",
     "- Claude Code / Cursor: The `flush-tools` hook fires behaviors alongside recall and predictions via the sideband socket's `behaviors` method.",
   ].join("\n"),

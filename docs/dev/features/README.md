@@ -29,5 +29,5 @@ system, see [../skills.md](../skills.md). For non-obvious invariants, see
 | [setup.md](setup.md) | Setup system (markers, checkSetup, auto-refresh, binary resolution) |
 | [cli.md](cli.md) | CLI (subcommands, environment variables) |
 | [database.md](database.md) | Database (schema, migrations, WAL, 11 tables) |
-| [qa-system.md](qa-system.md) | QA system (28 use cases, automatable vs live, mise tasks) |
+| [qa-system.md](qa-system.md) | QA system (93 use cases, automatable vs live, mise tasks) |
 | [cicd.md](cicd.md) | CI/CD (CI pipeline, OIDC publishing, release helper) |

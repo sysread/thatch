@@ -348,34 +348,64 @@ describe("seedDefaultBehaviors", () => {
     const before = seedDb.listBehaviors("global");
     expect(before.length).toBe(9);
 
-    // Manually corrupt one behavior's rationale to simulate an old version
+    // Simulate an old version: find one behavior, delete it, and recreate
+    // with the same key stamp but an old version stamp.
     const target = before[0];
+    const oldKey = target.rationale?.match(/seed-key:([^\s]+)/)?.[1];
+    expect(oldKey).toBeDefined();
+
+    seedDb.deleteBehavior(target.id);
+
     const oldBehaviorEmbed = await seedModel.passageEmbed(target.statement);
-    const oldBehavior = seedDb.findNearestBehavior("global", oldBehaviorEmbed, 0.85);
-    if (oldBehavior) {
-      seedDb.deleteBehavior(oldBehavior.id);
-    }
     const sitEmbed = await seedModel.passageEmbed(target.matchers[0].description);
     const matcherId = seedDb.findNearestBehaviorMatcher("global", sitEmbed, 0.85)!.id;
     const behaviorId = seedDb.createBehavior(
       "global",
       target.statement,
-      "old rationale without version stamp",
+      `old rationale seed-key:${oldKey} seed-version:0.0.1`,
       oldBehaviorEmbed,
       seedModel.name,
     );
     seedDb.createBehaviorEdge(matcherId, behaviorId, 1.0);
 
-    // Re-seed: should detect the missing version stamp and replace
+    // Re-seed: should find the behavior by key, detect version mismatch, replace
     await seedDefaultBehaviors(seedDb, seedModel);
 
     const after = seedDb.listBehaviors("global");
     expect(after.length).toBe(9);
-    // The replaced behavior should have the version stamp
+    // The replaced behavior should have the current version stamp
     const replaced = after.find((b) =>
       b.matchers.some((m) => m.description === target.matchers[0].description),
     );
     expect(replaced).toBeDefined();
+    expect(replaced!.rationale).toContain(`seed-key:${oldKey}`);
     expect(replaced!.rationale).toContain("seed-version:");
+  });
+
+  test("does not overwrite user-codified behaviors", async () => {
+    // Seed with current version
+    await seedDefaultBehaviors(seedDb, seedModel);
+    expect(seedDb.listBehaviors("global").length).toBe(9);
+
+    // User codifies a behavior without any seed-key stamp
+    const sitEmbed = await seedModel.passageEmbed("when working on documentation");
+    const behaviorEmbed = await seedModel.passageEmbed("check the docs build before committing");
+    const matcherId = seedDb.createBehaviorMatcher("global", "when working on documentation", sitEmbed, seedModel.name);
+    const behaviorId = seedDb.createBehavior(
+      "global",
+      "check the docs build before committing",
+      "user-defined rationale with no seed stamps",
+      behaviorEmbed,
+      seedModel.name,
+    );
+    seedDb.createBehaviorEdge(matcherId, behaviorId, 1.0);
+
+    // Re-seed: should NOT touch the user-codified behavior
+    await seedDefaultBehaviors(seedDb, seedModel);
+
+    const after = seedDb.listBehaviors("global");
+    expect(after.length).toBe(10); // 9 seeded + 1 user-codified
+    const userBehavior = after.find((b) => b.rationale === "user-defined rationale with no seed stamps");
+    expect(userBehavior).toBeDefined();
   });
 });

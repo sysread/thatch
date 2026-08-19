@@ -32,7 +32,7 @@ const useCase: UseCase = {
     "- Step 3: Returns `[soft]`, confidence drops slightly. Soft adds 0.25 to disconfirm_count. Formula: (1 + 2.5) / (1 + 0.25 + 5) = 0.571. Counts (1/0.25).",
     "- Step 4: Returns `[disconfirm]`, confidence drops further. Formula: (1 + 2.5) / (1 + 1.25 + 5) = 0.524. Counts (1/1.25).",
     "- Step 5: `prediction_list` shows the prediction with accumulated provenance entries (create, confirm, soft, disconfirm) sorted newest-first.",
-    '- Step 6: `prediction_query` returns the prediction with the current confidence and evidence count. Uses "you may prefer" for 0-evidence and "you tend to" for predictions with evidence. Threshold (0.45) filters out matchers below the relevance floor.',
+    '- Step 6: `prediction_query` returns the prediction with the current confidence and evidence count. Uses "you may prefer" for 0-evidence and "you tend to" for predictions with evidence. Threshold (0.60) filters out matchers below the relevance floor.',
   ].join("\n"),
 
   async run(ctx: QaContext) {

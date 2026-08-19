@@ -314,9 +314,9 @@ Evidence:
 
   // Race the opencode session against a timeout. If it wins, kill the
   // spawned process so we don't leave orphaned opencode sessions after
-  // bun abandons the test. The test-level timeout (600s) fires first;
+  // bun abandons the test. The test-level timeout (1200s) fires first;
   // this is a backstop that also cleans up the process.
-  const timeoutMs = 590_000; // 9 min 50s — just under the 10-min test timeout
+  const timeoutMs = 1_190_000; // 19 min 50s — just under the 20-min test timeout
 
   const proc = Bun.spawn(["opencode", "run", "--dir", ctx.dir, "--model", MODEL, "--auto", prompt], {
     env: ctx.env,

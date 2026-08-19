@@ -24,9 +24,14 @@ Shared core
   ├── embeddings.ts   → embedding model via transformers.js
   ├── git.ts          → detect repo identity (store name)
   ├── hygiene.ts      → hygiene report (pending dedups, stale, orphaned branches)
-  ├── prompts.ts      → system prompt, compaction, reminders, recall nudge, CLAUDE.md instructions
+  ├── prompts.ts      → system prompt, compaction, reminders, recall/prediction/behavior nudges, CLAUDE.md instructions
   ├── sideband.ts     → Unix socket server + client: warm-model semantic match for hook processes
-  └── skills.ts       → SKILL.md content + installer (shared + opencode-only arrays)
+  ├── skills.ts       → SKILL.md content + installer (shared + opencode-only arrays)
+  ├── scoring-engine.ts → generic four-table scoring base (shared by prediction + behavior engines)
+  ├── prediction.ts   → prediction engine wrapper (thin layer over ScoringEngine)
+  ├── behavior.ts     → behavior engine wrapper (thin layer over ScoringEngine)
+  ├── seed-behaviors.ts → default behavior seeding on first run
+  └── vector-math.ts  → blobToVector + cosineSimilarity helpers
 
 OpenCode plugin path
   ├── index.ts        → plugin entry: wires DB/model/extraction, registers tools + hooks
@@ -63,8 +68,13 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `extraction.ts` | Per-session in-memory ring buffer (cap 20) that buffers non-thatch tool interactions and serializes them into the JSON payload the `get_extraction_payload` tool returns. The in-memory pipeline is opencode-only, but the payload builders (`buildExtractionPayload`, `deriveTitle`) are shared by both paths — `extract-queue.ts` imports `deriveTitle`, `mcp.ts` imports `buildExtractionPayload` for the extraction payload provider. `summarizeArgs` is used internally by `buildExtractionPayload`. |
 | `extract-queue.ts` | File-backed per-session JSONL queue (caps 20, oldest dropped). Shared by the Claude Code and Cursor hook paths, which fire one-shot per event with no cross-call state. This is the MCP-side equivalent of `extraction.ts`. |
 | `sideband.ts` | Unix domain socket server + client. The MCP server (long-lived, warm model) runs `SidebandServer` so one-shot hook processes can ask it to embed a prompt and search for matches without loading the model themselves. Handles three methods: `match` (recall nudge), `predictions` (prediction auto-fire), and `behaviors` (behavior auto-fire). Socket path is a hash of the DB path — both processes compute it independently. |
-| `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, prompt-aware recall nudge (`recallNudge` / `claudeRecallNudge`), Claude Code CLAUDE.md instructions, Cursor AGENTS.md instructions, Claude Code hook text. |
+| `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, prompt-aware recall nudge (`recallNudge` / `claudeRecallNudge`), prediction nudge (`predictionNudge`), behavior nudge (`behaviorNudge`), prediction verb selection (`predictionVerb`), Claude Code CLAUDE.md instructions, Cursor AGENTS.md instructions, Claude Code hook text. |
 | `skills.ts` | `SKILL.md` content for all thatch skills, plus the installer. Skills are split into `SHARED_SKILLS` (22 skills: fact-extractor, dedup-classifier, project-primer, 7 review specialists, review synthesizer, review context, code archaeology, review followup, review response, change walkthrough, code walkthrough, session reflection, coding-workflow, thatch-pr-description, thatch-ticket-description, thatch-split-overlarge-pr — work on all three hosts) and `OPENCODE_ONLY_SKILLS` (1 skill: code-review coordinator — requires sub-agent support, not installed for Claude Code or Cursor). `installSkills(dir, skills)` defaults to `SHARED_SKILLS`; the opencode plugin passes `[...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]`. |
+| `scoring-engine.ts` | Generic four-table scoring engine with Bayesian confidence. Shared base for prediction and behavior engines — each wraps it with table-specific names. |
+| `prediction.ts` | Thin wrapper around `ScoringEngine` with prediction-specific table names. |
+| `behavior.ts` | Thin wrapper around `ScoringEngine` with behavior-specific table names. |
+| `seed-behaviors.ts` | Default behavior seeding on first run. Populates starter self-discipline rules. |
+| `vector-math.ts` | `blobToVector` and `cosineSimilarity` helpers used across the codebase. |
 
 ## Plugin hooks
 

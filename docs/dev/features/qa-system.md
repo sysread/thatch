@@ -1,6 +1,6 @@
 # QA System
 
-Thatch ships 28 QA use cases that verify end-to-end behavior. Each use case is
+Thatch ships 93 QA use cases that verify end-to-end behavior. Each use case is
 a `bun:test` file that runs in an isolated environment — a temp-directory copy
 of the repo, not the working tree itself. Use cases are split into
 **automatable** (no LLM, fast) and **live** (spawns opencode, costs model
@@ -39,7 +39,7 @@ registers all use cases in one suite, enabling `--concurrent
 --max-concurrency 5` to run 5 use cases at once (33s vs 88s sequential for the
 auto suite).
 
-### Automatable use cases (19)
+### Automatable use cases (73)
 
 Run without an LLM. Test CLI behavior, hooks, DB operations, and tool
 execution directly via bun assertions. These are fast and run in parallel.
@@ -66,10 +66,10 @@ execution directly via bun assertions. These are fast and run in parallel.
 | UC-027 | behavior-confidence-model | ham/spam adjusts Bayesian confidence |
 | UC-028 | behavior-delete | semantic-match deletion with cascade |
 
-### Live use cases (9)
+### Live use cases (20)
 
 Spawn real opencode sessions. Test the full pipeline with a real model. These
-cost model tokens and have a 10-minute per-use-case timeout. All 9 are marked
+cost model tokens and have a 20-minute per-use-case timeout. All 20 are marked
 `manualOnly: true` — the opencode binary is not available in CI, and three
 (UC-006, UC-010, UC-013) are manual-only for fundamental reasons (Cursor hook
 lifecycle, nested opencode session timeout, compaction trigger). Run them
@@ -137,7 +137,7 @@ safety contract is intentionally fixed text — do not paraphrase it.
    case content as prompt. Requires `VENICE_API_KEY`. Default model:
    `venice/zai-org-glm-5-2` (override with `QA_MODEL` env var). Uses
    `Bun.spawn()` (not `Bun.$`) so the process can be killed on timeout (590s
-   SIGTERM, SIGKILL in finally). The 10-minute per-test timeout is the
+   SIGTERM, SIGKILL in finally). The 20-minute per-test timeout is the
    wall-clock budget for a complete LLM-driven agent session — do not reduce
    it.
 2. **Automatable**: custom `run(ctx)` function with direct CLI/bun assertions.
@@ -155,8 +155,9 @@ includes all of `tests/`), just not executed during `check`. See
 ## Interactions with other features
 
 - **All features**: QA use cases verify end-to-end behavior of every feature
-- [cicd.md](cicd.md): `mise run check` runs `bun test` which includes the QA
-  test files; `mise run qa` runs the full QA suite separately
+- [cicd.md](cicd.md): `mise run check` uses a flat glob (`tests/*.test.ts`)
+  that excludes `tests/qa/`; CI runs `bun test` which includes the QA barrels;
+  `mise run qa` runs the full QA suite separately
 - [setup.md](setup.md): UC-005 and UC-018 test setup installation and detection
 - [nudge-pipeline.md](nudge-pipeline.md): UC-007, UC-009, UC-021, UC-025 test
   nudge tiers
@@ -191,7 +192,7 @@ No separate QA docs directory exists. QA use cases live in `tests/qa/` as execut
 1. **Automatable use cases never spawn an LLM.** They test CLI, hooks, DB, and
    tool execution directly.
 2. **Live use cases spawn real opencode sessions and cost model tokens.** All
-   9 are marked `manualOnly` — the opencode binary is not available in CI.
+   20 are marked `manualOnly` — the opencode binary is not available in CI.
 3. **`QA_DRY_RUN=1` lists use cases without executing.** Use this for CI and
    coverage review.
 4. **Each use case follows the structured format**: preconditions, steps,
@@ -200,5 +201,5 @@ No separate QA docs directory exists. QA use cases live in `tests/qa/` as execut
    maintain. Add a new `.ts` file and import it from the barrel.
 6. **The repo is read-only during QA.** Sessions run inside
    `/tmp/thatch-qa/<uc-name>/` copies created from `git archive HEAD`.
-7. **The 10-minute test timeout is the agent-session budget, not test
+7. **The 20-minute test timeout is the agent-session budget, not test
    execution time.** Reducing it will cause live use cases to time out.

@@ -19,7 +19,7 @@ import "./uc-078-child-session-error";
 import "./uc-079-child-session-deletion";
 import "./uc-080-parent-session-deletion";
 import "./uc-083-review-coordinator";
-import "./uc-084-review-salkthrough";
+import "./uc-084-review-walkthrough";
 import "./uc-085-review-followup";
 import "./uc-086-review-response";
 import "./uc-087-review-no-subagents";
