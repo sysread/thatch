@@ -8,7 +8,7 @@ tokens).
 
 ## What it does
 
-- 28 use cases: 19 automatable + 9 live
+- 93 use cases: 73 automatable + 20 live
 - Automatable use cases run without an LLM — they test CLI behavior, hooks, DB
   operations, and tool execution directly via bun assertions
 - Live use cases spawn real opencode sessions — they test the full
@@ -93,8 +93,8 @@ locally with `mise run qa-live`.
 |------|---------|---------|
 | `qa` | `bun test tests/qa/auto/index.test.ts --concurrent --max-concurrency 5 && bun test tests/qa/live/index.test.ts` | Run all QA (auto first, then live) |
 | `qa-dry-run` | `QA_DRY_RUN=1 bun test tests/qa/auto/index.test.ts tests/qa/live/index.test.ts --concurrent --max-concurrency 5` | List use cases without spawning sessions |
-| `qa-auto` | `bun test tests/qa/auto/index.test.ts --concurrent --max-concurrency 5` | Run automatable only (fast, no LLM) |
-| `qa-live` | `bun test tests/qa/live/index.test.ts` | Run live only (spawns opencode, costs tokens) |
+| `qa-auto` | `bin/qa-run auto` | Run automatable only (fast, no LLM). Pass UC names as args to select a subset. |
+| `qa-live` | `bin/qa-run live` | Run live only (spawns opencode, costs tokens). Pass UC names as args to select a subset. |
 
 The `qa` task runs auto first via `&&`. Auto failures stop before live runs.
 The `qa-live` task does not use `--concurrent` — live sessions are
@@ -181,8 +181,8 @@ includes all of `tests/`), just not executed during `check`. See
 | `tests/qa/runner.ts` | `registerUseCase`, `UseCase` type, `ensureMaster`, `createFixture`, `runViaOpencode`, execution logic |
 | `tests/qa/auto/index.test.ts` | Automatable use case barrel — imports all auto use case modules |
 | `tests/qa/live/index.test.ts` | Live use case barrel — imports all live use case modules |
-| `tests/qa/auto/uc-NNN-*.ts` | 19 automatable use case files |
-| `tests/qa/live/uc-NNN-*.ts` | 9 live use case files |
+| `tests/qa/auto/uc-NNN-*.ts` | 73 automatable use case files |
+| `tests/qa/live/uc-NNN-*.ts` | 20 live use case files |
 
 No separate QA docs directory exists. QA use cases live in `tests/qa/` as executable tests, not docs.
 
