@@ -221,7 +221,7 @@ With `thatch setup --claude`, skills install to `~/.claude/skills/` (or
 
 ### Code review skills
 
-Seven specialist review lenses, plus the synthesizer, context, followup,
+Eight specialist review lenses, plus the synthesizer, context, followup,
 response, walkthrough, and workflow skills that support the review pipeline:
 
 | Skill | Focus |
@@ -229,6 +229,7 @@ response, walkthrough, and workflow skills that support the review pipeline:
 | `thatch-review-pedantic` | Mechanical correctness: spelling, naming, doc accuracy, specs, guidelines, stale artifacts. |
 | `thatch-review-acceptance` | Behavioral/product review: UX coherency, behavioral delta, integration effects, user assumptions. |
 | `thatch-review-state-flow` | Data flow and contracts: module boundaries, implicit state machines, error propagation, separation of concerns. |
+| `thatch-review-economy` | Design simplicity and maintainability: is the complexity earned? Evaluates both the overall change design (forest) and individual touch points (trees) for unnecessary complexity, redundancy, and simpler available alternatives. |
 | `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth wall breaks, em dashes, hedging, filler. |
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of the code's behavior? |
 | `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
@@ -261,7 +262,7 @@ response, walkthrough, and workflow skills that support the review pipeline:
 | Skill | opencode | Claude Code | Cursor |
 |-------|----------|-------------|--------|
 | Memory skills (4) | Yes | Yes | Yes |
-| Review specialists (7) | Yes | Yes | Yes |
+| Review specialists (8) | Yes | Yes | Yes |
 | Review synthesizer | Yes | Yes | Yes |
 | Review context + code archaeology | Yes | Yes | Yes |
 | Review followup | Yes | Yes | Yes |

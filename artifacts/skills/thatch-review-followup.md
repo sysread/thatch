@@ -275,7 +275,7 @@ After all findings have been dealt with (adequately addressed and replied to, or
 ### How to offer
 
 Present the offer as a choice:
-1. **Re-run the full structured review**: load `thatch-code-review` on the current HEAD. It will dispatch all seven specialists on the merge-base..HEAD range. The existing follow-up detection will cross-reference your prior comments. On Claude Code or Cursor (no sub-agent support), run each specialist skill in sequence, then run `thatch-review-synthesizer` to aggregate.
+1. **Re-run the full structured review**: load `thatch-code-review` on the current HEAD. It will dispatch all eight specialists on the merge-base..HEAD range. The existing follow-up detection will cross-reference your prior comments. On Claude Code or Cursor (no sub-agent support), run each specialist skill in sequence, then run `thatch-review-synthesizer` to aggregate.
 2. **End the re-review here**: the user confirmed their concerns were addressed (or decided how to handle the unaddressed ones) and does not want another full round.
 
 The offer is just an offer. The user may decline. They may have only wanted to confirm their concerns were addressed.

@@ -29,9 +29,9 @@ description: Extract durable project facts ... Use when ...
   Code, and Cursor all auto-discover skills and use the description for
   relevance).
 
-## The 23 skills
+## The 24 skills
 
-**Shared (22)** — installed everywhere; no sub-agents required:
+**Shared (23)** — installed everywhere; no sub-agents required:
 
 | Skill | Role |
 |-------|------|
@@ -41,6 +41,7 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-pedantic` | Mechanical correctness: spelling, naming, doc accuracy, specs, stale artifacts. |
 | `thatch-review-acceptance` | Behavioral/product review: UX, behavioral delta, integration effects. |
 | `thatch-review-state-flow` | Data flow and contracts: module boundaries, implicit FSMs, error propagation. |
+| `thatch-review-economy` | Design simplicity and maintainability: is the complexity earned? Evaluates both the overall change design (forest) and individual touch points (trees) for unnecessary complexity, redundancy, and simpler available alternatives. |
 | `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth-wall breaks, em dashes, filler. |
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of behavior? |
 | `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
@@ -62,11 +63,11 @@ description: Extract durable project facts ... Use when ...
 
 | Skill | Role |
 |-------|------|
-| `thatch-code-review` | Resolve review target (incl. VCS detection and connected PR/MR lookup for follow-up round detection), gather project context, research affected workflows, estimate complexity, partition, dispatch the 7 specialists in parallel, synthesize with a workflow-change preface and prior-comment cross-reference. |
+| `thatch-code-review` | Resolve review target (incl. VCS detection and connected PR/MR lookup for follow-up round detection), gather project context, research affected workflows, estimate complexity, partition, dispatch the 8 specialists in parallel, synthesize with a workflow-change preface and prior-comment cross-reference. |
 
 ## REVIEW_COMMON
 
-The six problem-finding review specialists share a framework interpolated via `${REVIEW_COMMON}` (the seventh specialist, highlights, finds positive things and uses its own structure):
+The seven problem-finding review specialists share a framework interpolated via `${REVIEW_COMMON}` (the eighth specialist, highlights, finds positive things and uses its own structure):
 
 - **Static analysis only** — no running tests/linters/compilers.
 - **Scope gathering** — resolve the git range, `git diff --stat`, read changed
@@ -96,7 +97,7 @@ The synthesizer reuses the same verification rigor but has its own structure
 ## The two arrays
 
 ```ts
-const SHARED_SKILLS: SkillDef[] = [ /* 22 skills above */ ];
+const SHARED_SKILLS: SkillDef[] = [ /* 23 skills above */ ];
 const OPENCODE_ONLY_SKILLS: SkillDef[] = [ /* code-review coordinator */ ];
 ```
 
@@ -133,7 +134,7 @@ and `--cursor` pass only the shared set.
 ## Memory review skills in practice
 
 - **Quick single lens**: load any specialist directly and point it at a branch.
-- **Full review on opencode**: load `thatch-code-review` — it gathers project context, researches affected workflows, dispatches all 7 specialists in parallel (with both the context brief and workflow guide injected into each briefing), then synthesizes a report that starts with the workflow changes before findings.
+- **Full review on opencode**: load `thatch-code-review` — it gathers project context, researches affected workflows, dispatches all 8 specialists in parallel (with both the context brief and workflow guide injected into each briefing), then synthesizes a report that starts with the workflow changes before findings.
 - **Full review on Claude Code/Cursor**: run each specialist in sequence, then
   run `thatch-review-synthesizer` to verify and aggregate.
 - **Follow-up round (re-review)**: load `thatch-review-followup` when the author

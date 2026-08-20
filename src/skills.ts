@@ -37,6 +37,7 @@ function loadSharedSkills(): SkillDef[] {
     "thatch-review-pedantic",
     "thatch-review-acceptance",
     "thatch-review-state-flow",
+    "thatch-review-economy",
     "thatch-review-no-slop",
     "thatch-review-breadcrumbs",
     "thatch-review-mark-and-sweep",

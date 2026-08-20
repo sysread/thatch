@@ -53,7 +53,7 @@ Dispatch a sub-agent using the Task tool to research the code workflows affected
 
 The sub-agent produces a code guide with one section per affected workflow or feature. Wait for it to complete and collect the guide.
 
-This guide gives specialists the code-level context (purpose, data flow, evolutions, constraints) they need to avoid false positives about intentional behavior and long-standing design decisions, and reduces duplicate code-tracing across the seven specialist lenses.
+This guide gives specialists the code-level context (purpose, data flow, evolutions, constraints) they need to avoid false positives about intentional behavior and long-standing design decisions, and reduces duplicate code-tracing across the eight specialist lenses.
 
 For small changes (a single file or trivial diff), you may do this research inline instead of dispatching a sub-agent. Use your judgment: if the workflow research would require reading more than 3-4 files, dispatch a sub-agent to preserve your context for orchestration.
 
@@ -83,7 +83,7 @@ For changes estimated at 3 points or fewer, skip partitioning — dispatch one s
 
 ## Step 6: Dispatch specialist sub-agents
 
-For each review unit, dispatch sub-agents using the Task tool. Each sub-agent runs one specialist lens on one review unit. The seven specialists are:
+For each review unit, dispatch sub-agents using the Task tool. Each sub-agent runs one specialist lens on one review unit. The eight specialists are:
 
 1. **Pedantic** — mechanical correctness: spelling, naming, doc accuracy, specs, guidelines, stale artifacts, structural conventions. Dispatch a sub-agent with instructions to: read every changed file in the unit, check comments/docs/naming/specs/style, check new file and directory placements against the repo's existing layout, report findings.
 
@@ -91,13 +91,15 @@ For each review unit, dispatch sub-agents using the Task tool. Each sub-agent ru
 
 3. **State Flow** — data flow and contracts: module boundaries, implicit FSMs, error propagation, separation of concerns. Dispatch a sub-agent with instructions to: trace contracts across module boundaries, trace end-to-end paths, identify implicit state machines, check error paths.
 
-4. **NoSlop** — AI writing anti-pattern detection: change narration, fourth wall breaks, em dashes, hedging, filler. Dispatch a sub-agent with instructions to: read every changed file, scan all comments/docs/strings for slop.
+4. **Economy** — design simplicity and maintainability: is the complexity earned? Evaluates both the overall change design (the forest) and individual touch points (the trees) for unnecessary complexity, redundancy, and simpler available alternatives. Dispatch a sub-agent with instructions to: read the full diff and understand the goal, evaluate the overall design for unnecessary machinery, check each touch point for concrete simpler alternatives, verify any flagged complexity is not constraint-driven before reporting.
 
-5. **Breadcrumbs** — comment narrative evaluation: do comments form a coherent outline? Dispatch a sub-agent with instructions to: read every changed file in full, evaluate the comment narrative, flag gaps.
+5. **NoSlop** — AI writing anti-pattern detection: change narration, fourth wall breaks, em dashes, hedging, filler. Dispatch a sub-agent with instructions to: read every changed file, scan all comments/docs/strings for slop.
 
-6. **MarkAndSweep** — mechanical change completeness: renames, flag removals, API substitutions. Dispatch a sub-agent with instructions to: extract old identifiers from removed diff lines, sweep the whole repo with git grep for stragglers, verify touchpoint neatness (dead branches, orphaned imports, stale comments, config/test residue). Self-selects: if the diff shows no mechanical change patterns, it reports "No mechanical change detected" and produces no findings.
+6. **Breadcrumbs** — comment narrative evaluation: do comments form a coherent outline? Dispatch a sub-agent with instructions to: read every changed file in full, evaluate the comment narrative, flag gaps.
 
-7. **Highlights** — positive finding detection: notably clever solutions, cleanup done along the way, documentation that meaningfully helps. Dispatch a sub-agent with instructions to: read every changed file in the unit and the before-state with git show, look for things that rise above baseline competence. Medium-high bar: no generic praise, no baseline competence. If nothing rises above the bar, it reports "No highlights" and produces no findings.
+7. **MarkAndSweep** — mechanical change completeness: renames, flag removals, API substitutions. Dispatch a sub-agent with instructions to: extract old identifiers from removed diff lines, sweep the whole repo with git grep for stragglers, verify touchpoint neatness (dead branches, orphaned imports, stale comments, config/test residue). Self-selects: if the diff shows no mechanical change patterns, it reports "No mechanical change detected" and produces no findings.
+
+8. **Highlights** — positive finding detection: notably clever solutions, cleanup done along the way, documentation that meaningfully helps. Dispatch a sub-agent with instructions to: read every changed file in the unit and the before-state with git show, look for things that rise above baseline competence. Medium-high bar: no generic praise, no baseline competence. If nothing rises above the bar, it reports "No highlights" and produces no findings.
 
 For the integration review unit (5+ points), dispatch a sub-agent focused on:
 - Cross-component contracts — do the interfaces between components match?
@@ -144,7 +146,7 @@ Alternatively, perform the synthesis yourself:
 When dispatching each sub-agent, include in the prompt:
 - The git range to review
 - The specific files in this unit's scope
-- The specialist focus (from the seven specialists above)
+- The specialist focus (from the eight specialists above)
 - The diff stat for this unit's files
 - **The project context brief** from Step 2, filtered to what is relevant to this unit's scope. Explicitly list any deferred work that falls within this unit's files, and call out TODO ($ticket) markers the specialists should recognize as intentional.
 - **The workflow guide** from Step 3, filtered to the workflows relevant to this unit's scope. Use it to understand the purpose and evolution of the code before flagging issues. It provides the code-level context (flows, contracts, history, constraints) that prevents false positives about intentional behavior and long-standing design decisions.
