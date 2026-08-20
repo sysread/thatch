@@ -21,7 +21,7 @@ jobs:
         with:
           bun-version: "1.3.14"
       - run: bun install
-      - run: bun test
+      - run: bun test tests/*.test.ts
       # OIDC publish needs npm >= 11.5.1. setup-node installs into the
       # user-writable tool cache (the runner's stock node in /usr/local is
       # root-owned, so npm can't self-upgrade there). Deliberately NO
