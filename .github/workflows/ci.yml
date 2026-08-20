@@ -16,5 +16,5 @@ jobs:
           bun-version: "1.3.14"
       - run: bun install
       - run: bunx tsc -p tsconfig.check.json
-      - run: bun test
+      - run: bun test tests/*.test.ts
       - run: bunx markdownlint-cli2
