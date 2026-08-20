@@ -177,7 +177,7 @@ async function doEnsureMaster(): Promise<void> {
     }
 
     // Copy skills from the real opencode config. The thatch plugin already
-    // installed these there (22 shared + 1 opencode-only = 23 skills).
+    // installed these there (23 shared + 1 opencode-only = 24 skills).
     // The plugin's drift detection compares on-disk content to the artifact
     // definitions; if they match, the install is a no-op.
     if (existsSync(join(realOpencodeConfig, "skills"))) {

@@ -9,7 +9,7 @@ import { registerUseCase, type UseCase, type QaContext } from "../runner";
  * Automatable: yes — skill dir inspection after setup. The code-review
  * coordinator skill (thatch-code-review) is only installed for opencode
  * (which has sub-agent support). MCP hosts (Claude Code, Cursor) get
- * SHARED_SKILLS only (22 skills, no coordinator).
+ * SHARED_SKILLS only (23 skills, no coordinator).
  */
 
 const useCase: UseCase = {
@@ -24,9 +24,9 @@ const useCase: UseCase = {
     "3. Check whether thatch-code-review appears in each directory.",
   ].join("\n"),
   expected: [
-    "- Claude Code: 22 thatch-* skill directories present. thatch-code-review is absent.",
-    "- Cursor: 22 thatch-* skill directories present. thatch-code-review is absent.",
-    "- opencode: 23 thatch-* skill directories present. thatch-code-review is present (verified by uc-014).",
+    "- Claude Code: 23 thatch-* skill directories present. thatch-code-review is absent.",
+    "- Cursor: 23 thatch-* skill directories present. thatch-code-review is absent.",
+    "- opencode: 24 thatch-* skill directories present. thatch-code-review is present (verified by uc-014).",
   ].join("\n"),
 
   async run(ctx: QaContext) {
@@ -53,8 +53,8 @@ const useCase: UseCase = {
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
 
-    if (claudeSkills.length !== 22) {
-      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 22`);
+    if (claudeSkills.length !== 23) {
+      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 23`);
       return "FAIL";
     }
     if (claudeSkills.includes("thatch-code-review")) {
@@ -80,8 +80,8 @@ const useCase: UseCase = {
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
 
-    if (cursorSkills.length !== 22) {
-      console.log(`  FAIL: Cursor skills count is ${cursorSkills.length}, expected 22`);
+    if (cursorSkills.length !== 23) {
+      console.log(`  FAIL: Cursor skills count is ${cursorSkills.length}, expected 23`);
       return "FAIL";
     }
     if (cursorSkills.includes("thatch-code-review")) {
