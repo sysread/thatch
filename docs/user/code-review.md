@@ -1,6 +1,6 @@
 # Code Review
 
-Thatch ships a multi-agent code review pipeline. Seven specialist
+Thatch ships a multi-agent code review pipeline. Eight specialist
 review lenses run in parallel, then a synthesizer verifies and
 deduplicates their findings into a single report.
 
@@ -16,20 +16,21 @@ the review:
 3. **Research affected workflows**: load `thatch-code-archaeology`,
    trace the code paths the change touches.
 4. **Estimate complexity**: partition the diff into review units.
-5. **Dispatch specialists**: fan out the seven specialists as
+5. **Dispatch specialists**: fan out the eight specialists as
    parallel sub-agents, each with the context brief.
 6. **Synthesize**: the synthesizer reads all specialist output,
    verifies each finding (cited text exists, claim is accurate,
    severity is justified), deduplicates by root cause, and produces
    the final report.
 
-## The seven specialists
+## The eight specialists
 
 | Skill | What it checks |
 |-------|-------------|
 | `thatch-review-pedantic` | Spelling, naming, doc accuracy, specs, guidelines, stale artifacts, structural conventions (file/directory placement). |
 | `thatch-review-acceptance` | UX coherency, behavioral delta, integration effects, user assumptions. |
 | `thatch-review-state-flow` | Module boundaries, implicit state machines, error propagation, separation of concerns. |
+| `thatch-review-economy` | Design simplicity and maintainability: is the complexity earned? Evaluates both the overall change design (forest) and individual touch points (trees) for unnecessary complexity, redundancy, and simpler available alternatives. |
 | `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth wall breaks, em dashes, hedging, filler. |
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of the code's behavior? |
 | `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
