@@ -43,6 +43,27 @@ if git rev-parse -q --verify "refs/tags/v$curr" >/dev/null 2>&1; then
   fi
 fi
 
+branch=$(git rev-parse --abbrev-ref HEAD)
+ci_json=$(gh run list --branch "$branch" --workflow ci.yml --limit 1 --json status,conclusion 2>/dev/null || echo "[]")
+ci_status=$(echo "$ci_json" | jq -r '.[0].status // "unknown"')
+ci_conclusion=$(echo "$ci_json" | jq -r '.[0].conclusion // "unknown"')
+
+if [[ "$ci_status" != "completed" ]]; then
+  echo "ERROR: CI is still running on '$branch' (status: $ci_status)."
+  echo "  Wait for it to finish before releasing."
+  exit 1
+fi
+
+if [[ "$ci_conclusion" != "success" ]]; then
+  echo "ERROR: CI is red on '$branch' (conclusion: $ci_conclusion)."
+  echo "  Fix the failures before releasing."
+  echo "  View: gh run list --branch $branch --workflow ci.yml"
+  exit 1
+fi
+
+echo "  ✓ CI green on '$branch'"
+echo
+
 echo "▸ running checks (typecheck + tests + markdown lint)..."
 mise run check
 echo "  ✓ checks passed"
