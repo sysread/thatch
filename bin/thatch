@@ -2,6 +2,7 @@
 
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import pkg from "../package.json" with { type: "json" };
 import { ThatchDB } from "../src/db";
 import { detectRepo } from "../src/git";
 import { BgeEmbeddingModel } from "../src/embeddings";
@@ -17,6 +18,7 @@ const [command, ...args] = process.argv.slice(2);
 
 function usage(): never {
   console.error(`USAGE
+  thatch --version, -v             Print version and exit
   thatch stores                    List all stores
   thatch list   [store]            List memory labels in a store  
   thatch show   <label> [store]    Display a memory by label
@@ -52,6 +54,11 @@ function projectDir(): string {
 }
 
 switch (command) {
+  case "--version":
+  case "-v":
+    console.log(pkg.version);
+    process.exit(0);
+
   case "stores":
     console.log(db.listStores().join("\n"));
     break;
