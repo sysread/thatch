@@ -14,6 +14,7 @@ import {
   startVersionChecker,
   stopVersionChecker,
   getVersionChecker,
+  compareSemver,
   _resetForTesting,
 } from "../src/version-check";
 import pkg from "../package.json";
@@ -214,5 +215,57 @@ describe("version file and npm cache paths are deterministic from dbPath", () =>
     const vf = versionFilePath(dbPath);
     const nc = npmCachePath(dbPath);
     expect(dirname(vf)).toBe(dirname(nc));
+  });
+});
+
+describe("compareSemver", () => {
+  test("equal versions return 0", () => {
+    expect(compareSemver("0.1.30", "0.1.30")).toBe(0);
+    expect(compareSemver("1.0.0", "1.0.0")).toBe(0);
+  });
+
+  test("older version is negative", () => {
+    expect(compareSemver("0.1.30", "0.1.31")).toBeLessThan(0);
+    expect(compareSemver("0.0.9", "0.1.0")).toBeLessThan(0);
+    expect(compareSemver("0.9.9", "1.0.0")).toBeLessThan(0);
+  });
+
+  test("newer version is positive", () => {
+    expect(compareSemver("0.1.31", "0.1.30")).toBeGreaterThan(0);
+    expect(compareSemver("1.0.0", "0.9.9")).toBeGreaterThan(0);
+  });
+
+  test("handles different segment counts", () => {
+    expect(compareSemver("1.0", "1.0.0")).toBe(0);
+    expect(compareSemver("1.0.0.1", "1.0.0")).toBeGreaterThan(0);
+  });
+});
+
+describe("npm cache with stale (older) cached version", () => {
+  test("readNpmCacheForUpdate returns null when cached version is older than running", () => {
+    const dbPath = join(dir, "test.db");
+    const path = npmCachePath(dbPath);
+    mkdirSync(dirname(path), { recursive: true });
+    // Simulate a stale cache from before the current version was published.
+    const older = pkg.version.split(".").map(Number);
+    older[2] = (older[2] ?? 0) - 1;
+    const olderStr = older.join(".");
+    writeFileSync(path, JSON.stringify({ version: olderStr, checkedAt: Date.now() }), "utf-8");
+    expect(readNpmCacheForUpdate(dbPath)).toBeNull();
+  });
+
+  test("checker reports not outdated when cached version is older than running", () => {
+    const dbPath = join(dir, "test.db");
+    const path = npmCachePath(dbPath);
+    mkdirSync(dirname(path), { recursive: true });
+    const older = pkg.version.split(".").map(Number);
+    older[2] = (older[2] ?? 0) - 1;
+    const olderStr = older.join(".");
+    writeFileSync(path, JSON.stringify({ version: olderStr, checkedAt: Date.now() }), "utf-8");
+
+    const checker = startVersionChecker(dbPath);
+    expect(checker.getLatestVersion()).toBe(olderStr);
+    expect(checker.isOutdated()).toBe(false);
+    expect(checker.getUpdateWarning()).toBeNull();
   });
 });
