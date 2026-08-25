@@ -20,7 +20,7 @@ import { ExtractionPipeline, type ToolInteraction } from "./extraction";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
 import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
-import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion } from "./version-check";
+import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
 import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
@@ -398,7 +398,7 @@ export const server: Plugin = async ({ client, worktree }) => {
         const onDisk = readOnDiskVersion();
         const checker = getVersionChecker();
         const npmUpdate = checker?.getUpdateWarning() ?? null;
-        const skewWarning = onDisk && onDisk !== runningVersion
+        const skewWarning = onDisk && compareSemver(runningVersion, onDisk) < 0
           ? `thatch was upgraded to v${onDisk} but this session is running v${runningVersion}. Restart opencode to apply the update.`
           : null;
         const warning = skewWarning ?? npmUpdate;

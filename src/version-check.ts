@@ -5,6 +5,23 @@ import { join, dirname } from "node:path";
 import pkg from "../package.json";
 
 /**
+ * Compares two semver strings (e.g. "0.1.30", "0.1.31"). Returns a negative
+ * number if a < b, positive if a > b, 0 if equal. Pre-release tags are not
+ * supported because @jeffober/thatch does not use them.
+ */
+export function compareSemver(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const va = pa[i] ?? 0;
+    const vb = pb[i] ?? 0;
+    if (va < vb) return -1;
+    if (va > vb) return 1;
+  }
+  return 0;
+}
+
+/**
  * Version skew detection and npm update checking.
  *
  * Two complementary checks:
@@ -198,7 +215,7 @@ class NpmVersionChecker {
    */
   isOutdated(): boolean {
     if (!this.#latestVersion) return false;
-    return this.#latestVersion !== pkg.version;
+    return compareSemver(pkg.version, this.#latestVersion) < 0;
   }
 
   /**
@@ -309,7 +326,7 @@ export function readNpmCacheForUpdate(dbPath: string): string | null {
     const raw = readFileSync(path, "utf-8");
     const parsed = JSON.parse(raw) as NpmCacheEntry;
     if (!parsed.version) return null;
-    if (parsed.version === pkg.version) return null;
+    if (compareSemver(pkg.version, parsed.version) >= 0) return null;
     return `thatch v${parsed.version} is available. ` +
       `Run \`npm update ${NPM_PACKAGE}\` to update, then restart your editor.`;
   } catch {
