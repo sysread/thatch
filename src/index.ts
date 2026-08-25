@@ -411,6 +411,20 @@ export const server: Plugin = async ({ client, worktree }) => {
             text: versionWarningNudge(warning),
             synthetic: true,
           });
+          try {
+            const short = skewWarning
+              ? `\u26A0\uFE0F thatch upgraded to v${onDisk} (running v${runningVersion})`
+              : `\u26A0\uFE0F thatch v${checker?.getLatestVersion()} is available`;
+            await client.tui.showToast({
+              body: {
+                message: short,
+                variant: "warning",
+                duration: 5000,
+              },
+            });
+          } catch {
+            // TUI may not be connected. Best-effort.
+          }
         }
       } catch {
         // Best-effort. Version check failure must not block nudges.
