@@ -13,12 +13,15 @@ import {
   extractionDirectPrompt,
   predictionNudge,
   behaviorNudge,
+  versionWarningNudge,
   type NudgeMatch,
 } from "./prompts";
 import { ExtractionPipeline, type ToolInteraction } from "./extraction";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
 import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
+import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion } from "./version-check";
+import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
 // V1 server export - tools, prompt injection, session hooks
@@ -64,6 +67,21 @@ export const server: Plugin = async ({ client, worktree }) => {
   // user-codified behaviors are never overwritten. See seed-behaviors.ts
   // for the full mechanism.
   await seedDefaultBehaviors(db, model);
+
+  // Start background npm update polling. The checker caches the latest
+  // version in memory and to a file. Never blocks the plugin or tool calls.
+  // The opencode plugin path has no hook/server split, so version skew
+  // between hooks and server is not a concern here. But two opencode
+  // sessions on different versions sharing one DB can cause schema/data
+  // corruption. The npm update nudge covers the "please update" case.
+  // The on-disk version check (readOnDiskVersion) catches the case where
+  // the user ran `npm update` but hasn't restarted opencode yet.
+  startVersionChecker(dbPath);
+
+  // The running version, frozen at module load time. Compared against the
+  // on-disk package.json version on each chat.message to detect post-upgrade
+  // non-restart.
+  const runningVersion = pkg.version;
 
   // Sessions currently being compacted. chat.message nudges are skipped while
   // a session is in this set - the agent can't call tools during summary
@@ -370,6 +388,34 @@ export const server: Plugin = async ({ client, worktree }) => {
         if (isCompactionMsg) return;
         compacting.delete(input.sessionID);
       }
+
+      // Version warning: check if the on-disk package.json version differs
+      // from the running version (user upgraded but didn't restart opencode),
+      // or if the npm poller found a newer version. Best-effort: any failure
+      // silently skips. Injected as a synthetic part so the LLM sees it and
+      // can tell the user to restart.
+      try {
+        const onDisk = readOnDiskVersion();
+        const checker = getVersionChecker();
+        const npmUpdate = checker?.getUpdateWarning() ?? null;
+        const skewWarning = onDisk && onDisk !== runningVersion
+          ? `thatch was upgraded to v${onDisk} but this session is running v${runningVersion}. Restart opencode to apply the update.`
+          : null;
+        const warning = skewWarning ?? npmUpdate;
+        if (warning) {
+          output.parts.push({
+            id: `prt_thatch_ver_${Math.random().toString(36).slice(2)}`,
+            sessionID: input.sessionID,
+            messageID: input.messageID ?? output.message.id,
+            type: "text",
+            text: versionWarningNudge(warning),
+            synthetic: true,
+          });
+        }
+      } catch {
+        // Best-effort. Version check failure must not block nudges.
+      }
+
       // Extraction nudge (fallback path). Skipped when the extracting set
       // is active - that means a direct-extraction child session is running
       // and the plugin is handling extraction via the SDK. The nudge fires
@@ -678,6 +724,7 @@ export const server: Plugin = async ({ client, worktree }) => {
     },
 
     dispose: async () => {
+      stopVersionChecker();
       db.close();
     },
   };

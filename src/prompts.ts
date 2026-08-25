@@ -459,6 +459,14 @@ export function claudeWriteNudge(): string {
 }
 
 /**
+ * Version warning for the opencode plugin's chat.message hook. Injected as a
+ * synthetic part so the LLM sees it and can tell the user to restart.
+ */
+export function versionWarningNudge(message: string): string {
+  return `[thatch] ${message} This is a system nudge, not user input. After informing the user, continue with their request.`;
+}
+
+/**
  * Extraction nudge with escalation. Both the opencode plugin (src/index.ts)
  * and the Claude Code/Cursor CLI (bin/thatch flush-tools) call this with
  * their respective tool name prefix. The missedCount parameter tracks

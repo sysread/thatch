@@ -9,6 +9,7 @@ import { SidebandServer, sidebandSocketPath } from "./sideband";
 import { peekQueue, consumeQueue, resetMissedCount } from "./extract-queue";
 import { buildExtractionPayload } from "./extraction";
 import { seedDefaultBehaviors } from "./seed-behaviors";
+import { writeVersionFile, removeVersionFile, startVersionChecker, stopVersionChecker, getVersionChecker } from "./version-check";
 import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
@@ -144,6 +145,19 @@ export async function runMcpServer(): Promise<void> {
     console.error(`[thatch] ${setupWarning}`);
   }
 
+  // Version warning: surfaced once on the first tools/call response. The
+  // primary delivery channel is flush-tools (fires on every prompt), so this
+  // is a backup. Combines npm update-available and version-skew warnings.
+  let versionWarning: string | null = null;
+  const checker = getVersionChecker();
+  if (checker) {
+    const updateMsg = checker.getUpdateWarning();
+    if (updateMsg) {
+      versionWarning = updateMsg;
+      console.error(`[thatch] ${updateMsg}`);
+    }
+  }
+
   // Auto-refresh: if setup was previously run (markers exist), re-run the
   // install functions to update skills, instructions, and hooks that may have
   // drifted since the last `thatch setup`. All operations are idempotent --
@@ -182,6 +196,16 @@ export async function runMcpServer(): Promise<void> {
     console.error(`[thatch] sideband socket failed: ${err}`);
   }
 
+  // Stamp the running version so hook processes (flush-tools) can detect
+  // version skew after an upgrade. The hook reads this file on every
+  // UserPromptSubmit and compares it to its own package.json version.
+  writeVersionFile(dbPath);
+
+  // Start background npm update polling. The checker caches the latest
+  // version to a file so hook processes can read it without making network
+  // requests. Never blocks tool calls.
+  startVersionChecker(dbPath);
+
   // Read stdin line by line. Each line is a complete JSON-RPC message.
   const decoder = new TextDecoder();
   let buf = "";
@@ -218,11 +242,25 @@ export async function runMcpServer(): Promise<void> {
         setupWarning = null;
       }
 
+      // Surface the version warning once per session on the first tools/call.
+      // The primary delivery channel is flush-tools (fires on every prompt),
+      // so this is a backup for when hooks are missing or fail. Cleared after
+      // one surfacing.
+      if (versionWarning && req.method === "tools/call" && !res.error) {
+        const content = res.result?.content;
+        if (Array.isArray(content) && content[0]?.text != null) {
+          content[0].text = `[thatch] ${versionWarning}\n\n${content[0].text}`;
+        }
+        versionWarning = null;
+      }
+
       send(res);
     }
   }
 
   sideband.stop();
+  stopVersionChecker();
+  removeVersionFile(dbPath);
   db.close();
 }
 

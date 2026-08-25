@@ -48,6 +48,20 @@ async function defaultStore(): Promise<string> {
   }
 }
 
+/**
+ * Emits the nudge output, prepending a version warning if present. The
+ * warning goes first so the LLM sees it before the nudge text. Used by
+ * flush-tools to surface version skew and update-available notices on
+ * every UserPromptSubmit, regardless of which tier fired.
+ */
+function emit(output: string, versionWarning: string | null, isJson: boolean): void {
+  if (versionWarning) {
+    output = `[thatch] ${versionWarning}\n\n${output}`;
+  }
+  if (isJson) console.log(JSON.stringify({ additional_context: output }));
+  else console.log(output);
+}
+
 /** Resolve the project directory from host-specific env vars or cwd. */
 function projectDir(): string {
   return process.env.CURSOR_PROJECT_DIR ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
@@ -359,9 +373,21 @@ switch (command) {
 
       const { peekQueue, getMissedCount, incrementMissedCount } = await import("../src/extract-queue");
       const { extractionNudge, claudeWriteNudge, claudeRecallNudge, predictionNudge, behaviorNudge } = await import("../src/prompts");
+      const { detectSkew, readNpmCacheForUpdate } = await import("../src/version-check");
 
       let repo = "unknown";
       try { repo = await detectRepo(); } catch {}
+
+      // Version checks (best-effort, no network, instant):
+      //   - Skew: the running MCP server's version file differs from this
+      //     binary's version. Means the user upgraded but didn't restart.
+      //   - Update: the npm cache file (written by the MCP server's
+      //     background poll) says a newer version is published.
+      // The warning is prepended to whatever nudge the tiers below produce.
+      // This is the primary delivery channel for version warnings because
+      // flush-tools fires on every prompt, including conversational turns
+      // with no tool calls.
+      const versionWarning = detectSkew(dbPath) ?? readNpmCacheForUpdate(dbPath);
 
       // Tier 1: extraction nudge. Peek (don't drain) - the queue persists
       // until the agent calls memory_remember, which triggers consumeQueue.
@@ -373,8 +399,7 @@ switch (command) {
         const missed = sessionID ? getMissedCount(sessionID) : 0;
         if (sessionID) incrementMissedCount(sessionID);
         const output = extractionNudge(interactions.length, missed, "mcp__thatch__memory_remember", sessionID ?? "");
-        if (isJson) console.log(JSON.stringify({ additional_context: output }));
-        else console.log(output);
+        emit(output, versionWarning, isJson);
         break;
       }
 
@@ -408,16 +433,14 @@ switch (command) {
 
         if (parts.length > 0) {
           const output = parts.join("\n\n");
-          if (isJson) console.log(JSON.stringify({ additional_context: output }));
-          else console.log(output);
+          emit(output, versionWarning, isJson);
           break;
         }
       }
 
       // Tier 3: static write nudge.
       const output = claudeWriteNudge();
-      if (isJson) console.log(JSON.stringify({ additional_context: output }));
-      else console.log(output);
+      emit(output, versionWarning, isJson);
     } catch (err) {
       console.error(`[thatch flush-tools] failed: ${err}`);
       try {
