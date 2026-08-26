@@ -84,8 +84,9 @@ Thatch gives your agent three layers of persistent context:
   classifier. Confidence adjusts the same way as predictions. An anti-laziness
   guard in the prompt prevents the agent from codifying shortcuts.
 
-Plus **24 skills** for memory workflows, structured multi-specialist code
-review, review response, change and feature walkthroughs, and writing tasks
+Plus **26 skills** for memory workflows, structured multi-specialist code
+review, review response, change and feature walkthroughs, memory verification,
+knowledge export, and writing tasks
 (PR descriptions, tickets, PR splitting).
 
 See the [user guide](docs/user/README.md) for the full tool list, CLI
