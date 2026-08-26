@@ -66,6 +66,7 @@ function formatEntry(
   if (entry.branch) meta += ` branch:${entry.branch}`;
   if (entry.confidence) meta += ` confidence:${entry.confidence}`;
   if (entry.archived) meta += " archived:true";
+  meta += ` created:${entry.created_at} updated:${entry.updated_at}`;
   parts.push(meta, "", entry.content);
   return parts.join("\n");
 }
@@ -75,6 +76,7 @@ function formatRecallResult(entry: MemoryRow & { _score: number }): string {
   if (entry.branch) meta += ` branch:${entry.branch}`;
   if (entry.confidence) meta += ` confidence:${entry.confidence}`;
   if (entry.archived) meta += " archived:true";
+  meta += ` updated:${entry.updated_at}`;
   const score = entry._score.toFixed(3);
   return `[${meta}] [score:${score}]\n${entry.content}`;
 }

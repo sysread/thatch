@@ -63,6 +63,8 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-ticket-description\` - draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
 - \`thatch-split-overlarge-pr\` - split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
 - \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
+- \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory has an old \`updated_at\` date or when preparing a knowledge export.
+- \`thatch-knowledge-export\` - compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories, and generates a clean export.
 
 ## When to Write
 
@@ -79,6 +81,16 @@ rounds of tool calls for investigation, debugging, or code-writing - check
 whether you've discovered knowledge worth persisting. Use thatch_memory_recall
 to check for duplicates, then thatch_memory_remember for new findings. Then
 deliver your response.
+
+## Memory Verification
+
+When thatch_memory_show or thatch_memory_recall returns a memory with an old
+updated_at date (more than a few weeks), consider loading the
+thatch-memory-verify skill to fact-check its code-related claims against the
+current codebase before relying on them. This is not mandatory for every old
+memory. Use judgment: a memory about a stable architectural decision may be
+fine for months, while a memory about file locations or function names is
+more likely to drift.
 
 ## Background Task Completions
 
@@ -297,6 +309,8 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-ticket-description\` - draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
 - \`thatch-split-overlarge-pr\` - split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
 - \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
+- \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory has an old \`updated_at\` date or when preparing a knowledge export.
+- \`thatch-knowledge-export\` - compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories, and generates a clean export.
 
 ## When to Write
 
@@ -313,6 +327,15 @@ rounds of tool calls for investigation, debugging, or code-writing - check
 whether you've discovered knowledge worth persisting. Use memory_recall to
 check for duplicates, then memory_remember for new findings. Then deliver
 your response.
+
+## Memory Verification
+
+When memory_show or memory_recall returns a memory with an old updated_at
+date (more than a few weeks), consider loading the thatch-memory-verify skill
+to fact-check its code-related claims against the current codebase before
+relying on them. This is not mandatory for every old memory. Use judgment: a
+memory about a stable architectural decision may be fine for months, while a
+memory about file locations or function names is more likely to drift.
 
 ## User Decision Model
 

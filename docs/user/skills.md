@@ -20,7 +20,7 @@ becomes part of the agent's context.
 
 ## What ships
 
-24 skills total (23 shared, 1 opencode-only):
+26 skills total (25 shared, 1 opencode-only):
 
 ### Memory skills
 
@@ -30,6 +30,8 @@ becomes part of the agent's context.
 | `thatch-dedup-classifier` | Guides the agent through classifying and resolving duplicate-candidate pairs. |
 | `thatch-project-primer` | Investigates a new project from multiple angles and writes foundational memories. |
 | `thatch-session-reflection` | End-of-session skill for recording what was learned about the project, user, tools, and self. |
+| `thatch-memory-verify` | Fact-checks a single memory against the current codebase and corrects stale claims. Uses git archaeology to preserve historical context when changes were intentional. |
+| `thatch-knowledge-export` | Compiles everything thatch knows about a topic into a curated markdown file for knowledge transfer to another engineer. Searches across stores, curates out personal noise, fact-checks code-related memories. |
 
 ### Code review skills
 

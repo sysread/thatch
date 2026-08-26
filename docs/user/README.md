@@ -218,6 +218,8 @@ With `thatch setup --claude`, skills install to `~/.claude/skills/` (or
 | `thatch-dedup-classifier` | Guides the agent through classifying and resolving duplicate-candidate pairs. |
 | `thatch-project-primer` | Investigates a new project from multiple angles and writes foundational memories. |
 | `thatch-session-reflection` | End-of-session skill for recording what was learned about the project, user, tools, and self. |
+| `thatch-memory-verify` | Fact-checks a single memory against the current codebase and corrects stale claims. Uses git archaeology to preserve historical context when changes were intentional. |
+| `thatch-knowledge-export` | Compiles everything thatch knows about a topic into a curated markdown file for knowledge transfer to another engineer. Searches across stores, curates out personal noise, fact-checks code-related memories. |
 
 ### Code review skills
 
@@ -261,7 +263,7 @@ response, walkthrough, and workflow skills that support the review pipeline:
 
 | Skill | opencode | Claude Code | Cursor |
 |-------|----------|-------------|--------|
-| Memory skills (4) | Yes | Yes | Yes |
+| Memory skills (6) | Yes | Yes | Yes |
 | Review specialists (8) | Yes | Yes | Yes |
 | Review synthesizer | Yes | Yes | Yes |
 | Review context + code archaeology | Yes | Yes | Yes |
