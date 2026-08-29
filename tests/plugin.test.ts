@@ -1239,6 +1239,7 @@ describe("extractionNudge escalation", () => {
   test("tier 0 (missedCount 0-1): leads with verb, mentions background dispatch", () => {
     const nudge = extractionNudge(3, 0, tool, sessionID);
     expect(nudge).toContain("Dispatch a task with background: true");
+    expect(nudge).toContain("subagent_type");
     expect(nudge).toContain("thatch_extraction_done");
     expect(nudge).toContain("not user input");
     expect(nudge).toContain("continue waiting");
@@ -1258,6 +1259,7 @@ describe("extractionNudge escalation", () => {
     const nudge = extractionNudge(3, 0, "mcp__thatch__memory_remember", sessionID);
     expect(nudge).toContain("Spawn a background sub-agent");
     expect(nudge).not.toContain("background: true");
+    expect(nudge).not.toContain("subagent_type");
     expect(nudge).toContain("mcp__thatch__extraction_done");
     expect(nudge).toContain("mcp__thatch__get_extraction_payload");
   });
@@ -1272,6 +1274,7 @@ describe("extractionNudge escalation", () => {
     const nudge = extractionNudge(3, 3, tool, sessionID);
     expect(nudge).toContain("IGNORING EXTRACTION INSTRUCTIONS");
     expect(nudge).toContain("INSTALLED THIS PLUGIN FOR A REASON");
+    expect(nudge.toLowerCase()).toContain("subagent_type");
   });
 
   test("tier 2 escalates further with higher counts", () => {

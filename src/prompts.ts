@@ -523,7 +523,7 @@ function extractionNudgeOpencode(
   sessionID: string,
 ): string {
   const plural = count === 1 ? "" : "s";
-  const dispatch = "Dispatch a task with background: true";
+  const dispatch = 'Dispatch a task with background: true and subagent_type: "general" (required for thatch tool access)';
   const drainTool = "thatch_extraction_done";
   const fetchTool = "thatch_get_extraction_payload";
   return buildExtractionNudge(count, missedCount, plural, dispatch, drainTool, fetchTool, sessionID);
