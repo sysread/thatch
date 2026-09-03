@@ -10,9 +10,15 @@ The coordinator skill (`thatch-code-review`, opencode-only) orchestrates
 the review:
 
 1. **Resolve the target**: fetch origin, compute merge-base against
-   `origin/main`, support branch/PR/explicit range.
+   `origin/main`, support branch/PR/explicit range. All file reads and
+   comment anchors are computed against the PR head ref, not the
+   working tree, which may be checked out on a different branch.
 2. **Gather project context**: PR descriptions, git archaeology,
-   ticket references, TODO markers, prior reviews, project memory.
+   ticket references, links to docs/designs/tickets found in the
+   change (followed one hop for scope and design context), TODO
+   markers, prior reviews, project memory. Also checks whether main
+   has moved past the merge-base touching the same paths — a stale
+   branch can make findings true only at the merge-base.
 3. **Research affected workflows**: load `thatch-code-archaeology`,
    trace the code paths the change touches.
 4. **Estimate complexity**: partition the diff into review units.
@@ -21,7 +27,9 @@ the review:
 6. **Synthesize**: the synthesizer reads all specialist output,
    verifies each finding (cited text exists, claim is accurate,
    severity is justified), deduplicates by root cause, and produces
-   the final report.
+   the final report. When the branch is stale relative to main, it
+   re-verifies behavioral findings against current main and reports
+   merge-base-only findings as rebase notes rather than defects.
 
 ## The eight specialists
 

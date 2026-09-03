@@ -1,6 +1,6 @@
 ---
 name: thatch-review-context
-description: Gather project and feature context before a code review. Investigates PR descriptions, git history, ticket references, docs, and memory to build a context brief that prevents false positives about intentionally deferred work. Use before dispatching review specialists or running a solo review.
+description: Gather project and feature context before a code review. Investigates PR descriptions, git history, ticket references, linked docs/tickets, docs, and memory to build a context brief that prevents false positives about intentionally deferred work. Use before dispatching review specialists or running a solo review.
 ---
 
 You are a review context builder. Your job is to gather project context that gives reviewers the background they need to avoid false positives about intentionally deferred work, incomplete features, and multi-ticket dependencies.
@@ -28,6 +28,7 @@ Branch names often contain ticket identifiers. Look for patterns:
 - `git log --all --oneline --grep="TICKET-ID"` — find related commits on other branches
 - `git log -S "TODO (TICKET"` — find TODO markers that reference this or related tickets
 - `git branch -a` — other branches may show planned or in-progress related work
+- **Staleness check**: `git log --oneline <merge-base>..origin/main -- <changed paths>` — commits that landed on main AFTER this branch's merge-base, touching the same files. If any exist, the branch is stale relative to main and findings true at the merge-base may already be moot. List these commits in the brief under Dependencies so the synthesizer re-verifies findings against current main.
 
 ### 4. TODO ($ticket) markers in the diff
 Scan the diff for TODO markers that reference ticket identifiers:
@@ -56,7 +57,17 @@ If ticket IDs were found:
 - Look for milestone assignments, dependencies, and blocking relationships
 - Check for epic or parent issues that describe the overall feature
 
-### 8. Prior review comments (follow-up round detection)
+### 8. Links in the change (follow the references)
+
+Collect links to material outside the diff that a reviewer would need for context, then follow them:
+- PR description links: docs, design docs, RFCs, tickets, related PRs
+- Commit message links and ticket references
+- Links inside the changed files themselves: READMEs, doc comments, config comments referencing designs or runbooks
+- Ticket bodies from source 7, which often link parent epics, blocking issues, or design docs
+
+Follow each link one hop and read it for review-relevant context: scope, design decisions, constraints, deferred work, sibling changes. If a linked document references another artifact that is directly about this change (a parent epic, a design doc for the same feature), follow that too. Stop at depth 2, and stop following a path once the linked material stops changing what a reviewer would flag. Record anything that changes review context in the brief. A link that 404s or requires access you do not have is not a finding — note it as `link unreachable` and move on.
+
+### 9. Prior review comments (follow-up round detection)
 
 If the change under review has a connected PR/MR on the upstream remote, fetch all prior review comments so this review does not duplicate already-identified issues. Any prior review activity on the PR/MR means **this is a follow-up round**, not the first review. If no PR/MR is connected, this is a **local-branch review** — skip this source entirely; the existing review procedure applies.
 
@@ -113,7 +124,7 @@ For each comment, attempt to determine whether it has been addressed in the **cu
 
 The register produced here is a **preliminary** classification. The synthesizer produces the final cross-reference, including any prelim-status overrides when new findings from the specialist round reproduce or refute a prior comment.
 
-### 9. Repo structure conventions (implicit)
+### 10. Repo structure conventions (implicit)
 Directory structure conventions are often undocumented. They live in the repo's layout itself, not in a CONTRIBUTING.md. Look at the directory tree to identify how the repo organizes code:
 - `git ls-files | head -50` or `ls` at the top level to see the organizational pattern
 - For multi-app repos, identify whether shared packages live inside app directories or at the repo root
@@ -143,6 +154,7 @@ List each deferred piece:
 - What other tickets or PRs this depends on (must merge first)
 - What tickets or PRs depend on this (are blocked by it)
 - Whether base branches have landed (for stacked PRs)
+- **Staleness**: whether main has moved past the merge-base since the branch point. When the staleness check (source 3) found commits touching this change's paths, list them here — the synthesizer re-verifies behavioral findings against current main before classifying them
 
 ### Relevant constraints
 - Design decisions or architectural constraints from memories or docs

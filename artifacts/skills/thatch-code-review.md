@@ -26,6 +26,8 @@ Also detect whether the current branch has a **connected PR/MR** even when none 
 
 Also fetch any refs not locally reachable so branches and PRs that were never checked out can be reviewed (e.g. `git fetch origin <branch>` for a PR head).
 
+**Anchor discipline**: the working tree may be checked out on any branch — main, another feature, a detached HEAD — and is not guaranteed to match the change under review. Resolve the head SHA of the review range (`git rev-parse <head-ref>`), and compute every file:line citation and review-comment anchor against that ref with `git show <head-sha>:<path>` — never from the working tree, and never from the base. When the working tree happens to be the PR branch this is equivalent, so apply the rule unconditionally rather than branching on it. Pass the head SHA to sub-agents (see the briefing template).
+
 Run git diff --stat on the resolved range and git log --oneline to understand the change.
 
 ## Step 2: Gather project context
@@ -38,7 +40,9 @@ Load the thatch-review-context skill and follow its methodology to build a conte
 - thatch_memory_recall for feature/project status, design decisions, ticket dependencies
 - Project docs, READMEs, design docs
 - Issue tracker (gh issue/view) if ticket IDs are found
-- **Prior review comments** — if Step 1 detected a connected PR/MR, fetch ALL prior review comments on it (see source #8 in the review-context skill) and build the prior-comments register with a preliminary addressed-check status per comment. This is what distinguishes a **follow-up round** (register non-empty) from the **first round** (register empty or PR has no prior reviews). If Step 1 found no connected PR/MR, the brief explicitly states `Local-branch review — no prior-comment fetch`.
+- **Links in the change** — docs, designs, tickets, and related PRs linked from the PR description, commit messages, or the changed files themselves; follow them for scope and design context (see source #8 in the review-context skill)
+- **Staleness check** — whether main has moved past the merge-base touching the same paths (see source #3 in the review-context skill); when it has, record the commits in the brief
+- **Prior review comments** — if Step 1 detected a connected PR/MR, fetch ALL prior review comments on it (see source #9 in the review-context skill) and build the prior-comments register with a preliminary addressed-check status per comment. This is what distinguishes a **follow-up round** (register non-empty) from the **first round** (register empty or PR has no prior reviews). If Step 1 found no connected PR/MR, the brief explicitly states `Local-branch review — no prior-comment fetch`.
 
 Produce the context brief in the format the skill prescribes (project context, this change's scope, deferred work, dependencies, relevant constraints, and the prior review comments section when present).
 
@@ -123,6 +127,7 @@ Pass the synthesizer:
 - The workflow guide from Step 3.
 - The specialist findings.
 - The prior-comments register when present.
+- The staleness signal from the brief (commits on main after the merge-base touching this change's paths), when present.
 
 The final user-facing report MUST begin with a concise explanation of the workflow(s) this PR changes before listing findings. Use one `### Workflow changes` section, with one subheading per affected workflow when there are multiple. Use the before/now walkthrough shape from the thatch-pr-description skill: numbered step = existing behavior; `NOW` sub-bullet = what the PR changes; `N/A` for new stages. This gives the user a map of the change before the findings. Keep it short: 3-6 steps per workflow.
 
@@ -136,7 +141,7 @@ Alternatively, perform the synthesis yourself:
 1. Read each finding's cited location to verify evidence accuracy.
 2. Deduplicate findings flagged by multiple specialists.
 3. Group findings by root cause where multiple findings stem from the same issue.
-4. Classify each as CONFIRMED, REJECTED, or UNVERIFIABLE. For behavioral findings, apply citation verification, reachability, and intent verification. For mechanical findings, verify the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy. For highlights, verify the cited text exists, the claim is accurate, and the highlighted thing genuinely rises above baseline competence.
+4. Classify each as CONFIRMED, REJECTED, or UNVERIFIABLE. For behavioral findings, apply citation verification, reachability, and intent verification. For mechanical findings, verify the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy. For highlights, verify the cited text exists, the claim is accurate, and the highlighted thing genuinely rises above baseline competence. When the brief reports staleness (main moved past the merge-base touching this change's paths), re-verify each behavioral finding against current main first — a finding true only at the merge-base is a rebase note for the author, not a defect in this PR.
 5. Cross-reference against the prior-comments register if one was built in Step 2: tag matching findings `Provenance: previously identified by @author, PR #N, DATE` and produce the `### Previously identified findings` appendix per the synthesizer skill.
 6. Calibrate severity (BLOCKING > HIGH > MEDIUM > LOW) based on your verification.
 7. Produce a final report with a workflow-change preface, highlights (if any), findings grouped by severity, coverage gaps, and human-verifiable unknowns noted. Include every confirmed LOW finding.
@@ -145,6 +150,7 @@ Alternatively, perform the synthesis yourself:
 
 When dispatching each sub-agent, include in the prompt:
 - The git range to review
+- **The resolved head SHA of the range** — all file reads, file:line citations, and anchors MUST be computed against this ref (`git show <head-sha>:<path>`), never the working tree, which may be on a different branch than the change under review
 - The specific files in this unit's scope
 - The specialist focus (from the eight specialists above)
 - The diff stat for this unit's files
