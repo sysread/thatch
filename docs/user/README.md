@@ -237,7 +237,7 @@ response, walkthrough, and workflow skills that support the review pipeline:
 | `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
 | `thatch-review-highlights` | Positive finding detection: notably clever solutions, cleanup done along the way, documentation that helps. Medium-high bar against generic praise. |
 | `thatch-review-synthesizer` | Verifies and synthesizes findings from multiple specialists into a report that starts with workflow changes, then highlights, then deduplicated severity-grouped findings. |
-| `thatch-review-context` | Gathers project context (PR descriptions, git archaeology, ticket references, memory) before a review. Prevents false positives about intentionally deferred work. |
+| `thatch-review-context` | Gathers project context (PR descriptions, git archaeology, ticket references, linked docs/tickets, memory) before a review. Prevents false positives about intentionally deferred work. |
 | `thatch-code-archaeology` | Investigates an existing feature, debugs an unfamiliar area, or begins a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features, skeletons) before proposing changes. Pairs with `thatch-coding-workflow`. |
 | `thatch-review-followup` | Alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed your prior findings, offers to reply on resolved items, then optionally re-runs the full structured review. |
 | `thatch-review-response` | Author-side review response: triage findings on your own PR, fix bugs one by one, reply on each thread, post a top-level summary comment. |

@@ -31,11 +31,9 @@ For each finding from the specialists:
 
 5a. **Verify governing constraints for data-shape findings.** For findings claiming a field can be NULL/missing/orphaned/malformed, locate and read the field's definition (schema migration, model, type declaration). If a NOT NULL, FK, enum, or type constraint forecloses the claimed state, REJECT and cite the constraint. Do not classify such a finding CONFIRMED without having read the governing definition.
 
+5b. **Re-verify against post-branch-point main (behavioral findings, only when the context brief flags staleness).** If the brief reports commits on main after this branch's merge-base touching this change's paths, the branch may be stale and a finding can be true at the merge-base but already moot on main. For each behavioral finding, read the equivalent code on current main (`git show origin/main:<path>`). A finding that main has already fixed or mooted is a **rebase note**, not a defect in this PR: keep it out of the confirmed findings and list it in the report's rebase-notes appendix instead.
+
 6. **Verify intent (behavioral findings only).** If the specialist flagged behavior as a bug but the code appears to work as designed, check whether the behavior is intentional:
-   - Read the callers of the cited code to see if the pattern makes sense in context.
-   - Check git log or git blame on the cited file for commit messages explaining the decision.
-   - Use thatch_memory_recall to search for documented rationale.
-   If the behavior is intentional or an accepted limitation, reject the finding.
 
 4m. **Mechanical verification (pedantic, no-slop, breadcrumbs, docs, naming, style, comments, structural conventions).** For mechanical findings, verification means:
     - The cited text exists at the cited location (already confirmed in step 2). For PLACEMENT findings, the cited evidence is the file path and the existing directory structure, not quoted code. Verify the file exists at the claimed path and that the existing structure shows the convention the specialist cited.
@@ -71,7 +69,7 @@ Multiple findings may stem from the same underlying issue (e.g., a contract mism
 
 ## Cross-reference against prior review comments
 
-If your input includes a **prior-comments register** (built by the coordinator via `thatch-review-context` source #8 — prior review comments retrieved from the PR/MR's review history), cross-reference every confirmed and rejected finding against it so the final report does not present already-identified issues as fresh discoveries.
+If your input includes a **prior-comments register** (built by the coordinator via `thatch-review-context` source #9 — prior review comments retrieved from the PR/MR's review history), cross-reference every confirmed and rejected finding against it so the final report does not present already-identified issues as fresh discoveries.
 
 For each new finding:
 1. **Search for a matching prior comment** by location and semantic claim. Match if both hold:
@@ -254,6 +252,10 @@ Findings you rejected and a one-line reason why. Include the specialist and loca
 ### Pre-existing bugs (appendix, brief)
 
 Findings you verified as real but pre-existing, with a one-line note on the issue and its potential impact.
+
+### Rebase notes (appendix, brief — only when the context brief flags staleness)
+
+Findings that were true at the merge-base but are already fixed or mooted by later commits on main. One line each: the finding, and the main commit that moots it. Omit this section entirely when the brief reports no staleness.
 
 ### Previously identified findings (appendix — only when a prior-comments register was provided)
 
