@@ -57,6 +57,23 @@ const useCase: UseCase = {
     const fakeBinDir = join(ctx.dir, "fake-bin-093");
     mkdirSync(fakeBinDir, { recursive: true });
 
+    // Fake gh returning green CI. bin/release's CI preflight refuses to run
+    // when `gh run list` does not report a completed/success run; without
+    // this mock the script bails in the fixture repo (no GitHub remote)
+    // before ever reaching the npm preflight under test. Unknown gh
+    // subcommands fail closed - never exec the real gh, since this dir is
+    // first on PATH and would recurse.
+    writeFileSync(
+      join(fakeBinDir, "gh"),
+      "#!/usr/bin/env bash\n" +
+      'if [ "$1" = "run" ] && [ "$2" = "list" ]; then\n' +
+      '  echo \'[{"status":"completed","conclusion":"success"}]\'\n' +
+      '  exit 0\n' +
+      'fi\n' +
+      'exit 127\n',
+    );
+    await $`chmod +x ${fakeBinDir}/gh`.quiet();
+
     // Fake npm that returns E404
     writeFileSync(
       join(fakeBinDir, "npm"),
@@ -123,6 +140,18 @@ const useCase: UseCase = {
     // Also need a fake mise to skip the check step
     writeFileSync(join(fakeBinDir2, "mise"), "#!/usr/bin/env bash\nexit 0\n");
     await $`chmod +x ${fakeBinDir2}/mise`.quiet();
+
+    // And a fake gh with green CI so the script reaches the npm check.
+    writeFileSync(
+      join(fakeBinDir2, "gh"),
+      "#!/usr/bin/env bash\n" +
+      'if [ "$1" = "run" ] && [ "$2" = "list" ]; then\n' +
+      '  echo \'[{"status":"completed","conclusion":"success"}]\'\n' +
+      '  exit 0\n' +
+      'fi\n' +
+      'exit 127\n',
+    );
+    await $`chmod +x ${fakeBinDir2}/gh`.quiet();
 
     const envWarn = {
       ...ctx.env,
