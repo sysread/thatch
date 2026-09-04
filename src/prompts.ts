@@ -23,7 +23,8 @@ Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
        thatch_prediction_query, thatch_prediction_update, thatch_prediction_list,
        thatch_prediction_delete,
        thatch_behavior_codify, thatch_behavior_feedback, thatch_behavior_list,
-       thatch_behavior_delete, thatch_get_session_info
+       thatch_behavior_delete, thatch_get_session_info,
+       thatch_session_search, thatch_session_get
 
 ## Stores
 
@@ -270,8 +271,9 @@ Tools are prefixed in ${host}: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__prediction_list\`, \`mcp__thatch__prediction_delete\`,
 \`mcp__thatch__behavior_codify\`, \`mcp__thatch__behavior_feedback\`,
 \`mcp__thatch__behavior_list\`, \`mcp__thatch__behavior_delete\`. Bare names used below for readability.
-get_session_info is intentionally absent: it is opencode-only (MCP hosts
-have no session concept), so do not expect it here.
+get_session_info, session_search, and session_get are intentionally absent:
+they are opencode-only (MCP hosts have no session concept or session
+database), so do not expect them here.
 
 ## Stores
 

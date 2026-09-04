@@ -6,6 +6,7 @@ import { z } from "zod";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
 import { TOOL_DEFS, type CoreContext } from "../src/tool-defs";
+import { systemPrompt, claudeInstructions } from "../src/prompts";
 
 let dbPath: string;
 let dbDir: string;
@@ -28,8 +29,8 @@ afterEach(() => {
 });
 
 describe("TOOL_DEFS", () => {
-  test("exports all 19 tools", () => {
-    expect(TOOL_DEFS.length).toBe(19);
+  test("exports all 21 tools", () => {
+    expect(TOOL_DEFS.length).toBe(21);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -51,12 +52,32 @@ describe("TOOL_DEFS", () => {
       "behavior_list",
       "behavior_delete",
       "get_session_info",
+      "session_search",
+      "session_get",
     ]);
   });
 
-  test("only get_session_info is opencode-only", () => {
+  test("only the session tools are opencode-only", () => {
     const opencodeOnly = TOOL_DEFS.filter((t) => t.opencodeOnly).map((t) => t.name);
-    expect(opencodeOnly).toEqual(["get_session_info"]);
+    expect(opencodeOnly).toEqual(["get_session_info", "session_search", "session_get"]);
+  });
+
+  test("opencode prompt lists every tool including opencode-only ones", () => {
+    const prompt = systemPrompt("test/repo");
+    for (const def of TOOL_DEFS) {
+      expect(prompt).toContain(`thatch_${def.name}`);
+    }
+  });
+
+  test("MCP prompts list shared tools but not opencode-only ones", () => {
+    const prompt = claudeInstructions();
+    for (const def of TOOL_DEFS) {
+      if (def.opencodeOnly) {
+        expect(prompt).not.toContain(`mcp__thatch__${def.name}`);
+      } else {
+        expect(prompt).toContain(`mcp__thatch__${def.name}`);
+      }
+    }
   });
 
   test("each tool has name, description, args, and execute", () => {

@@ -112,6 +112,8 @@ describe("plugin entry", () => {
       "thatch_prediction_list",
       "thatch_prediction_query",
       "thatch_prediction_update",
+      "thatch_session_get",
+      "thatch_session_search",
       "thatch_store_list",
     ]);
   });
