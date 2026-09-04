@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ThatchDB, DedupCandidate, MemoryRow } from "./db";
 import type { EmbeddingModel } from "./embeddings";
 import { predictionVerb } from "./prompts";
+import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
 // creation time. Matches the thatch_find_duplicates threshold (0.85).
@@ -839,6 +840,111 @@ const getSessionInfoDef: ToolDef = {
 };
 
 /**
+ * Lets the model search its own past opencode conversations. The model only
+ * knows the current session id (via get_session_info); everything before
+ * compaction or in earlier sessions is invisible to it otherwise. Returns
+ * the same JSONL timeline shape as `thatch session search`, with previews
+ * truncated so a result set stays context-affordable; session_get fetches
+ * full content for interesting hits.
+ */
+const sessionSearchDef: ToolDef = {
+  name: "session_search",
+  description:
+    "Search past opencode session conversations by substring (or regex with " +
+    "regex: true). Matches decoded message text, tool outputs, and reasoning " +
+    "across all sessions (or one session with session_id). Returns JSONL " +
+    "entries with ids for follow-up: call session_get with a hit's part_id " +
+    "or msg_id to retrieve the full content. opencode-only.",
+  args: {
+    query: z.string().describe(
+      "Substring to find (case-insensitive), or a regular expression when regex is true.",
+    ),
+    regex: z.boolean().optional().describe(
+      "Treat query as a regular expression instead of a plain substring.",
+    ),
+    session_id: z.string().optional().describe(
+      "Narrow the search to one session. Omit to search all sessions.",
+    ),
+    limit: z.number().optional().describe(
+      "Maximum matches to return (default 200, oldest first).",
+    ),
+  },
+  opencodeOnly: true,
+  async execute(args) {
+    const dbPath = resolveOpencodeDbPath();
+    if (!dbPath) {
+      return "Session search is unavailable: no opencode database was found (set OPENCODE_DB to point at one).";
+    }
+    const db = new SessionDB(dbPath);
+    try {
+      const matches = db.search(args.query as string, {
+        regex: args.regex === true,
+        sessionID: args.session_id as string | undefined,
+        limit: typeof args.limit === "number" ? args.limit : undefined,
+      });
+      if (matches.length === 0) return `No matches for "${args.query}".`;
+      // Session titles orient cross-session results the same way the CLI
+      // search does; cached because matches cluster by session.
+      const titles = new Map<string, string | null>();
+      return matches
+        .map((part) => {
+          if (!titles.has(part.sessionId)) {
+            titles.set(part.sessionId, db.getSession(part.sessionId)?.title ?? null);
+          }
+          return JSON.stringify({
+            session_id: part.sessionId,
+            session_title: titles.get(part.sessionId),
+            ...partToTimelineEntry(part),
+          });
+        })
+        .join("\n");
+    } finally {
+      db.close();
+    }
+  },
+};
+
+/**
+ * Fetches the full, untruncated content of one part or message found via
+ * session_search. Tool parts carry their complete args and output - the
+ * detail the timeline preview truncates.
+ */
+const sessionGetDef: ToolDef = {
+  name: "session_get",
+  description:
+    "Retrieve the full content of one conversation item by id. Pass a " +
+    "part_id (from session_search or session list) for one content piece, " +
+    "or a msg_id for an entire message with all of its parts. Tool parts " +
+    "include their complete input arguments and output. opencode-only.",
+  args: {
+    id: z.string().describe(
+      "A part id (prt_...) or message id (msg_...) from session_search results.",
+    ),
+  },
+  opencodeOnly: true,
+  async execute(args) {
+    const dbPath = resolveOpencodeDbPath();
+    if (!dbPath) {
+      return "Session retrieval is unavailable: no opencode database was found (set OPENCODE_DB to point at one).";
+    }
+    const db = new SessionDB(dbPath);
+    try {
+      const id = args.id as string;
+      if (id.startsWith("msg_")) {
+        const message = db.getMessage(id);
+        if (!message) return `No message "${id}" found.`;
+        return JSON.stringify(messageToFullJson(message), null, 2);
+      }
+      const part = db.getPart(id);
+      if (!part) return `No part "${id}" found.`;
+      return JSON.stringify(partToFullJson(part), null, 2);
+    } finally {
+      db.close();
+    }
+  },
+};
+
+/**
  * All tool definitions, in the order they should be presented to the agent.
  * The opencode plugin wraps each in `tool()`; the MCP server exposes the
  * non-opencodeOnly ones via `tools/list` and dispatches `tools/call` to
@@ -864,4 +970,6 @@ export const TOOL_DEFS: ToolDef[] = [
   behaviorListDef,
   behaviorDeleteDef,
   getSessionInfoDef,
+  sessionSearchDef,
+  sessionGetDef,
 ];

@@ -147,6 +147,12 @@ Stores are created automatically. No setup required.
 | Tool | What it does |
 |------|-------------|
 | `thatch_get_session_info` | Report the current session's ID and the agent name running this turn. opencode doesn't surface its session ID to the model; the agent needs it to fetch extraction payloads or look up past sessions. MCP hosts have no session concept, so this tool doesn't exist there. |
+| `thatch_session_search` | Search past opencode conversations by substring or regex. Matches decoded message text, tool outputs, and reasoning across all sessions. Returns JSONL hits with ids for follow-up. |
+| `thatch_session_get` | Retrieve the full content of one part or message found via `thatch_session_search`, including complete tool inputs and outputs. |
+
+The same functionality is available on the command line as `thatch session
+list`, `thatch session get`, `thatch session transcript`, and `thatch session
+search` - JSONL output designed for piping to `jq` or `grep`.
 
 ## Automatic behaviors
 

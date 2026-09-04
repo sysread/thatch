@@ -17,11 +17,11 @@ Thatch supports three host agents from a single codebase:
   `mcp__thatch__` tool prefix, system prompt in AGENTS.md
 
 All three paths share the tool definitions from `src/tool-defs.ts`: 18
-host-agnostic tools plus opencode-only tools (currently one,
-`get_session_info`) that the MCP server filters out. The shared tools take
-args and a `CoreContext` (`{ db, model, defaultStore }`) and return a string.
-The host-specific wrapping---prefixing, transport, session hooks---lives
-outside the core.
+host-agnostic tools plus opencode-only tools (currently three:
+`get_session_info`, `session_search`, `session_get`) that the MCP server
+filters out. The shared tools take args and a `CoreContext`
+(`{ db, model, defaultStore }`) and return a string. The host-specific
+wrapping---prefixing, transport, session hooks---lives outside the core.
 
 ## The three paths
 
@@ -180,6 +180,7 @@ behavior, with some features having no MCP counterpart.
 | Background sub-agents | Yes (experimental) | No | No |
 | Tool batching | N/A (in-process) | PostToolBatch (batch) | postToolUse (per-tool) |
 | `get_session_info` (session identity) | Yes | No | No |
+| `session_search` / `session_get` (conversation archaeology) | Yes (tools) | CLI only (`thatch session ...`) | CLI only (`thatch session ...`) |
 
 For the full parity matrix, see [../mcp-parity.md](../mcp-parity.md).
 
@@ -229,4 +230,4 @@ the opencode-only skills require sub-agent dispatch or in-process hooks.
 - The MCP server always exposes bare names. The `mcp__thatch__` prefix is applied by the MCP client, not thatch.
 - The three system prompt variants are independent string constants in `src/prompts.ts` with no shared template. Editing shared prose in one requires mirroring in the other two, or they drift.
 - The tool list line in all three prompts must match `TOOL_DEFS` in `src/tool-defs.ts` (opencode's list includes opencode-only tools; the MCP lists exclude them). The historical failure mode: a tool is added to `TOOL_DEFS` but only two of three prompts are updated.
-- opencode-only features (direct extraction, compaction recovery, code-review coordinator, background sub-agents, TUI toasts, `get_session_info`) have no MCP counterpart.
+- opencode-only features (direct extraction, compaction recovery, code-review coordinator, background sub-agents, TUI toasts, `get_session_info`, `session_search`/`session_get`) have no MCP counterpart. The `thatch session` CLI subcommands work anywhere - they only need an opencode.db file to read.
