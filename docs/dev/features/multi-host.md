@@ -16,10 +16,12 @@ Thatch supports three host agents from a single codebase:
 - **Cursor MCP**---same stdio MCP server, `--json` hook output format,
   `mcp__thatch__` tool prefix, system prompt in AGENTS.md
 
-All three paths expose the same 18 tool definitions from `src/tool-defs.ts`.
-The tools are host-agnostic: each takes args and a `CoreContext`
-(`{ db, model, defaultStore }`) and returns a string. The host-specific
-wrapping---prefixing, transport, session hooks---lives outside the core.
+All three paths share the tool definitions from `src/tool-defs.ts`: 18
+host-agnostic tools plus opencode-only tools (currently one,
+`get_session_info`) that the MCP server filters out. The shared tools take
+args and a `CoreContext` (`{ db, model, defaultStore }`) and return a string.
+The host-specific wrapping---prefixing, transport, session hooks---lives
+outside the core.
 
 ## The three paths
 
@@ -147,7 +149,7 @@ an asymmetry a reviewer can catch by diffing the tool lines.
 
 ## Tool name prefixing
 
-The 18 tool definitions in `src/tool-defs.ts` use bare names:
+The tool definitions in `src/tool-defs.ts` use bare names:
 `memory_remember`, `memory_recall`, `memory_list`, etc. Each host applies its
 own prefix.
 
@@ -177,13 +179,15 @@ behavior, with some features having no MCP counterpart.
 | code-review coordinator skill | Yes | No | No |
 | Background sub-agents | Yes (experimental) | No | No |
 | Tool batching | N/A (in-process) | PostToolBatch (batch) | postToolUse (per-tool) |
+| `get_session_info` (session identity) | Yes | No | No |
 
 For the full parity matrix, see [../mcp-parity.md](../mcp-parity.md).
 
 ## Interactions with other features
 
-All 18 tools are shared across all hosts via the single source of truth in
-`src/tool-defs.ts`. Individual tool behavior is documented in
+The 18 shared tools are available on all hosts via the single source of truth
+in `src/tool-defs.ts`; opencode-only tools (e.g. `get_session_info`) are
+filtered out by the MCP server. Individual tool behavior is documented in
 [memory-store.md](memory-store.md), [extraction.md](extraction.md),
 [prediction-engine.md](prediction-engine.md),
 [behavior-engine.md](behavior-engine.md), and
@@ -216,13 +220,13 @@ the opencode-only skills require sub-agent dispatch or in-process hooks.
 | `src/setup.ts` | Setup installer for Claude Code and Cursor---markers, hooks, skills |
 | `src/prompts.ts` | All three system prompt variants---`systemPrompt()`, `claudeInstructions()`, `cursorInstructions()` |
 | `src/tools.ts` | Thin opencode tool wrappers---imports tool-defs, adds `thatch_` prefix via `tool()` |
-| `src/tool-defs.ts` | Single source of truth for all 18 tool definitions---name, description, zod schema, execute |
+| `src/tool-defs.ts` | Single source of truth for all tool definitions---name, description, zod schema, execute, `opencodeOnly` flag |
 | `bin/thatch` | CLI hook commands for MCP hosts---`reminder`, `buffer-tool`, `flush-tools`, `setup` |
 
 ## Key invariants
 
-- All three hosts share the same 18 tool definitions from `src/tool-defs.ts`. Adding a tool requires updating `TOOL_DEFS` and all three prompt functions.
+- All hosts share the tool definitions from `src/tool-defs.ts` (18 shared + opencode-only tools marked `opencodeOnly: true`, which the MCP server filters out). Adding a tool requires updating `TOOL_DEFS` and all three prompt functions; opencode-only tools go in the opencode prompt only.
 - The MCP server always exposes bare names. The `mcp__thatch__` prefix is applied by the MCP client, not thatch.
 - The three system prompt variants are independent string constants in `src/prompts.ts` with no shared template. Editing shared prose in one requires mirroring in the other two, or they drift.
-- The tool list line in all three prompts must match `TOOL_DEFS` in `src/tool-defs.ts`. The historical failure mode: a tool is added to `TOOL_DEFS` but only two of three prompts are updated.
-- opencode-only features (direct extraction, compaction recovery, code-review coordinator, background sub-agents, TUI toasts) have no MCP counterpart.
+- The tool list line in all three prompts must match `TOOL_DEFS` in `src/tool-defs.ts` (opencode's list includes opencode-only tools; the MCP lists exclude them). The historical failure mode: a tool is added to `TOOL_DEFS` but only two of three prompts are updated.
+- opencode-only features (direct extraction, compaction recovery, code-review coordinator, background sub-agents, TUI toasts, `get_session_info`) have no MCP counterpart.

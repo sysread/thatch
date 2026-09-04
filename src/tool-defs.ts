@@ -39,6 +39,17 @@ export interface CoreContext {
 }
 
 /**
+ * Per-call host context identifying the session a tool call belongs to.
+ * opencode's plugin system supplies it on every tool execution; MCP servers
+ * have no session concept and omit it. Only tools that need session identity
+ * consume it - the rest ignore the third execute parameter.
+ */
+export interface HostToolContext {
+  sessionID: string;
+  agent: string;
+}
+
+/**
  * A tool definition - the single source of truth shared by the opencode plugin
  * wrapper (tools.ts) and the MCP server (mcp.ts). The `args` field is a ZodRawShape
  * (a plain object of Zod types), which opencode's `tool()` accepts directly and
@@ -49,7 +60,13 @@ export interface ToolDef {
   name: string;
   description: string;
   args: Record<string, z.ZodType>;
-  execute(args: Record<string, unknown>, ctx: CoreContext): Promise<string>;
+  execute(args: Record<string, unknown>, ctx: CoreContext, host?: HostToolContext): Promise<string>;
+  /**
+   * When true, the tool exists only on the opencode plugin path and the MCP
+   * server filters it out of tools/list. Used for tools that depend on host
+   * capabilities MCP hosts lack (e.g. session identity).
+   */
+  opencodeOnly?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -796,9 +813,36 @@ const behaviorDeleteDef: ToolDef = {
 };
 
 /**
+ * Reports the calling session's identity. opencode does not surface its
+ * session ID to the model, so the model cannot learn it any other way -
+ * yet it needs the ID to call thatch_get_extraction_payload /
+ * thatch_extraction_done on the parent's behalf and for session
+ * archaeology against opencode.db. MCP hosts have no session concept,
+ * hence opencodeOnly.
+ */
+const getSessionInfoDef: ToolDef = {
+  name: "get_session_info",
+  description:
+    "Return the current session's identity: the host session ID and the " +
+    "agent name running this turn (e.g. build, plan, or a sub-agent type). " +
+    "opencode-only: MCP hosts have no session concept. Use the session ID " +
+    "when a nudge tells you to call a tool with the parent's session_id, " +
+    "or to query past sessions in ~/.local/share/opencode/opencode.db.",
+  args: {},
+  opencodeOnly: true,
+  async execute(_args, _ctx, host) {
+    if (!host) {
+      return "Session identity is unavailable: this host did not provide a session context.";
+    }
+    return `sessionID: ${host.sessionID}\nagent: ${host.agent}`;
+  },
+};
+
+/**
  * All tool definitions, in the order they should be presented to the agent.
- * The opencode plugin wraps each in `tool()`; the MCP server exposes them
- * via `tools/list` and dispatches `tools/call` to their execute functions.
+ * The opencode plugin wraps each in `tool()`; the MCP server exposes the
+ * non-opencodeOnly ones via `tools/list` and dispatches `tools/call` to
+ * their execute functions.
  */
 export const TOOL_DEFS: ToolDef[] = [
   rememberDef,
@@ -819,4 +863,5 @@ export const TOOL_DEFS: ToolDef[] = [
   behaviorFeedbackDef,
   behaviorListDef,
   behaviorDeleteDef,
+  getSessionInfoDef,
 ];
