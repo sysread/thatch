@@ -83,6 +83,11 @@ Thatch gives your agent three layers of persistent context:
   situations arise. The agent ham/spams each surfaced rule to train the
   classifier. Confidence adjusts the same way as predictions. An anti-laziness
   guard in the prompt prevents the agent from codifying shortcuts.
+- **Conversation search** -- the agent can search its own past opencode
+  conversations by substring or regex and retrieve full messages, including
+  complete tool inputs and outputs. Available as tools (`session_search`,
+  `session_get`, opencode only) and as CLI subcommands (`thatch session
+  list/get/transcript/search`, JSONL output designed for piping to `jq`).
 
 Plus **26 skills** for memory workflows, structured multi-specialist code
 review, review response, change and feature walkthroughs, memory verification,

@@ -35,6 +35,7 @@ import "./uc-054-behavior-default-seeding";
 import "./uc-055-behavior-no-match";
 import "./uc-056-behavior-delete-not-found";
 import "./uc-059-tool-prefixing";
+import "./uc-094-session-archaeology";
 import "./uc-060-feature-availability";
 import "./uc-061-setup-idempotent-rerun";
 import "./uc-062-setup-markers-broken";
