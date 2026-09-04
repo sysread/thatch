@@ -1,7 +1,7 @@
 import { tool } from "@opencode-ai/plugin";
 import type { ThatchDB } from "./db";
 import type { EmbeddingModel } from "./embeddings";
-import { TOOL_DEFS, type CoreContext } from "./tool-defs";
+import { TOOL_DEFS, type CoreContext, type HostToolContext } from "./tool-defs";
 
 /**
  * Builds the opencode tool map from shared tool definitions. Each definition
@@ -31,8 +31,13 @@ export function createTools(
     tools[`thatch_${def.name}`] = tool({
       description: def.description,
       args: def.args,
-      async execute(args) {
-        return def.execute(args as Record<string, unknown>, ctx);
+      async execute(args, hostContext) {
+        // Trim opencode's ToolContext to the host-agnostic fields the shared
+        // definitions know about. Tests and MCP paths pass no host context.
+        const host: HostToolContext | undefined = hostContext
+          ? { sessionID: hostContext.sessionID, agent: hostContext.agent }
+          : undefined;
+        return def.execute(args as Record<string, unknown>, ctx, host);
       },
     });
   }

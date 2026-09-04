@@ -365,3 +365,27 @@ describe("thatch_dedup_mark_checked", () => {
     expect(result).toContain("other-store");
   });
 });
+
+// ---------------------------------------------------------------------------
+// thatch_get_session_info
+// ---------------------------------------------------------------------------
+
+describe("thatch_get_session_info", () => {
+  test("passes opencode's ToolContext through to the shared execute", async () => {
+    const map = createTools(db, model, defaultStore);
+    const sessionTool = map.thatch_get_session_info;
+    const fakeContext = {
+      sessionID: "ses_wrapper_test",
+      messageID: "msg_wrapper_test",
+      agent: "build",
+      directory: "/tmp",
+      worktree: "/tmp",
+      abort: new AbortController().signal,
+      metadata: () => {},
+      ask: async () => {},
+    } as any;
+    const result = await (sessionTool as any).execute({}, fakeContext);
+    expect(result).toContain("sessionID: ses_wrapper_test");
+    expect(result).toContain("agent: build");
+  });
+});

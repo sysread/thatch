@@ -28,8 +28,8 @@ afterEach(() => {
 });
 
 describe("TOOL_DEFS", () => {
-  test("exports all 18 tools", () => {
-    expect(TOOL_DEFS.length).toBe(18);
+  test("exports all 19 tools", () => {
+    expect(TOOL_DEFS.length).toBe(19);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -50,7 +50,13 @@ describe("TOOL_DEFS", () => {
       "behavior_feedback",
       "behavior_list",
       "behavior_delete",
+      "get_session_info",
     ]);
+  });
+
+  test("only get_session_info is opencode-only", () => {
+    const opencodeOnly = TOOL_DEFS.filter((t) => t.opencodeOnly).map((t) => t.name);
+    expect(opencodeOnly).toEqual(["get_session_info"]);
   });
 
   test("each tool has name, description, args, and execute", () => {
@@ -447,6 +453,27 @@ describe("tool-defs validation", () => {
   test("store_list accepts empty args", () => {
     const def = TOOL_DEFS.find((t) => t.name === "store_list")!;
     const schema = z.object(def.args);
+    expect(() => schema.parse({})).not.toThrow();
+  });
+});
+
+describe("get_session_info", () => {
+  const findTool = () => TOOL_DEFS.find((t) => t.name === "get_session_info")!;
+
+  test("reports session identity when the host supplies a context", async () => {
+    const result = await findTool().execute({}, ctx, { sessionID: "ses_test_123", agent: "build" });
+    expect(result).toContain("sessionID: ses_test_123");
+    expect(result).toContain("agent: build");
+  });
+
+  test("explains unavailability when no host context exists (MCP path)", async () => {
+    const result = await findTool().execute({}, ctx);
+    expect(result).toContain("unavailable");
+    expect(result).not.toContain("sessionID: undefined");
+  });
+
+  test("takes no arguments", () => {
+    const schema = z.object(findTool().args);
     expect(() => schema.parse({})).not.toThrow();
   });
 });

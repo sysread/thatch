@@ -142,6 +142,12 @@ Stores are created automatically. No setup required.
 | `thatch_behavior_list` | List all codified behaviors with matchers, confidence, and provenance. |
 | `thatch_behavior_delete` | Delete a behavior by semantic match. Edges and provenance are cascade-deleted. |
 
+### Session tools (opencode only)
+
+| Tool | What it does |
+|------|-------------|
+| `thatch_get_session_info` | Report the current session's ID and the agent name running this turn. opencode doesn't surface its session ID to the model; the agent needs it to fetch extraction payloads or look up past sessions. MCP hosts have no session concept, so this tool doesn't exist there. |
+
 ## Automatic behaviors
 
 Beyond the tools, thatch hooks into opencode itself:

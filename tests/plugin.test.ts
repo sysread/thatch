@@ -102,6 +102,7 @@ describe("plugin entry", () => {
       "thatch_extraction_done",
       "thatch_find_duplicates",
       "thatch_get_extraction_payload",
+      "thatch_get_session_info",
       "thatch_memory_forget",
       "thatch_memory_list",
       "thatch_memory_recall",

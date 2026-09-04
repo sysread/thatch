@@ -60,9 +60,12 @@ interface CompiledTool {
   inputSchema: Record<string, unknown>;
 }
 
-function compileTools(): Map<string, CompiledTool> {
+export function compileTools(): Map<string, CompiledTool> {
   const map = new Map<string, CompiledTool>();
   for (const def of TOOL_DEFS) {
+    // opencode-only tools depend on host capabilities MCP servers don't
+    // have (e.g. session identity via HostToolContext) - never expose them.
+    if (def.opencodeOnly) continue;
     const schema = z.object(def.args);
     map.set(def.name, {
       def,
