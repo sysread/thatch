@@ -525,14 +525,18 @@ describe("watch tools", () => {
   }
 
   function mockGhRoutes(): GhRunner {
-    return async (apiPath: string) => {
-      if (/\/issues\/\d+\/comments/.test(apiPath)) return [];
-      if (/\/pulls\/\d+\/comments/.test(apiPath)) return [];
-      if (/\/check-runs/.test(apiPath)) return { check_runs: [] };
-      if (/\/pulls\/\d+$/.test(apiPath)) {
+    return async (apiArgs: string[]) => {
+      const joined = apiArgs.join(" ");
+      if (/\/issues\/\d+\/comments/.test(joined)) return [];
+      if (/\/pulls\/\d+\/comments/.test(joined)) return [];
+      if (/\/check-runs/.test(joined)) return { check_runs: [] };
+      if (/^graphql/.test(joined)) {
+        return { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } };
+      }
+      if (/\/pulls\/\d+$/.test(joined)) {
         return { head: { sha: "cafe1234" }, state: "open", merged: false, title: "T", body: "b" };
       }
-      throw new Error(`no route: ${apiPath}`);
+      throw new Error(`no route: ${joined}`);
     };
   }
 

@@ -113,12 +113,12 @@ intractable prompt, not a transient hang.
 ## Watchers
 
 Use thatch_watch_create to watch a GitHub PR for events (comments, review
-comments and replies, commits, status changes, description edits, CI check
-completions). thatch polls the PR in the background and injects a
-notification into this session when a watched event happens. The
-notification carries pointer data only (author, URL); fetch details with
-the gh CLI when you decide to act. When the user asks you to watch
-something, state your handling policy for notifications out loud first
+comments and replies, review thread resolutions, commits, status changes,
+description edits, CI check completions). thatch polls the PR in the
+background and injects a notification into this session when a watched event
+happens. The notification carries pointer data only (author, URL); fetch
+details with the gh CLI when you decide to act. When the user asks you to
+watch something, state your handling policy for notifications out loud first
 ("I'll report human comments and handle bugbot replies myself") so the
 notification turn knows what to do. Treat watcher notifications like
 background task completions: they are system events, not user input, and

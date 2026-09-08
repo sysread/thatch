@@ -3,6 +3,7 @@ import {
   WatcherRegistry,
   diffPrState,
   fetchPrState,
+  WATCHER_EVENT_TYPES,
   type GhRunner,
   type PrState,
   type WatcherEvent,
@@ -26,6 +27,7 @@ function baseState(overrides: Partial<PrState> = {}): PrState {
     lastReviewCommentId: 200,
     issueComments: [{ id: 100, author: "alice", url: "https://github.com/acme/widgets/pull/7#issuecomment-100", isReply: false }],
     reviewComments: [],
+    resolvedThreads: [],
     checkRuns: {
       "1": { name: "ci", status: "completed", conclusion: "success", url: "https://example.com/ci" },
     },
@@ -33,14 +35,15 @@ function baseState(overrides: Partial<PrState> = {}): PrState {
   };
 }
 
-/** Builds a gh runner from regex routes. First matching pattern wins; unmatched paths throw. Route values may be functions, called with the api path. */
+/** Builds a gh runner from regex routes (matched against the joined args). First match wins; unmatched calls throw. Route values may be functions, called with the joined args. */
 function mockGh(routes: Array<[RegExp, unknown]>): GhRunner {
-  return async (apiPath: string) => {
+  return async (apiArgs: string[]) => {
+    const joined = apiArgs.join(" ");
     for (const [pattern, response] of routes) {
-      if (!pattern.test(apiPath)) continue;
-      return typeof response === "function" ? (response as (p: string) => unknown)(apiPath) : response;
+      if (!pattern.test(joined)) continue;
+      return typeof response === "function" ? (response as (p: string) => unknown)(joined) : response;
     }
-    throw new Error(`mockGh: no route for ${apiPath}`);
+    throw new Error(`mockGh: no route for ${joined}`);
   };
 }
 
@@ -59,11 +62,13 @@ const RE_PULL = /\/pulls\/\d+$/;
 const RE_ISSUE_COMMENTS = /\/issues\/\d+\/comments/;
 const RE_REVIEW_COMMENTS = /\/pulls\/\d+\/comments/;
 const RE_CHECK_RUNS = /\/check-runs/;
+const RE_GRAPHQL = /^graphql/;
 
 const quietRoutes = (): Array<[RegExp, unknown]> => [
   [RE_ISSUE_COMMENTS, []],
   [RE_REVIEW_COMMENTS, []],
   [RE_CHECK_RUNS, { check_runs: [] }],
+  [RE_GRAPHQL, { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }],
   [RE_PULL, prResponse()],
 ];
 
@@ -129,6 +134,22 @@ describe("diffPrState", () => {
     expect(comment.summary).toContain("bob");
   });
 
+  test("thread resolution transitions emit pr_review_resolved with direction in the summary", () => {
+    const resolved = baseState({ resolvedThreads: ["PRRT_1"] });
+    const events = diffPrState(baseState(), resolved, URL);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("pr_review_resolved");
+    expect(events[0].summary).toContain("resolved");
+
+    // Resolving again is not an event.
+    expect(diffPrState(resolved, baseState({ resolvedThreads: ["PRRT_1"] }), URL)).toEqual([]);
+
+    // Reopening emits the reopened direction.
+    const reopen = diffPrState(resolved, baseState(), URL);
+    expect(reopen).toHaveLength(1);
+    expect(reopen[0].summary).toContain("reopened");
+  });
+
   test("check run reaching completion emits pr_ci; already-completed runs do not", () => {
     const before = baseState({
       checkRuns: { "1": { name: "ci", status: "in_progress", conclusion: null, url: "https://example.com/ci" } },
@@ -170,16 +191,16 @@ describe("diffPrState", () => {
 // ---------------------------------------------------------------------------
 
 describe("fetchPrState", () => {
-  test("calls the four PR endpoints and parses the results", async () => {
+  test("calls the PR endpoints plus graphql and parses the results", async () => {
     const called: string[] = [];
-    const gh: GhRunner = async (apiPath) => {
-      called.push(apiPath);
+    const gh: GhRunner = async (apiArgs) => {
+      called.push(apiArgs.join(" "));
       return mockGh([
         [RE_CHECK_RUNS, {
           check_runs: [{ id: 1, name: "lint", status: "completed", conclusion: "failure", html_url: "https://ci/1" }],
         }],
         ...quietRoutes(),
-      ])(apiPath);
+      ])(apiArgs);
     };
     const state = await fetchPrState(gh, "acme/widgets", 7);
     expect(called.some((p) => RE_PULL.test(p))).toBe(true);
@@ -189,6 +210,28 @@ describe("fetchPrState", () => {
     expect(state.checkRuns["1"]).toEqual({ name: "lint", status: "completed", conclusion: "failure", url: "https://ci/1" });
     const again = await fetchPrState(gh, "acme/widgets", 7);
     expect(again.bodySha).toBe(state.bodySha);
+  });
+
+  test("parses resolved review threads from the graphql response", async () => {
+    const gh = mockGh([
+      [RE_GRAPHQL, {
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                nodes: [
+                  { id: "PRRT_aaa", isResolved: true },
+                  { id: "PRRT_bbb", isResolved: false },
+                ],
+              },
+            },
+          },
+        },
+      }],
+      ...quietRoutes(),
+    ]);
+    const state = await fetchPrState(gh, "acme/widgets", 7);
+    expect(state.resolvedThreads).toEqual(["PRRT_aaa"]);
   });
 
   test("comment refs capture author and reply flag", async () => {
@@ -402,14 +445,15 @@ describe("WatcherRegistry", () => {
         delivered.push({ sessionID: s, events: e });
       },
       canDeliver: () => true,
-      ghRunner: (apiPath) => {
-        if (apiPath.includes("/pulls/7")) throw new Error("boom");
+      ghRunner: (apiArgs) => {
+        if (apiArgs.join(" ").includes("/pulls/7")) throw new Error("boom");
         return mockGh([
           [RE_PULL, prResponse({ head: { sha: "bbbb0000" } })],
           [RE_ISSUE_COMMENTS, []],
           [RE_REVIEW_COMMENTS, []],
           [RE_CHECK_RUNS, { check_runs: [] }],
-        ])(apiPath);
+          [RE_GRAPHQL, { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }],
+        ])(apiArgs);
       },
       pollIntervalMs: 60_000,
     });
@@ -431,11 +475,13 @@ describe("watcher event types", () => {
       "pr_comment",
       "pr_review_comment",
       "pr_review_reply",
+      "pr_review_resolved",
       "pr_commit",
       "pr_status",
       "pr_description",
       "pr_ci",
     ];
-    expect(expected).toHaveLength(7);
+    expect(WATCHER_EVENT_TYPES).toEqual(expected);
+    expect(expected).toHaveLength(8);
   });
 });
