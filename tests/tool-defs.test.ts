@@ -30,8 +30,8 @@ afterEach(() => {
 });
 
 describe("TOOL_DEFS", () => {
-  test("exports all 24 tools", () => {
-    expect(TOOL_DEFS.length).toBe(24);
+  test("exports all 25 tools", () => {
+    expect(TOOL_DEFS.length).toBe(25);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -56,6 +56,7 @@ describe("TOOL_DEFS", () => {
       "session_search",
       "session_get",
       "watch_create",
+      "watch_branch_create",
       "watch_list",
       "watch_cancel",
     ]);
@@ -68,6 +69,7 @@ describe("TOOL_DEFS", () => {
       "session_search",
       "session_get",
       "watch_create",
+      "watch_branch_create",
       "watch_list",
       "watch_cancel",
     ]);
@@ -613,5 +615,72 @@ describe("watch tools", () => {
       const result = await findTool(name).execute(name === "watch_create" ? { pr: 7 } : name === "watch_cancel" ? { id: "x" } : {}, ctx);
       expect(result).toContain("unavailable");
     }
+  });
+});
+
+describe("watch_branch_create", () => {
+  const findTool = () => TOOL_DEFS.find((t) => t.name === "watch_branch_create")!;
+  const host = { sessionID: "ses_branch_test", agent: "build" };
+
+  function registryWith(): WatcherRegistry {
+    return new WatcherRegistry({
+      deliver: async () => {},
+      canDeliver: () => true,
+      ghRunner: async (apiArgs: string[]) => {
+        const joined = apiArgs.join(" ");
+        if (/\/issues\/\d+\/comments/.test(joined)) return [];
+        if (/\/pulls\/\d+\/comments/.test(joined)) return [];
+        if (/\/check-runs/.test(joined)) return { check_runs: [] };
+        if (/^graphql/.test(joined)) return { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } };
+        if (/\/actions\/runs\?branch=main/.test(joined)) {
+          return { workflow_runs: [{ id: 55, name: "CI", status: "in_progress", conclusion: null, html_url: "https://x/55", event: "push" }] };
+        }
+        if (/\/branches\/main$/.test(joined)) return { commit: { sha: "decafbad" } };
+        if (/\/pulls\/\d+$/.test(joined)) return { head: { sha: "cafe1234" }, state: "open", merged: false, title: "T", body: "b" };
+        throw new Error(`no route: ${joined}`);
+      },
+      pollIntervalMs: 60_000,
+    });
+  }
+
+  test("registers a branch watcher and reports the baseline", async () => {
+    const registry = registryWith();
+    const watchCtx = { ...ctx, watchers: registry };
+    const result = await findTool().execute({ branch: "main" }, watchCtx, host);
+    expect(result).toContain("[watching] test-owner/test-repo@main");
+    expect(result).toContain("decafba");
+    expect(result).toContain("branch_workflow");
+    expect(registry.listForSession(host.sessionID)).toHaveLength(1);
+  });
+
+  test("honors a workflow-name filter in the registration report", async () => {
+    const registry = registryWith();
+    const watchCtx = { ...ctx, watchers: registry };
+    const result = await findTool().execute(
+      { branch: "main", repo: "acme/other", events: ["branch_workflow"], workflows: ["release", "publish"] },
+      watchCtx,
+      host,
+    );
+    expect(result).toContain("[watching] acme/other@main");
+    expect(result).toContain("workflow filter: release, publish");
+  });
+
+  test("reports gh failures clearly", async () => {
+    const registry = new WatcherRegistry({
+      deliver: async () => {},
+      canDeliver: () => true,
+      ghRunner: async () => {
+        throw new Error("no route to host");
+      },
+      pollIntervalMs: 60_000,
+    });
+    const watchCtx = { ...ctx, watchers: registry };
+    const result = await findTool().execute({ branch: "main" }, watchCtx, host);
+    expect(result).toContain("Watcher not created");
+  });
+
+  test("explains unavailability without a host context (MCP path)", async () => {
+    const result = await findTool().execute({ branch: "main" }, ctx);
+    expect(result).toContain("unavailable");
   });
 });

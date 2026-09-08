@@ -2,10 +2,15 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import {
   WatcherRegistry,
   diffPrState,
+  diffBranchState,
   fetchPrState,
+  fetchBranchState,
+  PR_EVENT_TYPES,
+  BRANCH_EVENT_TYPES,
   WATCHER_EVENT_TYPES,
   type GhRunner,
   type PrState,
+  type BranchState,
   type WatcherEvent,
   type WatcherEventType,
 } from "../src/watchers";
@@ -14,6 +19,7 @@ import {
 // Fixtures
 // ---------------------------------------------------------------------------
 
+const TGT = "acme/widgets#7";
 const URL = "https://github.com/acme/widgets/pull/7";
 
 function baseState(overrides: Partial<PrState> = {}): PrState {
@@ -82,12 +88,12 @@ function quietGh(): GhRunner {
 
 describe("diffPrState", () => {
   test("no changes produces no events", () => {
-    expect(diffPrState(baseState(), baseState(), URL)).toEqual([]);
+    expect(diffPrState(baseState(), baseState(), TGT, URL)).toEqual([]);
   });
 
   test("head SHA change emits pr_commit", () => {
     const after = baseState({ headSha: "ffff0000ffff0000ffff0000ffff0000ffff0000" });
-    const events = diffPrState(baseState(), after, URL);
+    const events = diffPrState(baseState(), after, TGT, URL);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("pr_commit");
     expect(events[0].summary).toContain("ffff000");
@@ -95,21 +101,21 @@ describe("diffPrState", () => {
   });
 
   test("state change emits pr_status, merged wins in the summary", () => {
-    const events = diffPrState(baseState(), baseState({ state: "closed" }), URL);
+    const events = diffPrState(baseState(), baseState({ state: "closed" }), TGT, URL);
     expect(events[0].type).toBe("pr_status");
     expect(events[0].summary).toContain("closed");
 
-    const merged = diffPrState(baseState(), baseState({ merged: true }), URL);
+    const merged = diffPrState(baseState(), baseState({ merged: true }), TGT, URL);
     expect(merged[0].summary).toContain("merged");
   });
 
   test("body hash change emits pr_description", () => {
-    const events = diffPrState(baseState(), baseState({ bodySha: "body-hash-2" }), URL);
+    const events = diffPrState(baseState(), baseState({ bodySha: "body-hash-2" }), TGT, URL);
     expect(events.map((e) => e.type)).toContain("pr_description");
   });
 
   test("title change emits pr_description", () => {
-    const events = diffPrState(baseState(), baseState({ title: "Rename widget" }), URL);
+    const events = diffPrState(baseState(), baseState({ title: "Rename widget" }), TGT, URL);
     expect(events.map((e) => e.type)).toContain("pr_description");
   });
 
@@ -126,7 +132,7 @@ describe("diffPrState", () => {
         { id: 210, author: "carol", url: "https://github.com/acme/widgets/pull/7#discussion_r210", isReply: true },
       ],
     });
-    const events = diffPrState(before, after, URL);
+    const events = diffPrState(before, after, TGT, URL);
     const types = events.map((e) => e.type);
     expect(types).toContain("pr_comment");
     expect(types).toContain("pr_review_reply");
@@ -136,16 +142,16 @@ describe("diffPrState", () => {
 
   test("thread resolution transitions emit pr_review_resolved with direction in the summary", () => {
     const resolved = baseState({ resolvedThreads: ["PRRT_1"] });
-    const events = diffPrState(baseState(), resolved, URL);
+    const events = diffPrState(baseState(), resolved, TGT, URL);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("pr_review_resolved");
     expect(events[0].summary).toContain("resolved");
 
     // Resolving again is not an event.
-    expect(diffPrState(resolved, baseState({ resolvedThreads: ["PRRT_1"] }), URL)).toEqual([]);
+    expect(diffPrState(resolved, baseState({ resolvedThreads: ["PRRT_1"] }), TGT, URL)).toEqual([]);
 
     // Reopening emits the reopened direction.
-    const reopen = diffPrState(resolved, baseState(), URL);
+    const reopen = diffPrState(resolved, baseState(), TGT, URL);
     expect(reopen).toHaveLength(1);
     expect(reopen[0].summary).toContain("reopened");
   });
@@ -155,18 +161,18 @@ describe("diffPrState", () => {
       checkRuns: { "1": { name: "ci", status: "in_progress", conclusion: null, url: "https://example.com/ci" } },
     });
     const after = baseState();
-    const events = diffPrState(before, after, URL);
+    const events = diffPrState(before, after, TGT, URL);
     const ci = events.find((e) => e.type === "pr_ci");
     expect(ci).toBeDefined();
     expect(ci!.summary).toContain("ci");
 
     // Same state again - no new event.
-    expect(diffPrState(after, baseState(), URL)).toEqual([]);
+    expect(diffPrState(after, baseState(), TGT, URL)).toEqual([]);
   });
 
   test("a check run that appears already-completed emits pr_ci", () => {
     const before = baseState({ checkRuns: {} });
-    const events = diffPrState(before, baseState(), URL);
+    const events = diffPrState(before, baseState(), TGT, URL);
     expect(events.map((e) => e.type)).toContain("pr_ci");
   });
 
@@ -182,7 +188,7 @@ describe("diffPrState", () => {
       lastIssueCommentId: 125,
       issueComments: [...before.issueComments, ...fresh],
     });
-    expect(diffPrState(before, after, URL)).toHaveLength(10);
+    expect(diffPrState(before, after, TGT, URL)).toHaveLength(10);
   });
 });
 
@@ -282,7 +288,7 @@ describe("WatcherRegistry", () => {
 
   test("create captures baseline state and returns the watcher", async () => {
     const reg = makeRegistry();
-    const result = await reg.create("s1", "acme/widgets", 7, ["pr_comment"]);
+    const result = await reg.createPr("s1", "acme/widgets", 7, ["pr_comment"]);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.watcher.sessionID).toBe("s1");
@@ -301,7 +307,7 @@ describe("WatcherRegistry", () => {
       },
       pollIntervalMs: 60_000,
     });
-    const result = await reg.create("s1", "acme/widgets", 7, []);
+    const result = await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("gh: not authenticated");
@@ -309,19 +315,19 @@ describe("WatcherRegistry", () => {
 
   test("create enforces the per-session watcher limit", async () => {
     const reg = makeRegistry({ maxPerSession: 2 });
-    expect((await reg.create("s1", "acme/widgets", 7, [])).ok).toBe(true);
-    expect((await reg.create("s1", "acme/widgets", 8, [])).ok).toBe(true);
-    const third = await reg.create("s1", "acme/widgets", 9, []);
+    expect((await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"])).ok).toBe(true);
+    expect((await reg.createPr("s1", "acme/widgets", 8, ["pr_commit"])).ok).toBe(true);
+    const third = await reg.createPr("s1", "acme/widgets", 9, ["pr_commit"]);
     expect(third.ok).toBe(false);
     if (third.ok) return;
     expect(third.error).toContain("limit");
     // A different session is not affected by s1's limit.
-    expect((await reg.create("s2", "acme/widgets", 9, [])).ok).toBe(true);
+    expect((await reg.createPr("s2", "acme/widgets", 9, ["pr_commit"])).ok).toBe(true);
   });
 
   test("cancel is session-scoped", async () => {
     const reg = makeRegistry();
-    const result = await reg.create("s1", "acme/widgets", 7, []);
+    const result = await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
     if (!result.ok) throw new Error("unreachable");
     expect(reg.cancel("s2", result.watcher.id)).toBe(false);
     expect(reg.cancel("s1", result.watcher.id)).toBe(true);
@@ -341,7 +347,7 @@ describe("WatcherRegistry", () => {
       ]),
       pollIntervalMs: 60_000,
     });
-    await reg.create("s1", "acme/widgets", 7, ["pr_commit", "pr_status"]);
+    await reg.createPr("s1", "acme/widgets", 7, ["pr_commit", "pr_status"]);
     // First poll sees no change (baseline was just captured).
     await reg.poll();
     expect(delivered).toHaveLength(0);
@@ -366,7 +372,7 @@ describe("WatcherRegistry", () => {
       ghRunner: quietGh(),
       pollIntervalMs: 60_000,
     });
-    await reg.create("s1", "acme/widgets", 7, ["pr_ci"]);
+    await reg.createPr("s1", "acme/widgets", 7, ["pr_ci"]);
     // Force a state change that produces only a pr_commit event.
     reg.listForSession("s1")[0].state.headSha = "old";
     await reg.poll();
@@ -377,7 +383,7 @@ describe("WatcherRegistry", () => {
   test("delivery waits for canDeliver and succeeds later", async () => {
     canDeliver = false;
     const reg = makeRegistry();
-    await reg.create("s1", "acme/widgets", 7, ["pr_commit"]);
+    await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
     reg.listForSession("s1")[0].state.headSha = "old";
     await reg.poll();
     expect(delivered).toHaveLength(0);
@@ -400,7 +406,7 @@ describe("WatcherRegistry", () => {
       ghRunner: quietGh(),
       pollIntervalMs: 60_000,
     });
-    await reg.create("s1", "acme/widgets", 7, ["pr_commit"]);
+    await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
     reg.listForSession("s1")[0].state.headSha = "old";
     await reg.poll();
     expect(reg.pendingCount("s1")).toBe(1);
@@ -413,7 +419,7 @@ describe("WatcherRegistry", () => {
 
   test("expired watchers are dropped silently", async () => {
     const reg = makeRegistry({ ttlMinutes: -1 });
-    await reg.create("s1", "acme/widgets", 7, []);
+    await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
     expect(reg.listForSession("s1")).toHaveLength(1);
     await reg.poll();
     expect(reg.listForSession("s1")).toHaveLength(0);
@@ -422,7 +428,7 @@ describe("WatcherRegistry", () => {
   test("cancelSession drops watchers and pending events", async () => {
     canDeliver = false;
     const reg = makeRegistry();
-    await reg.create("s1", "acme/widgets", 7, ["pr_commit"]);
+    await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
     reg.listForSession("s1")[0].state.headSha = "old";
     await reg.poll();
     expect(reg.pendingCount("s1")).toBe(1);
@@ -457,9 +463,10 @@ describe("WatcherRegistry", () => {
       },
       pollIntervalMs: 60_000,
     });
-    await reg.create("s1", "acme/widgets", 7, ["pr_commit"]);
-    await reg.create("s1", "acme/widgets", 8, ["pr_commit"]);
+    await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
+    await reg.createPr("s1", "acme/widgets", 8, ["pr_commit"]);
     reg.listForSession("s1").forEach((w) => {
+      if (w.source !== "pr") return;
       w.state.headSha = w.pr === 7 ? "aaaa1111" : "old";
     });
     await reg.poll();
@@ -471,17 +478,155 @@ describe("WatcherRegistry", () => {
 
 describe("watcher event types", () => {
   test("covers the documented vocabulary", () => {
-    const expected: WatcherEventType[] = [
-      "pr_comment",
-      "pr_review_comment",
-      "pr_review_reply",
-      "pr_review_resolved",
-      "pr_commit",
-      "pr_status",
-      "pr_description",
-      "pr_ci",
-    ];
+    const expected: WatcherEventType[] = [...PR_EVENT_TYPES, ...BRANCH_EVENT_TYPES];
     expect(WATCHER_EVENT_TYPES).toEqual(expected);
-    expect(expected).toHaveLength(8);
+    expect(expected).toHaveLength(11);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Branch source (github-ci on main, etc.)
+// ---------------------------------------------------------------------------
+
+function branchState(overrides: Partial<BranchState> = {}): BranchState {
+  return {
+    headSha: "aaaa1111",
+    checkRuns: {},
+    workflowRuns: {},
+    ...overrides,
+  };
+}
+
+describe("fetchBranchState", () => {
+  test("fetches branch head, workflow runs, and check runs on the head", async () => {
+    const called: string[] = [];
+    const gh: GhRunner = async (apiArgs) => {
+      called.push(apiArgs.join(" "));
+      return mockGh([
+        [RE_CHECK_RUNS, { check_runs: [{ id: 9, name: "test", status: "completed", conclusion: "success", html_url: "https://ci/9" }] }],
+        ...quietRoutes(),
+        [RE_GRAPHQL, {}],
+        [/\/actions\/runs\?branch=main/, {
+          workflow_runs: [
+            { id: 55, name: "Publish", status: "in_progress", conclusion: null, html_url: "https://x/55", event: "push" },
+          ],
+        }],
+        [/\/branches\/main$/, { commit: { sha: "beef00d5" } }],
+      ])(apiArgs);
+    };
+    const state = await fetchBranchState(gh, "acme/widgets", "main");
+    expect(called.some((p) => /\/branches\/main$/.test(p))).toBe(true);
+    expect(called.some((p) => /\/actions\/runs\?branch=main/.test(p))).toBe(true);
+    expect(called.some((p) => /\/commits\/beef00d5\/check-runs/.test(p))).toBe(true);
+    expect(state.headSha).toBe("beef00d5");
+    expect(state.checkRuns["9"]!.name).toBe("test");
+    expect(state.workflowRuns["55"]!.name).toBe("Publish");
+    expect(state.workflowRuns["55"]!.event).toBe("push");
+  });
+});
+
+describe("diffBranchState", () => {
+  test("no changes produces no events", () => {
+    expect(diffBranchState(branchState(), branchState(), TGT, "acme/widgets")).toEqual([]);
+  });
+
+  test("head movement emits branch_commit with the commit URL", () => {
+    const events = diffBranchState(branchState(), branchState({ headSha: "ffff8888" }), TGT, "acme/widgets");
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("branch_commit");
+    expect(events[0].target).toBe(TGT);
+    expect(events[0].url).toContain("/commit/ffff8888");
+  });
+
+  test("check runs reaching completion emit branch_ci", () => {
+    const before = branchState({ checkRuns: { "1": { name: "ci", status: "in_progress", conclusion: null, url: null } } });
+    const events = diffBranchState(before, branchState({ checkRuns: { "1": { name: "ci", status: "completed", conclusion: "failure", url: "https://ci/1" } } }), TGT, "acme/widgets");
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("branch_ci");
+    expect(events[0].summary).toContain("failure");
+  });
+
+  test("workflow runs emit on appearance and status transitions, with trigger event", () => {
+    const before = branchState({
+      workflowRuns: { "55": { name: "Publish", status: "in_progress", conclusion: null, url: "https://x/55", event: "push" } },
+    });
+    const after = branchState({
+      workflowRuns: {
+        "55": { name: "Publish", status: "completed", conclusion: "success", url: "https://x/55", event: "push" },
+        "56": { name: "CI", status: "in_progress", conclusion: null, url: "https://x/56", event: "pull_request" },
+      },
+    });
+    const events = diffBranchState(before, after, TGT, "acme/widgets");
+    expect(events).toHaveLength(2);
+    expect(events.map((e) => e.summary)).toEqual([
+      'workflow "Publish" completed (success) [push]',
+      'workflow "CI" started (in_progress) [pull_request]',
+    ]);
+    // No repeats when nothing changes.
+    expect(diffBranchState(after, after, TGT, "acme/widgets")).toEqual([]);
+  });
+});
+
+describe("branch watchers in the registry", () => {
+  let delivered: Array<{ sessionID: string; events: WatcherEvent[] }>;
+  let canDeliver: boolean;
+
+  beforeEach(() => {
+    delivered = [];
+    canDeliver = true;
+  });
+
+  test("createBranch captures the baseline and poll delivers branch events", async () => {
+    let pushed = false;
+    const reg = new WatcherRegistry({
+      deliver: async (s, e) => {
+        delivered.push({ sessionID: s, events: e });
+      },
+      canDeliver: () => canDeliver,
+      ghRunner: mockGh([
+        [/\/branches\/main$/, () => ({ commit: { sha: pushed ? "dddd7777" : "aaaa1111" } })],
+        [/\/actions\/runs\?branch=main/, { workflow_runs: [] }],
+        ...quietRoutes(),
+      ]),
+      pollIntervalMs: 60_000,
+    });
+    const result = await reg.createBranch("s1", "acme/widgets", "main", ["branch_commit", "branch_workflow"]);
+    expect(result.ok).toBe(true);
+    await reg.poll();
+    expect(delivered).toHaveLength(0);
+
+    pushed = true;
+    await reg.poll();
+    expect(reg.pendingCount("s1")).toBe(0);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].events.map((e) => e.type)).toEqual(["branch_commit"]);
+    reg.dispose();
+  });
+
+  test("the workflow-name filter drops events for other workflows", async () => {
+    const reg = new WatcherRegistry({
+      deliver: async (s, e) => {
+        delivered.push({ sessionID: s, events: e });
+      },
+      canDeliver: () => canDeliver,
+      ghRunner: mockGh([
+        [/\/branches\/main$/, { commit: { sha: "aaaa1111" } }],
+        [/\/actions\/runs\?branch=main/, { workflow_runs: [] }],
+        ...quietRoutes(),
+      ]),
+      pollIntervalMs: 60_000,
+    });
+    await reg.createBranch("s1", "acme/widgets", "main", ["branch_workflow"], ["release"]);
+    // Simulate the poll pipeline directly: state moves, diff produces a
+    // branch_commit (filtered out - not watched) and a branch_workflow.
+    const w = reg.listForSession("s1")[0];
+    expect(w.source).toBe("branch");
+    if (w.source !== "branch") return;
+    w.state.workflowRuns["77"] = { name: "CI", status: "in_progress", conclusion: null, url: "https://x/77", event: "push" };
+    await reg.poll();
+    // "CI" does not match the "release" filter - nothing delivered.
+    expect(delivered).toHaveLength(0);
+    expect(reg.pendingCount("s1")).toBe(0);
+    reg.dispose();
   });
 });

@@ -17,9 +17,9 @@ Thatch supports three host agents from a single codebase:
   `mcp__thatch__` tool prefix, system prompt in AGENTS.md
 
 All three paths share the tool definitions from `src/tool-defs.ts`: 18
-host-agnostic tools plus opencode-only tools (currently six:
+host-agnostic tools plus opencode-only tools (currently seven:
 `get_session_info`, `session_search`/`session_get`, and the
-`watch_create`/`watch_list`/`watch_cancel` watcher tools), which the MCP server
+`watch_create`/`watch_branch_create`/`watch_list`/`watch_cancel` watcher tools), which the MCP server
 filters out. The shared tools take args and a `CoreContext`
 (`{ db, model, defaultStore }`) and return a string. The host-specific
 wrapping---prefixing, transport, session hooks---lives outside the core.

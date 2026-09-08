@@ -2,11 +2,13 @@
  * Watchers: event-driven notifications from external sources, delivered into
  * a live opencode session as injected prompts.
  *
- * The motivating case: the model registers a watcher on a GitHub PR, and
- * thatch polls the PR in the background. When something the watcher cares
- * about happens (new comments, commits, CI results), the plugin prompts the
- * session with a synthetic notification part - the same delivery mechanism
- * opencode itself uses for background task completions.
+ * The registry supports multiple source types behind one mechanism. The
+ * first source was GitHub pull requests (source "pr"); GitHub branches
+ * (source "branch") arrived second, for watching CI and workflow runs
+ * against main. A source contributes: event types, a fetch function that
+ * produces a snapshot of the watched state, and a pure diff between two
+ * snapshots. Everything else - registry, pending queue, delivery gating -
+ * is source-agnostic.
  *
  * Lifetime is deliberately process-scoped. The registry lives in plugin
  * memory, never in SQLite: opencode loads thatch in-process, so the plugin
@@ -21,17 +23,11 @@
  */
 
 // ---------------------------------------------------------------------------
-// Types
+// Event types
 // ---------------------------------------------------------------------------
 
-/**
- * The event vocabulary for the github-pr source. Each type maps to one diff
- * against the watcher's last-seen PR state. Notifications carry pointer data
- * (author, URL, counts) rather than content, so text authored by strangers
- * on GitHub never enters the model's context directly - the model fetches
- * details on demand with the gh CLI.
- */
-export type WatcherEventType =
+/** Event types for source "pr". */
+export type PrWatcherEventType =
   | "pr_comment"
   | "pr_review_comment"
   | "pr_review_reply"
@@ -41,7 +37,12 @@ export type WatcherEventType =
   | "pr_description"
   | "pr_ci";
 
-export const WATCHER_EVENT_TYPES: WatcherEventType[] = [
+/** Event types for source "branch" (typically main): commits land, CI and workflow runs execute. */
+export type BranchWatcherEventType = "branch_commit" | "branch_ci" | "branch_workflow";
+
+export type WatcherEventType = PrWatcherEventType | BranchWatcherEventType;
+
+export const PR_EVENT_TYPES: PrWatcherEventType[] = [
   "pr_comment",
   "pr_review_comment",
   "pr_review_reply",
@@ -52,9 +53,20 @@ export const WATCHER_EVENT_TYPES: WatcherEventType[] = [
   "pr_ci",
 ];
 
+export const BRANCH_EVENT_TYPES: BranchWatcherEventType[] = [
+  "branch_commit",
+  "branch_ci",
+  "branch_workflow",
+];
+
+/** Every event type across all sources - for diagnostics and tests. */
+export const WATCHER_EVENT_TYPES: WatcherEventType[] = [...PR_EVENT_TYPES, ...BRANCH_EVENT_TYPES];
+
 /** A single detected change, ready for delivery. Pointer data only. */
 export interface WatcherEvent {
   type: WatcherEventType;
+  /** Which watch produced this event, e.g. "acme/widgets#7" or "acme/widgets@main". */
+  target: string;
   /** Human-readable, content-free summary: who/what/where, never body text. */
   summary: string;
   url: string;
@@ -68,6 +80,28 @@ export interface CommentRef {
   /** True when the comment is a reply to another review comment. */
   isReply: boolean;
 }
+
+/** One CI check run, keyed by id in state snapshots. */
+export interface CheckRunRef {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  url: string | null;
+}
+
+/** One GitHub Actions workflow run, keyed by run id. */
+export interface WorkflowRunRef {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  url: string;
+  /** What triggered the run: push, pull_request, schedule, workflow_run, ... */
+  event: string;
+}
+
+// ---------------------------------------------------------------------------
+// Watchers: a discriminated union over sources
+// ---------------------------------------------------------------------------
 
 /**
  * The last-seen state of a PR, captured at watch creation and updated each
@@ -87,30 +121,53 @@ export interface PrState {
   reviewComments: CommentRef[];
   /** Sorted ids of review threads currently in the resolved state. */
   resolvedThreads: string[];
-  /** Check runs on the head SHA, keyed by check run id. */
-  checkRuns: Record<string, { name: string; status: string; conclusion: string | null; url: string | null }>;
+  checkRuns: Record<string, CheckRunRef>;
 }
 
-export interface Watcher {
+/** The last-seen state of a branch. */
+export interface BranchState {
+  headSha: string;
+  checkRuns: Record<string, CheckRunRef>;
+  /** Workflow runs on the branch, keyed by run id (last 20). */
+  workflowRuns: Record<string, WorkflowRunRef>;
+}
+
+export interface PrWatcher {
   id: string;
+  source: "pr";
   sessionID: string;
   /** owner/repo */
   repo: string;
   pr: number;
-  events: WatcherEventType[];
+  events: PrWatcherEventType[];
   /** Epoch ms. When now > expiresAt the watcher is silently dropped. */
   expiresAt: number;
   createdAt: number;
   state: PrState;
 }
 
-/**
- * Runs one GitHub API call via the gh CLI and parses the JSON response.
- * The array is the argument list after `gh api`: a REST path like
- * ["/repos/o/r/pulls/7"] or a GraphQL invocation like
- * ["graphql", "-f", "query={...}"]. Array-shaped so both transports fit
- * without the callers string-concatenating shell quotes.
- */
+export interface BranchWatcher {
+  id: string;
+  source: "branch";
+  sessionID: string;
+  /** owner/repo */
+  repo: string;
+  branch: string;
+  events: BranchWatcherEventType[];
+  /** Substring filters on workflow run names; empty means all workflows. */
+  workflows: string[];
+  expiresAt: number;
+  createdAt: number;
+  state: BranchState;
+}
+
+export type Watcher = PrWatcher | BranchWatcher;
+
+/** Runs one GitHub API call via the gh CLI and parses the JSON response.
+ *  The array is the argument list after `gh api`: a REST path like
+ *  ["/repos/o/r/pulls/7"] or a GraphQL invocation like
+ *  ["graphql", "-f", "query={...}"]. Array-shaped so both transports fit
+ *  without the callers string-concatenating shell quotes. */
 export type GhRunner = (apiArgs: string[]) => Promise<unknown>;
 
 export interface WatcherRegistryOptions {
@@ -186,7 +243,7 @@ export function _resetGhAvailability(): void {
 }
 
 // ---------------------------------------------------------------------------
-// PR state construction and diffing
+// Snapshot construction
 // ---------------------------------------------------------------------------
 
 function sha256(text: string): string {
@@ -214,6 +271,60 @@ function toCommentRefs(raw: unknown): CommentRef[] {
 
 function maxCommentId(refs: CommentRef[]): number {
   return refs.reduce((max, c) => Math.max(max, c.id), 0);
+}
+
+function parseCheckRuns(raw: unknown): Record<string, CheckRunRef> {
+  const runs: Record<string, CheckRunRef> = {};
+  const rawRuns = (raw as { check_runs?: Array<{
+    id?: number;
+    name?: string;
+    status?: string;
+    conclusion?: string | null;
+    html_url?: string | null;
+  }> }).check_runs ?? [];
+  for (const run of rawRuns) {
+    if (run.id === undefined) continue;
+    runs[String(run.id)] = {
+      name: run.name ?? "check",
+      status: run.status ?? "unknown",
+      conclusion: run.conclusion ?? null,
+      url: run.html_url ?? null,
+    };
+  }
+  return runs;
+}
+
+function parseWorkflowRuns(raw: unknown): Record<string, WorkflowRunRef> {
+  const runs: Record<string, WorkflowRunRef> = {};
+  const rawRuns = (raw as { workflow_runs?: Array<{
+    id?: number;
+    name?: string;
+    status?: string;
+    conclusion?: string | null;
+    html_url?: string;
+    event?: string;
+  }> }).workflow_runs ?? [];
+  for (const run of rawRuns) {
+    if (run.id === undefined) continue;
+    runs[String(run.id)] = {
+      name: run.name ?? "workflow",
+      status: run.status ?? "unknown",
+      conclusion: run.conclusion ?? null,
+      url: run.html_url ?? "",
+      event: run.event ?? "unknown",
+    };
+  }
+  return runs;
+}
+
+function parseResolvedThreads(raw: unknown): string[] {
+  const nodes = (raw as {
+    data?: { repository?: { pullRequest?: { reviewThreads?: { nodes?: Array<{ id?: string; isResolved?: boolean }> } } } };
+  }).data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+  return nodes
+    .filter((n) => n.id && n.isResolved)
+    .map((n) => n.id!)
+    .sort();
 }
 
 /**
@@ -246,31 +357,6 @@ export async function fetchPrState(gh: GhRunner, repo: string, pr: number): Prom
 
   const issueRefs = toCommentRefs(issueComments);
   const reviewRefs = toCommentRefs(reviewComments);
-  const nodes = (threads as {
-    data?: { repository?: { pullRequest?: { reviewThreads?: { nodes?: Array<{ id?: string; isResolved?: boolean }> } } } };
-  }).data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
-  const resolvedThreads = nodes
-    .filter((n) => n.id && n.isResolved)
-    .map((n) => n.id!)
-    .sort();
-
-  const runs: PrState["checkRuns"] = {};
-  const rawRuns = (checkRuns as { check_runs?: Array<{
-    id?: number;
-    name?: string;
-    status?: string;
-    conclusion?: string | null;
-    html_url?: string | null;
-  }> }).check_runs ?? [];
-  for (const run of rawRuns) {
-    if (run.id === undefined) continue;
-    runs[String(run.id)] = {
-      name: run.name ?? "check",
-      status: run.status ?? "unknown",
-      conclusion: run.conclusion ?? null,
-      url: run.html_url ?? null,
-    };
-  }
 
   return {
     headSha,
@@ -282,76 +368,158 @@ export async function fetchPrState(gh: GhRunner, repo: string, pr: number): Prom
     lastReviewCommentId: maxCommentId(reviewRefs),
     issueComments: issueRefs,
     reviewComments: reviewRefs,
-    resolvedThreads,
-    checkRuns: runs,
+    resolvedThreads: parseResolvedThreads(threads),
+    checkRuns: parseCheckRuns(checkRuns),
   };
 }
+
+/**
+ * Fetches the current state of a branch: the head commit, check runs on that
+ * head, and the branch's recent workflow runs (last 20). The branch and
+ * workflow-run calls run in parallel; check runs need the head SHA first.
+ */
+export async function fetchBranchState(gh: GhRunner, repo: string, branch: string): Promise<BranchState> {
+  const [branchInfo, runs] = await Promise.all([
+    gh([`/repos/${repo}/branches/${branch}`]),
+    gh([`/repos/${repo}/actions/runs?branch=${branch}&per_page=20`]),
+  ]);
+  const headSha = (branchInfo as { commit?: { sha?: string } }).commit?.sha ?? "";
+  const checkRuns = await gh([`/repos/${repo}/commits/${headSha}/check-runs?per_page=100`]);
+  return {
+    headSha,
+    checkRuns: parseCheckRuns(checkRuns),
+    workflowRuns: parseWorkflowRuns(runs),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Diffing
+// ---------------------------------------------------------------------------
 
 /** At most this many events per watcher per cycle; comment floods collapse. */
 const MAX_EVENTS_PER_DIFF = 10;
 
 /**
+ * Shared check-run diff: emits one event per run that reaches a completed
+ * status. A run that was already completed before produces nothing; a run
+ * that appears between polls already completed produces one.
+ */
+function diffCheckRuns(
+  before: Record<string, CheckRunRef>,
+  after: Record<string, CheckRunRef>,
+  eventType: "pr_ci" | "branch_ci",
+  fallbackUrl: string,
+  out: WatcherEvent[],
+): void {
+  for (const [runId, run] of Object.entries(after)) {
+    const previous = before[runId];
+    if (run.status !== "completed") continue;
+    if (previous && previous.status === "completed") continue;
+    const conclusion = run.conclusion ? ` (${run.conclusion})` : "";
+    out.push({
+      type: eventType,
+      target: "",
+      summary: `check "${run.name}" completed${conclusion}`,
+      url: run.url ?? fallbackUrl,
+    });
+  }
+}
+
+/**
  * Pure diff between the last-seen and current PR state. Detects comments by
  * id monotonicity, commits by head SHA, description by body hash, CI by
- * check-run transitions to a completed status.
+ * check-run transitions, thread resolution by symmetric difference of the
+ * sorted resolved-id lists.
  */
-export function diffPrState(before: PrState, after: PrState, url: string): WatcherEvent[] {
+export function diffPrState(before: PrState, after: PrState, target: string, baseUrl: string): WatcherEvent[] {
   const events: WatcherEvent[] = [];
 
   if (after.headSha !== before.headSha && after.headSha) {
-    events.push({
-      type: "pr_commit",
-      summary: `head moved to ${after.headSha.slice(0, 7)}`,
-      url,
-    });
+    events.push({ type: "pr_commit", target, summary: `head moved to ${after.headSha.slice(0, 7)}`, url: baseUrl });
   }
 
   if (after.state !== before.state || after.merged !== before.merged) {
     const status = after.merged ? "merged" : after.state;
-    events.push({ type: "pr_status", summary: `PR is now ${status}`, url });
+    events.push({ type: "pr_status", target, summary: `PR is now ${status}`, url: baseUrl });
   }
 
   if (after.bodySha !== before.bodySha || after.title !== before.title) {
-    events.push({ type: "pr_description", summary: "PR title or description changed", url });
+    events.push({ type: "pr_description", target, summary: "PR title or description changed", url: baseUrl });
   }
 
   const fresh = (refs: CommentRef[], lastSeenId: number) =>
     refs.filter((c) => c.id > lastSeenId);
 
   for (const c of fresh(after.issueComments, before.lastIssueCommentId)) {
-    events.push({ type: "pr_comment", summary: `comment by ${c.author}`, url: c.url || url });
+    events.push({ type: "pr_comment", target, summary: `comment by ${c.author}`, url: c.url || baseUrl });
   }
   for (const c of fresh(after.reviewComments, before.lastReviewCommentId)) {
     events.push({
       type: c.isReply ? "pr_review_reply" : "pr_review_comment",
+      target,
       summary: `comment by ${c.author}`,
-      url: c.url || url,
+      url: c.url || baseUrl,
     });
   }
 
-  // Review-thread resolution transitions (GraphQL-only state). Symmetric
-  // difference of the sorted resolved-id lists: added ids were resolved,
-  // removed ids were reopened.
   const afterResolved = new Set(after.resolvedThreads);
   const beforeResolved = new Set(before.resolvedThreads);
   for (const id of after.resolvedThreads) {
     if (!beforeResolved.has(id)) {
-      events.push({ type: "pr_review_resolved", summary: "review thread resolved", url });
+      events.push({ type: "pr_review_resolved", target, summary: "review thread resolved", url: baseUrl });
     }
   }
   for (const id of before.resolvedThreads) {
     if (!afterResolved.has(id)) {
-      events.push({ type: "pr_review_resolved", summary: "review thread reopened", url });
+      events.push({ type: "pr_review_resolved", target, summary: "review thread reopened", url: baseUrl });
     }
   }
 
-  for (const [runId, run] of Object.entries(after.checkRuns)) {
-    const previous = before.checkRuns[runId];
-    const completed = run.status === "completed";
-    if (!completed) continue;
-    if (previous && previous.status === "completed") continue;
-    const conclusion = run.conclusion ? ` (${run.conclusion})` : "";
-    events.push({ type: "pr_ci", summary: `check "${run.name}" completed${conclusion}`, url: run.url ?? url });
+  diffCheckRuns(before.checkRuns, after.checkRuns, "pr_ci", baseUrl, events);
+
+  return events.slice(0, MAX_EVENTS_PER_DIFF);
+}
+
+/**
+ * Pure diff between the last-seen and current branch state: head movement,
+ * check-run completions on the head, and workflow runs appearing or
+ * transitioning on the branch.
+ */
+export function diffBranchState(
+  before: BranchState,
+  after: BranchState,
+  target: string,
+  repo: string,
+): WatcherEvent[] {
+  const events: WatcherEvent[] = [];
+
+  if (after.headSha !== before.headSha && after.headSha) {
+    events.push({
+      type: "branch_commit",
+      target,
+      summary: `head moved to ${after.headSha.slice(0, 7)}`,
+      url: `https://github.com/${repo}/commit/${after.headSha}`,
+    });
+  }
+
+  diffCheckRuns(before.checkRuns, after.checkRuns, "branch_ci", `https://github.com/${repo}/actions`, events);
+
+  for (const [runId, run] of Object.entries(after.workflowRuns)) {
+    const previous = before.workflowRuns[runId];
+    const transition = !previous
+      ? `started (${run.status})`
+      : previous.status !== run.status
+        ? run.status === "completed"
+          ? `completed (${run.conclusion ?? "no conclusion"})`
+          : `${previous.status} -> ${run.status}`
+        : null;
+    if (!transition) continue;
+    events.push({
+      type: "branch_workflow",
+      target,
+      summary: `workflow "${run.name}" ${transition} [${run.event}]`,
+      url: run.url,
+    });
   }
 
   return events.slice(0, MAX_EVENTS_PER_DIFF);
@@ -412,24 +580,20 @@ export class WatcherRegistry {
   // -- CRUD ----------------------------------------------------------------
 
   /**
-   * Registers a watcher and captures the baseline state immediately. The
+   * Registers a PR watcher and captures the baseline state immediately. The
    * baseline fetch doubles as validation: a bad repo, missing PR, or broken
    * gh setup fails here with a real error instead of a watcher that never
    * fires.
    */
-  async create(
+  async createPr(
     sessionID: string,
     repo: string,
     pr: number,
-    events: WatcherEventType[],
-  ): Promise<{ ok: true; watcher: Watcher } | { ok: false; error: string }> {
-    const existing = this.listForSession(sessionID);
-    if (existing.length >= this.#opts.maxPerSession) {
-      return {
-        ok: false,
-        error: `Watcher limit reached: ${this.#opts.maxPerSession} active watchers per session. Cancel one with watch_cancel first.`,
-      };
-    }
+    events: PrWatcherEventType[],
+  ): Promise<{ ok: true; watcher: PrWatcher } | { ok: false; error: string }> {
+    const limit = this.#checkLimit(sessionID);
+    if (limit) return { ok: false, error: limit };
+    if (events.length === 0) return { ok: false, error: "No events to watch - pass at least one event type." };
 
     let state: PrState;
     try {
@@ -441,8 +605,9 @@ export class WatcherRegistry {
       return { ok: false, error: `Could not resolve a head SHA for ${repo}#${pr}. Is it an open PR?` };
     }
 
-    const watcher: Watcher = {
+    const watcher: PrWatcher = {
       id: `watch_${Math.random().toString(36).slice(2, 10)}`,
+      source: "pr",
       sessionID,
       repo,
       pr,
@@ -453,6 +618,56 @@ export class WatcherRegistry {
     };
     this.#watchers.set(watcher.id, watcher);
     return { ok: true, watcher };
+  }
+
+  /**
+   * Registers a branch watcher (typically main): commit landings, check-run
+   * completions on the head, and workflow runs on the branch. Same baseline
+   * validation as createPr.
+   */
+  async createBranch(
+    sessionID: string,
+    repo: string,
+    branch: string,
+    events: BranchWatcherEventType[],
+    workflows: string[] = [],
+  ): Promise<{ ok: true; watcher: BranchWatcher } | { ok: false; error: string }> {
+    const limit = this.#checkLimit(sessionID);
+    if (limit) return { ok: false, error: limit };
+    if (events.length === 0) return { ok: false, error: "No events to watch - pass at least one event type." };
+
+    let state: BranchState;
+    try {
+      state = await fetchBranchState(this.#opts.ghRunner, repo, branch);
+    } catch (err) {
+      return { ok: false, error: `Failed to read ${repo}@${branch}: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    if (!state.headSha) {
+      return { ok: false, error: `Could not resolve a head SHA for ${repo}@${branch}. Does the branch exist and have commits?` };
+    }
+
+    const watcher: BranchWatcher = {
+      id: `watch_${Math.random().toString(36).slice(2, 10)}`,
+      source: "branch",
+      sessionID,
+      repo,
+      branch,
+      events,
+      workflows,
+      expiresAt: Date.now() + this.#opts.ttlMinutes * 60_000,
+      createdAt: Date.now(),
+      state,
+    };
+    this.#watchers.set(watcher.id, watcher);
+    return { ok: true, watcher };
+  }
+
+  #checkLimit(sessionID: string): string | null {
+    const existing = this.listForSession(sessionID);
+    if (existing.length >= this.#opts.maxPerSession) {
+      return `Watcher limit reached: ${this.#opts.maxPerSession} active watchers per session. Cancel one with watch_cancel first.`;
+    }
+    return null;
   }
 
   /** Summaries of one session's watchers, newest first. */
@@ -483,9 +698,9 @@ export class WatcherRegistry {
   /**
    * One poll cycle: diff every watcher, queue events, then deliver whatever
    * is pending for sessions that can accept a prompt. Errors are per-watcher:
-   * one bad PR never blocks the others. Reentrant calls (a cycle slower than
-   * the interval) are dropped - overlapping diffs against the same baseline
-   * would queue duplicate events.
+   * one bad target never blocks the others. Reentrant calls (a cycle slower
+   * than the interval) are dropped - overlapping diffs against the same
+   * baseline would queue duplicate events.
    */
   async poll(): Promise<void> {
     if (this.#polling) return;
@@ -498,15 +713,12 @@ export class WatcherRegistry {
           continue;
         }
         try {
-          const after = await fetchPrState(this.#opts.ghRunner, watcher.repo, watcher.pr);
-          const events = diffPrState(watcher.state, after, this.pullUrl(watcher))
-            .filter((e) => watcher.events.includes(e.type));
+          const events = await this.#pollOne(watcher);
           if (events.length > 0) {
             const queue = this.#pending.get(watcher.sessionID) ?? [];
             queue.push(...events);
             this.#pending.set(watcher.sessionID, queue);
           }
-          watcher.state = after;
         } catch (err) {
           console.error(`[thatch] watcher ${id} poll failed: ${err}`);
         }
@@ -515,6 +727,26 @@ export class WatcherRegistry {
     } finally {
       this.#polling = false;
     }
+  }
+
+  /** Fetches and diffs one watcher, filtered to its watched event types. */
+  async #pollOne(watcher: Watcher): Promise<WatcherEvent[]> {
+    if (watcher.source === "pr") {
+      const after = await fetchPrState(this.#opts.ghRunner, watcher.repo, watcher.pr);
+      const events = diffPrState(watcher.state, after, `${watcher.repo}#${watcher.pr}`, this.#prUrl(watcher))
+        .filter((e) => watcher.events.includes(e.type as PrWatcherEventType));
+      watcher.state = after;
+      return events;
+    }
+    const after = await fetchBranchState(this.#opts.ghRunner, watcher.repo, watcher.branch);
+    const all = diffBranchState(watcher.state, after, `${watcher.repo}@${watcher.branch}`, watcher.repo);
+    watcher.state = after;
+    // Workflow-name filter (substring, case-insensitive). Events filtered
+    // out by name are dropped entirely, not queued.
+    const matchesFilter = (e: WatcherEvent) =>
+      watcher.workflows.length === 0 || watcher.workflows.some((wf) => e.summary.toLowerCase().includes(wf.toLowerCase()));
+    return all
+      .filter((e) => watcher.events.includes(e.type as BranchWatcherEventType) && matchesFilter(e));
   }
 
   /**
@@ -546,7 +778,7 @@ export class WatcherRegistry {
     return (this.#pending.get(sessionID) ?? []).length;
   }
 
-  private pullUrl(watcher: Watcher): string {
+  #prUrl(watcher: PrWatcher): string {
     return `https://github.com/${watcher.repo}/pull/${watcher.pr}`;
   }
 }
