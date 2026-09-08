@@ -29,9 +29,9 @@ description: Extract durable project facts ... Use when ...
   Code, and Cursor all auto-discover skills and use the description for
   relevance).
 
-## The 27 skills
+## The 26 skills
 
-**Shared (26)** — installed everywhere; no sub-agents required:
+**Shared (25)** — installed everywhere; no sub-agents required:
 
 | Skill | Role |
 |-------|------|
@@ -60,7 +60,6 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-response` | Author-side review response: triage findings, fix bugs one by one, reply on each thread, post a top-level summary comment. |
 | `thatch-memory-verify` | Fact-check a single memory against the current codebase and correct stale claims. Uses git archaeology to preserve historical context when changes were intentional. |
 | `thatch-knowledge-export` | Compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories via `thatch-memory-verify`. |
-| `thatch-sourdough-recipe` | Build a sourdough formula for a stiff starter and home-milled flour: levain build, hydration for fresh-milled whole grain, fermentation schedule, bake-ready table. (Yes, really. Also the canonical example of adding a skill.) |
 
 **opencode-only (1)** — the coordinator needs sub-agent support:
 
