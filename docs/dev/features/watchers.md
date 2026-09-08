@@ -51,12 +51,13 @@ process exit is the real lifetime boundary in both TUI and serve mode
 ### Registration (`watch_create`)
 
 `create()` immediately fetches the PR's state as a baseline via
-`fetchPrState()` - four `gh api` calls (the pull, issue comments,
-review comments, check runs on the head SHA), three of them in
-parallel. The baseline doubles as validation: a missing PR, wrong
-repo, or broken gh setup fails registration with a real error instead
-of producing a watcher that never fires. Watch creation is also gated
-on a cached `gh --version` availability check.
+`fetchPrState()` - five gh calls (the pull, issue comments, review
+comments, check runs on the head SHA, and one GraphQL query for
+review-thread resolution state), four of them in parallel. The
+baseline doubles as validation: a missing PR, wrong repo, or broken
+gh setup fails registration with a real error instead of producing a
+watcher that never fires. Watch creation is also gated on a cached
+`gh --version` availability check.
 
 ### Polling
 
@@ -76,6 +77,11 @@ Event detection:
 - description by SHA-256 of the body text (the body itself is never
   stored)
 - CI by check-run transitions into a completed status
+- review-thread resolution by symmetric difference of the sorted
+  resolved-thread-id lists (thread `isResolved` state exists only in
+  the GraphQL API, so the fetch is a `gh api graphql -f query=...`
+  call; the `GhRunner` interface carries an args array to fit both
+  transports)
 
 A diff emits at most 10 events per watcher per cycle, so comment
 floods collapse into one batch.
@@ -102,9 +108,10 @@ cycle or when the session next goes idle (the event hook calls
 
 ### Event vocabulary
 
-`pr_comment`, `pr_review_comment`, `pr_review_reply`, `pr_commit`,
-`pr_status`, `pr_description`, `pr_ci`. The tool's `events` argument
-selects a subset; the default is all seven.
+`pr_comment`, `pr_review_comment`, `pr_review_reply`,
+`pr_review_resolved`, `pr_commit`, `pr_status`, `pr_description`,
+`pr_ci`. The tool's `events` argument selects a subset; the default is
+all eight.
 
 ## Interactions with other features
 

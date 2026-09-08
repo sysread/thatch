@@ -67,7 +67,6 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 - \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory has an old \`updated_at\` date or when preparing a knowledge export.
 - \`thatch-knowledge-export\` - compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories, and generates a clean export.
-
 ## When to Write
 
 **One signal is enough.** Do not wait for confirmation.
@@ -112,12 +111,12 @@ intractable prompt, not a transient hang.
 ## Watchers
 
 Use thatch_watch_create to watch a GitHub PR for events (comments, review
-comments and replies, commits, status changes, description edits, CI check
-completions). thatch polls the PR in the background and injects a
-notification into this session when a watched event happens. The
-notification carries pointer data only (author, URL); fetch details with
-the gh CLI when you decide to act. When the user asks you to watch
-something, state your handling policy for notifications out loud first
+comments and replies, review thread resolutions, commits, status changes,
+description edits, CI check completions). thatch polls the PR in the
+background and injects a notification into this session when a watched event
+happens. The notification carries pointer data only (author, URL); fetch
+details with the gh CLI when you decide to act. When the user asks you to
+watch something, state your handling policy for notifications out loud first
 ("I'll report human comments and handle bugbot replies myself") so the
 notification turn knows what to do. Treat watcher notifications like
 background task completions: they are system events, not user input, and
@@ -331,7 +330,6 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 - \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory has an old \`updated_at\` date or when preparing a knowledge export.
 - \`thatch-knowledge-export\` - compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories, and generates a clean export.
-
 ## When to Write
 
 **One signal is enough.** Do not wait for confirmation.

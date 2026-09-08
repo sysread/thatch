@@ -35,6 +35,7 @@ export type WatcherEventType =
   | "pr_comment"
   | "pr_review_comment"
   | "pr_review_reply"
+  | "pr_review_resolved"
   | "pr_commit"
   | "pr_status"
   | "pr_description"
@@ -44,6 +45,7 @@ export const WATCHER_EVENT_TYPES: WatcherEventType[] = [
   "pr_comment",
   "pr_review_comment",
   "pr_review_reply",
+  "pr_review_resolved",
   "pr_commit",
   "pr_status",
   "pr_description",
@@ -83,6 +85,8 @@ export interface PrState {
   lastReviewCommentId: number;
   issueComments: CommentRef[];
   reviewComments: CommentRef[];
+  /** Sorted ids of review threads currently in the resolved state. */
+  resolvedThreads: string[];
   /** Check runs on the head SHA, keyed by check run id. */
   checkRuns: Record<string, { name: string; status: string; conclusion: string | null; url: string | null }>;
 }
@@ -100,8 +104,14 @@ export interface Watcher {
   state: PrState;
 }
 
-/** Runs one GitHub REST API path via the gh CLI and parses the JSON response. */
-export type GhRunner = (apiPath: string) => Promise<unknown>;
+/**
+ * Runs one GitHub API call via the gh CLI and parses the JSON response.
+ * The array is the argument list after `gh api`: a REST path like
+ * ["/repos/o/r/pulls/7"] or a GraphQL invocation like
+ * ["graphql", "-f", "query={...}"]. Array-shaped so both transports fit
+ * without the callers string-concatenating shell quotes.
+ */
+export type GhRunner = (apiArgs: string[]) => Promise<unknown>;
 
 export interface WatcherRegistryOptions {
   /** Delivers a batch of events for a session. Injected so tests never spawn. */
@@ -128,8 +138,8 @@ export interface WatcherRegistryOptions {
  * existing gh session - thatch never sees or stores a token. Throws on
  * non-zero exit or unparseable output.
  */
-export async function ghApiRun(apiPath: string): Promise<unknown> {
-  const proc = Bun.spawn(["gh", "api", apiPath], {
+export async function ghApiRun(apiArgs: string[]): Promise<unknown> {
+  const proc = Bun.spawn(["gh", "api", ...apiArgs], {
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -141,7 +151,7 @@ export async function ghApiRun(apiPath: string): Promise<unknown> {
     ]);
     if (exitCode !== 0) {
       const stderr = await new Response(proc.stderr).text();
-      throw new Error(`gh api ${apiPath} failed (exit ${exitCode}): ${stderr.trim().slice(0, 200)}`);
+      throw new Error(`gh api ${apiArgs.join(" ")} failed (exit ${exitCode}): ${stderr.trim().slice(0, 200)}`);
     }
     return JSON.parse(stdout);
   } finally {
@@ -208,12 +218,14 @@ function maxCommentId(refs: CommentRef[]): number {
 
 /**
  * Fetches the current state of a PR plus everything the diff functions need.
- * Four gh calls per poll per watcher: the PR itself, issue comments
- * (top-level PR conversation), review comments (inline diff comments), and
- * check runs on the head SHA. Comment and check-run fetches run in parallel.
+ * Five gh calls per poll per watcher: the PR itself, issue comments
+ * (top-level PR conversation), review comments (inline diff comments), check
+ * runs on the head SHA, and one GraphQL query for review-thread resolution
+ * state (isResolved exists only in GraphQL, not the REST API). All
+ * non-pull fetches run in parallel.
  */
 export async function fetchPrState(gh: GhRunner, repo: string, pr: number): Promise<PrState> {
-  const pull = (await gh(`/repos/${repo}/pulls/${pr}`)) as {
+  const pull = (await gh([`/repos/${repo}/pulls/${pr}`])) as {
     head?: { sha?: string };
     state?: string;
     merged?: boolean;
@@ -221,14 +233,26 @@ export async function fetchPrState(gh: GhRunner, repo: string, pr: number): Prom
     body?: string | null;
   };
   const headSha = pull.head?.sha ?? "";
-  const [issueComments, reviewComments, checkRuns] = await Promise.all([
-    gh(`/repos/${repo}/issues/${pr}/comments?per_page=100&sort=created&direction=desc`),
-    gh(`/repos/${repo}/pulls/${pr}/comments?per_page=100&sort=created&direction=desc`),
-    gh(`/repos/${repo}/commits/${headSha}/check-runs?per_page=100`),
+  const [owner, repoName] = repo.split("/");
+  const graphqlQuery =
+    `query { repository(owner: "${owner}", name: "${repoName}") { ` +
+    `pullRequest(number: ${pr}) { reviewThreads(first: 100) { nodes { id isResolved } } } } }`;
+  const [issueComments, reviewComments, checkRuns, threads] = await Promise.all([
+    gh([`/repos/${repo}/issues/${pr}/comments?per_page=100&sort=created&direction=desc`]),
+    gh([`/repos/${repo}/pulls/${pr}/comments?per_page=100&sort=created&direction=desc`]),
+    gh([`/repos/${repo}/commits/${headSha}/check-runs?per_page=100`]),
+    gh(["graphql", "-f", `query=${graphqlQuery}`]),
   ]);
 
   const issueRefs = toCommentRefs(issueComments);
   const reviewRefs = toCommentRefs(reviewComments);
+  const nodes = (threads as {
+    data?: { repository?: { pullRequest?: { reviewThreads?: { nodes?: Array<{ id?: string; isResolved?: boolean }> } } } };
+  }).data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+  const resolvedThreads = nodes
+    .filter((n) => n.id && n.isResolved)
+    .map((n) => n.id!)
+    .sort();
 
   const runs: PrState["checkRuns"] = {};
   const rawRuns = (checkRuns as { check_runs?: Array<{
@@ -258,6 +282,7 @@ export async function fetchPrState(gh: GhRunner, repo: string, pr: number): Prom
     lastReviewCommentId: maxCommentId(reviewRefs),
     issueComments: issueRefs,
     reviewComments: reviewRefs,
+    resolvedThreads,
     checkRuns: runs,
   };
 }
@@ -302,6 +327,22 @@ export function diffPrState(before: PrState, after: PrState, url: string): Watch
       summary: `comment by ${c.author}`,
       url: c.url || url,
     });
+  }
+
+  // Review-thread resolution transitions (GraphQL-only state). Symmetric
+  // difference of the sorted resolved-id lists: added ids were resolved,
+  // removed ids were reopened.
+  const afterResolved = new Set(after.resolvedThreads);
+  const beforeResolved = new Set(before.resolvedThreads);
+  for (const id of after.resolvedThreads) {
+    if (!beforeResolved.has(id)) {
+      events.push({ type: "pr_review_resolved", summary: "review thread resolved", url });
+    }
+  }
+  for (const id of before.resolvedThreads) {
+    if (!afterResolved.has(id)) {
+      events.push({ type: "pr_review_resolved", summary: "review thread reopened", url });
+    }
   }
 
   for (const [runId, run] of Object.entries(after.checkRuns)) {

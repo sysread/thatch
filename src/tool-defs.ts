@@ -960,12 +960,13 @@ const watchCreateDef: ToolDef = {
   description:
     "Watch a GitHub PR for events and get notified in this session when they " +
     "happen. Events: new top-level comments, new inline review comments, " +
-    "replies to review comments, new commits (head SHA change), PR status " +
-    "changes, title/description edits, and completed CI check runs. The " +
-    "watcher polls in the background and injects a notification prompt; " +
-    "notifications carry pointers only (author, URL) - fetch details yourself " +
-    "with the gh CLI when you decide to act. Watches live until cancelled, " +
-    "the session ends, or opencode restarts. Requires the gh CLI.",
+    "replies to review comments, review thread resolutions, new commits " +
+    "(head SHA change), PR status changes, title/description edits, and " +
+    "completed CI check runs. The watcher polls in the background and " +
+    "injects a notification prompt; notifications carry pointers only " +
+    "(author, URL) - fetch details yourself with the gh CLI when you decide " +
+    "to act. Watches live until cancelled, the session ends, or opencode " +
+    "restarts. Requires the gh CLI.",
   args: {
     pr: z.number().int().positive().describe(
       "The PR number to watch.",

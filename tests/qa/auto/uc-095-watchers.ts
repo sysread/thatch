@@ -51,8 +51,8 @@ const useCase: UseCase = {
     }
 
     // The event vocabulary is stable and documented.
-    if (WATCHER_EVENT_TYPES.length !== 7) {
-      console.log(`  FAIL: expected 7 event types, got ${WATCHER_EVENT_TYPES.length}`);
+    if (WATCHER_EVENT_TYPES.length !== 8) {
+      console.log(`  FAIL: expected 8 event types, got ${WATCHER_EVENT_TYPES.length}`);
       return "FAIL";
     }
 
@@ -67,20 +67,25 @@ const useCase: UseCase = {
       lastReviewCommentId: 0,
       issueComments: [],
       reviewComments: [],
+      resolvedThreads: [],
       checkRuns: {},
     };
-    const gh = async (apiPath: string) => {
-      if (/\/issues\/\d+\/comments/.test(apiPath)) {
+    const gh = async (apiArgs: string[]) => {
+      const joined = apiArgs.join(" ");
+      if (/\/issues\/\d+\/comments/.test(joined)) {
         return state.issueComments.length > 0
           ? state.issueComments.map((c) => ({ id: c.id, user: { login: c.author }, html_url: c.url }))
           : [];
       }
-      if (/\/pulls\/\d+\/comments/.test(apiPath)) return [];
-      if (/\/check-runs/.test(apiPath)) return { check_runs: [] };
-      if (/\/pulls\/\d+$/.test(apiPath)) {
+      if (/\/pulls\/\d+\/comments/.test(joined)) return [];
+      if (/\/check-runs/.test(joined)) return { check_runs: [] };
+      if (/^graphql/.test(joined)) {
+        return { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } };
+      }
+      if (/\/pulls\/\d+$/.test(joined)) {
         return { head: { sha: state.headSha }, state: state.state, merged: state.merged, title: state.title, body: state.bodySha };
       }
-      throw new Error(`no route: ${apiPath}`);
+      throw new Error(`no route: ${joined}`);
     };
 
     let canDeliver = false;

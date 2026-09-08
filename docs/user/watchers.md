@@ -19,6 +19,7 @@ Watched events:
 - `pr_comment` - new top-level comments on the PR
 - `pr_review_comment` - new inline comments on the diff
 - `pr_review_reply` - replies to an existing review comment
+- `pr_review_resolved` - a review thread resolved or reopened
 - `pr_commit` - new commits (the head SHA moved)
 - `pr_status` - the PR opened, closed, or merged
 - `pr_description` - title or description edited
