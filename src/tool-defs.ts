@@ -3,6 +3,7 @@ import type { ThatchDB, DedupCandidate, MemoryRow } from "./db";
 import type { EmbeddingModel } from "./embeddings";
 import { predictionVerb } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
+import { WATCHER_EVENT_TYPES, type WatcherRegistry, type WatcherEventType } from "./watchers";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
 // creation time. Matches the thatch_find_duplicates threshold (0.85).
@@ -37,6 +38,10 @@ export interface CoreContext {
    *  childToParent). Called by extraction_done when the sub-agent passes
    *  the parent's session_id. */
   drainExtractionQueue?: (sessionID: string) => void;
+  /** The plugin's in-memory watcher registry. Only wired on the opencode
+   *  path - MCP hosts have no poller, no event bus, and no way to deliver a
+   *  proactive prompt, so watch tools are opencode-only. */
+  watchers?: WatcherRegistry;
 }
 
 /**
@@ -945,6 +950,111 @@ const sessionGetDef: ToolDef = {
 };
 
 /**
+ * Registers a background watcher on a GitHub PR. The plugin process polls
+ * the PR (via the gh CLI, using the user's existing gh auth) and prompts the
+ * session with a synthetic notification when a watched event happens.
+ * opencode-only: MCP hosts have no poller and no proactive-prompt channel.
+ */
+const watchCreateDef: ToolDef = {
+  name: "watch_create",
+  description:
+    "Watch a GitHub PR for events and get notified in this session when they " +
+    "happen. Events: new top-level comments, new inline review comments, " +
+    "replies to review comments, new commits (head SHA change), PR status " +
+    "changes, title/description edits, and completed CI check runs. The " +
+    "watcher polls in the background and injects a notification prompt; " +
+    "notifications carry pointers only (author, URL) - fetch details yourself " +
+    "with the gh CLI when you decide to act. Watches live until cancelled, " +
+    "the session ends, or opencode restarts. Requires the gh CLI.",
+  args: {
+    pr: z.number().int().positive().describe(
+      "The PR number to watch.",
+    ),
+    repo: z.string().optional().describe(
+      "GitHub repo as owner/repo. Defaults to this project's repo from the git remote.",
+    ),
+    events: z.array(z.enum(WATCHER_EVENT_TYPES as [WatcherEventType, ...WatcherEventType[]])).optional().describe(
+      "Which event types to watch. Omit for all event types.",
+    ),
+  },
+  opencodeOnly: true,
+  async execute(args, ctx, host) {
+    if (!host) {
+      return "Watching is unavailable: this host did not provide a session context.";
+    }
+    if (!ctx.watchers) {
+      return "Watching is unavailable: no watcher registry was wired by this host.";
+    }
+    const repo = (args.repo as string | undefined) ?? ctx.defaultStore;
+    const events = (args.events as WatcherEventType[] | undefined) ?? [...WATCHER_EVENT_TYPES];
+    const result = await ctx.watchers.create(host.sessionID, repo, args.pr as number, events);
+    if (!result.ok) return `Watcher not created: ${result.error}`;
+    const w = result.watcher;
+    return (
+      `[watching] ${w.repo}#${w.pr}\n` +
+      `id: ${w.id}\n` +
+      `events: ${w.events.join(", ")}\n` +
+      `head: ${w.state.headSha.slice(0, 7)} (${w.state.state}${w.state.merged ? ", merged" : ""})\n\n` +
+      `The baseline is captured now - only changes from this point notify. ` +
+      `You will receive a system notification in this session when a watched event happens. ` +
+      `State any handling policy for those notifications now (e.g. what to act on, what just to report), ` +
+      `since the notification itself carries only pointers.`
+    );
+  },
+};
+
+/**
+ * Lists the calling session's active watchers. opencode-only, session-scoped:
+ * a session can only ever see its own watches.
+ */
+const watchListDef: ToolDef = {
+  name: "watch_list",
+  description:
+    "List this session's active watchers with their ids, targets, watched " +
+    "event types, and remaining time. opencode-only.",
+  args: {},
+  opencodeOnly: true,
+  async execute(_args, ctx, host) {
+    if (!host) {
+      return "Watching is unavailable: this host did not provide a session context.";
+    }
+    if (!ctx.watchers) {
+      return "Watching is unavailable: no watcher registry was wired by this host.";
+    }
+    const watchers = ctx.watchers.listForSession(host.sessionID);
+    if (watchers.length === 0) return "No active watchers.";
+    const minutesLeft = (w: { expiresAt: number }) => Math.max(0, Math.round((w.expiresAt - Date.now()) / 60_000));
+    return watchers
+      .map((w) => `${w.id}: ${w.repo}#${w.pr} events=[${w.events.join(",")}] expires in ${minutesLeft(w)}m head=${w.state.headSha.slice(0, 7)}`)
+      .join("\n");
+  },
+};
+
+/**
+ * Cancels one watcher. opencode-only, session-scoped: cancelling by id only
+ * works for the session that created it.
+ */
+const watchCancelDef: ToolDef = {
+  name: "watch_cancel",
+  description: "Cancel one of this session's watchers by id. opencode-only.",
+  args: {
+    id: z.string().describe("The watcher id from watch_create or watch_list."),
+  },
+  opencodeOnly: true,
+  async execute(args, ctx, host) {
+    if (!host) {
+      return "Watching is unavailable: this host did not provide a session context.";
+    }
+    if (!ctx.watchers) {
+      return "Watching is unavailable: no watcher registry was wired by this host.";
+    }
+    const cancelled = ctx.watchers.cancel(host.sessionID, args.id as string);
+    if (!cancelled) return `No watcher "${args.id}" in this session.`;
+    return `[cancelled] ${args.id}`;
+  },
+};
+
+/**
  * All tool definitions, in the order they should be presented to the agent.
  * The opencode plugin wraps each in `tool()`; the MCP server exposes the
  * non-opencodeOnly ones via `tools/list` and dispatches `tools/call` to
@@ -972,4 +1082,7 @@ export const TOOL_DEFS: ToolDef[] = [
   getSessionInfoDef,
   sessionSearchDef,
   sessionGetDef,
+  watchCreateDef,
+  watchListDef,
+  watchCancelDef,
 ];

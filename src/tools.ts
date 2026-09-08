@@ -2,6 +2,7 @@ import { tool } from "@opencode-ai/plugin";
 import type { ThatchDB } from "./db";
 import type { EmbeddingModel } from "./embeddings";
 import { TOOL_DEFS, type CoreContext, type HostToolContext } from "./tool-defs";
+import type { WatcherRegistry } from "./watchers";
 
 /**
  * Builds the opencode tool map from shared tool definitions. Each definition
@@ -16,6 +17,7 @@ export function createTools(
   extensions?: {
     extractionPayloadProvider?: CoreContext["extractionPayloadProvider"];
     drainExtractionQueue?: CoreContext["drainExtractionQueue"];
+    watcherRegistry?: WatcherRegistry;
   },
 ): Record<string, ReturnType<typeof tool>> {
   const ctx: CoreContext = {
@@ -24,6 +26,7 @@ export function createTools(
     defaultStore,
     extractionPayloadProvider: extensions?.extractionPayloadProvider,
     drainExtractionQueue: extensions?.drainExtractionQueue,
+    watchers: extensions?.watcherRegistry,
   };
 
   const tools: Record<string, ReturnType<typeof tool>> = {};

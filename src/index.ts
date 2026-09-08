@@ -21,6 +21,8 @@ import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
 import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
+import { WatcherRegistry, ghApiRun, ghAvailable } from "./watchers";
+import { watcherNotificationNudge } from "./prompts";
 import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
@@ -82,6 +84,43 @@ export const server: Plugin = async ({ client, worktree }) => {
   // on-disk package.json version on each chat.message to detect post-upgrade
   // non-restart.
   const runningVersion = pkg.version;
+
+  // Latest observed opencode session status per session ("busy" | "idle" |
+  // "retry"). The event hook records these; the watcher registry's
+  // canDeliver gate reads them so proactive notification prompts only fire
+  // into idle sessions - never into a turn that is already running.
+  const sessionStatus = new Map<string, string>();
+
+  // In-memory watcher registry for proactive event notifications (GitHub PR
+  // watching today). Deliberately process-scoped: no SQLite, no cross-restart
+  // state. See src/watchers.ts for the rationale.
+  //
+  // Delivery prompts the session with a synthetic part - the same mechanism
+  // opencode uses for background task completions - so a watched event
+  // triggers a model turn even when the user is away. Events only carry
+  // pointer data; the model fetches details itself with gh.
+  const watchers = new WatcherRegistry({
+    deliver: async (sessionID, events) => {
+      const target = events[0]?.url.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/)?.[0]
+        ?.replace(/github\.com\//, "")
+        .replace(/\/pull\//, "#") ?? "watched PR";
+      await client.session.promptAsync({
+        path: { id: sessionID },
+        body: {
+          parts: [{ type: "text", text: watcherNotificationNudge(target, events), synthetic: true }],
+        },
+      });
+    },
+    canDeliver: (sessionID) =>
+      !compacting.has(sessionID) && sessionStatus.get(sessionID) === "idle",
+    ghRunner: ghApiRun,
+  });
+  // gh presence decides whether watch_create works; checked lazily by the
+  // tool, but log once at startup so misconfiguration is visible in debug logs.
+  void ghAvailable().then((ok) => {
+    if (!ok) console.error("[thatch] gh CLI not found - watch tools will report unavailable");
+  });
+  watchers.start();
 
   // Sessions currently being compacted. chat.message nudges are skipped while
   // a session is in this set - the agent can't call tools during summary
@@ -242,6 +281,7 @@ export const server: Plugin = async ({ client, worktree }) => {
         if (all.length === 0) return null;
         return extraction.buildPayload(all, repo);
       },
+      watcherRegistry: watchers,
     }),
 
     // 1. System prompt - always in context.
@@ -600,8 +640,13 @@ export const server: Plugin = async ({ client, worktree }) => {
         }
         return;
       }
-      if (event.type === "session.status" && event.properties.status?.type === "idle") {
+      if (event.type === "session.status") {
         const sessionID = event.properties.sessionID;
+        const statusType = event.properties.status?.type;
+        // Record the latest status so the watcher registry can gate
+        // proactive prompt delivery on idle sessions.
+        if (sessionID && statusType) sessionStatus.set(sessionID, statusType);
+        if (statusType !== "idle") return;
         const parentID = sessionID ? childToParent.get(sessionID) : undefined;
         if (parentID && sessionID) {
           // A child session went idle. Two cases:
@@ -685,6 +730,15 @@ export const server: Plugin = async ({ client, worktree }) => {
             extracting.delete(sessionID);
           }
         }
+        // The session just became idle, so watcher events queued while it
+        // was busy can be delivered now - the poll interval may otherwise
+        // hold them for up to a full cycle. Best-effort; failures stay
+        // pending and retry on the next poll.
+        try {
+          await watchers.deliverPending();
+        } catch (err) {
+          console.error(`[thatch] watcher delivery on idle failed: ${err}`);
+        }
         return;
       }
       if (event.type === "session.deleted") {
@@ -699,9 +753,13 @@ export const server: Plugin = async ({ client, worktree }) => {
         parentSnapshots.delete(id);
         childMetrics.delete(id);
         extractionChildren.delete(id);
-        // A deleted parent takes its accepted entries with it.
+        // A deleted parent takes its accepted entries with it, and its
+        // watchers die with it - the session that would receive their
+        // notifications no longer exists.
         extraction.completeAccepted(id);
         extracting.delete(id);
+        sessionStatus.delete(id);
+        watchers.cancelSession(id);
         return;
       }
 
@@ -739,6 +797,7 @@ export const server: Plugin = async ({ client, worktree }) => {
 
     dispose: async () => {
       stopVersionChecker();
+      watchers.dispose();
       db.close();
     },
   };

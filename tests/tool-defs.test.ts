@@ -7,6 +7,7 @@ import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
 import { TOOL_DEFS, type CoreContext } from "../src/tool-defs";
 import { systemPrompt, claudeInstructions } from "../src/prompts";
+import { WatcherRegistry, type GhRunner } from "../src/watchers";
 
 let dbPath: string;
 let dbDir: string;
@@ -29,8 +30,8 @@ afterEach(() => {
 });
 
 describe("TOOL_DEFS", () => {
-  test("exports all 21 tools", () => {
-    expect(TOOL_DEFS.length).toBe(21);
+  test("exports all 24 tools", () => {
+    expect(TOOL_DEFS.length).toBe(24);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -54,12 +55,22 @@ describe("TOOL_DEFS", () => {
       "get_session_info",
       "session_search",
       "session_get",
+      "watch_create",
+      "watch_list",
+      "watch_cancel",
     ]);
   });
 
-  test("only the session tools are opencode-only", () => {
+  test("only the session and watch tools are opencode-only", () => {
     const opencodeOnly = TOOL_DEFS.filter((t) => t.opencodeOnly).map((t) => t.name);
-    expect(opencodeOnly).toEqual(["get_session_info", "session_search", "session_get"]);
+    expect(opencodeOnly).toEqual([
+      "get_session_info",
+      "session_search",
+      "session_get",
+      "watch_create",
+      "watch_list",
+      "watch_cancel",
+    ]);
   });
 
   test("opencode prompt lists every tool including opencode-only ones", () => {
@@ -496,5 +507,107 @@ describe("get_session_info", () => {
   test("takes no arguments", () => {
     const schema = z.object(findTool().args);
     expect(() => schema.parse({})).not.toThrow();
+  });
+});
+
+describe("watch tools", () => {
+  const findTool = (name: string) => TOOL_DEFS.find((t) => t.name === name)!;
+  const host = { sessionID: "ses_watch_test", agent: "build" };
+
+  function registryWith(overrides: Record<string, unknown> = {}): WatcherRegistry {
+    return new WatcherRegistry({
+      deliver: async () => {},
+      canDeliver: () => true,
+      ghRunner: mockGhRoutes(),
+      pollIntervalMs: 60_000,
+      ...overrides,
+    });
+  }
+
+  function mockGhRoutes(): GhRunner {
+    return async (apiPath: string) => {
+      if (/\/issues\/\d+\/comments/.test(apiPath)) return [];
+      if (/\/pulls\/\d+\/comments/.test(apiPath)) return [];
+      if (/\/check-runs/.test(apiPath)) return { check_runs: [] };
+      if (/\/pulls\/\d+$/.test(apiPath)) {
+        return { head: { sha: "cafe1234" }, state: "open", merged: false, title: "T", body: "b" };
+      }
+      throw new Error(`no route: ${apiPath}`);
+    };
+  }
+
+  test("watch_create registers a watcher and reports the baseline", async () => {
+    const registry = registryWith();
+    const watchCtx = { ...ctx, watchers: registry };
+    const result = await findTool("watch_create").execute({ pr: 7 }, watchCtx, host);
+    expect(result).toContain("[watching] test-owner/test-repo#7");
+    expect(result).toContain("id: watch_");
+    expect(result).toContain("cafe123");
+    expect(registry.listForSession(host.sessionID)).toHaveLength(1);
+  });
+
+  test("watch_create defaults events to all types", async () => {
+    const registry = registryWith();
+    const watchCtx = { ...ctx, watchers: registry };
+    const result = await findTool("watch_create").execute({ pr: 7 }, watchCtx, host);
+    expect(result).toContain("pr_ci");
+    expect(result).toContain("pr_comment");
+  });
+
+  test("watch_create reports gh/PR failures clearly", async () => {
+    const registry = new WatcherRegistry({
+      deliver: async () => {},
+      canDeliver: () => true,
+      ghRunner: async () => {
+        throw new Error("no auth");
+      },
+      pollIntervalMs: 60_000,
+    });
+    const watchCtx = { ...ctx, watchers: registry };
+    const result = await findTool("watch_create").execute({ pr: 7, repo: "acme/widgets" }, watchCtx, host);
+    expect(result).toContain("Watcher not created");
+    expect(result).toContain("no auth");
+  });
+
+  test("watch_create honors a repo override and event filter", async () => {
+    const registry = registryWith();
+    const watchCtx = { ...ctx, watchers: registry };
+    const result = await findTool("watch_create").execute(
+      { pr: 9, repo: "acme/other", events: ["pr_commit"] },
+      watchCtx,
+      host,
+    );
+    expect(result).toContain("[watching] acme/other#9");
+    expect(result).toContain("events: pr_commit");
+  });
+
+  test("watch_list shows session watchers; other sessions are invisible", async () => {
+    const registry = registryWith();
+    const watchCtx = { ...ctx, watchers: registry };
+    await findTool("watch_create").execute({ pr: 7 }, watchCtx, { sessionID: "ses_a", agent: "build" });
+    await findTool("watch_create").execute({ pr: 8 }, watchCtx, { sessionID: "ses_b", agent: "build" });
+
+    const forA = await findTool("watch_list").execute({}, watchCtx, { sessionID: "ses_a", agent: "build" });
+    expect(forA).toContain("test-owner/test-repo#7");
+    expect(forA).not.toContain("#8");
+  });
+
+  test("watch_cancel removes only the session's own watcher", async () => {
+    const registry = registryWith();
+    const watchCtx = { ...ctx, watchers: registry };
+    const created = await findTool("watch_create").execute({ pr: 7 }, watchCtx, host);
+    const id = created.match(/id: (watch_\w+)/)![1];
+
+    expect(await findTool("watch_cancel").execute({ id }, watchCtx, { sessionID: "ses_other", agent: "build" }))
+      .toContain(`No watcher "${id}"`);
+    expect(await findTool("watch_cancel").execute({ id }, watchCtx, host)).toContain("[cancelled]");
+    expect(await findTool("watch_cancel").execute({ id }, watchCtx, host)).toContain(`No watcher "${id}"`);
+  });
+
+  test("watch tools explain unavailability without a host context (MCP path)", async () => {
+    for (const name of ["watch_create", "watch_list", "watch_cancel"]) {
+      const result = await findTool(name).execute(name === "watch_create" ? { pr: 7 } : name === "watch_cancel" ? { id: "x" } : {}, ctx);
+      expect(result).toContain("unavailable");
+    }
   });
 });

@@ -17,14 +17,15 @@ Thatch provides persistent memory across opencode sessions. Use it to persist
 knowledge so future sessions can build on what you've already learned.
 
 Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
-       thatch_memory_show, thatch_memory_forget, thatch_store_list,
-       thatch_find_duplicates, thatch_dedup_mark_checked,
-       thatch_extraction_done, thatch_get_extraction_payload,
-       thatch_prediction_query, thatch_prediction_update, thatch_prediction_list,
-       thatch_prediction_delete,
-       thatch_behavior_codify, thatch_behavior_feedback, thatch_behavior_list,
-       thatch_behavior_delete, thatch_get_session_info,
-       thatch_session_search, thatch_session_get
+        thatch_memory_show, thatch_memory_forget, thatch_store_list,
+        thatch_find_duplicates, thatch_dedup_mark_checked,
+        thatch_extraction_done, thatch_get_extraction_payload,
+        thatch_prediction_query, thatch_prediction_update, thatch_prediction_list,
+        thatch_prediction_delete,
+        thatch_behavior_codify, thatch_behavior_feedback, thatch_behavior_list,
+        thatch_behavior_delete, thatch_get_session_info,
+        thatch_session_search, thatch_session_get,
+        thatch_watch_create, thatch_watch_list, thatch_watch_cancel
 
 ## Stores
 
@@ -107,6 +108,20 @@ If a background task was cancelled after timing out, re-dispatch it once with
 the same prompt. If the re-dispatch also fails or times out, note the gap and
 move on. Do not retry more than once - repeated failures indicate an
 intractable prompt, not a transient hang.
+
+## Watchers
+
+Use thatch_watch_create to watch a GitHub PR for events (comments, review
+comments and replies, commits, status changes, description edits, CI check
+completions). thatch polls the PR in the background and injects a
+notification into this session when a watched event happens. The
+notification carries pointer data only (author, URL); fetch details with
+the gh CLI when you decide to act. When the user asks you to watch
+something, state your handling policy for notifications out loud first
+("I'll report human comments and handle bugbot replies myself") so the
+notification turn knows what to do. Treat watcher notifications like
+background task completions: they are system events, not user input, and
+not approval to advance other pending work.
 
 ## User Decision Model
 
@@ -271,9 +286,10 @@ Tools are prefixed in ${host}: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__prediction_list\`, \`mcp__thatch__prediction_delete\`,
 \`mcp__thatch__behavior_codify\`, \`mcp__thatch__behavior_feedback\`,
 \`mcp__thatch__behavior_list\`, \`mcp__thatch__behavior_delete\`. Bare names used below for readability.
-get_session_info, session_search, and session_get are intentionally absent:
-they are opencode-only (MCP hosts have no session concept or session
-database), so do not expect them here.
+get_session_info, session_search, session_get, watch_create, watch_list,
+and watch_cancel are intentionally absent: they are opencode-only (MCP
+hosts have no session concept, session database, or proactive-prompt
+channel), so do not expect them here.
 
 ## Stores
 
@@ -671,4 +687,20 @@ export function behaviorNudge(items: BehaviorNudgeItem[]): string {
     return `- [${b.confidence.toFixed(2)} conf, ${b.evidence_count} tests] When ${b.matcher_description}: ${verb} ${b.statement}`;
   });
   return `[thatch] Situational behaviors\n${lines.join("\n")}`;
+}
+
+/**
+ * Watcher notification for the poller's promptAsync delivery. Injected as a
+ * synthetic part that triggers a model turn. Events carry pointer data only
+ * (author, URL) - never external content - so the model fetches details on
+ * demand with the gh CLI. The wrapper text borrows the background-task
+ * completion framing: a system event, not user input, not approval to
+ * advance other pending work.
+ */
+export function watcherNotificationNudge(target: string, events: { type: string; summary: string; url: string }[]): string {
+  const lines = events.map((e) => `- ${e.type}: ${e.summary} ${e.url}`);
+  return `[thatch] Watcher notification for ${target}
+${lines.join("\n")}
+
+This is a system notification, not user input. Decide whether to act now or keep waiting - the user's instructions from when the watch was created govern how to handle it. Fetch details with the gh CLI if you need them. Do not treat this notification as approval to advance other pending work. If you act, tell the user what you did and why; if not, stop and wait.`;
 }

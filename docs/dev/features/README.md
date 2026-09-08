@@ -26,6 +26,7 @@ system, see [../skills.md](../skills.md). For non-obvious invariants, see
 | [sideband.md](sideband.md) | Sideband IPC (Unix socket for MCP host hook processes) |
 | [compaction-recovery.md](compaction-recovery.md) | Compaction recovery (opencode compaction hooks) |
 | [session-lifecycle.md](session-lifecycle.md) | Session lifecycle management (opencode events, child tracking) |
+| [watchers.md](watchers.md) | Event-driven notifications (in-memory registry, background poller, PR watching) |
 | [setup.md](setup.md) | Setup system (markers, checkSetup, auto-refresh, binary resolution) |
 | [cli.md](cli.md) | CLI (subcommands, environment variables) |
 | [database.md](database.md) | Database (schema, migrations, WAL, 11 tables) |

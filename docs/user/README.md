@@ -11,6 +11,7 @@ This README is the overview. Each feature has its own guide:
 
 - [memory.md](memory.md): persistent memory store
 - [extraction.md](extraction.md): automatic fact extraction from tool calls
+- [watchers.md](watchers.md): event-driven notifications (PR watching)
 - [prediction-engine.md](prediction-engine.md): user decision model
 - [behavior-engine.md](behavior-engine.md): agent self-discipline rules
 - [default-behaviors.md](default-behaviors.md): what ships automatically
@@ -153,6 +154,17 @@ Stores are created automatically. No setup required.
 The same functionality is available on the command line as `thatch session
 list`, `thatch session get`, `thatch session transcript`, and `thatch session
 search` - JSONL output designed for piping to `jq` or `grep`.
+
+### Watcher tools (opencode only)
+
+| Tool | What it does |
+|------|-------------|
+| `thatch_watch_create` | Watch a GitHub PR for events (comments, review comments and replies, commits, status changes, description edits, CI completions). The plugin polls in the background and prompts the session when a watched event happens. |
+| `thatch_watch_list` | List this session's active watchers. |
+| `thatch_watch_cancel` | Cancel one of this session's watchers by id. |
+
+See [watchers.md](watchers.md) for the full behavior, lifetime, and
+requirements.
 
 ## Automatic behaviors
 
