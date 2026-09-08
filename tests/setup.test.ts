@@ -834,24 +834,22 @@ describe("skill artifact registry parity", () => {
 });
 
 describe("stale skill cleanup on install", () => {
-  test("removes old non-prefixed skill dirs from before the rename", () => {
+  test("leaves old non-prefixed skill dirs alone - the rename window closed at v0.1.35", () => {
     const dir = mkdtempSync(join(tmpdir(), "thatch-cleanup-"));
-    // Simulate a pre-rename install: create dirs with the old names.
+    // The v0.1.27 rename (pr-description -> thatch-pr-description and
+    // siblings) cleaned these up only through a version window that closed
+    // with v0.1.35. Non-prefixed names now belong to third parties, so
+    // cleanup must never remove them.
     for (const name of ["pr-description", "ticket-description", "split-overlarge-pr"]) {
       mkdirSync(join(dir, name), { recursive: true });
-      writeFileSync(join(dir, name, "SKILL.md"), "stale content");
+      writeFileSync(join(dir, name, "SKILL.md"), "someone else's skill now");
     }
-    // Also create a current skill to prove install still works.
-    mkdirSync(join(dir, "thatch-fact-extractor"), { recursive: true });
-    writeFileSync(join(dir, "thatch-fact-extractor", "SKILL.md"), "old content");
 
     installSkills(dir, SHARED_SKILLS);
 
-    expect(existsSync(join(dir, "pr-description"))).toBe(false);
-    expect(existsSync(join(dir, "ticket-description"))).toBe(false);
-    expect(existsSync(join(dir, "split-overlarge-pr"))).toBe(false);
-    // Current skills are installed and not deleted.
-    expect(existsSync(join(dir, "thatch-fact-extractor", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(dir, "pr-description"))).toBe(true);
+    expect(existsSync(join(dir, "ticket-description"))).toBe(true);
+    expect(existsSync(join(dir, "split-overlarge-pr"))).toBe(true);
   });
 
   test("removes stale thatch-* dirs not in the current skill set", () => {
@@ -893,12 +891,12 @@ describe("stale skill cleanup on install", () => {
     // wants. The cleanup must remove the symlink, not the target.
     const targetDir = mkdtempSync(join(tmpdir(), "thatch-symlink-target-"));
     writeFileSync(join(targetDir, "SKILL.md"), "shared content");
-    symlinkSync(targetDir, join(dir, "pr-description"));
+    symlinkSync(targetDir, join(dir, "thatch-old-removed-skill"));
 
     installSkills(dir, SHARED_SKILLS);
 
     // The symlink is gone.
-    expect(existsSync(join(dir, "pr-description"))).toBe(false);
+    expect(existsSync(join(dir, "thatch-old-removed-skill"))).toBe(false);
     // The target directory the symlink pointed to is still intact.
     expect(existsSync(join(targetDir, "SKILL.md"))).toBe(true);
   });
