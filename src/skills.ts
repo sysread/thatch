@@ -1,6 +1,5 @@
 import { mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import pkg from "../package.json";
 
 export interface SkillFile {
   name: string;
@@ -73,46 +72,32 @@ export const OPENCODE_ONLY_SKILLS: SkillDef[] = loadOpencodeOnlySkills();
 // Stale skill cleanup - runs before install on every skillsDir
 // ---------------------------------------------------------------------------
 
-// Skills renamed from non-prefixed to thatch-prefixed in v0.1.27. The old
-// names are cleaned up during install for a limited version window because
-// non-prefixed names could be adopted by third parties after we abandon them.
-// After RENAME_MIGRATION_MAX_VERSION, the cleanup stops and leftover stale
-// files are the user's responsibility.
-const RENAMED_SKILLS = new Set([
-  "pr-description",
-  "ticket-description",
-  "split-overlarge-pr",
-]);
+// ---------------------------------------------------------------------------
+// Stale skill cleanup - runs before install on every skillsDir
+// ---------------------------------------------------------------------------
 
-// Last version that ships the non-prefixed-to-prefixed migration cleanup.
-// Users who upgrade to this version or earlier get automatic cleanup of the
-// old skill directories. Users who skip past this version must manually
-// delete the stale directories.
-const RENAME_MIGRATION_MAX_VERSION = "0.1.35";
-
-function compareVersions(a: string, b: string): number {
-  const [aMaj, aMin, aPatch] = a.split(".").map(Number);
-  const [bMaj, bMin, bPatch] = b.split(".").map(Number);
-  if (aMaj !== bMaj) return aMaj - bMaj;
-  if (aMin !== bMin) return aMin - bMin;
-  return aPatch - bPatch;
-}
+// Skills renamed from non-prefixed to thatch-prefixed in v0.1.27
+// (pr-description, ticket-description, split-overlarge-pr) were cleaned up
+// during install through a version-gated window that closed with v0.1.35.
+// The gate is gone because it can never reopen: package versions only grow,
+// so this code only ever runs at a version past the window. The standing
+// contract it protected remains: non-prefixed skill names belong to third
+// parties and are NEVER removed - cleanup only touches thatch-* dirs, where
+// the prefix is our namespace. Users upgrading from before v0.1.27 delete
+// the old directories manually.
 
 /**
  * Remove stale skill directories before installing the current set.
  *
- * Two cleanup rules:
+ * One rule: delete any `thatch-*` skill directory that is not in the current
+ * install set. The `thatch-` prefix is our namespace - no third party should
+ * use it, so unconditional removal is safe. This catches skills we've
+ * renamed or removed in any release.
  *
- * 1. Always: delete any `thatch-*` skill directory that is not in the current
- *    install set. The `thatch-` prefix is our namespace - no third party should
- *    use it, so unconditional removal is safe. This catches skills we've
- *    renamed or removed in any release.
- *
- * 2. Version-gated: delete directories matching old non-prefixed skill names
- *    (pr-description, ticket-description, split-overlarge-pr) through
- *    RENAME_MIGRATION_MAX_VERSION. These names lack the thatch- prefix and
- *    could be adopted by third parties after we abandon them, so the cleanup
- *    is time-boxed. Users who upgrade past the window must manually clean up.
+ * Non-prefixed directories are never touched. The v0.1.27 rename migration
+ * (pr-description -> thatch-pr-description and siblings) removed old
+ * non-prefixed dirs through a version window that closed with v0.1.35; see
+ * the block comment above.
  */
 function cleanupStaleSkills(skillsDir: string, currentNames: string[]): void {
   const currentSet = new Set(currentNames);
@@ -122,9 +107,6 @@ function cleanupStaleSkills(skillsDir: string, currentNames: string[]): void {
   } catch {
     return; // dir doesn't exist or isn't readable - nothing to clean
   }
-
-  const withinMigrationWindow =
-    compareVersions(pkg.version, RENAME_MIGRATION_MAX_VERSION) <= 0;
 
   for (const entry of entries) {
     // isDirectory() returns false for symlinks (even symlinked dirs), so
@@ -149,14 +131,8 @@ function cleanupStaleSkills(skillsDir: string, currentNames: string[]): void {
       }
     };
 
-    // Rule 1: stale thatch-* dirs (our namespace, always safe to remove).
+    // Stale thatch-* dirs: our namespace, always safe to remove.
     if (name.startsWith("thatch-") && !currentSet.has(name)) {
-      remove();
-      continue;
-    }
-
-    // Rule 2: renamed non-prefixed dirs (version-gated, third-party risk).
-    if (RENAMED_SKILLS.has(name) && withinMigrationWindow) {
       remove();
     }
   }

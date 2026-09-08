@@ -119,10 +119,12 @@ and `--cursor` pass only the shared set.
   versions without users manually deleting files.
 - **Stale cleanup**: before installing, `installSkills` removes stale skill
   directories. Any `thatch-*` directory not in the current install set is
-  deleted (the `thatch-` prefix is our namespace). Three skills renamed from
-  non-prefixed to `thatch-`-prefixed in v0.1.27 (pr-description, ticket-description,
-  split-overlarge-pr) are also cleaned up through v0.1.35; after that, those
-  names are fair game for third parties and the cleanup stops.
+  deleted (the `thatch-` prefix is our namespace). Non-prefixed directories
+  are never touched: the v0.1.27 rename migration (pr-description,
+  ticket-description, split-overlarge-pr) cleaned up old installs only
+  through a version window that closed with v0.1.35, after which those names
+  are fair game for third parties and the cleanup no longer runs. Users
+  upgrading from before v0.1.27 delete the old directories manually.
 - **Idempotent**: re-running init or setup overwrites drifted content but leaves
   unrelated (non-`thatch-*`) skill files alone.
 
