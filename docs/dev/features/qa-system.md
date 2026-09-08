@@ -1,6 +1,6 @@
 # QA System
 
-Thatch ships 93 QA use cases that verify end-to-end behavior. Each use case is
+Thatch ships 95 QA use cases that verify end-to-end behavior. Each use case is
 a `bun:test` file that runs in an isolated environment — a temp-directory copy
 of the repo, not the working tree itself. Use cases are split into
 **automatable** (no LLM, fast) and **live** (spawns opencode, costs model
@@ -8,7 +8,7 @@ tokens).
 
 ## What it does
 
-- 93 use cases: 73 automatable + 20 live
+- 95 use cases: 75 automatable + 20 live
 - Automatable use cases run without an LLM — they test CLI behavior, hooks, DB
   operations, and tool execution directly via bun assertions
 - Live use cases spawn real opencode sessions — they test the full
@@ -182,7 +182,7 @@ includes all of `tests/`), just not executed during `check`. See
 | `tests/qa/runner.ts` | `registerUseCase`, `UseCase` type, `ensureMaster`, `createFixture`, `runViaOpencode`, execution logic |
 | `tests/qa/auto/index.test.ts` | Automatable use case barrel — imports all auto use case modules |
 | `tests/qa/live/index.test.ts` | Live use case barrel — imports all live use case modules |
-| `tests/qa/auto/uc-NNN-*.ts` | 73 automatable use case files |
+| `tests/qa/auto/uc-NNN-*.ts` | 75 automatable use case files |
 | `tests/qa/live/uc-NNN-*.ts` | 20 live use case files |
 
 No separate QA docs directory exists. QA use cases live in `tests/qa/` as executable tests, not docs.
