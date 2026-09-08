@@ -89,7 +89,7 @@ Thatch gives your agent three layers of persistent context:
   `session_get`, opencode only) and as CLI subcommands (`thatch session
   list/get/transcript/search`, JSONL output designed for piping to `jq`).
 - **Watchers** -- event-driven notifications from external sources (opencode
-  only). The agent registers a watch on a GitHub PR; thatch polls it in the
+  only). The agent registers a watch on a GitHub PR or branch (main); thatch polls it in the
   background and prompts the session when comments, commits, CI results, or
   status changes arrive. Notifications carry pointer data only.
 

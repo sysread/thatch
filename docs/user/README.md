@@ -11,7 +11,7 @@ This README is the overview. Each feature has its own guide:
 
 - [memory.md](memory.md): persistent memory store
 - [extraction.md](extraction.md): automatic fact extraction from tool calls
-- [watchers.md](watchers.md): event-driven notifications (PR watching)
+- [watchers.md](watchers.md): event-driven notifications (PR and branch watching)
 - [prediction-engine.md](prediction-engine.md): user decision model
 - [behavior-engine.md](behavior-engine.md): agent self-discipline rules
 - [default-behaviors.md](default-behaviors.md): what ships automatically
