@@ -88,6 +88,10 @@ Thatch gives your agent three layers of persistent context:
   complete tool inputs and outputs. Available as tools (`session_search`,
   `session_get`, opencode only) and as CLI subcommands (`thatch session
   list/get/transcript/search`, JSONL output designed for piping to `jq`).
+- **Watchers** -- event-driven notifications from external sources (opencode
+  only). The agent registers a watch on a GitHub PR; thatch polls it in the
+  background and prompts the session when comments, commits, CI results, or
+  status changes arrive. Notifications carry pointer data only.
 
 Plus **26 skills** for memory workflows, structured multi-specialist code
 review, review response, change and feature walkthroughs, memory verification,
@@ -102,6 +106,12 @@ host.
 
 Everything is local. The embedding model downloads once from Hugging Face Hub
 and is cached. No data leaves your machine.
+
+One exception: watchers (opencode only) call the GitHub API through the `gh`
+CLI to poll PRs you explicitly asked to watch, using your existing gh
+authentication. Thatch never sees or stores the token, and notifications
+carry pointer data only - GitHub comment text never enters your context
+unless the agent fetches it.
 
 ## Development
 

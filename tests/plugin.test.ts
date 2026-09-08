@@ -115,6 +115,9 @@ describe("plugin entry", () => {
       "thatch_session_get",
       "thatch_session_search",
       "thatch_store_list",
+      "thatch_watch_cancel",
+      "thatch_watch_create",
+      "thatch_watch_list",
     ]);
   });
 
