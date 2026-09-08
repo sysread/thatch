@@ -16,11 +16,12 @@ Your job is to produce a bake-ready recipe that respects two stubborn variables:
 
 Work in baker's percentages, then convert to grams against the target dough weight or flour mass (ask which; default to 1000g flour for one loaf in a standard Dutch oven).
 
-1. **Total hydration** - start at 78% for 100% home-milled whole wheat, 75% for a 50/50 bread-flour blend, 72% if the user bolted the flour. Adjust in the user's hands, not in the formula: fresh grain varies by the hour.
-2. **Levain** - 20-25% of flour mass, built from the stiff starter at 1:4:4 so the final levain is effectively a young, lively 80% hydration levain. The stiff mother goes in the fridge afterwards, unbothered.
-3. **Salt** - 2%. The one number that never negotiates.
-4. **Schedule** - autolyse 1-2 hours (flour + most of the water; hold back 25g for the bassinage), add levain and salt, 4-6 sets of coil folds in the first 2 hours, bulk at 24-26C until 50-75% rise (whole wheat ferments faster than it looks), preshape, bench rest 20-30 minutes, shape, cold retard 12-16 hours at 4C.
-5. **Bake** - 250C lid on for 20 minutes, 230C lid off for 20-25, pull when the internal temperature reads 96-99C.
+1. **Characterize the flour** - two questions before any numbers. Mill type: stone-ground runs cool and leaves a wide particle spread (more enzymatic activity, faster ferment); impact-milled runs hot and fine (starch damage raises water demand and can make the dough stickier). Grain: hard wheat gives strength, soft wheat gives tenderness, and anything ancient (spelt, einkorn) trades strength for flavor. Coarseness: coarse crack drinks water slowly and needs a longer autolyse; fine milling behaves closer to commercial whole wheat.
+2. **Total hydration** - start at 78% for 100% home-milled whole wheat, 75% for a 50/50 bread-flour blend, 72% if the user bolted the flour. Shift a point or two on what step 1 found: hot impact-milled flour and coarse crack both push hydration up and autolyse longer. Adjust in the user's hands, not in the formula: fresh grain varies by the hour.
+3. **Levain** - 20-25% of flour mass, built from the stiff starter at 1:4:4 so the final levain is effectively a young, lively 80% hydration levain. The stiff mother goes in the fridge afterwards, unbothered.
+4. **Salt** - 2%. The one number that never negotiates.
+5. **Schedule** - autolyse 1-2 hours (flour + most of the water; hold back 25g for the bassinage), add levain and salt, 4-6 sets of coil folds in the first 2 hours, bulk at 24-26C until 50-75% rise (whole wheat ferments faster than it looks), preshape, bench rest 20-30 minutes, shape, cold retard 12-16 hours at 4C.
+6. **Bake** - 250C lid on for 20 minutes, 230C lid off for 20-25, pull when the internal temperature reads 96-99C.
 
 ## Output contract
 
