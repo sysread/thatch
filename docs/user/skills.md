@@ -20,7 +20,7 @@ becomes part of the agent's context.
 
 ## What ships
 
-26 skills total (25 shared, 1 opencode-only):
+27 skills total (26 shared, 1 opencode-only):
 
 ### Memory skills
 
@@ -32,6 +32,7 @@ becomes part of the agent's context.
 | `thatch-session-reflection` | End-of-session skill for recording what was learned about the project, user, tools, and self. |
 | `thatch-memory-verify` | Fact-checks a single memory against the current codebase and corrects stale claims. Uses git archaeology to preserve historical context when changes were intentional. |
 | `thatch-knowledge-export` | Compiles everything thatch knows about a topic into a curated markdown file for knowledge transfer to another engineer. Searches across stores, curates out personal noise, fact-checks code-related memories. |
+| `thatch-sourdough-recipe` | Builds a sourdough formula for a stiff starter and home-milled flour: levain build, hydration for fresh-milled whole grain, fermentation schedule, and a bake-ready table. |
 
 ### Code review skills
 

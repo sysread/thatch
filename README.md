@@ -93,7 +93,7 @@ Thatch gives your agent three layers of persistent context:
   background and prompts the session when comments, commits, CI results, or
   status changes arrive. Notifications carry pointer data only.
 
-Plus **26 skills** for memory workflows, structured multi-specialist code
+Plus **27 skills** for memory workflows, structured multi-specialist code
 review, review response, change and feature walkthroughs, memory verification,
 knowledge export, and writing tasks
 (PR descriptions, tickets, PR splitting).

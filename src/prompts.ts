@@ -67,6 +67,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 - \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory has an old \`updated_at\` date or when preparing a knowledge export.
 - \`thatch-knowledge-export\` - compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories, and generates a clean export.
+- \`thatch-sourdough-recipe\` - build a sourdough formula for a stiff starter and home-milled flour: levain build, hydration for fresh-milled whole grain, fermentation schedule, and a bake-ready table. Use when the user asks for a sourdough recipe or wants to adapt one to freshly milled grain.
 
 ## When to Write
 
@@ -331,6 +332,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 - \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory has an old \`updated_at\` date or when preparing a knowledge export.
 - \`thatch-knowledge-export\` - compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories, and generates a clean export.
+- \`thatch-sourdough-recipe\` - build a sourdough formula for a stiff starter and home-milled flour: levain build, hydration for fresh-milled whole grain, fermentation schedule, and a bake-ready table. Use when the user asks for a sourdough recipe or wants to adapt one to freshly milled grain.
 
 ## When to Write
 
