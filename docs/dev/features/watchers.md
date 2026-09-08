@@ -3,15 +3,18 @@
 Watchers are the general mechanism for event-driven notifications from
 external sources: the model registers a watch on something outside the
 session, thatch polls it in the background, and the plugin prompts the
-session when a watched event happens. The first source is GitHub pull
-requests. The registry, poller, and delivery are source-agnostic - a
-future source only adds a fetch-and-diff function and event types.
+session when a watched event happens. Two sources ship: GitHub pull
+requests (source `pr`) and GitHub branches (source `branch`, for
+watching CI and workflow runs on main). The registry, poller, and
+delivery are source-agnostic - a new source adds a fetch-and-diff
+function pair and event types.
 
 User-facing behavior is documented in [docs/user/watchers.md](../../user/watchers.md).
 
 ## What it does
 
-- `thatch_watch_create` / `thatch_watch_list` / `thatch_watch_cancel` tools (opencode-only)
+- `thatch_watch_create` (PRs) / `thatch_watch_branch_create` (branches) /
+  `thatch_watch_list` / `thatch_watch_cancel` tools (all opencode-only)
 - A background poller in the plugin process diffs each watcher's target
   against its last-seen state
 - Delivery prompts the session with a synthetic part - the same
@@ -148,10 +151,11 @@ all eight.
 
 ## Adding a new source type
 
-The registry is source-agnostic in shape but currently hardcoded to
-the github-pr fetch/diff pair. A new source type means: new event
-types in `WATCHER_EVENT_TYPES`, a fetch/diff function pair, a
-`source_type` discriminator on `Watcher` (add it when the second
-source arrives - do not parameterize early), and the tool surface for
-registering it. Keep the pointer-only notification rule: external
-content enters the context on explicit fetch, never via notification.
+The registry is a discriminated union over sources: `PrWatcher` and
+`BranchWatcher` implement the same lifecycle (id, session, repo,
+events, expiry, snapshot), and `poll()` dispatches to the source's
+fetch/diff pair. Adding a third source means: new event types, a
+`fetchXState`/`diffXState` pair, a new arm of the `Watcher` union, a
+`#pollOne` branch, and the tool surface for registering it. Keep the
+pointer-only notification rule: external content enters the context on
+explicit fetch, never via notification.

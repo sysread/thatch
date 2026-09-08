@@ -101,13 +101,13 @@ export const server: Plugin = async ({ client, worktree }) => {
   // pointer data; the model fetches details itself with gh.
   const watchers = new WatcherRegistry({
     deliver: async (sessionID, events) => {
-      const target = events[0]?.url.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/)?.[0]
-        ?.replace(/github\.com\//, "")
-        .replace(/\/pull\//, "#") ?? "watched PR";
+      // Events carry their watch's target label from the registry, so the
+      // notification header is correct for every source (PRs, branches,
+      // CI events whose URLs would not parse).
       await client.session.promptAsync({
         path: { id: sessionID },
         body: {
-          parts: [{ type: "text", text: watcherNotificationNudge(target, events), synthetic: true }],
+          parts: [{ type: "text", text: watcherNotificationNudge(events[0]?.target ?? "watched target", events), synthetic: true }],
         },
       });
     },

@@ -1,20 +1,21 @@
 # Watchers
 
-Watchers monitor external sources - today, GitHub pull requests - and
-inject a notification into the conversation when something happens. You
-ask the agent to watch a PR; thatch polls it in the background; the
-agent gets woken up when a watched event occurs. No one has to keep
-asking "any updates yet?"
+Watchers monitor external sources - today, GitHub pull requests and
+branches - and inject a notification into the conversation when
+something happens. You ask the agent to watch a PR or a branch; thatch
+polls it in the background; the agent gets woken up when a watched
+event occurs. No one has to keep asking "any updates yet?"
 
 ## What it does
 
-The agent calls `thatch_watch_create` to register a watcher on a PR.
-thatch captures the PR's current state as a baseline, then polls the
-GitHub API through the `gh` CLI once a minute. When the PR changes in a
-way the watcher cares about, the plugin prompts the agent with a
-notification.
+The agent calls `thatch_watch_create` to register a watcher on a PR,
+or `thatch_watch_branch_create` to register a watcher on a branch
+(typically main). thatch captures the target's current state as a
+baseline, then polls the GitHub API through the `gh` CLI once a
+minute. When the target changes in a way the watcher cares about, the
+plugin prompts the agent with a notification.
 
-Watched events:
+PR watched events:
 
 - `pr_comment` - new top-level comments on the PR
 - `pr_review_comment` - new inline comments on the diff
@@ -24,6 +25,14 @@ Watched events:
 - `pr_status` - the PR opened, closed, or merged
 - `pr_description` - title or description edited
 - `pr_ci` - a CI check run on the head SHA completed
+
+Branch watched events:
+
+- `branch_commit` - new commits land on the branch (e.g. a PR merged)
+- `branch_ci` - a check run on the branch head completed
+- `branch_workflow` - a GitHub Actions workflow run starts or finishes
+  on the branch, optionally filtered by workflow name (substring,
+  case-insensitive)
 
 Notifications are delivered as synthetic parts: the model sees them,
 the transcript does not. A notification triggers a model turn, so the
@@ -52,6 +61,8 @@ do about it.
 
 Other tools:
 
+- `thatch_watch_branch_create` - watch a branch (typically main) for
+  commits, CI check runs, and workflow runs
 - `thatch_watch_list` - shows the session's active watchers
 - `thatch_watch_cancel` - cancels one by id
 

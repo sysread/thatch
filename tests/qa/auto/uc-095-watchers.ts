@@ -51,8 +51,8 @@ const useCase: UseCase = {
     }
 
     // The event vocabulary is stable and documented.
-    if (WATCHER_EVENT_TYPES.length !== 8) {
-      console.log(`  FAIL: expected 8 event types, got ${WATCHER_EVENT_TYPES.length}`);
+    if (WATCHER_EVENT_TYPES.length !== 11) {
+      console.log(`  FAIL: expected 11 event types, got ${WATCHER_EVENT_TYPES.length}`);
       return "FAIL";
     }
 
@@ -100,7 +100,7 @@ const useCase: UseCase = {
     });
 
     // Step 2: baseline capture.
-    const created = await registry.create("ses_uc95", "acme/widgets", 7, ["pr_comment", "pr_commit"]);
+    const created = await registry.createPr("ses_uc95", "acme/widgets", 7, ["pr_comment", "pr_commit"]);
     if (!created.ok) {
       console.log(`  FAIL: create failed: ${created.error}`);
       return "FAIL";
@@ -142,7 +142,7 @@ const useCase: UseCase = {
     }
 
     // Sanity: the pure diff is the same machinery the poller uses.
-    const diffEvents = diffPrState(created.watcher.state, { ...created.watcher.state, headSha: "cccc3333" }, "url");
+    const diffEvents = diffPrState(created.watcher.state, { ...created.watcher.state, headSha: "cccc3333" }, "acme/widgets#7", "https://github.com/acme/widgets/pull/7");
     if (diffEvents.length !== 1 || diffEvents[0].type !== "pr_commit") {
       console.log("  FAIL: diffPrState did not detect the head change");
       return "FAIL";

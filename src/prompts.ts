@@ -25,7 +25,8 @@ Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
         thatch_behavior_codify, thatch_behavior_feedback, thatch_behavior_list,
         thatch_behavior_delete, thatch_get_session_info,
         thatch_session_search, thatch_session_get,
-        thatch_watch_create, thatch_watch_list, thatch_watch_cancel
+        thatch_watch_create, thatch_watch_branch_create,
+        thatch_watch_list, thatch_watch_cancel
 
 ## Stores
 
@@ -112,9 +113,12 @@ intractable prompt, not a transient hang.
 
 Use thatch_watch_create to watch a GitHub PR for events (comments, review
 comments and replies, review thread resolutions, commits, status changes,
-description edits, CI check completions). thatch polls the PR in the
+description edits, CI check completions), or thatch_watch_branch_create to
+watch a branch (typically main) for commit landings, check-run completions,
+and workflow runs on the branch. thatch polls in the
 background and injects a notification into this session when a watched event
-happens. The notification carries pointer data only (author, URL); fetch
+happens. The
+notification carries pointer data only (author, URL); fetch
 details with the gh CLI when you decide to act. When the user asks you to
 watch something, state your handling policy for notifications out loud first
 ("I'll report human comments and handle bugbot replies myself") so the
@@ -285,7 +289,8 @@ Tools are prefixed in ${host}: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__prediction_list\`, \`mcp__thatch__prediction_delete\`,
 \`mcp__thatch__behavior_codify\`, \`mcp__thatch__behavior_feedback\`,
 \`mcp__thatch__behavior_list\`, \`mcp__thatch__behavior_delete\`. Bare names used below for readability.
-get_session_info, session_search, session_get, watch_create, watch_list,
+get_session_info, session_search, session_get, watch_create,
+watch_branch_create, watch_list,
 and watch_cancel are intentionally absent: they are opencode-only (MCP
 hosts have no session concept, session database, or proactive-prompt
 channel), so do not expect them here.

@@ -3,7 +3,7 @@ import type { ThatchDB, DedupCandidate, MemoryRow } from "./db";
 import type { EmbeddingModel } from "./embeddings";
 import { predictionVerb } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
-import { WATCHER_EVENT_TYPES, type WatcherRegistry, type WatcherEventType } from "./watchers";
+import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, type WatcherRegistry, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
 // creation time. Matches the thatch_find_duplicates threshold (0.85).
@@ -974,8 +974,8 @@ const watchCreateDef: ToolDef = {
     repo: z.string().optional().describe(
       "GitHub repo as owner/repo. Defaults to this project's repo from the git remote.",
     ),
-    events: z.array(z.enum(WATCHER_EVENT_TYPES as [WatcherEventType, ...WatcherEventType[]])).optional().describe(
-      "Which event types to watch. Omit for all event types.",
+    events: z.array(z.enum(PR_EVENT_TYPES as [PrWatcherEventType, ...PrWatcherEventType[]])).optional().describe(
+      "Which event types to watch. Omit for all PR event types.",
     ),
   },
   opencodeOnly: true,
@@ -987,8 +987,8 @@ const watchCreateDef: ToolDef = {
       return "Watching is unavailable: no watcher registry was wired by this host.";
     }
     const repo = (args.repo as string | undefined) ?? ctx.defaultStore;
-    const events = (args.events as WatcherEventType[] | undefined) ?? [...WATCHER_EVENT_TYPES];
-    const result = await ctx.watchers.create(host.sessionID, repo, args.pr as number, events);
+    const events = (args.events as PrWatcherEventType[] | undefined) ?? [...PR_EVENT_TYPES];
+    const result = await ctx.watchers.createPr(host.sessionID, repo, args.pr as number, events);
     if (!result.ok) return `Watcher not created: ${result.error}`;
     const w = result.watcher;
     return (
@@ -1026,8 +1026,76 @@ const watchListDef: ToolDef = {
     if (watchers.length === 0) return "No active watchers.";
     const minutesLeft = (w: { expiresAt: number }) => Math.max(0, Math.round((w.expiresAt - Date.now()) / 60_000));
     return watchers
-      .map((w) => `${w.id}: ${w.repo}#${w.pr} events=[${w.events.join(",")}] expires in ${minutesLeft(w)}m head=${w.state.headSha.slice(0, 7)}`)
+      .map((w) => {
+        const target = w.source === "pr" ? `${w.repo}#${w.pr}` : `${w.repo}@${w.branch}`;
+        return `${w.id}: ${target} [${w.source}] events=[${w.events.join(",")}] expires in ${minutesLeft(w)}m head=${w.state.headSha.slice(0, 7)}`;
+      })
       .join("\n");
+  },
+};
+
+/**
+ * Registers a background watcher on a GitHub branch (typically main): commit
+ * landings, check-run completions on the head, and workflow runs. This is
+ * how the model watches "CI against main" or waits for a post-merge build.
+ * opencode-only, like the PR watch tools.
+ */
+const watchBranchCreateDef: ToolDef = {
+  name: "watch_branch_create",
+  description:
+    "Watch a GitHub branch (typically main) and get notified in this session " +
+    "when things happen on it: branch_commit when new commits land (e.g. a " +
+    "PR merged), branch_ci when a check run on the head completes, and " +
+    "branch_workflow when a GitHub Actions workflow run starts or finishes " +
+    "on the branch. Optionally filter to workflow names (substring match). " +
+    "The watcher polls in the background and injects a notification prompt; " +
+    "notifications carry pointers only - fetch details with the gh CLI when " +
+    "you decide to act. Watches live until cancelled, the session ends, or " +
+    "opencode restarts. Requires the gh CLI.",
+  args: {
+    branch: z.string().describe(
+      "The branch name to watch, e.g. main.",
+    ),
+    repo: z.string().optional().describe(
+      "GitHub repo as owner/repo. Defaults to this project's repo from the git remote.",
+    ),
+    events: z.array(z.enum(BRANCH_EVENT_TYPES as [BranchWatcherEventType, ...BranchWatcherEventType[]])).optional().describe(
+      "Which event types to watch. Omit for all branch event types.",
+    ),
+    workflows: z.array(z.string()).optional().describe(
+      "Only notify for workflow runs whose name contains one of these substrings (case-insensitive). Omit for all workflows.",
+    ),
+  },
+  opencodeOnly: true,
+  async execute(args, ctx, host) {
+    if (!host) {
+      return "Watching is unavailable: this host did not provide a session context.";
+    }
+    if (!ctx.watchers) {
+      return "Watching is unavailable: no watcher registry was wired by this host.";
+    }
+    const repo = (args.repo as string | undefined) ?? ctx.defaultStore;
+    const events = (args.events as BranchWatcherEventType[] | undefined) ?? [...BRANCH_EVENT_TYPES];
+    const result = await ctx.watchers.createBranch(
+      host.sessionID,
+      repo,
+      args.branch as string,
+      events,
+      (args.workflows as string[] | undefined) ?? [],
+    );
+    if (!result.ok) return `Watcher not created: ${result.error}`;
+    const w = result.watcher;
+    return (
+      `[watching] ${w.repo}@${w.branch}\n` +
+      `id: ${w.id}\n` +
+      `events: ${w.events.join(", ")}\n` +
+      (w.workflows.length > 0 ? `workflow filter: ${w.workflows.join(", ")}\n` : "") +
+      `head: ${w.state.headSha.slice(0, 7)}\n\n` +
+      `The baseline is captured now - only changes from this point notify. ` +
+      `You will receive a system notification in this session when a watched event happens. ` +
+      `State any handling policy for those notifications now (e.g. what to act on, what just to report), ` +
+      `since the notification itself carries only pointers.`
+    );
   },
 };
 
@@ -1039,7 +1107,7 @@ const watchCancelDef: ToolDef = {
   name: "watch_cancel",
   description: "Cancel one of this session's watchers by id. opencode-only.",
   args: {
-    id: z.string().describe("The watcher id from watch_create or watch_list."),
+    id: z.string().describe("The watcher id from watch_create, watch_branch_create, or watch_list."),
   },
   opencodeOnly: true,
   async execute(args, ctx, host) {
@@ -1084,6 +1152,7 @@ export const TOOL_DEFS: ToolDef[] = [
   sessionSearchDef,
   sessionGetDef,
   watchCreateDef,
+  watchBranchCreateDef,
   watchListDef,
   watchCancelDef,
 ];
