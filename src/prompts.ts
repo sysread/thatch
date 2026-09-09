@@ -23,7 +23,8 @@ Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
         thatch_prediction_query, thatch_prediction_update, thatch_prediction_list,
         thatch_prediction_delete,
         thatch_behavior_codify, thatch_behavior_feedback, thatch_behavior_list,
-        thatch_behavior_delete, thatch_get_session_info,
+        thatch_behavior_delete, thatch_config_get, thatch_config_set,
+        thatch_notify_user, thatch_get_session_info,
         thatch_session_search, thatch_session_get,
         thatch_watch_create, thatch_watch_branch_create,
         thatch_watch_list, thatch_watch_cancel
@@ -178,6 +179,17 @@ way that is about your own operational discipline (not a user preference):
 Do not codify rules that make you lazier or less thorough. Rules should encode
 discipline, not shortcuts.
 
+## Notifications
+
+Use thatch_notify_user for terminal-event outcomes the user should hear about
+even when looking away: CI results, merge or deploy completion, watcher
+events. Always include a source label (ticket number or feature name) so the
+user knows which session spoke. Manage notification preferences with
+thatch_config_get and thatch_config_set - call config_get first; config_set
+merges fields and echoes the result. The config file
+(~/.config/thatch/config.json) is also hand-editable; do not store thatch
+config in memory.
+
 ## What to Store
 
 - **Global store**: user observations, agent personality, system environment
@@ -288,7 +300,9 @@ Tools are prefixed in ${host}: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__prediction_query\`, \`mcp__thatch__prediction_update\`,
 \`mcp__thatch__prediction_list\`, \`mcp__thatch__prediction_delete\`,
 \`mcp__thatch__behavior_codify\`, \`mcp__thatch__behavior_feedback\`,
-\`mcp__thatch__behavior_list\`, \`mcp__thatch__behavior_delete\`. Bare names used below for readability.
+\`mcp__thatch__behavior_list\`, \`mcp__thatch__behavior_delete\`,
+\`mcp__thatch__config_get\`, \`mcp__thatch__config_set\`,
+\`mcp__thatch__notify_user\`. Bare names used below for readability.
 get_session_info, session_search, session_get, watch_create,
 watch_branch_create, watch_list,
 and watch_cancel are intentionally absent: they are opencode-only (MCP
@@ -411,6 +425,16 @@ way that is about your own operational discipline (not a user preference):
 
 Do not codify rules that make you lazier or less thorough. Rules should encode
 discipline, not shortcuts.
+
+## Notifications
+
+Use notify_user for terminal-event outcomes the user should hear about even
+when looking away: CI results, merge or deploy completion, watcher events.
+Always include a source label (ticket number or feature name) so the user
+knows which session spoke. Manage notification preferences with config_get
+and config_set - call config_get first; config_set merges fields and echoes
+the result. The config file (~/.config/thatch/config.json) is also
+hand-editable; do not store thatch config in memory.
 
 ## What to Store
 

@@ -1,6 +1,18 @@
 import { z } from "zod";
 import type { ThatchDB, DedupCandidate, MemoryRow } from "./db";
 import type { EmbeddingModel } from "./embeddings";
+import {
+  CONFIG_SECTIONS,
+  loadConfig,
+  mergeNotificationPrefs,
+  notificationDefaults,
+  notificationPrefsSchema,
+  saveConfig,
+  type Config,
+  type ConfigSection,
+  type NotificationPrefs,
+} from "./config";
+import { sendNotification, defaultSpawner, type NotifyChannel, type Spawner } from "./notify";
 import { predictionVerb } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, type WatcherRegistry, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
@@ -42,6 +54,9 @@ export interface CoreContext {
    *  path - MCP hosts have no poller, no event bus, and no way to deliver a
    *  proactive prompt, so watch tools are opencode-only. */
   watchers?: WatcherRegistry;
+  /** Injectable command runner for notify_user. Defaults to Bun.spawn.
+   *  Tests inject a mock so notifications never actually fire or speak. */
+  spawner?: Spawner;
 }
 
 /**
@@ -818,6 +833,161 @@ const behaviorDeleteDef: ToolDef = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Config and notification tools. The config is a single JSON file beside
+// thatch.db, hand-editable and also managed through these tools. notify_user
+// shells out to the platform's banner and TTS commands - see src/notify.ts.
+// ---------------------------------------------------------------------------
+
+/** Notification preference fields, in presentation order. */
+const NOTIFICATION_FIELDS = ["mode", "voice", "sound"] as const;
+
+/** Renders one section with per-field default annotations for echo output. */
+function renderNotificationSection(prefs: NotificationPrefs | undefined): string {
+  const defaults = notificationDefaults();
+  const lines = ["notifications:"];
+  for (const field of NOTIFICATION_FIELDS) {
+    const current = prefs?.[field];
+    const fallback = defaults[field];
+    lines.push(`  ${field}: ${current ?? "<unset>"}${fallback ? ` (default: ${fallback})` : ""}`);
+  }
+  return lines.join("\n");
+}
+
+/** Drops keys explicitly set to undefined so a merge never overwrites. */
+function stripUndefined(obj: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
+}
+
+const configGetDef: ToolDef = {
+  name: "config_get",
+  description:
+    "Read thatch's user config, optionally restricted to one section. " +
+    "Values are annotated with their defaults; unset fields show <unset>. " +
+    "The config file (~/.config/thatch/config.json, beside thatch.db) is " +
+    "also hand-editable. Call this before config_set.",
+  args: {
+    section: z.enum(["notifications"]).optional().describe(
+      "Restrict output to one section. Omit to read all sections.",
+    ),
+  },
+  async execute(args) {
+    const loaded = loadConfig();
+    const lines: string[] = [];
+    if (loaded.warning) lines.push(`[warning] ${loaded.warning}`, "");
+    const sections: ConfigSection[] = args.section
+      ? [args.section as ConfigSection]
+      : [...CONFIG_SECTIONS];
+    for (const name of sections) {
+      if (name === "notifications") {
+        lines.push(renderNotificationSection(loaded.config.notifications));
+      }
+    }
+    lines.push("", `file: ${loaded.path}`);
+    return lines.join("\n");
+  },
+};
+
+const configSetDef: ToolDef = {
+  name: "config_set",
+  description:
+    "Update thatch's user config. Field-level merge: only fields you pass " +
+    "change; omitted fields and omitted sections keep their current values. " +
+    "Returns the resulting section so you can verify the write. Call " +
+    "config_get first to see current values and defaults.",
+  args: {
+    notifications: z.strictObject({
+      mode: z.enum(["both", "banner", "voice", "none"]).optional().describe(
+        "Default channels for notify_user: both, banner only, voice only, " +
+        "or none (disable notifications entirely).",
+      ),
+      voice: z.string().optional().describe(
+        "Spoken voice name (macOS default: Zarvox). Omit to use the " +
+        "platform default.",
+      ),
+      sound: z.string().optional().describe(
+        "Banner alert sound (macOS, from /System/Library/Sounds; default: " +
+        "Submarine). Omit to use the platform default.",
+      ),
+    }).optional().describe(
+      "Notification preferences to update. Fields you omit keep their " +
+      "current values.",
+    ),
+  },
+  async execute(args) {
+    const loaded = loadConfig();
+    const config: Config = { ...loaded.config };
+    const patch = args.notifications as Record<string, unknown> | undefined;
+    if (!patch || Object.keys(stripUndefined(patch)).length === 0) {
+      return (
+        "Nothing to update: pass a section with fields to change.\n" +
+        renderNotificationSection(config.notifications)
+      );
+    }
+    config.notifications = notificationPrefsSchema.parse(
+      mergeNotificationPrefs(config.notifications, stripUndefined(patch)),
+    );
+    const path = saveConfig(config);
+    return (
+      `[saved] ${path}\n` +
+      renderNotificationSection(config.notifications)
+    );
+  },
+};
+
+const notifyUserDef: ToolDef = {
+  name: "notify_user",
+  description:
+    "Notify the user out-of-band: desktop banner and/or spoken voice " +
+    "(macOS: Notification Center + say; Linux: notify-send + spd-say/espeak). " +
+    "Use for long-running terminal-event outcomes worth interrupting for: " +
+    "CI results, merge or deploy completion, watcher events. ALWAYS include " +
+    "source: a word or two identifying the session or work item (ticket " +
+    "number or feature name) so the user knows which session spoke. Honors " +
+    "the user's configured preferences; pass channel to override for this " +
+    "call only. If the configured mode is none, the tool no-ops and says " +
+    "so. The result reports command success only - OS focus modes can " +
+    "silently suppress banners.",
+  args: {
+    message: z.string().describe(
+      "The notification text. Spell out letter sequences so " +
+      "text-to-speech pronounces them (\"C I green\", not \"CI green\").",
+    ),
+    title: z.string().optional().describe(
+      "Banner title. Defaults to source, then \"thatch\".",
+    ),
+    source: z.string().optional().describe(
+      "Short label identifying the session or work item (ticket number or " +
+      "feature name), e.g. \"PLAT-280\". Prepended to the spoken message.",
+    ),
+    channel: z.enum(["both", "banner", "voice"]).optional().describe(
+      "Override the configured mode for this call only.",
+    ),
+    voice: z.string().optional().describe(
+      "Override the configured voice for this call.",
+    ),
+  },
+  async execute(args, ctx) {
+    const loaded = loadConfig();
+    const prefs = loaded.config.notifications ?? {};
+    const mode = prefs.mode ?? "both";
+    if (mode === "none") {
+      return "[skipped] notifications are disabled (notifications.mode: none). " +
+        "Use thatch config_set to re-enable if the user asks.";
+    }
+    const channel = (args.channel as NotifyChannel | undefined) ?? (mode as NotifyChannel);
+    return sendNotification({
+      message: args.message as string,
+      title: args.title as string | undefined,
+      source: args.source as string | undefined,
+      channel,
+      voice: (args.voice as string | undefined) ?? prefs.voice,
+      sound: prefs.sound,
+    }, ctx.spawner ?? defaultSpawner);
+  },
+};
+
+
 /**
  * Reports the calling session's identity. opencode does not surface its
  * session ID to the model, so the model cannot learn it any other way -
@@ -1148,6 +1318,9 @@ export const TOOL_DEFS: ToolDef[] = [
   behaviorFeedbackDef,
   behaviorListDef,
   behaviorDeleteDef,
+  configGetDef,
+  configSetDef,
+  notifyUserDef,
   getSessionInfoDef,
   sessionSearchDef,
   sessionGetDef,
