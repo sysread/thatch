@@ -29,9 +29,9 @@ description: Extract durable project facts ... Use when ...
   Code, and Cursor all auto-discover skills and use the description for
   relevance).
 
-## The 26 skills
+## The skills
 
-**Shared (25)** — installed everywhere; no sub-agents required:
+**Shared** — installed everywhere; no sub-agents required:
 
 | Skill | Role |
 |-------|------|
@@ -61,11 +61,11 @@ description: Extract durable project facts ... Use when ...
 | `thatch-memory-verify` | Fact-check a single memory against the current codebase and correct stale claims. Uses git archaeology to preserve historical context when changes were intentional. |
 | `thatch-knowledge-export` | Compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories via `thatch-memory-verify`. |
 
-**opencode-only (1)** — the coordinator needs sub-agent support:
+**opencode-only** — the coordinator needs sub-agent support:
 
 | Skill | Role |
 |-------|------|
-| `thatch-code-review` | Resolve review target (incl. VCS detection and connected PR/MR lookup for follow-up round detection), gather project context, research affected workflows, estimate complexity, partition, dispatch the 8 specialists in parallel, synthesize with a workflow-change preface and prior-comment cross-reference. |
+| `thatch-code-review` | Resolve review target (incl. VCS detection and connected PR/MR lookup for follow-up round detection), gather project context, research affected workflows, estimate complexity, partition, dispatch the review specialists in parallel, synthesize with a workflow-change preface and prior-comment cross-reference. |
 
 ## REVIEW_COMMON
 
@@ -99,7 +99,7 @@ The synthesizer reuses the same verification rigor but has its own structure
 ## The two arrays
 
 ```ts
-const SHARED_SKILLS: SkillDef[] = [ /* 26 skills above */ ];
+const SHARED_SKILLS: SkillDef[] = [ /* all shared skills above */ ];
 const OPENCODE_ONLY_SKILLS: SkillDef[] = [ /* code-review coordinator */ ];
 ```
 
@@ -138,7 +138,7 @@ and `--cursor` pass only the shared set.
 ## Memory review skills in practice
 
 - **Quick single lens**: load any specialist directly and point it at a branch.
-- **Full review on opencode**: load `thatch-code-review` — it gathers project context, researches affected workflows, dispatches all 8 specialists in parallel (with both the context brief and workflow guide injected into each briefing), then synthesizes a report that starts with the workflow changes before findings.
+- **Full review on opencode**: load `thatch-code-review` — it gathers project context, researches affected workflows, dispatches all review specialists in parallel (with both the context brief and workflow guide injected into each briefing), then synthesizes a report that starts with the workflow changes before findings.
 - **Full review on Claude Code/Cursor**: run each specialist in sequence, then
   run `thatch-review-synthesizer` to verify and aggregate.
 - **Follow-up round (re-review)**: load `thatch-review-followup` when the author

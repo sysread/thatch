@@ -20,7 +20,7 @@ becomes part of the agent's context.
 
 ## What ships
 
-26 skills total (25 shared, 1 opencode-only):
+Skills are split into shared (all hosts) and opencode-only:
 
 ### Memory skills
 

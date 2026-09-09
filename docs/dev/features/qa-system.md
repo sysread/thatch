@@ -1,14 +1,13 @@
 # QA System
 
-Thatch ships 95 QA use cases that verify end-to-end behavior. Each use case is
-a `bun:test` file that runs in an isolated environment — a temp-directory copy
-of the repo, not the working tree itself. Use cases are split into
-**automatable** (no LLM, fast) and **live** (spawns opencode, costs model
-tokens).
+Thatch ships a suite of QA use cases that verify end-to-end behavior. Each use
+case is a `bun:test` file that runs in an isolated environment — a
+temp-directory copy of the repo, not the working tree itself. Use cases are
+split into **automatable** (no LLM, fast) and **live** (spawns opencode, costs
+model tokens).
 
 ## What it does
 
-- 95 use cases: 75 automatable + 20 live
 - Automatable use cases run without an LLM — they test CLI behavior, hooks, DB
   operations, and tool execution directly via bun assertions
 - Live use cases spawn real opencode sessions — they test the full
@@ -39,7 +38,7 @@ registers all use cases in one suite, enabling `--concurrent
 --max-concurrency 5` to run 5 use cases at once (33s vs 88s sequential for the
 auto suite).
 
-### Automatable use cases (73)
+### Automatable use cases
 
 Run without an LLM. Test CLI behavior, hooks, DB operations, and tool
 execution directly via bun assertions. These are fast and run in parallel.
@@ -66,14 +65,15 @@ execution directly via bun assertions. These are fast and run in parallel.
 | UC-027 | behavior-confidence-model | ham/spam adjusts Bayesian confidence |
 | UC-028 | behavior-delete | semantic-match deletion with cascade |
 
-### Live use cases (20)
+### Live use cases
 
 Spawn real opencode sessions. Test the full pipeline with a real model. These
-cost model tokens and have a 20-minute per-use-case timeout. All 20 are marked
-`manualOnly: true` — the opencode binary is not available in CI, and three
-(UC-006, UC-010, UC-013) are manual-only for fundamental reasons (Cursor hook
-lifecycle, nested opencode session timeout, compaction trigger). Run them
-locally with `mise run qa-live`.
+cost model tokens and have a 20-minute per-use-case timeout. Live use cases
+check for `opencode` on PATH at runtime: if it is present they run; if not,
+they skip with `[MANUAL]`. Three (UC-006, UC-010, UC-013) are
+`manualOnly: true` for infrastructure reasons (Cursor hook lifecycle, nested
+opencode session timeout, compaction trigger). Run them locally with
+`mise run qa-live`.
 
 | UC | Name | What it tests |
 |----|------|---------------|
@@ -182,8 +182,8 @@ includes all of `tests/`), just not executed during `check`. See
 | `tests/qa/runner.ts` | `registerUseCase`, `UseCase` type, `ensureMaster`, `createFixture`, `runViaOpencode`, execution logic |
 | `tests/qa/auto/index.test.ts` | Automatable use case barrel — imports all auto use case modules |
 | `tests/qa/live/index.test.ts` | Live use case barrel — imports all live use case modules |
-| `tests/qa/auto/uc-NNN-*.ts` | 75 automatable use case files |
-| `tests/qa/live/uc-NNN-*.ts` | 20 live use case files |
+| `tests/qa/auto/uc-NNN-*.ts` | Automatable use case files, one per use case |
+| `tests/qa/live/uc-NNN-*.ts` | Live use case files, one per use case |
 
 No separate QA docs directory exists. QA use cases live in `tests/qa/` as executable tests, not docs.
 
@@ -191,8 +191,9 @@ No separate QA docs directory exists. QA use cases live in `tests/qa/` as execut
 
 1. **Automatable use cases never spawn an LLM.** They test CLI, hooks, DB, and
    tool execution directly.
-2. **Live use cases spawn real opencode sessions and cost model tokens.** All
-   20 are marked `manualOnly` — the opencode binary is not available in CI.
+2. **Live use cases spawn real opencode sessions and cost model tokens.** They
+   skip with `[MANUAL]` when `opencode` is not on PATH; three are
+   `manualOnly: true` for infrastructure reasons.
 3. **`QA_DRY_RUN=1` lists use cases without executing.** Use this for CI and
    coverage review.
 4. **Each use case follows the structured format**: preconditions, steps,
