@@ -110,6 +110,24 @@ export const server: Plugin = async ({ client, worktree }) => {
           parts: [{ type: "text", text: watcherNotificationNudge(events[0]?.target ?? "watched target", events), synthetic: true }],
         },
       });
+      // Toast: the notification part is TUI-hidden, so without this the
+      // user watching the session sees the model wake up with no visible
+      // cause. Announce what fired. Failed checks/workflows surface as a
+      // warning variant; routine events as info. Best-effort - the TUI may
+      // not be connected (headless mode).
+      const failed = events.some((e) => e.summary.includes("failure"));
+      const more = events.length > 1 ? ` +${events.length - 1} more` : "";
+      try {
+        await client.tui.showToast({
+          body: {
+            message: `\u23F0 ${events[0]?.target ?? "watched target"}: ${events[0]?.summary ?? ""}${more}`,
+            variant: failed ? "warning" : "info",
+            duration: 5000,
+          },
+        });
+      } catch {
+        // TUI may not be connected. Best-effort.
+      }
     },
     canDeliver: (sessionID) =>
       !compacting.has(sessionID) && sessionStatus.get(sessionID) === "idle",
