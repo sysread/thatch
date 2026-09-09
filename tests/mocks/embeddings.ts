@@ -10,8 +10,18 @@ export class MockEmbeddingModel implements EmbeddingModel {
   readonly dims = 384;
   readonly name = "mock";
   loaded = true;
+  #disposed = false;
+
+  /** True after dispose() - lets tests assert shutdown wiring ran. */
+  get disposed(): boolean {
+    return this.#disposed;
+  }
 
   async load(): Promise<void> {}
+
+  async dispose(): Promise<void> {
+    this.#disposed = true;
+  }
 
   async queryEmbed(text: string): Promise<Float32Array> {
     return this.#embed(text);
