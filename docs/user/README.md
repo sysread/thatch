@@ -12,6 +12,7 @@ This README is the overview. Each feature has its own guide:
 - [memory.md](memory.md): persistent memory store
 - [extraction.md](extraction.md): automatic fact extraction from tool calls
 - [watchers.md](watchers.md): event-driven notifications (PR and branch watching)
+- [notifications.md](notifications.md): banner and voice notifications, user config
 - [prediction-engine.md](prediction-engine.md): user decision model
 - [behavior-engine.md](behavior-engine.md): agent self-discipline rules
 - [default-behaviors.md](default-behaviors.md): what ships automatically
@@ -142,6 +143,22 @@ Stores are created automatically. No setup required.
 | `thatch_behavior_feedback` | Record ham/spam feedback on a surfaced behavior. `relevant: true` (ham) confirms the rule applies; `relevant: false` (spam) disconfirms. Trains the classifier. |
 | `thatch_behavior_list` | List all codified behaviors with matchers, confidence, and provenance. |
 | `thatch_behavior_delete` | Delete a behavior by semantic match. Edges and provenance are cascade-deleted. |
+
+### Config tools
+
+| Tool | What it does |
+|------|-------------|
+| `thatch_config_get` | Read the user config (`~/.config/thatch/config.json`), with defaults annotated. The agent manages config through these tools; you can also edit the file by hand. |
+| `thatch_config_set` | Update config fields. Field-level merge: only fields you pass change. Returns the resulting section so the agent can verify. |
+
+### Notification tools
+
+| Tool | What it does |
+|------|-------------|
+| `thatch_notify_user` | Notify the user out-of-band: desktop banner and/or spoken voice. Use for long-running outcomes worth interrupting for (CI results, deploys, watcher events). macOS and Linux. |
+
+See [notifications.md](notifications.md) for the full behavior and
+configuration.
 
 ### Session tools (opencode only)
 
@@ -288,14 +305,14 @@ response, walkthrough, and workflow skills that support the review pipeline:
 
 | Skill | opencode | Claude Code | Cursor |
 |-------|----------|-------------|--------|
-| Memory skills (6) | Yes | Yes | Yes |
-| Review specialists (8) | Yes | Yes | Yes |
+| Memory skills | Yes | Yes | Yes |
+| Review specialists | Yes | Yes | Yes |
 | Review synthesizer | Yes | Yes | Yes |
 | Review context + code archaeology | Yes | Yes | Yes |
 | Review followup | Yes | Yes | Yes |
 | Review response (author-side) | Yes | Yes | Yes |
-| Walkthrough skills (2) | Yes | Yes | Yes |
-| Writing skills (3) | Yes | Yes | Yes |
+| Walkthrough skills | Yes | Yes | Yes |
+| Writing skills | Yes | Yes | Yes |
 | Code review coordinator | Yes | No (requires sub-agents) | No (requires sub-agents) |
 
 ### Using review skills
@@ -380,19 +397,23 @@ Store defaults to your current git repo.
 
 ## Configuration
 
-No configuration needed. The default behavior:
+Most configuration needs none. Two layers exist:
 
-- **Database**: `~/.config/thatch/thatch.db` (created automatically)
-- **Embedding model**: bge-small-en-v1.5 (downloaded once, cached locally)
-- **Store name**: auto-detected from `git remote get-url origin`
-- **Search scope**: always includes the project store and `global`
-
-### Environment variables
+- **Preferences the agent manages** live in
+  `~/.config/thatch/config.json` (beside the database): notification mode,
+  voice, and sound. Ask your agent ("set notifications to banner only") or
+  edit the file by hand. See [notifications.md](notifications.md).
+- **Environment variables** for infrastructure:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `THATCH_DB_PATH` | `$XDG_CONFIG_HOME/thatch/thatch.db` | Override database location |
+| `THATCH_DB_PATH` | `$XDG_CONFIG_HOME/thatch/thatch.db` | Override database location (the config file follows it) |
 | `THATCH_MODEL` | `Xenova/bge-small-en-v1.5` | Override embedding model |
+
+Unchanged defaults: the database is created automatically, the embedding
+model downloads once and is cached, the store name is auto-detected from
+`git remote get-url origin`, and search always includes the project store
+and `global`.
 
 `$XDG_CONFIG_HOME` defaults to `~/.config` when unset.
 

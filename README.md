@@ -92,8 +92,14 @@ Thatch gives your agent three layers of persistent context:
   only). The agent registers a watch on a GitHub PR or branch (main); thatch polls it in the
   background and prompts the session when comments, commits, CI results, or
   status changes arrive. Notifications carry pointer data only.
+- **Notifications + user config** -- the agent can ping you out-of-band when
+  a long-running outcome lands: a desktop banner, a spoken voice
+  announcement, or both (macOS and Linux). Preferences live in a
+  hand-editable config file (`~/.config/thatch/config.json`) that the agent
+  manages through `config_get`/`config_set` -- ask it to change your voice
+  or quiet notifications entirely.
 
-Plus **26 skills** for memory workflows, structured multi-specialist code
+Plus **skills** for memory workflows, structured multi-specialist code
 review, review response, change and feature walkthroughs, memory verification,
 knowledge export, and writing tasks
 (PR descriptions, tickets, PR splitting).

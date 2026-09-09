@@ -17,7 +17,7 @@ describe("MCP compileTools", () => {
     }
   });
 
-  test("exposes 18 shared tools", () => {
-    expect(compileTools().size).toBe(18);
+  test("exposes 21 shared tools", () => {
+    expect(compileTools().size).toBe(21);
   });
 });

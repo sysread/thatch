@@ -30,8 +30,8 @@ afterEach(() => {
 });
 
 describe("TOOL_DEFS", () => {
-  test("exports all 25 tools", () => {
-    expect(TOOL_DEFS.length).toBe(25);
+  test("exports all 28 tools", () => {
+    expect(TOOL_DEFS.length).toBe(28);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -52,6 +52,9 @@ describe("TOOL_DEFS", () => {
       "behavior_feedback",
       "behavior_list",
       "behavior_delete",
+      "config_get",
+      "config_set",
+      "notify_user",
       "get_session_info",
       "session_search",
       "session_get",
