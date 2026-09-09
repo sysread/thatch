@@ -632,7 +632,7 @@ describe("watch_branch_create", () => {
         if (/\/pulls\/\d+\/comments/.test(joined)) return [];
         if (/\/check-runs/.test(joined)) return { check_runs: [] };
         if (/^graphql/.test(joined)) return { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } };
-        if (/\/actions\/runs\?branch=main/.test(joined)) {
+        if (/\/actions\/runs\?/.test(joined)) {
           return { workflow_runs: [{ id: 55, name: "CI", status: "in_progress", conclusion: null, html_url: "https://x/55", event: "push" }] };
         }
         if (/\/branches\/main$/.test(joined)) return { commit: { sha: "decafbad" } };
