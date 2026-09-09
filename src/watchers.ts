@@ -97,6 +97,9 @@ export interface WorkflowRunRef {
   url: string;
   /** What triggered the run: push, pull_request, schedule, workflow_run, ... */
   event: string;
+  /** The branch the run's head commit is on (a tag-triggered run puts the TAG name here). */
+  headBranch: string;
+  headSha: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +306,8 @@ function parseWorkflowRuns(raw: unknown): Record<string, WorkflowRunRef> {
     conclusion?: string | null;
     html_url?: string;
     event?: string;
+    head_branch?: string;
+    head_sha?: string;
   }> }).workflow_runs ?? [];
   for (const run of rawRuns) {
     if (run.id === undefined) continue;
@@ -312,6 +317,8 @@ function parseWorkflowRuns(raw: unknown): Record<string, WorkflowRunRef> {
       conclusion: run.conclusion ?? null,
       url: run.html_url ?? "",
       event: run.event ?? "unknown",
+      headBranch: run.head_branch ?? "",
+      headSha: run.head_sha ?? "",
     };
   }
   return runs;
@@ -375,20 +382,30 @@ export async function fetchPrState(gh: GhRunner, repo: string, pr: number): Prom
 
 /**
  * Fetches the current state of a branch: the head commit, check runs on that
- * head, and the branch's recent workflow runs (last 20). The branch and
+ * head, and recent workflow runs relevant to the branch. The branch and
  * workflow-run calls run in parallel; check runs need the head SHA first.
+ *
+ * Workflow runs are fetched WITHOUT the API's branch filter and filtered
+ * client-side: keep runs whose head_branch matches the branch (push runs)
+ * or whose head_sha is the branch's current head (tag-triggered runs like a
+ * release Publish run - their head_branch is the tag name, so the API's
+ * branch filter would hide exactly the runs a release watch exists for).
  */
 export async function fetchBranchState(gh: GhRunner, repo: string, branch: string): Promise<BranchState> {
   const [branchInfo, runs] = await Promise.all([
     gh([`/repos/${repo}/branches/${branch}`]),
-    gh([`/repos/${repo}/actions/runs?branch=${branch}&per_page=20`]),
+    gh([`/repos/${repo}/actions/runs?per_page=30`]),
   ]);
   const headSha = (branchInfo as { commit?: { sha?: string } }).commit?.sha ?? "";
+  const allRuns = parseWorkflowRuns(runs);
+  const relevant = Object.fromEntries(
+    Object.entries(allRuns).filter(([, run]) => run.headBranch === branch || run.headSha === headSha),
+  );
   const checkRuns = await gh([`/repos/${repo}/commits/${headSha}/check-runs?per_page=100`]);
   return {
     headSha,
     checkRuns: parseCheckRuns(checkRuns),
-    workflowRuns: parseWorkflowRuns(runs),
+    workflowRuns: relevant,
   };
 }
 
