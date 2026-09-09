@@ -146,3 +146,21 @@ here first. These are the things that have already cost time.
 - **`bun test` does not typecheck**, and `tsconfig.json` excludes `tests`. Test
   type errors are editor-only noise unless you run `tsc` on the test files
   directly. Keep test files type-clean anyway so the editor stays quiet.
+
+## Config and notifications
+
+- **Tests touching the config must set `THATCH_DB_PATH`.** The config tools
+  derive the config file path from the environment (`THATCH_DB_PATH`, then the
+  XDG default), not from the test's tempdir `ThatchDB`. A config test that
+  skips this reads and writes the developer's real
+  `~/.config/thatch/config.json`. See `tests/notify.test.ts` for the
+  save-and-restore pattern.
+- **osascript exits 0 even when macOS drops the banner.** Focus/Do Not Disturb
+  or missing notification permission silently swallow it. `notify_user` result
+  text therefore reports command success only; never interpret exit 0 as
+  delivery.
+- **New QA use cases must be imported into the directory's barrel file**
+  (`tests/qa/auto/index.test.ts` or the live one). The `.ts` files are not
+  discovered by bun on their own. UC-095 sat out of the suite for a release
+  cycle and rotted (asserted 3 watch tools when 4 existed) because nobody
+  noticed it never ran.

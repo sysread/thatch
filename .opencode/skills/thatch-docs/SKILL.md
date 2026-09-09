@@ -59,8 +59,8 @@ needed.
   Update the parity matrix when a gap closes or a new feature ships.
 - **docs/dev/skills.md** documents the skill system: the two arrays
   (SHARED_SKILLS, OPENCODE_ONLY_SKILLS), REVIEW_COMMON interpolation, install
-  mechanics, and the procedure for adding a skill. Update the skill count and
-  table when skills are added or removed.
+  mechanics, and the procedure for adding a skill. Update the table when
+  skills are added or removed.
 - **docs/user/README.md** is the user-facing guide: installation, tool
   reference, skill list. Write for someone who has never seen the codebase.
 - **docs/user/<feature>.md** holds per-feature product guides. Each .md
@@ -135,24 +135,36 @@ landed plan docs should preserve what was true at that time.
 - Define subsystem-specific terms on first use. Translate project-private
   labels into plain behavior before using them.
 
-## When updating skill counts
+## No hardcoded counts in docs
 
-Several doc files carry hardcoded skill counts that drift when skills are
-added or removed. Touch all of these when the count changes:
+Do not put item counts in prose docs -- not skill counts, tool counts, use
+case counts, or table counts. Counts rot: qa-system.md drifted three times
+before the counts were removed (September 2026). The count already exists in
+the thing being counted -- `TOOL_DEFS.length`, `SHARED_SKILLS.length`, the
+rows of a table, the output of `mise run qa-dry-run`. Docs should reference
+the source, not restate the number.
 
-1. `docs/dev/README.md` -- skills.ts description line
-2. `docs/dev/skills.md` -- skill count and table
-3. `docs/user/README.md` -- skill tables and category sections
-4. `docs/user/skills.md` -- per-feature skill doc (if it exists)
-5. `tests/qa/auto/uc-005-setup-install.ts` -- shared skill count in expected string
-6. `tests/qa/auto/uc-014-skill-install-drift.ts` -- shared vs opencode counts in expected string
-7. `tests/setup.test.ts` -- unit test gate (catches count mismatch in `mise run check`)
+When a doc edit tempts you to write "N tools" or "M skills", write "the tool
+table below" or link to the source of truth instead.
 
-After updating, grep both `docs/` and `tests/qa/` for old count numbers to
-confirm no stale references remain. The QA test files (UC-005, UC-014) are
-NOT caught by `mise run check` (flat glob excludes `tests/qa/`), so they
-only fail during `mise run qa-auto`. Always run `mise run qa-auto` after
-adding a skill to catch stale QA count assertions.
+Test files are the exception and the enforcement layer: tests like
+`tests/setup.test.ts` and `tests/tool-defs.test.ts` assert counts as
+literals so `mise run check` fails loudly when the surface changes. Keep
+those. Keep them out of prose.
+
+## Skill tables
+
+Skill counts appear in these TEST files only (they fail loudly when stale):
+
+1. `tests/setup.test.ts` -- asserts the shared skill count against code
+2. `tests/qa/auto/uc-005-setup-install.ts` -- shared skill count in expected string
+3. `tests/qa/auto/uc-014-skill-install-drift.ts` -- shared vs opencode counts in expected string
+
+The QA test files are NOT caught by `mise run check` (flat glob excludes
+`tests/qa/`), so they only fail during `mise run qa-auto`. Always run
+`mise run qa-auto` after adding a skill to catch stale QA count assertions.
+Doc skill TABLES (docs/dev/skills.md, docs/user/skills.md, docs/user/README.md)
+must be updated when skills change, but without counts.
 
 ## Running QA subsets
 
@@ -161,17 +173,18 @@ select a subset: `mise run qa-live uc-001 uc-003` runs only those two.
 No args runs all. Uses `bin/qa-run` which builds a `--test-name-pattern`
 regex from the args.
 
-## When updating tool counts
+## When adding or removing tools
 
-Tool counts live in `TOOL_DEFS` (`src/tool-defs.ts`). When tools are added
-or removed, touch:
+Tool definitions live in `TOOL_DEFS` (`src/tool-defs.ts`). When tools are
+added or removed, touch:
 
-1. `docs/dev/README.md` -- module table and tool count references
-2. `docs/user/README.md` -- tool tables in the automatic behaviors section
+1. `docs/dev/README.md` -- module table
+2. `docs/user/README.md` -- tool tables in the tool reference section
 3. `docs/dev/features/<feature>.md` -- the feature doc that exposes the tool
 4. `docs/user/<feature>.md` -- the user doc for that feature
 
-Grep `docs/` for the old count after any tool change.
+Docs list tools by name in tables; never restate the count in prose (see
+"No hardcoded counts in docs").
 
 ## Before committing doc changes
 

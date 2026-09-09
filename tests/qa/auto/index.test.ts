@@ -77,3 +77,5 @@ import "./uc-035-verdict-clearing-on-overwrite";
 import "./uc-036-cluster-grouping";
 import "./uc-057-hygiene-healthy-store";
 import "./uc-058-hygiene-outside-git";
+import "./uc-095-watchers";
+import "./uc-096-notify-user";

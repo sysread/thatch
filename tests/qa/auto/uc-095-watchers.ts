@@ -41,8 +41,8 @@ const useCase: UseCase = {
   async run(_ctx: QaContext) {
     // Step 1: watch tools are opencode-only.
     const watchTools = TOOL_DEFS.filter((t) => t.name.startsWith("watch_"));
-    if (watchTools.length !== 3) {
-      console.log(`  FAIL: expected 3 watch tools, got ${watchTools.length}`);
+    if (watchTools.length !== 4) {
+      console.log(`  FAIL: expected 4 watch tools, got ${watchTools.length}`);
       return "FAIL";
     }
     if (!watchTools.every((t) => t.opencodeOnly)) {

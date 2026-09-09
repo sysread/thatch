@@ -1,6 +1,6 @@
 # Database
 
-Thatch stores all data in a single SQLite file. The schema has 11 tables organized around three concerns: memory entries, the prediction engine, and the behavior engine.
+Thatch stores all data in a single SQLite file. The schema is organized around three concerns: memory entries, the prediction engine, and the behavior engine.
 
 ## Configuration
 
@@ -10,7 +10,7 @@ Thatch stores all data in a single SQLite file. The schema has 11 tables organiz
 
 ## Schema overview
 
-11 tables in three groups:
+The tables fall into three groups:
 
 | Group | Tables | Purpose |
 |-------|--------|---------|

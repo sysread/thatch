@@ -187,7 +187,7 @@ For the full parity matrix, see [../mcp-parity.md](../mcp-parity.md).
 
 ## Interactions with other features
 
-The 18 shared tools are available on all hosts via the single source of truth
+The shared tools are available on all hosts via the single source of truth
 in `src/tool-defs.ts`; opencode-only tools (e.g. `get_session_info`) are
 filtered out by the MCP server. Individual tool behavior is documented in
 [memory-store.md](memory-store.md), [extraction.md](extraction.md),
@@ -227,7 +227,7 @@ the opencode-only skills require sub-agent dispatch or in-process hooks.
 
 ## Key invariants
 
-- All hosts share the tool definitions from `src/tool-defs.ts` (18 shared + opencode-only tools marked `opencodeOnly: true`, which the MCP server filters out). Adding a tool requires updating `TOOL_DEFS` and all three prompt functions; opencode-only tools go in the opencode prompt only.
+- All hosts share the tool definitions from `src/tool-defs.ts` (shared tools plus opencode-only tools marked `opencodeOnly: true`, which the MCP server filters out). Adding a tool requires updating `TOOL_DEFS` and all three prompt functions; opencode-only tools go in the opencode prompt only.
 - The MCP server always exposes bare names. The `mcp__thatch__` prefix is applied by the MCP client, not thatch.
 - The three system prompt variants are independent string constants in `src/prompts.ts` with no shared template. Editing shared prose in one requires mirroring in the other two, or they drift.
 - The tool list line in all three prompts must match `TOOL_DEFS` in `src/tool-defs.ts` (opencode's list includes opencode-only tools; the MCP lists exclude them). The historical failure mode: a tool is added to `TOOL_DEFS` but only two of three prompts are updated.

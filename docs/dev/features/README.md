@@ -27,8 +27,9 @@ system, see [../skills.md](../skills.md). For non-obvious invariants, see
 | [compaction-recovery.md](compaction-recovery.md) | Compaction recovery (opencode compaction hooks) |
 | [session-lifecycle.md](session-lifecycle.md) | Session lifecycle management (opencode events, child tracking) |
 | [watchers.md](watchers.md) | Event-driven notifications (in-memory registry, background poller, PR watching) |
+| [notifications.md](notifications.md) | Out-of-band notification (banner + voice) and the user config file |
 | [setup.md](setup.md) | Setup system (markers, checkSetup, auto-refresh, binary resolution) |
 | [cli.md](cli.md) | CLI (subcommands, environment variables) |
-| [database.md](database.md) | Database (schema, migrations, WAL, 11 tables) |
-| [qa-system.md](qa-system.md) | QA system (93 use cases, automatable vs live, mise tasks) |
+| [database.md](database.md) | Database (schema, migrations, WAL) |
+| [qa-system.md](qa-system.md) | QA system (automatable vs live, mise tasks) |
 | [cicd.md](cicd.md) | CI/CD (CI pipeline, OIDC publishing, release helper) |
