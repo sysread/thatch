@@ -645,3 +645,16 @@ describe("branch watchers in the registry", () => {
     reg.dispose();
   });
 });
+
+test("branch diffs cap at 10 events like PR diffs", () => {
+  const before = branchState();
+  const after = branchState({
+    workflowRuns: Object.fromEntries(
+      Array.from({ length: 15 }, (_, i) => [
+        String(100 + i),
+        { name: "CI", status: "completed", conclusion: "success", url: `https://x/${100 + i}`, event: "push", headBranch: "main", headSha: "aaaa1111" },
+      ]),
+    ),
+  });
+  expect(diffBranchState(before, after, TGT, "acme/widgets")).toHaveLength(10);
+});

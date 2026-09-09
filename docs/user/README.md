@@ -159,7 +159,8 @@ search` - JSONL output designed for piping to `jq` or `grep`.
 
 | Tool | What it does |
 |------|-------------|
-| `thatch_watch_create` | Watch a GitHub PR for events (comments, review comments and replies, commits, status changes, description edits, CI completions). The plugin polls in the background and prompts the session when a watched event happens. |
+| `thatch_watch_create` | Watch a GitHub PR for events (comments, review comments and replies, thread resolutions, commits, status changes, description edits, CI completions). The plugin polls in the background and prompts the session when a watched event happens. |
+| `thatch_watch_branch_create` | Watch a GitHub branch (typically main) for commit landings, CI check-run completions, and workflow runs, with an optional workflow-name filter. |
 | `thatch_watch_list` | List this session's active watchers. |
 | `thatch_watch_cancel` | Cancel one of this session's watchers by id. |
 
