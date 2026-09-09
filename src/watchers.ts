@@ -741,10 +741,13 @@ export class WatcherRegistry {
     const after = await fetchBranchState(this.#opts.ghRunner, watcher.repo, watcher.branch);
     const all = diffBranchState(watcher.state, after, `${watcher.repo}@${watcher.branch}`, watcher.repo);
     watcher.state = after;
-    // Workflow-name filter (substring, case-insensitive). Events filtered
-    // out by name are dropped entirely, not queued.
+    // The workflow-name filter narrows branch_workflow events only -
+    // commits and check runs pass through unfiltered, or a watch filtered
+    // to "Publish" would silently drop its commit and CI notifications.
     const matchesFilter = (e: WatcherEvent) =>
-      watcher.workflows.length === 0 || watcher.workflows.some((wf) => e.summary.toLowerCase().includes(wf.toLowerCase()));
+      e.type !== "branch_workflow" ||
+      watcher.workflows.length === 0 ||
+      watcher.workflows.some((wf) => e.summary.toLowerCase().includes(wf.toLowerCase()));
     return all
       .filter((e) => watcher.events.includes(e.type as BranchWatcherEventType) && matchesFilter(e));
   }

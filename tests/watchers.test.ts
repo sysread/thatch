@@ -603,30 +603,37 @@ describe("branch watchers in the registry", () => {
     reg.dispose();
   });
 
-  test("the workflow-name filter drops events for other workflows", async () => {
+  test("the workflow-name filter narrows branch_workflow events only", async () => {
+    let headMoved = false;
     const reg = new WatcherRegistry({
       deliver: async (s, e) => {
         delivered.push({ sessionID: s, events: e });
       },
       canDeliver: () => canDeliver,
       ghRunner: mockGh([
-        [/\/branches\/main$/, { commit: { sha: "aaaa1111" } }],
+        [/\/branches\/main$/, () => ({ commit: { sha: headMoved ? "dddd7777" : "aaaa1111" } })],
         [/\/actions\/runs\?branch=main/, { workflow_runs: [] }],
         ...quietRoutes(),
       ]),
       pollIntervalMs: 60_000,
     });
-    await reg.createBranch("s1", "acme/widgets", "main", ["branch_workflow"], ["release"]);
-    // Simulate the poll pipeline directly: state moves, diff produces a
-    // branch_commit (filtered out - not watched) and a branch_workflow.
+    await reg.createBranch("s1", "acme/widgets", "main", ["branch_commit", "branch_workflow"], ["release"]);
     const w = reg.listForSession("s1")[0];
     expect(w.source).toBe("branch");
     if (w.source !== "branch") return;
+
+    // A CI-named workflow run does not match the "release" filter - dropped.
     w.state.workflowRuns["77"] = { name: "CI", status: "in_progress", conclusion: null, url: "https://x/77", event: "push" };
     await reg.poll();
-    // "CI" does not match the "release" filter - nothing delivered.
     expect(delivered).toHaveLength(0);
     expect(reg.pendingCount("s1")).toBe(0);
+
+    // But a commit landing passes the filter unfiltered - a watch filtered
+    // to "Publish" still reports that main moved.
+    headMoved = true;
+    await reg.poll();
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].events.map((e) => e.type)).toEqual(["branch_commit"]);
     reg.dispose();
   });
 });
