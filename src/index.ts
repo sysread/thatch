@@ -816,6 +816,10 @@ export const server: Plugin = async ({ client, worktree }) => {
     dispose: async () => {
       stopVersionChecker();
       watchers.dispose();
+      // Release native ONNX sessions while the worker is still healthy. Left
+      // to Bun's teardown, their NAPI finalizers panic the process (see
+      // BgeEmbeddingModel.dispose).
+      await model.dispose();
       db.close();
     },
   };

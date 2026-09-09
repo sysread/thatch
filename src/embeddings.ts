@@ -16,6 +16,7 @@ export interface EmbeddingModel {
   load(): Promise<void>;
   queryEmbed(text: string): Promise<Float32Array>;
   passageEmbed(text: string): Promise<Float32Array>;
+  dispose(): Promise<void>;
 }
 
 /**
@@ -80,5 +81,36 @@ export class BgeEmbeddingModel implements EmbeddingModel {
       normalize: true,
     });
     return output.data as Float32Array;
+  }
+
+  /**
+   * Releases the pipeline's native ONNX sessions. The host calls this during
+   * graceful shutdown so onnxruntime's NAPI wrap finalizers are freed while
+   * the runtime is still alive. If instead they survive to Bun's worker
+   * teardown, Bun panics creating their errors (oven-sh/bun#34664).
+   *
+   * Best-effort by design: dispose never throws, and a failed release is
+   * indistinguishable from never loading. An embed call after dispose just
+   * lazily re-loads the model.
+   */
+  async dispose(): Promise<void> {
+    // An in-flight load memoizes a rejecting promise on failure. Await it
+    // defensively so its error neither escapes dispose nor kills the teardown.
+    if (this.#loading) {
+      try {
+        await this.#loading;
+      } catch {
+        // Load failed - nothing was loaded, so nothing to release.
+      }
+    }
+    const pipe = this.#pipe;
+    this.#pipe = null;
+    this.#loading = null;
+    if (!pipe) return;
+    try {
+      await pipe.dispose();
+    } catch {
+      // Best-effort - see doc comment above.
+    }
   }
 }

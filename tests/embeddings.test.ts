@@ -62,6 +62,13 @@ describe("MockEmbeddingModel", () => {
     const model = new MockEmbeddingModel();
     expect(model.name).toBe("mock");
   });
+
+  test("dispose flips the disposed flag", async () => {
+    const model = new MockEmbeddingModel();
+    expect(model.disposed).toBe(false);
+    await model.dispose();
+    expect(model.disposed).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -70,11 +77,16 @@ describe("MockEmbeddingModel", () => {
 
 describe("BgeEmbeddingModel", () => {
   // Mock pipeline factory that returns a fake pipeline producing deterministic vectors
-  function createMockPipelineFactory(dims = 384): { factory: PipelineFactory; callCount: () => number } {
+  function createMockPipelineFactory(dims = 384): {
+    factory: PipelineFactory;
+    callCount: () => number;
+    disposeCount: () => number;
+  } {
     let calls = 0;
+    let disposals = 0;
     const factory: PipelineFactory = async (_modelName) => {
       calls++;
-      return async (text: string, _opts: any) => {
+      const pipe = async (text: string, _opts: any) => {
         // Produce a deterministic vector from text hash (like MockEmbeddingModel)
         let h = 0;
         for (let i = 0; i < text.length; i++) {
@@ -92,8 +104,12 @@ describe("BgeEmbeddingModel", () => {
         }
         return { data: vec };
       };
+      pipe.dispose = async () => {
+        disposals++;
+      };
+      return pipe;
     };
-    return { factory, callCount: () => calls };
+    return { factory, callCount: () => calls, disposeCount: () => disposals };
   }
 
   test("reports loaded as false before load", () => {
@@ -196,5 +212,81 @@ describe("BgeEmbeddingModel", () => {
     const { factory } = createMockPipelineFactory();
     const model = new BgeEmbeddingModel(undefined, factory);
     expect(model.name).toBe("Xenova/bge-small-en-v1.5");
+  });
+
+  test("dispose before load is a no-op", async () => {
+    const { factory, callCount } = createMockPipelineFactory();
+    const model = new BgeEmbeddingModel("test-model", factory);
+
+    await model.dispose();
+
+    expect(model.loaded).toBe(false);
+    expect(callCount()).toBe(0);
+  });
+
+  test("dispose releases the pipeline and clears loaded", async () => {
+    const { factory, disposeCount } = createMockPipelineFactory();
+    const model = new BgeEmbeddingModel("test-model", factory);
+    await model.passageEmbed("hello");
+    expect(model.loaded).toBe(true);
+
+    await model.dispose();
+
+    expect(model.loaded).toBe(false);
+    expect(disposeCount()).toBe(1);
+  });
+
+  test("dispose is idempotent", async () => {
+    const { factory, disposeCount } = createMockPipelineFactory();
+    const model = new BgeEmbeddingModel("test-model", factory);
+    await model.load();
+
+    await model.dispose();
+    await model.dispose();
+
+    expect(disposeCount()).toBe(1);
+  });
+
+  test("dispose waits for an in-flight load", async () => {
+    const { factory, callCount, disposeCount } = createMockPipelineFactory();
+    const model = new BgeEmbeddingModel("test-model", factory);
+
+    // Start the load without awaiting it, then dispose while it is suspended.
+    const loading = model.load();
+    await model.dispose();
+    await loading;
+
+    expect(callCount()).toBe(1);
+    expect(disposeCount()).toBe(1);
+    expect(model.loaded).toBe(false);
+  });
+
+  test("embed after dispose lazily re-loads", async () => {
+    const { factory, callCount } = createMockPipelineFactory();
+    const model = new BgeEmbeddingModel("test-model", factory);
+    await model.passageEmbed("hello");
+    await model.dispose();
+
+    await model.passageEmbed("hello again");
+
+    expect(model.loaded).toBe(true);
+    expect(callCount()).toBe(2);
+  });
+
+  test("dispose swallows a failed load memo", async () => {
+    let attempts = 0;
+    const failingFactory: PipelineFactory = async () => {
+      attempts++;
+      throw new Error("Network error");
+    };
+    const model = new BgeEmbeddingModel("test-model", failingFactory);
+
+    // Start the load without settling its rejection first, so dispose runs
+    // while the memo still holds the rejecting promise. Its error must be
+    // swallowed by dispose, not rethrown as dispose's own failure.
+    const failed = model.passageEmbed("hello").catch(() => {});
+    await expect(model.dispose()).resolves.toBeUndefined();
+    await failed;
+    expect(attempts).toBe(1);
   });
 });
