@@ -506,9 +506,14 @@ describe("fetchBranchState", () => {
         [RE_CHECK_RUNS, { check_runs: [{ id: 9, name: "test", status: "completed", conclusion: "success", html_url: "https://ci/9" }] }],
         ...quietRoutes(),
         [RE_GRAPHQL, {}],
-        [/\/actions\/runs\?branch=main/, {
+        [/\/actions\/runs\?/, {
           workflow_runs: [
-            { id: 55, name: "Publish", status: "in_progress", conclusion: null, html_url: "https://x/55", event: "push" },
+            { id: 55, name: "Publish", status: "in_progress", conclusion: null, html_url: "https://x/55", event: "push", head_branch: "main", head_sha: "beef00d5" },
+            // A tag-triggered run on the same head: head_branch is the tag,
+            // included because head_sha matches the branch head.
+            { id: 56, name: "Publish", status: "completed", conclusion: "success", html_url: "https://x/56", event: "push", head_branch: "v0.1.37", head_sha: "beef00d5" },
+            // A run from another branch: excluded.
+            { id: 57, name: "CI", status: "completed", conclusion: "success", html_url: "https://x/57", event: "push", head_branch: "feature-x", head_sha: "dead2222" },
           ],
         }],
         [/\/branches\/main$/, { commit: { sha: "beef00d5" } }],
@@ -516,12 +521,15 @@ describe("fetchBranchState", () => {
     };
     const state = await fetchBranchState(gh, "acme/widgets", "main");
     expect(called.some((p) => /\/branches\/main$/.test(p))).toBe(true);
-    expect(called.some((p) => /\/actions\/runs\?branch=main/.test(p))).toBe(true);
+    expect(called.some((p) => /\/actions\/runs\?/.test(p))).toBe(true);
     expect(called.some((p) => /\/commits\/beef00d5\/check-runs/.test(p))).toBe(true);
     expect(state.headSha).toBe("beef00d5");
     expect(state.checkRuns["9"]!.name).toBe("test");
     expect(state.workflowRuns["55"]!.name).toBe("Publish");
     expect(state.workflowRuns["55"]!.event).toBe("push");
+    // The tag-triggered run on the branch head is kept; the foreign-branch
+    // run is dropped.
+    expect(Object.keys(state.workflowRuns).sort()).toEqual(["55", "56"]);
   });
 });
 
@@ -548,12 +556,12 @@ describe("diffBranchState", () => {
 
   test("workflow runs emit on appearance and status transitions, with trigger event", () => {
     const before = branchState({
-      workflowRuns: { "55": { name: "Publish", status: "in_progress", conclusion: null, url: "https://x/55", event: "push" } },
+      workflowRuns: { "55": { name: "Publish", status: "in_progress", conclusion: null, url: "https://x/55", event: "push", headBranch: "main", headSha: "aaaa1111" } },
     });
     const after = branchState({
       workflowRuns: {
-        "55": { name: "Publish", status: "completed", conclusion: "success", url: "https://x/55", event: "push" },
-        "56": { name: "CI", status: "in_progress", conclusion: null, url: "https://x/56", event: "pull_request" },
+        "55": { name: "Publish", status: "completed", conclusion: "success", url: "https://x/55", event: "push", headBranch: "main", headSha: "aaaa1111" },
+        "56": { name: "CI", status: "in_progress", conclusion: null, url: "https://x/56", event: "pull_request", headBranch: "main", headSha: "aaaa1111" },
       },
     });
     const events = diffBranchState(before, after, TGT, "acme/widgets");
@@ -585,7 +593,7 @@ describe("branch watchers in the registry", () => {
       canDeliver: () => canDeliver,
       ghRunner: mockGh([
         [/\/branches\/main$/, () => ({ commit: { sha: pushed ? "dddd7777" : "aaaa1111" } })],
-        [/\/actions\/runs\?branch=main/, { workflow_runs: [] }],
+        [/\/actions\/runs\?/, { workflow_runs: [] }],
         ...quietRoutes(),
       ]),
       pollIntervalMs: 60_000,
@@ -612,7 +620,7 @@ describe("branch watchers in the registry", () => {
       canDeliver: () => canDeliver,
       ghRunner: mockGh([
         [/\/branches\/main$/, () => ({ commit: { sha: headMoved ? "dddd7777" : "aaaa1111" } })],
-        [/\/actions\/runs\?branch=main/, { workflow_runs: [] }],
+        [/\/actions\/runs\?/, { workflow_runs: [] }],
         ...quietRoutes(),
       ]),
       pollIntervalMs: 60_000,
@@ -623,7 +631,7 @@ describe("branch watchers in the registry", () => {
     if (w.source !== "branch") return;
 
     // A CI-named workflow run does not match the "release" filter - dropped.
-    w.state.workflowRuns["77"] = { name: "CI", status: "in_progress", conclusion: null, url: "https://x/77", event: "push" };
+    w.state.workflowRuns["77"] = { name: "CI", status: "in_progress", conclusion: null, url: "https://x/77", event: "push", headBranch: "main", headSha: "aaaa1111" };
     await reg.poll();
     expect(delivered).toHaveLength(0);
     expect(reg.pendingCount("s1")).toBe(0);
