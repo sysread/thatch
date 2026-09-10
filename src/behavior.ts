@@ -82,7 +82,7 @@ export class BehaviorEngine {
     return this.#engine.createMatcher(store, description, embedding, model);
   }
 
-  findNearestBehavior(store: string, embedding: Float32Array, threshold: number): BehaviorRow | null {
+  findNearestBehavior(store: string | string[], embedding: Float32Array, threshold: number): BehaviorRow | null {
     return this.#engine.findNearestItem(store, embedding, threshold) as BehaviorRow | null;
   }
 

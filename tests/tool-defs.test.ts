@@ -283,6 +283,50 @@ describe("prediction tool execute functions", () => {
     expect(list).not.toContain("disconfirm:");
   });
 
+  test("prediction_update cross-store duplicate reinforces in its home store", async () => {
+    // The preference already lives in global (the right home for a
+    // user-wide preference). A later call that defaults to the project
+    // store must reinforce the global row, not create a second copy that
+    // the auto-fire (which scans both stores) would surface twice.
+    await findTool("prediction_update").execute({
+      matcher: "choosing how to report tool activity",
+      prediction: "prefer toast notifications over in-chat messages",
+      signal: "create",
+      rationale: "user praised the toast pattern",
+      store: "global",
+    }, ctx);
+
+    const result = await findTool("prediction_update").execute({
+      matcher: "choosing how to report tool activity",
+      prediction: "prefer toast notifications over in-chat messages",
+      signal: "create",
+      rationale: "observed again, defaulting to the project store",
+    }, ctx);
+
+    expect(result).toContain("global");
+    expect(result).not.toContain("[created]");
+
+    // Exactly one copy across the stores the auto-fire scans.
+    const list = await findTool("prediction_list").execute({}, ctx);
+    const occurrences = list.split("prefer toast notifications over in-chat messages").length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  test("prediction_update with unknown default store falls back to global", async () => {
+    const unknownCtx = { ...ctx, defaultStore: "unknown" };
+    const result = await findTool("prediction_update").execute({
+      matcher: "choosing a commit style",
+      prediction: "prefer terse commit titles",
+      signal: "create",
+      rationale: "user stated the preference",
+    }, unknownCtx);
+
+    // The row must not land in a store no auto-fire scan can see.
+    expect(result).toContain("[created] global ::");
+    const list = await findTool("prediction_list").execute({}, unknownCtx);
+    expect(list).toContain("prefer terse commit titles");
+  });
+
   test("prediction_query returns matching predictions with 0-evidence verb", async () => {
     await findTool("prediction_update").execute({
       matcher: "deciding on test coverage",
@@ -395,6 +439,41 @@ describe("behavior tool execute functions", () => {
     const list = await findTool("behavior_list").execute({}, ctx);
     expect(list).toContain("investigating a new codebase");
     expect(list).toContain("starting a new ticket in an unfamiliar area");
+  });
+
+  test("behavior_codify cross-store duplicate reinforces in its home store", async () => {
+    await findTool("behavior_codify").execute({
+      situation: "about to run a destructive shell command",
+      behavior: "re-read the command for flags before pressing enter",
+      rationale: "typo'd flags are how directories vanish",
+      store: "global",
+    }, ctx);
+
+    const result = await findTool("behavior_codify").execute({
+      situation: "about to run a destructive shell command",
+      behavior: "re-read the command for flags before pressing enter",
+      rationale: "same rule, defaulting to the project store",
+    }, ctx);
+
+    expect(result).toContain("global");
+    expect(result).not.toContain("[codified] ");
+
+    const list = await findTool("behavior_list").execute({}, ctx);
+    const occurrences = list.split("re-read the command for flags before pressing enter").length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  test("behavior_codify with unknown default store falls back to global", async () => {
+    const unknownCtx = { ...ctx, defaultStore: "unknown" };
+    const result = await findTool("behavior_codify").execute({
+      situation: "about to run a destructive shell command",
+      behavior: "re-read the command for flags before pressing enter",
+      rationale: "user-agnostic discipline",
+    }, unknownCtx);
+
+    expect(result).toContain("[codified] global ::");
+    const list = await findTool("behavior_list").execute({}, unknownCtx);
+    expect(list).toContain("re-read the command for flags before pressing enter");
   });
 
   test("behavior_feedback ham confirms a behavior", async () => {

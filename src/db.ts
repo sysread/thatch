@@ -612,7 +612,7 @@ export class ThatchDB {
     return this.#predictions.createMatcher(store, description, embedding, model);
   }
 
-  findNearestPrediction(store: string, embedding: Float32Array, threshold: number) {
+  findNearestPrediction(store: string | string[], embedding: Float32Array, threshold: number) {
     return this.#predictions.findNearestPrediction(store, embedding, threshold);
   }
 
@@ -672,7 +672,7 @@ export class ThatchDB {
     return this.#behaviors.createBehaviorMatcher(store, description, embedding, model);
   }
 
-  findNearestBehavior(store: string, embedding: Float32Array, threshold: number) {
+  findNearestBehavior(store: string | string[], embedding: Float32Array, threshold: number) {
     return this.#behaviors.findNearestBehavior(store, embedding, threshold);
   }
 

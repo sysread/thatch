@@ -23,6 +23,26 @@ const MATCHER_DEDUP_COSINE = 0.85;
 const PREDICTION_DEDUP_COSINE = 0.85;
 const BEHAVIOR_DEDUP_COSINE = 0.85;
 
+/**
+ * Resolves the write target for a store-scoped tool. detectRepo falls back
+ * to "unknown" when it cannot name a repo; rows written to a store called
+ * "unknown" are invisible to every auto-fire scan (which reads the project
+ * store and "global"), so an unidentified context falls back to global.
+ */
+function resolveStore(args: Record<string, unknown>, ctx: CoreContext): string {
+  const store = (args.store as string) || ctx.defaultStore;
+  return store === "unknown" ? "global" : store;
+}
+
+/**
+ * The stores whose items a write must dedup against: the target store plus
+ * global, matching the stores the auto-fire nudge scans. A duplicate in
+ * either store would otherwise surface twice every turn.
+ */
+function dedupScanStores(store: string): string[] {
+  return store === "global" ? ["global"] : [store, "global"];
+}
+
 // Minimum matcher cosine to consider a prediction relevant. Matches the
 // auto-fire threshold in index.ts (PREDICTION_THRESHOLD). The query tool
 // should not return predictions from near-zero-similarity matchers that
@@ -192,7 +212,7 @@ const rememberDef: ToolDef = {
     ),
   },
   async execute(args, ctx) {
-    const store = (args.store as string) || ctx.defaultStore;
+    const store = resolveStore(args, ctx);
     const label = args.label as string;
     const content = `# ${label}\n\n${args.content as string}`;
     const embedding = await ctx.model.passageEmbed(content);
@@ -276,7 +296,7 @@ const listDef: ToolDef = {
     ),
   },
   async execute(args, ctx) {
-    const store = (args.store as string) || ctx.defaultStore;
+    const store = resolveStore(args, ctx);
     const entries = ctx.db.listEntries(store);
 
     if (entries.length === 0) return `No memories in "${store}".`;
@@ -306,7 +326,7 @@ const showDef: ToolDef = {
     ),
   },
   async execute(args, ctx) {
-    const store = (args.store as string) || ctx.defaultStore;
+    const store = resolveStore(args, ctx);
     const entry = ctx.db.showEntry(store, args.label as string);
 
     if (!entry) return `No memory labeled "${args.label as string}" found in store "${store}".`;
@@ -327,7 +347,7 @@ const forgetDef: ToolDef = {
     ),
   },
   async execute(args, ctx) {
-    const store = (args.store as string) || ctx.defaultStore;
+    const store = resolveStore(args, ctx);
     const deleted = ctx.db.forgetEntry(store, args.label as string);
 
     if (!deleted) return `No memory labeled "${args.label as string}" found in store "${store}".`;
@@ -366,7 +386,7 @@ const findDuplicatesDef: ToolDef = {
     ),
   },
   async execute(args, ctx) {
-    const store = (args.store as string) || ctx.defaultStore;
+    const store = resolveStore(args, ctx);
     const threshold = (args.threshold as number) ?? 0.85;
     const candidates = ctx.db.findDuplicates(store, threshold);
 
@@ -394,7 +414,7 @@ const markCheckedDef: ToolDef = {
     ),
   },
   async execute(args, ctx) {
-    const store = (args.store as string) || ctx.defaultStore;
+    const store = resolveStore(args, ctx);
     ctx.db.markPairChecked(
       store,
       ctx.db.slugify(args.label_a as string),
@@ -551,7 +571,7 @@ const predictionUpdateDef: ToolDef = {
     ),
   },
   async execute(args, ctx) {
-    const store = (args.store as string) || ctx.defaultStore;
+    const store = resolveStore(args, ctx);
     const matcherText = args.matcher as string;
     const predictionText = args.prediction as string;
     const signal = args.signal as "confirm" | "disconfirm" | "soft" | "create";
@@ -565,20 +585,23 @@ const predictionUpdateDef: ToolDef = {
     // entire operation rather than leaving orphans (matcher without
     // prediction, prediction without edge, edge without confidence).
     return ctx.db.transaction(() => {
+      // Cross-store dedup: search the target store AND global for a
+      // near-identical prediction. The auto-fire nudge scans both stores,
+      // so two copies would surface twice every turn. When the prediction
+      // already exists in the other store, that store becomes the write
+      // target ("home") and the result echoes where it landed.
+      const existing = ctx.db.findNearestPrediction(dedupScanStores(store), predEmbed, PREDICTION_DEDUP_COSINE);
+      const home = existing?.store ?? store;
+      const storeTag = home === store ? "" : ` in ${home}`;
+
       // Dedup matchers: find an existing matcher above the cosine threshold
       // rather than always creating a new one.
-      let matcherId = ctx.db.findNearestMatcher(store, matcherEmbed, MATCHER_DEDUP_COSINE)?.id;
-      if (!matcherId) matcherId = ctx.db.createMatcher(store, matcherText, matcherEmbed, ctx.model.name);
+      let matcherId = ctx.db.findNearestMatcher(home, matcherEmbed, MATCHER_DEDUP_COSINE)?.id;
+      if (!matcherId) matcherId = ctx.db.createMatcher(home, matcherText, matcherEmbed, ctx.model.name);
 
-      // Store-wide dedup: search the entire store for a near-identical
-      // prediction, not just this matcher's edges. If found, link this
-      // matcher to the existing prediction via an edge rather than
-      // creating a second row with the same statement.
-      let predictionId = ctx.db.findNearestPrediction(store, predEmbed, PREDICTION_DEDUP_COSINE)?.id;
-
-      if (!predictionId) {
+      if (!existing) {
         // No near-identical prediction exists; create one and link it.
-        predictionId = ctx.db.createPrediction(store, predictionText, rationale, predEmbed, ctx.model.name);
+        const predictionId = ctx.db.createPrediction(home, predictionText, rationale, predEmbed, ctx.model.name);
         ctx.db.createEdge(matcherId, predictionId, 1.0);
 
         // When the signal is confirm/disconfirm/soft (not create), apply
@@ -593,8 +616,10 @@ const predictionUpdateDef: ToolDef = {
           return `[created + ${signal}] "${updated?.statement ?? predictionText}" confidence=${(updated?.confidence ?? 0).toFixed(2)} (${updated?.confirm_count ?? 0}/${updated?.disconfirm_count ?? 0})`;
         }
         ctx.db.addProvenance(predictionId, "create", rationale);
-        return `[created] ${store} :: "${predictionText}" for "${matcherText}"`;
+        return `[created] ${home} :: "${predictionText}" for "${matcherText}"`;
       }
+
+      const predictionId = existing.id;
 
       // Ensure an edge links this matcher to the existing prediction.
       // createEdge uses ON CONFLICT DO NOTHING, so existing edge weights
@@ -607,8 +632,8 @@ const predictionUpdateDef: ToolDef = {
       // confidence-neutral, not a disconfirm.
       if (signal === "create") {
         ctx.db.addProvenance(predictionId, "create", rationale);
-        const existing = ctx.db.getPrediction(predictionId);
-        return `[linked] "${existing?.statement ?? predictionText}" for "${matcherText}" confidence=${(existing?.confidence ?? 0).toFixed(2)} (${existing?.confirm_count ?? 0}/${existing?.disconfirm_count ?? 0})`;
+        const existingItem = ctx.db.getPrediction(predictionId);
+        return `[linked${storeTag}] "${existingItem?.statement ?? predictionText}" for "${matcherText}" confidence=${(existingItem?.confidence ?? 0).toFixed(2)} (${existingItem?.confirm_count ?? 0}/${existingItem?.disconfirm_count ?? 0})`;
       }
 
       // Signal is confirm, disconfirm, or soft. Map the tool's 4-value
@@ -616,7 +641,7 @@ const predictionUpdateDef: ToolDef = {
       ctx.db.adjustConfidence(predictionId, signal === "soft" ? "soft" : signal === "confirm" ? "confirm" : "disconfirm");
       ctx.db.addProvenance(predictionId, signal, rationale);
       const updated = ctx.db.getPrediction(predictionId);
-      return `[${signal}] "${updated?.statement ?? predictionText}" confidence=${(updated?.confidence ?? 0).toFixed(2)} (${updated?.confirm_count ?? 0}/${updated?.disconfirm_count ?? 0})`;
+      return `[${signal}${storeTag}] "${updated?.statement ?? predictionText}" confidence=${(updated?.confidence ?? 0).toFixed(2)} (${updated?.confirm_count ?? 0}/${updated?.disconfirm_count ?? 0})`;
     });
   },
 };
@@ -628,13 +653,15 @@ const predictionListDef: ToolDef = {
     "confidence, and evidence count. For inspection and debugging.",
   args: {
     store: z.string().optional().describe(
-      "Which store to list. Defaults to the project store.",
+      "Which store to list. Defaults to the project store and global.",
     ),
   },
   async execute(args, ctx) {
-    const store = (args.store as string) || ctx.defaultStore;
-    const predictions = ctx.db.listPredictions(store);
-    if (predictions.length === 0) return `No predictions in "${store}".`;
+    const stores = args.store
+      ? [args.store as string]
+      : [ctx.defaultStore, "global"];
+    const predictions = stores.flatMap((s) => ctx.db.listPredictions(s));
+    if (predictions.length === 0) return `No predictions in "${stores.join('", "')}".`;
     return predictions.map((p) => {
       const matchers = p.matchers.map((m) => `    - "${m.description}" (w:${m.weight})`).join("\n");
       const provenance = ctx.db.getProvenance(p.id);
@@ -662,7 +689,7 @@ const predictionDeleteDef: ToolDef = {
     ),
   },
   async execute(args, ctx) {
-    const store = (args.store as string) || ctx.defaultStore;
+    const store = resolveStore(args, ctx);
     const statementText = args.statement as string;
     const predEmbed = await ctx.model.passageEmbed(statementText);
     const prediction = ctx.db.findNearestPrediction(store, predEmbed, PREDICTION_DEDUP_COSINE);
@@ -705,7 +732,7 @@ const behaviorCodifyDef: ToolDef = {
     ),
   },
   async execute(args, ctx) {
-    const store = (args.store as string) || ctx.defaultStore;
+    const store = resolveStore(args, ctx);
     const situationText = args.situation as string;
     const behaviorText = args.behavior as string;
     const rationale = args.rationale as string;
@@ -714,21 +741,28 @@ const behaviorCodifyDef: ToolDef = {
     const behaviorEmbed = await ctx.model.passageEmbed(behaviorText);
 
     return ctx.db.transaction(() => {
-      let matcherId = ctx.db.findNearestBehaviorMatcher(store, matcherEmbed, BEHAVIOR_DEDUP_COSINE)?.id;
-      if (!matcherId) matcherId = ctx.db.createBehaviorMatcher(store, situationText, matcherEmbed, ctx.model.name);
+      // Cross-store dedup: same rationale as prediction_update. The
+      // auto-fire nudge scans the target store and global, so a duplicate
+      // in either store would surface twice every turn.
+      const existing = ctx.db.findNearestBehavior(dedupScanStores(store), behaviorEmbed, BEHAVIOR_DEDUP_COSINE);
+      const home = existing?.store ?? store;
+      const storeTag = home === store ? "" : ` in ${home}`;
 
-      let behaviorId = ctx.db.findNearestBehavior(store, behaviorEmbed, BEHAVIOR_DEDUP_COSINE)?.id;
+      let matcherId = ctx.db.findNearestBehaviorMatcher(home, matcherEmbed, BEHAVIOR_DEDUP_COSINE)?.id;
+      if (!matcherId) matcherId = ctx.db.createBehaviorMatcher(home, situationText, matcherEmbed, ctx.model.name);
+
+      let behaviorId = existing?.id;
       if (!behaviorId) {
-        behaviorId = ctx.db.createBehavior(store, behaviorText, rationale, behaviorEmbed, ctx.model.name);
+        behaviorId = ctx.db.createBehavior(home, behaviorText, rationale, behaviorEmbed, ctx.model.name);
         ctx.db.createBehaviorEdge(matcherId, behaviorId, 1.0);
         ctx.db.addBehaviorProvenance(behaviorId, "codify", rationale);
-        return `[codified] ${store} :: "${behaviorText}" for "${situationText}"`;
+        return `[codified] ${home} :: "${behaviorText}" for "${situationText}"`;
       }
 
       ctx.db.createBehaviorEdge(matcherId, behaviorId, 1.0);
       ctx.db.addBehaviorProvenance(behaviorId, "codify", rationale);
-      const existing = ctx.db.getBehavior(behaviorId);
-      return `[linked] "${existing?.statement ?? behaviorText}" for "${situationText}" confidence=${(existing?.confidence ?? 0).toFixed(2)} (${existing?.confirm_count ?? 0}/${existing?.disconfirm_count ?? 0})`;
+      const behavior = ctx.db.getBehavior(behaviorId);
+      return `[linked${storeTag}] "${behavior?.statement ?? behaviorText}" for "${situationText}" confidence=${(behavior?.confidence ?? 0).toFixed(2)} (${behavior?.confirm_count ?? 0}/${behavior?.disconfirm_count ?? 0})`;
     });
   },
 };
@@ -761,7 +795,7 @@ const behaviorFeedbackDef: ToolDef = {
     ),
   },
   async execute(args, ctx) {
-    const store = (args.store as string) || ctx.defaultStore;
+    const store = resolveStore(args, ctx);
     const behaviorText = args.behavior as string;
     const relevant = args.relevant as boolean;
     const contextText = args.context as string;
@@ -787,13 +821,15 @@ const behaviorListDef: ToolDef = {
     "evidence count. For inspection and debugging.",
   args: {
     store: z.string().optional().describe(
-      "Which store to list. Defaults to the project store.",
+      "Which store to list. Defaults to the project store and global.",
     ),
   },
   async execute(args, ctx) {
-    const store = (args.store as string) || ctx.defaultStore;
-    const behaviors = ctx.db.listBehaviors(store);
-    if (behaviors.length === 0) return `No behaviors in "${store}".`;
+    const stores = args.store
+      ? [args.store as string]
+      : [ctx.defaultStore, "global"];
+    const behaviors = stores.flatMap((s) => ctx.db.listBehaviors(s));
+    if (behaviors.length === 0) return `No behaviors in "${stores.join('", "')}".`;
     return behaviors.map((b) => {
       const matchers = b.matchers.map((m) => `    - "${m.description}" (w:${m.weight})`).join("\n");
       const provenance = ctx.db.getBehaviorProvenance(b.id);
@@ -822,7 +858,7 @@ const behaviorDeleteDef: ToolDef = {
     ),
   },
   async execute(args, ctx) {
-    const store = (args.store as string) || ctx.defaultStore;
+    const store = resolveStore(args, ctx);
     const statementText = args.statement as string;
     const behaviorEmbed = await ctx.model.passageEmbed(statementText);
     const behavior = ctx.db.findNearestBehavior(store, behaviorEmbed, BEHAVIOR_DEDUP_COSINE);
