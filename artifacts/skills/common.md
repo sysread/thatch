@@ -65,3 +65,7 @@ Produce findings as markdown. For each finding:
 
 Severities: BLOCKING > HIGH > MEDIUM > LOW.
 If no findings, say so explicitly. Do NOT report issues in files you did not actually read. Do NOT report "likely similar issues exist" without evidence.
+
+## Wording
+
+Findings are prose for humans, not shorthand. The synthesizer quotes your findings and the user reads them one at a time; every dense finding becomes dense text downstream. One idea per sentence. State the problem in plain English before any code vocabulary. Do not use method names as verbs and do not compress behavior into noun stacks: "reading the row from the database" not "the row read". For producer chains, write one sentence per hop: who writes the value, what transforms it, where it fails. "Producer at X, transform at Y, consumer at Z" on one line is not followable.

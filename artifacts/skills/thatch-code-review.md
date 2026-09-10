@@ -145,6 +145,7 @@ Alternatively, perform the synthesis yourself:
 5. Cross-reference against the prior-comments register if one was built in Step 2: tag matching findings `Provenance: previously identified by @author, PR #N, DATE` and produce the `### Previously identified findings` appendix per the synthesizer skill.
 6. Calibrate severity (BLOCKING > HIGH > MEDIUM > LOW) based on your verification.
 7. Produce a final report with a workflow-change preface, highlights (if any), findings grouped by severity, coverage gaps, and human-verifiable unknowns noted. Include every confirmed LOW finding.
+8. Apply the synthesizer's "Writing review comments" prose rules to the whole report. Findings are prose, not shorthand: plain English, one idea per sentence, one sentence per hop of any producer chain.
 
 ## Specialist briefing template
 
@@ -160,5 +161,6 @@ When dispatching each sub-agent, include in the prompt:
 - Any design context or specific concerns
 - Explicit scope boundaries ("your scope is X; do NOT review Y")
 - Instruction to produce markdown findings with: severity, category, file:line, finding, evidence, trigger scenario, reachability, source of truth, producer chain, provenance
+- Instruction that findings are prose for humans, not shorthand: plain English, one idea per sentence, no clause-chains, one sentence per hop of any producer chain. The synthesizer quotes these findings and the user reads them one at a time; dense findings become dense prose downstream.
 - Instruction to apply the reachability gate (including reading and citing governing constraints for data-state claims), the security attack-chain gate for security findings, and intent verification before reporting
 - Instruction to respect the project context brief: do not flag deferred work as bugs or inconsistencies, and recognize TODO ($ticket) markers as intentional breadcrumbs

@@ -120,8 +120,12 @@ Apply the same clarity rules as the writing skills: prefer concrete terms over a
 
 ### Writing review comments
 
-The author is already holding the bug mechanics, the state flow, and the
-code context in their head when they read your comment. Write so the
+The author has the diff open at your cited lines. They can see what
+those lines do. What they may not have in front of them is one hop out:
+the caller, the callee, the guard, the other writer of the same field.
+That hop is the comment's context budget. Do not re-explain the visible
+lines and do not reach for project-wide background either; spend the
+words on what the cited lines cannot show. Write so the
 prose itself takes no effort to parse. The author should spend their
 slow deliberate thinking on the bug, not on decoding your sentences.
 
@@ -159,6 +163,31 @@ Rules:
   insight itself: a sharp technical observation that happens to be
   funny. Not a joke next to the insight. Not sycophancy. Not "great
   catch!" The playfulness signals engagement, not approval.
+- **Clarity wins over compression.** To shorten a comment, drop a whole
+  claim. Never tighten a surviving sentence into a clause-chain; every
+  sentence you keep keeps its full grammar. Brevity means fewer claims,
+  not denser ones.
+- **Literal phrasing beats compressed idiom.** Do not use method names
+  as verbs and do not compress behavior into noun stacks. "reading the
+  row from the database" not "the row read". If a phrase sounds like it
+  belongs in source code, rewrite it as a sentence.
+- **Explain operations before naming them.** A process word (refresh,
+  coalesce, reconcile, fan out) is not an explanation. Name the object,
+  the action, and the effect: "the worker waits up to 5 seconds, then
+  reloads each stale key once".
+- **Show the middle step.** A sentence with "so", "because", or
+  "prevents" hides its mechanism unless the step between cause and
+  effect is visible. A producer-transform-consumer chain is one
+  sentence per hop, not one line for the whole chain.
+- **Prefer concrete over ambiguous.** If a word can be read two ways in
+  this context, qualify it or replace it with the concrete behavior.
+  Ordinary words count: claim, owner, current, resolve, scope.
+
+These rules govern the whole report, not only comments posted after it.
+The Finding, Evidence, and Trigger/Proof fields are prose. A
+Trigger/Proof field that crams producer, transform, and consumer into
+one line is the densest text in the report and the first thing the
+author fails to parse. One sentence per hop.
 
 ### Author sensitivity
 
@@ -242,7 +271,7 @@ For each finding, grouped by severity (BLOCKING > HIGH > MEDIUM > LOW). Each fin
 3. **Location**: file:line
 4. **Finding**: what the problem is
 5. **Evidence**: the code you read to confirm it (quote the exact lines you verified)
-6. **Trigger/Proof**: the workflow trigger, and for state/data/behavior issues the producer then transform then consumer chain you verified
+6. **Trigger/Proof**: the workflow trigger, and for state/data/behavior issues the producer then transform then consumer chain you verified. One sentence per hop; do not cram the chain into one line.
 7. **Provenance**: branch-introduced or pre-existing. If the finding matches a prior review comment, append `; previously identified by @author, PR #N, DATE` to this field. For findings matching an `addressed` prior comment, also add a one-line note on why the finding persists so the user can investigate whether the prior resolution is incomplete or the issue has regressed.
 
 ### Rejected findings (appendix, brief)
