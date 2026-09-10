@@ -1,6 +1,11 @@
 import { describe, test, expect } from "bun:test";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { BgeEmbeddingModel, type PipelineFactory } from "../src/embeddings";
+import {
+  BgeEmbeddingModel,
+  backendMode,
+  configureBackend,
+  type PipelineFactory,
+} from "../src/embeddings";
 
 describe("MockEmbeddingModel", () => {
   test("reports dims correctly", () => {
@@ -384,5 +389,58 @@ describe("BgeEmbeddingModel", () => {
     const out = await model.passageEmbed("hello");
 
     expect(out.length).toBe(384);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Embedding backend selection
+// ---------------------------------------------------------------------------
+
+describe("embedding backend", () => {
+  test("backendMode defaults to wasm", () => {
+    const saved = process.env.THATCH_EMBEDDING_BACKEND;
+    try {
+      delete process.env.THATCH_EMBEDDING_BACKEND;
+      expect(backendMode()).toBe("wasm");
+    } finally {
+      if (saved === undefined) delete process.env.THATCH_EMBEDDING_BACKEND;
+      else process.env.THATCH_EMBEDDING_BACKEND = saved;
+    }
+  });
+
+  test("backendMode opts out to native", () => {
+    const saved = process.env.THATCH_EMBEDDING_BACKEND;
+    try {
+      process.env.THATCH_EMBEDDING_BACKEND = "native";
+      expect(backendMode()).toBe("native");
+    } finally {
+      if (saved === undefined) delete process.env.THATCH_EMBEDDING_BACKEND;
+      else process.env.THATCH_EMBEDDING_BACKEND = saved;
+    }
+  });
+
+  test("backendMode treats unknown values as wasm", () => {
+    const saved = process.env.THATCH_EMBEDDING_BACKEND;
+    try {
+      process.env.THATCH_EMBEDDING_BACKEND = "garbage";
+      expect(backendMode()).toBe("wasm");
+    } finally {
+      if (saved === undefined) delete process.env.THATCH_EMBEDDING_BACKEND;
+      else process.env.THATCH_EMBEDDING_BACKEND = saved;
+    }
+  });
+
+  test("configureBackend pins onnxruntime-web and single-threads wasm", async () => {
+    // configureBackend memoizes per process, so this runs once. It must be
+    // the only configureBackend call in the test process.
+    delete process.env.THATCH_EMBEDDING_BACKEND;
+    expect(Symbol.for("onnxruntime") in globalThis).toBe(false);
+
+    const mode = await configureBackend();
+
+    expect(mode).toBe("wasm");
+    const ort = (globalThis as Record<symbol, any>)[Symbol.for("onnxruntime")];
+    expect(ort).toBeDefined();
+    expect(ort.env.wasm.numThreads).toBe(1);
   });
 });

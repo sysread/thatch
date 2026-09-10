@@ -25,9 +25,69 @@ export interface EmbeddingModel {
  */
 export type PipelineFactory = (modelName: string) => Promise<any>;
 
+/**
+ * Embedding backend mode. "wasm" runs the ONNX model on onnxruntime-web's
+ * pure-JS/wasm runtime; "native" runs it on onnxruntime-node's NAPI addon.
+ */
+export type EmbeddingBackendMode = "wasm" | "native";
+
+/**
+ * Reads the backend override. Only "native" opts out; any other value,
+ * including unset, selects the wasm default. Exported for tests.
+ */
+export function backendMode(): EmbeddingBackendMode {
+  return process.env.THATCH_EMBEDDING_BACKEND === "native" ? "native" : "wasm";
+}
+
+const ORT_SYMBOL = Symbol.for("onnxruntime");
+
+let backendConfigured: Promise<EmbeddingBackendMode> | null = null;
+
+/**
+ * Chooses the ONNX backend before transformers initializes. Memoized: the
+ * choice is made once at transformers' module init and cannot be changed
+ * afterwards. Exported for tests.
+ *
+ * "wasm" mode pins globalThis[Symbol.for("onnxruntime")] to onnxruntime-web
+ * so transformers' node build creates sessions on its pure-JS/wasm runtime
+ * instead of the onnxruntime-node NAPI addon. The NAPI addon leaves wrap
+ * finalizers that panic Bun at process teardown (oven-sh/bun#34664); the wasm
+ * runtime creates none. A backend already chosen by the host (symbol present)
+ * is respected, never clobbered. A failed onnxruntime-web import falls back
+ * to native rather than blocking embedding.
+ */
+export async function configureBackend(): Promise<EmbeddingBackendMode> {
+  backendConfigured ??= (async () => {
+    const mode = backendMode();
+    if (mode === "native" || ORT_SYMBOL in globalThis) return mode;
+    try {
+      const ort = await import("onnxruntime-web");
+      (globalThis as Record<symbol, unknown>)[ORT_SYMBOL] = ort;
+      // Single-threaded wasm: deterministic, and avoids worker_threads,
+      // where Bun has known shutdown crashes. Latency at one thread is fine
+      // for background embedding.
+      ort.env.wasm.numThreads = 1;
+    } catch {
+      // onnxruntime-web unavailable - native sessions still work.
+    }
+    return mode;
+  })();
+  return backendConfigured;
+}
+
 const defaultPipelineFactory: PipelineFactory = async (modelName) => {
+  const mode = await configureBackend();
   const { pipeline } = await import("@huggingface/transformers");
-  return pipeline("feature-extraction", modelName);
+  if (mode === "native") {
+    return pipeline("feature-extraction", modelName);
+  }
+  // The ORT_SYMBOL override branch leaves transformers' device allowlist
+  // empty, so any named device throws; "auto" bypasses the check and the
+  // explicit execution provider does the real work.
+  return pipeline("feature-extraction", modelName, {
+    device: "auto",
+    session_options: { executionProviders: ["wasm"] },
+  });
 };
 
 /**
