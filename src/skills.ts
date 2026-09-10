@@ -41,6 +41,7 @@ function loadSharedSkills(): SkillDef[] {
     "thatch-review-breadcrumbs",
     "thatch-review-mark-and-sweep",
     "thatch-review-highlights",
+    "thatch-review-mentorship",
     "thatch-review-synthesizer",
     "thatch-review-context",
     "thatch-code-archaeology",
