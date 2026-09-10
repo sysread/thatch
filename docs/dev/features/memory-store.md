@@ -41,6 +41,19 @@ The "global" store always exists — it is inserted at schema init (`INSERT OR I
 - Output is a `Float32Array`.
 - `MockEmbeddingModel` is available for tests.
 - The model can be overridden via the `THATCH_MODEL` environment variable.
+- Backend: runs on onnxruntime-web's pure-JS/wasm runtime by default. Before
+  transformers initializes, `configureBackend()` pins
+  `globalThis[Symbol.for("onnxruntime")]` to onnxruntime-web, so no
+  onnxruntime-node NAPI wrap finalizers exist to panic Bun at process
+  teardown (oven-sh/bun#34664). `THATCH_EMBEDDING_BACKEND=native` opts back
+  into onnxruntime-node. Wasm runs single-threaded and uses
+  `device: "auto"` with an explicit `wasm` execution provider (the override
+  branch leaves transformers' device allowlist empty, so named devices throw).
+- Native-memory hygiene: each embed copies the vector out of the output
+  tensor, then disposes the tensor; after 10 idle minutes the pipeline's
+  native sessions are released (an embed lazily re-loads). The plugin's
+  `dispose` hook releases them at shutdown. All release paths are
+  best-effort and never throw.
 
 ### Write path (memory_remember)
 

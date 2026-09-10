@@ -49,6 +49,9 @@ store when recalling.
   (MCP).
 - `THATCH_MODEL`: Hugging Face model name for embeddings. Defaults to
   `Xenova/bge-small-en-v1.5` (34 MB, 384-dimensional).
+- `THATCH_EMBEDDING_BACKEND`: embedding compute backend. Defaults to
+  `wasm` (pure JavaScript/WebAssembly, no native addons). Set to
+  `native` to use the onnxruntime-node addon instead.
 - `THATCH_RECALL_THRESHOLD`: cosine score threshold for the recall
   nudge. Defaults to 0.55. Lower surfaces more matches (noisier);
   higher surfaces fewer (stricter).
