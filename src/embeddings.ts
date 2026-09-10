@@ -75,6 +75,19 @@ export async function configureBackend(): Promise<EmbeddingBackendMode> {
   return backendConfigured;
 }
 
+/**
+ * Test hook: clears the configureBackend memo and unpins the onnxruntime
+ * global, so a test can exercise the pinning path itself. Needed because the
+ * test process is shared across files: initializing the plugin server seeds
+ * behaviors, which embeds, which runs configureBackend and pins the symbol
+ * as a side effect. Whether that happened before a given test file runs
+ * depends on bun's file order, which differs between machines.
+ */
+export function resetBackendForTests(): void {
+  backendConfigured = null;
+  delete (globalThis as Record<symbol, unknown>)[ORT_SYMBOL];
+}
+
 const defaultPipelineFactory: PipelineFactory = async (modelName) => {
   const mode = await configureBackend();
   const { pipeline } = await import("@huggingface/transformers");
