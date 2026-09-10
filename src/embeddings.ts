@@ -31,18 +31,40 @@ const defaultPipelineFactory: PipelineFactory = async (modelName) => {
 };
 
 /**
+ * How long a loaded pipeline may sit unused before its native ONNX sessions
+ * are released while the runtime is still healthy. Long enough to span the
+ * gap between extraction bursts, short enough to matter before process exit.
+ */
+const DEFAULT_IDLE_TTL_MS = 10 * 60 * 1000;
+
+export interface BgeEmbeddingModelOptions {
+  /**
+   * Idle milliseconds before the pipeline's native sessions are released.
+   * A later embed lazily re-loads. 0 disables idle release.
+   */
+  idleTtlMs?: number;
+}
+
+/**
  * Lazy-loads an embedding model via @huggingface/transformers.
  * Model files (~34 MB for the default) are downloaded once and cached by HF Hub.
  */
 export class BgeEmbeddingModel implements EmbeddingModel {
   #modelName: string;
   #pipelineFactory: PipelineFactory;
+  #idleTtlMs: number;
   #pipe: any = null;
   #loading: Promise<void> | null = null;
+  #idleTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(modelName = "Xenova/bge-small-en-v1.5", pipelineFactory?: PipelineFactory) {
+  constructor(
+    modelName = "Xenova/bge-small-en-v1.5",
+    pipelineFactory?: PipelineFactory,
+    options: BgeEmbeddingModelOptions = {},
+  ) {
     this.#modelName = modelName;
     this.#pipelineFactory = pipelineFactory ?? defaultPipelineFactory;
+    this.#idleTtlMs = options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
   }
 
   get loaded(): boolean {
@@ -75,12 +97,31 @@ export class BgeEmbeddingModel implements EmbeddingModel {
   }
 
   async #embed(text: string): Promise<Float32Array> {
-    await this.load();
-    const output = await this.#pipe(text, {
-      pooling: "mean",
-      normalize: true,
-    });
-    return output.data as Float32Array;
+    // Clear any pending idle timer before touching the pipeline. The timer
+    // must never fire while an embed is in flight - its callback releases
+    // the pipeline this call is about to use.
+    this.#clearIdleTimer();
+    try {
+      await this.load();
+      const pipe = this.#pipe;
+      const output = await pipe(text, {
+        pooling: "mean",
+        normalize: true,
+      });
+      // Copy the vector before releasing the tensor: the real Tensor's data
+      // getter exposes memory the disposer frees.
+      const data = new Float32Array(output.data);
+      if (typeof output?.dispose === "function") {
+        try {
+          await output.dispose();
+        } catch {
+          // Tensor release is best-effort; the copied data is already valid.
+        }
+      }
+      return data;
+    } finally {
+      this.#armIdleTimer();
+    }
   }
 
   /**
@@ -89,11 +130,16 @@ export class BgeEmbeddingModel implements EmbeddingModel {
    * the runtime is still alive. If instead they survive to Bun's worker
    * teardown, Bun panics creating their errors (oven-sh/bun#34664).
    *
+   * The idle timer releases on the same principle during normal operation:
+   * the plugin's dispose hook is best-effort because opencode can exit
+   * without running it, so sessions are also freed after a quiet period.
+   *
    * Best-effort by design: dispose never throws, and a failed release is
    * indistinguishable from never loading. An embed call after dispose just
    * lazily re-loads the model.
    */
   async dispose(): Promise<void> {
+    this.#clearIdleTimer();
     // An in-flight load memoizes a rejecting promise on failure. Await it
     // defensively so its error neither escapes dispose nor kills the teardown.
     if (this.#loading) {
@@ -103,6 +149,10 @@ export class BgeEmbeddingModel implements EmbeddingModel {
         // Load failed - nothing was loaded, so nothing to release.
       }
     }
+    await this.#release();
+  }
+
+  async #release(): Promise<void> {
     const pipe = this.#pipe;
     this.#pipe = null;
     this.#loading = null;
@@ -110,7 +160,27 @@ export class BgeEmbeddingModel implements EmbeddingModel {
     try {
       await pipe.dispose();
     } catch {
-      // Best-effort - see doc comment above.
+      // Best-effort - see dispose's doc comment.
+    }
+  }
+
+  #armIdleTimer(): void {
+    if (this.#idleTtlMs <= 0) return;
+    this.#clearIdleTimer();
+    this.#idleTimer = setTimeout(() => {
+      this.#idleTimer = null;
+      this.#release().catch(() => {
+        // Idle release is best-effort; a failed release retries on dispose.
+      });
+    }, this.#idleTtlMs);
+    // Never hold the host process open for an idle timer.
+    this.#idleTimer.unref?.();
+  }
+
+  #clearIdleTimer(): void {
+    if (this.#idleTimer) {
+      clearTimeout(this.#idleTimer);
+      this.#idleTimer = null;
     }
   }
 }
