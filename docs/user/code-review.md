@@ -1,6 +1,6 @@
 # Code Review
 
-Thatch ships a multi-agent code review pipeline. Eight specialist
+Thatch ships a multi-agent code review pipeline. Nine specialist
 review lenses run in parallel, then a synthesizer verifies and
 deduplicates their findings into a single report.
 
@@ -22,7 +22,7 @@ the review:
 3. **Research affected workflows**: load `thatch-code-archaeology`,
    trace the code paths the change touches.
 4. **Estimate complexity**: partition the diff into review units.
-5. **Dispatch specialists**: fan out the eight specialists as
+5. **Dispatch specialists**: fan out the nine specialists as
    parallel sub-agents, each with the context brief.
 6. **Synthesize**: the synthesizer reads all specialist output,
    verifies each finding (cited text exists, claim is accurate,
@@ -31,7 +31,7 @@ the review:
    re-verifies behavioral findings against current main and reports
    merge-base-only findings as rebase notes rather than defects.
 
-## The eight specialists
+## The nine specialists
 
 | Skill | What it checks |
 |-------|-------------|
@@ -43,6 +43,7 @@ the review:
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of the code's behavior? |
 | `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
 | `thatch-review-highlights` | Positive finding detection: clever solutions, cleanup done along the way, documentation that helps. Medium-high bar. |
+| `thatch-review-mentorship` | Peer-mentorship lens: teaching-grade notes on unseen helpers/internal packages, companion techniques, house patterns, test-craft, API-shape principles, next-reader discoverability. Informational only, never blocking. |
 
 Each specialist is a self-contained static-analysis pass. They can run
 individually or as part of the coordinated review.

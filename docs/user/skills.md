@@ -45,6 +45,7 @@ Skills are split into shared (all hosts) and opencode-only:
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of the code's behavior? |
 | `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
 | `thatch-review-highlights` | Positive finding detection: notably clever solutions, cleanup done along the way, documentation that helps. Medium-high bar. |
+| `thatch-review-mentorship` | Peer-mentorship lens: teaching-grade notes on unseen helpers/internal packages, companion techniques, house patterns, test-craft, API-shape principles, next-reader discoverability. Informational only, never blocking. |
 | `thatch-review-synthesizer` | Verifies and synthesizes findings from multiple specialists into a deduplicated, severity-grouped report. |
 | `thatch-review-context` | Gathers project context (PRs, tickets, linked docs/designs followed from the change, TODOs, deferred work) before a review. Prevents false positives about intentionally deferred work. |
 | `thatch-code-archaeology` | Investigates an existing feature, debugs an unfamiliar area, or begins a new ticket. The research skill; pair with `thatch-coding-workflow`. |

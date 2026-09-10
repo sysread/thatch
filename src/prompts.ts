@@ -338,7 +338,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-code-walkthrough\` - produces a teaching walkthrough for a feature/workflow as it stands today with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + Key files) and calibrated prose rules. Also use proactively to draft high-level docs for new or undocumented features (suitable for pkg/README.md or docs/features/<name>.md). Load the skill for the format and prose rules, not just for the research method.
 - \`thatch-review-context\` - gather project context (PRs, tickets, TODOs, deferred work) before a review.
 - \`thatch-review-followup\` - alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed prior findings, offers to reply on resolved items, then optionally re-runs the full structured review.
-- \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-economy\` / \`-no-slop\` / \`-breadcrumbs\` / \`-mark-and-sweep\` / \`-highlights\` - eight specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
+- \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-economy\` / \`-no-slop\` / \`-breadcrumbs\` / \`-mark-and-sweep\` / \`-highlights\` / \`-mentorship\` - nine specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
 - \`thatch-project-primer\` - investigate a new project and write foundational memories.
 - \`thatch-session-reflection\` - record what you learned at end of session.
 - \`thatch-fact-extractor\` - extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).
