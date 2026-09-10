@@ -85,7 +85,7 @@ Test design teaching. The tests pass; the design makes them expensive to trust o
 The lens positions on test design (apply when test code in the change deviates):
 - **Repetition is fine in tests.** Each test should read standalone. Do not flag duplicated setup as a DRY issue.
 - **Shared setup is fine up to a point of diminishing returns.** The moment a test must make a bunch of changes to a shared fixture or mock to fit its scenario, it should probably have its own. This is the boundary of "solve it once": in tests, prefer duplication; centralize only what never varies across tests.
-- **Branches, loops, and tables inside test bodies are brittle.** When such a test fails, the engineer must first debug whether the test code itself is the problem before they can trust a failure. Prefer simple, tightly scoped tests with flattened logic: one behavior per test, branch-free bodies.
+- **Branches and loops inside a single test body are brittle.** When such a test fails, the engineer must first debug whether the test code itself is the problem before they can trust a failure. Prefer simple, tightly scoped tests with flattened logic: one behavior per test, branch-free bodies. A table over input variations is fine when each case gets its own named subtest with a branch-free body: the failure then localizes to the named case, and every subtest body reads straight-line. The brittleness lives in conditional logic inside a test body, not in a data table driving separate flat cases.
 
 What counts:
 - Test bodies that branch or loop over scenarios where inlining each case as its own flat test would read clearly
@@ -95,6 +95,7 @@ What counts:
 What does NOT count:
 - Test coverage gaps (out of scope for this lens)
 - Table-driven tests where they are the repo's enforced house style. Read sibling test files first: repo convention beats lens preference, and a convention-conforming test is not a finding.
+- A table of input variations where each case runs in its own named subtest with a branch-free body: failures localize to the case name, so the brittleness the lens targets is absent.
 
 ### MISUSE_PROOFING
 An API or interface the change introduces could be shaped so misuse is impossible rather than discouraged.
