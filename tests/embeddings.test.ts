@@ -289,4 +289,100 @@ describe("BgeEmbeddingModel", () => {
     await failed;
     expect(attempts).toBe(1);
   });
+
+  test("idle timeout releases the pipeline and clears loaded", async () => {
+    const { factory, disposeCount } = createMockPipelineFactory();
+    const model = new BgeEmbeddingModel("test-model", factory, { idleTtlMs: 10 });
+    await model.passageEmbed("hello");
+    expect(model.loaded).toBe(true);
+
+    await Bun.sleep(60);
+
+    expect(model.loaded).toBe(false);
+    expect(disposeCount()).toBe(1);
+  });
+
+  test("embed resets the idle timer", async () => {
+    const { factory, disposeCount } = createMockPipelineFactory();
+    const model = new BgeEmbeddingModel("test-model", factory, { idleTtlMs: 50 });
+    await model.passageEmbed("first");
+    await Bun.sleep(30);
+    await model.passageEmbed("second");
+    await Bun.sleep(30);
+    // 60ms since the first embed, but only 30ms since the second reset.
+    expect(model.loaded).toBe(true);
+    expect(disposeCount()).toBe(0);
+
+    await Bun.sleep(40);
+    expect(model.loaded).toBe(false);
+    expect(disposeCount()).toBe(1);
+  });
+
+  test("idle fire after dispose is a no-op", async () => {
+    const { factory, disposeCount } = createMockPipelineFactory();
+    const model = new BgeEmbeddingModel("test-model", factory, { idleTtlMs: 10 });
+    await model.passageEmbed("hello");
+
+    await model.dispose();
+    await Bun.sleep(40);
+
+    expect(disposeCount()).toBe(1);
+    expect(model.loaded).toBe(false);
+  });
+
+  test("idleTtlMs 0 disables idle disposal", async () => {
+    const { factory, disposeCount } = createMockPipelineFactory();
+    const model = new BgeEmbeddingModel("test-model", factory, { idleTtlMs: 0 });
+    await model.passageEmbed("hello");
+
+    await Bun.sleep(40);
+
+    expect(model.loaded).toBe(true);
+    expect(disposeCount()).toBe(0);
+  });
+
+  test("embed after idle release lazily re-loads", async () => {
+    const { factory, callCount } = createMockPipelineFactory();
+    const model = new BgeEmbeddingModel("test-model", factory, { idleTtlMs: 10 });
+    await model.passageEmbed("first");
+    await Bun.sleep(60);
+    expect(model.loaded).toBe(false);
+
+    await model.passageEmbed("second");
+
+    expect(model.loaded).toBe(true);
+    expect(callCount()).toBe(2);
+  });
+
+  test("disposes the output tensor after copying data", async () => {
+    const vec = new Float32Array(384).fill(0.5);
+    let tensorDisposes = 0;
+    const factory: PipelineFactory = async () => {
+      const pipe = async (_text: string, _opts: any) => ({
+        data: vec,
+        dispose: async () => {
+          tensorDisposes++;
+        },
+      });
+      pipe.dispose = async () => {};
+      return pipe;
+    };
+    // idleTtlMs 0 keeps the two disposal mechanisms independent: this only
+    // exercises per-call tensor release, not session release.
+    const model = new BgeEmbeddingModel("test-model", factory, { idleTtlMs: 0 });
+    const out = await model.passageEmbed("hello");
+
+    expect(tensorDisposes).toBe(1);
+    expect(out[0]).toBe(0.5);
+  });
+
+  test("pipeline without a tensor dispose method still embeds", async () => {
+    const factory: PipelineFactory = async () => {
+      return async (_text: string, _opts: any) => ({ data: new Float32Array(384) });
+    };
+    const model = new BgeEmbeddingModel("test-model", factory, { idleTtlMs: 0 });
+    const out = await model.passageEmbed("hello");
+
+    expect(out.length).toBe(384);
+  });
 });
