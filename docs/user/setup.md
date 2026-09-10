@@ -102,8 +102,9 @@ instructions are deployed without requiring you to manually re-run
   cached in `node_modules/@huggingface/transformers/.cache/`.
 - There is no web UI or dashboard. All interaction is through the
   agent's tool calls and the `thatch` CLI.
-- The MCP server is a long-lived process that holds the warm embedding
-  model in memory. Hook commands connect to it via a Unix domain
+- The MCP server is a long-lived process that keeps the embedding model
+  loaded while it is in use, releases it after 10 idle minutes, and
+  re-loads it on demand. Hook commands connect to it via a Unix domain
   socket (the sideband) to avoid loading the model themselves.
 
 See [memory.md](memory.md) for the memory system,
