@@ -4,6 +4,7 @@ import {
   BgeEmbeddingModel,
   backendMode,
   configureBackend,
+  resetBackendForTests,
   type PipelineFactory,
 } from "../src/embeddings";
 
@@ -431,16 +432,27 @@ describe("embedding backend", () => {
   });
 
   test("configureBackend pins onnxruntime-web and single-threads wasm", async () => {
-    // configureBackend memoizes per process, so this runs once. It must be
-    // the only configureBackend call in the test process.
+    // Other test files initialize the plugin server, whose behavior seeding
+    // embeds and pins the backend symbol as a side effect. Reset that state
+    // so this test exercises the pinning path itself, then restore whatever
+    // was there for later files.
     delete process.env.THATCH_EMBEDDING_BACKEND;
-    expect(Symbol.for("onnxruntime") in globalThis).toBe(false);
+    const globals = globalThis as Record<symbol, any>;
+    const savedOrt = globals[Symbol.for("onnxruntime")];
+    resetBackendForTests();
 
-    const mode = await configureBackend();
+    try {
+      const mode = await configureBackend();
 
-    expect(mode).toBe("wasm");
-    const ort = (globalThis as Record<symbol, any>)[Symbol.for("onnxruntime")];
-    expect(ort).toBeDefined();
-    expect(ort.env.wasm.numThreads).toBe(1);
+      expect(mode).toBe("wasm");
+      const ort = globals[Symbol.for("onnxruntime")];
+      expect(ort).toBeDefined();
+      expect(ort.env.wasm.numThreads).toBe(1);
+    } finally {
+      resetBackendForTests();
+      if (savedOrt !== undefined) {
+        globals[Symbol.for("onnxruntime")] = savedOrt;
+      }
+    }
   });
 });
