@@ -92,6 +92,8 @@ The seven problem-finding review specialists share a framework interpolated via 
   ticket is closed or merged.
 - **Output format** — `[SEVERITY] [CATEGORY] file:line` with finding, evidence
   (quoted), trigger, reachability, source of truth, producer chain, provenance.
+- **Wording** — findings are prose for humans, not shorthand: one idea per
+  sentence, no method names as verbs, one sentence per hop for producer chains.
 
 The synthesizer reuses the same verification rigor but has its own structure
 (it does not interpolate `REVIEW_COMMON`).
