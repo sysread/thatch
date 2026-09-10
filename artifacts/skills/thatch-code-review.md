@@ -87,7 +87,7 @@ For changes estimated at 3 points or fewer, skip partitioning — dispatch one s
 
 ## Step 6: Dispatch specialist sub-agents
 
-For each review unit, dispatch sub-agents using the Task tool. Each sub-agent runs one specialist lens on one review unit. The eight specialists are:
+For each review unit, dispatch sub-agents using the Task tool. Each sub-agent runs one specialist lens on one review unit. The nine specialists are:
 
 1. **Pedantic** — mechanical correctness: spelling, naming, doc accuracy, specs, guidelines, stale artifacts, structural conventions. Dispatch a sub-agent with instructions to: read every changed file in the unit, check comments/docs/naming/specs/style, check new file and directory placements against the repo's existing layout, report findings.
 
@@ -104,6 +104,8 @@ For each review unit, dispatch sub-agents using the Task tool. Each sub-agent ru
 7. **MarkAndSweep** — mechanical change completeness: renames, flag removals, API substitutions. Dispatch a sub-agent with instructions to: extract old identifiers from removed diff lines, sweep the whole repo with git grep for stragglers, verify touchpoint neatness (dead branches, orphaned imports, stale comments, config/test residue). Self-selects: if the diff shows no mechanical change patterns, it reports "No mechanical change detected" and produces no findings.
 
 8. **Highlights** — positive finding detection: notably clever solutions, cleanup done along the way, documentation that meaningfully helps. Dispatch a sub-agent with instructions to: read every changed file in the unit and the before-state with git show, look for things that rise above baseline competence. Medium-high bar: no generic praise, no baseline competence. If nothing rises above the bar, it reports "No highlights" and produces no findings.
+
+9. **Mentorship** — peer-mentorship teaching lens: helpers and internal packages the author may not have seen, companion techniques, house patterns, test-craft, API-shape principles, next-reader discoverability. Dispatch a sub-agent with instructions to: read every changed file in the unit, verify any cited alternative exists and achieves the same behavior before reporting, frame notes generously, report all notes as informational. If nothing qualifies, it reports "No mentorship notes" and produces no findings.
 
 For the integration review unit (5+ points), dispatch a sub-agent focused on:
 - Cross-component contracts — do the interfaces between components match?
@@ -135,16 +137,18 @@ Confirmed LOW findings are mandatory in the final report, including mechanical f
 
 Confirmed highlights (from the highlights specialist) appear in a `### Highlights` section after the workflow changes and before the confirmed findings. Most PRs will have none — that is expected. Do not pad with borderline calls. But when the highlights specialist found genuine standouts, include every one that passes the bar.
 
+Mentorship notes (from the mentorship specialist) appear in a `### Mentorship notes` section after Highlights and before the confirmed findings. They are teaching-grade observations (existing helpers, companion techniques, house patterns, test-craft, API-shape principles, next-reader discoverability), always informational, never merged into defect findings and never blocking. Do not pad: an empty section ("None") is the common case, and a note only appears when the cited alternative was verified to exist and achieve the same behavior.
+
 **Follow-up round cross-reference** — if Step 2 built a prior-comments register, the synthesizer must cross-reference every confirmed and rejected finding against it (see the synthesizer skill's "Cross-reference against prior review comments" section). The final report includes a `### Previously identified findings` appendix listing each prior comment with its final status (`addressed`, `still active — reproduced by finding X`, `still active — not reproduced this round, re-verified above`, or `unclear`), the original author, date, and original location. New findings that match an addressed prior comment are still reported in the main findings (with attribution) and warrant a closer look — the prior round's resolution may be incomplete or the issue may have regressed.
 
 Alternatively, perform the synthesis yourself:
 1. Read each finding's cited location to verify evidence accuracy.
 2. Deduplicate findings flagged by multiple specialists.
 3. Group findings by root cause where multiple findings stem from the same issue.
-4. Classify each as CONFIRMED, REJECTED, or UNVERIFIABLE. For behavioral findings, apply citation verification, reachability, and intent verification. For mechanical findings, verify the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy. For highlights, verify the cited text exists, the claim is accurate, and the highlighted thing genuinely rises above baseline competence. When the brief reports staleness (main moved past the merge-base touching this change's paths), re-verify each behavioral finding against current main first — a finding true only at the merge-base is a rebase note for the author, not a defect in this PR.
+4. Classify each as CONFIRMED, REJECTED, or UNVERIFIABLE. For behavioral findings, apply citation verification, reachability, and intent verification. For mechanical findings, verify the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy. For highlights, verify the cited text exists, the claim is accurate, and the highlighted thing genuinely rises above baseline competence. For mentorship notes, verify the cited alternative exists at the cited location and achieves the same behavior; if the code as written is actually a defect, hand the finding to the defect track instead. When the brief reports staleness (main moved past the merge-base touching this change's paths), re-verify each behavioral finding against current main first — a finding true only at the merge-base is a rebase note for the author, not a defect in this PR.
 5. Cross-reference against the prior-comments register if one was built in Step 2: tag matching findings `Provenance: previously identified by @author, PR #N, DATE` and produce the `### Previously identified findings` appendix per the synthesizer skill.
 6. Calibrate severity (BLOCKING > HIGH > MEDIUM > LOW) based on your verification.
-7. Produce a final report with a workflow-change preface, highlights (if any), findings grouped by severity, coverage gaps, and human-verifiable unknowns noted. Include every confirmed LOW finding.
+7. Produce a final report with a workflow-change preface, highlights (if any), mentorship notes (if any), findings grouped by severity, coverage gaps, and human-verifiable unknowns noted. Include every confirmed LOW finding.
 8. Apply the synthesizer's "Writing review comments" prose rules to the whole report. Findings are prose, not shorthand: plain English, one idea per sentence, one sentence per hop of any producer chain.
 
 ## Specialist briefing template
@@ -153,7 +157,7 @@ When dispatching each sub-agent, include in the prompt:
 - The git range to review
 - **The resolved head SHA of the range** — all file reads, file:line citations, and anchors MUST be computed against this ref (`git show <head-sha>:<path>`), never the working tree, which may be on a different branch than the change under review
 - The specific files in this unit's scope
-- The specialist focus (from the eight specialists above)
+- The specialist focus (from the nine specialists above)
 - The diff stat for this unit's files
 - **The project context brief** from Step 2, filtered to what is relevant to this unit's scope. Explicitly list any deferred work that falls within this unit's files, and call out TODO ($ticket) markers the specialists should recognize as intentional.
 - **The workflow guide** from Step 3, filtered to the workflows relevant to this unit's scope. Use it to understand the purpose and evolution of the code before flagging issues. It provides the code-level context (flows, contracts, history, constraints) that prevents false positives about intentional behavior and long-standing design decisions.
