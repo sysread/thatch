@@ -89,7 +89,7 @@ export class PredictionEngine {
     return this.#engine.createMatcher(store, description, embedding, model);
   }
 
-  findNearestPrediction(store: string, embedding: Float32Array, threshold: number): PredictionRow | null {
+  findNearestPrediction(store: string | string[], embedding: Float32Array, threshold: number): PredictionRow | null {
     return this.#engine.findNearestItem(store, embedding, threshold) as PredictionRow | null;
   }
 

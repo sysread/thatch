@@ -308,4 +308,46 @@ describe("scorePredictionNudge", () => {
     const items = db.scorePredictionNudge([store], makeEmbed(1), 0.0, 5);
     expect(items.length).toBe(1);
   });
+
+  test("deduplicates semantically identical predictions across stores", () => {
+    // The same preference saved to the project store and to global has two
+    // different row ids; the auto-fire scans both stores and would surface
+    // the preference twice without a semantic dedup.
+    const m1 = db.createMatcher(store, "PR review", makeEmbed(1), "m");
+    const p1 = db.createPrediction(store, "skip tech debt", "reason", makeEmbed(3), "m");
+    db.createEdge(m1, p1, 1.0);
+    const m2 = db.createMatcher("global", "PR review", makeEmbed(1), "m");
+    const p2 = db.createPrediction("global", "skip tech debt", "reason", makeEmbed(3), "m");
+    db.createEdge(m2, p2, 1.0);
+
+    const items = db.scorePredictionNudge([store, "global"], makeEmbed(1), 0.0, 5);
+    expect(items.length).toBe(1);
+  });
+
+  test("cross-store dedup keys on embedding cosine, not statement text", () => {
+    // Mirrors the real incident: the two copies differed by a textual prefix
+    // ("you tend to prefer ..."), so a normalized-text key would miss them.
+    const m1 = db.createMatcher(store, "PR review", makeEmbed(1), "m");
+    const p1 = db.createPrediction(store, "prefer toast notifications over chat noise", "reason", makeEmbed(3), "m");
+    db.createEdge(m1, p1, 1.0);
+    const m2 = db.createMatcher("global", "PR review", makeEmbed(1), "m");
+    const p2 = db.createPrediction("global", "you tend to prefer toast notifications over chat noise", "reason", makeEmbed(3), "m");
+    db.createEdge(m2, p2, 1.0);
+
+    const items = db.scorePredictionNudge([store, "global"], makeEmbed(1), 0.0, 5);
+    expect(items.length).toBe(1);
+  });
+
+  test("cross-store dedup keeps distinct predictions that share no cosine", () => {
+    // Different embeddings must survive: the dedup must not over-merge.
+    const m1 = db.createMatcher(store, "PR review", makeEmbed(1), "m");
+    const p1 = db.createPrediction(store, "skip tech debt", "reason", makeEmbed(3), "m");
+    db.createEdge(m1, p1, 1.0);
+    const m2 = db.createMatcher("global", "PR review", makeEmbed(1), "m");
+    const p2 = db.createPrediction("global", "write tests first", "reason", makeEmbed(4), "m");
+    db.createEdge(m2, p2, 1.0);
+
+    const items = db.scorePredictionNudge([store, "global"], makeEmbed(1), 0.0, 5);
+    expect(items.length).toBe(2);
+  });
 });

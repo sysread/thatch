@@ -78,9 +78,11 @@ Runs in a single DB transaction:
 
 1. **Matcher dedup** — finds an existing behavior matcher above cosine 0.85,
    else creates one.
-2. **Behavior dedup** — store-wide search for a near-identical behavior
-   (cosine >= 0.85). If found, links this matcher to it via an edge rather
-   than creating a duplicate row.
+2. **Behavior dedup** — search across the target store AND global for a
+   near-identical behavior (cosine >= 0.85). If found, links this matcher to
+   it via an edge rather than creating a duplicate row. The auto-fire nudge
+   scans both stores, so the write reinforces the existing row in its home
+   store and the result echoes where it landed.
 3. **New behavior** — creates behavior + edge + provenance entry tagged
    `codify`.
 4. Returns `[codified]` for a new behavior or `[linked]` for an existing one

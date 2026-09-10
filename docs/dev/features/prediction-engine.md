@@ -85,9 +85,12 @@ Runs in a single DB transaction:
 
 1. **Matcher dedup** — finds an existing matcher above cosine 0.85, else
    creates one.
-2. **Prediction dedup** — store-wide search for a near-identical prediction
-   (cosine >= 0.85). If found, links this matcher to it via an edge rather than
-   creating a duplicate row.
+2. **Prediction dedup** — search across the target store AND global for a
+   near-identical prediction (cosine >= 0.85). If found, links this matcher to
+   it via an edge rather than creating a duplicate row. The auto-fire nudge
+   scans both stores, so a prediction saved to both would otherwise surface
+   twice every turn; the write reinforces the existing row in its home store
+   and the result echoes where it landed.
 3. **New prediction with a non-create signal** — applies the signal
    immediately so the first confirm/disconfirm is not lost.
 4. **`create` on an existing prediction** — links the edge and records

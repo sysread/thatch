@@ -118,7 +118,7 @@ export class ScoringEngine {
     const rows = this.#db
       .query(
         `SELECT p.id, p.statement, p.rationale, p.confidence, p.confirm_count, p.disconfirm_count,
-                e.matcher_id, e.weight
+                p.embedding, e.matcher_id, e.weight
          FROM ${edgesTable} e
          JOIN ${itemsTable} p ON e.${itemForeignKey} = p.id
          WHERE e.matcher_id IN (${placeholders})
@@ -128,6 +128,7 @@ export class ScoringEngine {
 
     const matcherMap = new Map(matchers.map((m) => [m.id, m]));
     const scored: ScoredItem[] = [];
+    const embeddings = new Map<string, Float32Array>();
     for (const r of rows) {
       const matcher = matcherMap.get(r.matcher_id);
       if (!matcher) continue;
@@ -135,6 +136,7 @@ export class ScoringEngine {
       const confidence = r.confidence as number;
       const evidence = Math.round(r.confirm_count + r.disconfirm_count);
       const score = matcher.score * (r.weight as number) * confidence;
+      if (r.embedding) embeddings.set(r.id as string, blobToVector(r.embedding));
       scored.push({
         matcher_id: r.matcher_id,
         matcher_description: matcher.description,
@@ -153,9 +155,25 @@ export class ScoringEngine {
     // so the nudge does not repeat the same item with different matcher
     // contexts.
     const seen = new Set<string>();
+    // Semantic dedup across stores: the same preference saved to both the
+    // project and global stores has different row ids but near-identical
+    // embeddings. Without this, the multi-store nudge scan surfaces it
+    // twice every turn. Sorted by score descending, so the first occurrence
+    // (highest-scoring copy) wins.
+    const SEMANTIC_DEDUP_COSINE = 0.85;
+    const seenEmbeddings: Float32Array[] = [];
     return scored.filter((s) => {
       if (seen.has(s.item_id)) return false;
       seen.add(s.item_id);
+      const emb = embeddings.get(s.item_id);
+      if (emb) {
+        for (const other of seenEmbeddings) {
+          if (other.length === emb.length && cosineSimilarity(other, emb) >= SEMANTIC_DEDUP_COSINE) {
+            return false;
+          }
+        }
+        seenEmbeddings.push(emb);
+      }
       return true;
     });
   }
@@ -219,18 +237,21 @@ export class ScoringEngine {
   }
 
   findNearestItem(
-    store: string,
+    store: string | string[],
     embedding: Float32Array,
     threshold: number,
   ): ItemRow | null {
     const { itemsTable } = this.#cfg;
+    const stores = Array.isArray(store) ? store : [store];
+    if (stores.length === 0) return null;
+    const placeholders = stores.map(() => "?").join(", ");
     const rows = this.#db
       .query(
         `SELECT id, store, statement, rationale, confidence, confirm_count, disconfirm_count, created_at, updated_at, embedding
          FROM ${itemsTable}
-         WHERE store = ? AND embedding IS NOT NULL`,
+         WHERE store IN (${placeholders}) AND embedding IS NOT NULL`,
       )
-      .all(store) as any[];
+      .all(...(stores as [string, ...string[]])) as any[];
 
     let best: { row: any; score: number } | null = null;
     for (const r of rows) {
