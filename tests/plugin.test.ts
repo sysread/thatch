@@ -203,7 +203,7 @@ describe("plugin entry", () => {
     const before = promptAsyncCalls.length;
     await hooks["tool.execute.after"]!(
       { tool: "thatch_chat_send", sessionID: "ses_echo", callID: "ce1", args: { to: "Landru", body: "hello there" } },
-      { title: "chat send", output: "[sent] to Landru (ses_f6c9e9a0)\n\nThe recipient is nudged when idle.", metadata: {} },
+      { title: "chat send", output: "[sent] to Landru (ses_f6c9e9a0)\n\nThe recipient is nudged when its session is idle. If its host process is gone (stale in chat_list), the message waits unread - a dead session never reads it.", metadata: {} },
     );
     expect(promptAsyncCalls.length).toBe(before + 1);
     const call = promptAsyncCalls[promptAsyncCalls.length - 1];

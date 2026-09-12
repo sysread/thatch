@@ -320,7 +320,7 @@ describe("chat transcript echo text", () => {
   });
 
   test("send echoes the resolved recipient name with a clipped body", () => {
-    const out = "[sent] to Landru (ses_f6c9e9a0)\n\nThe recipient is nudged when idle.";
+    const out = "[sent] to Landru (ses_f6c9e9a0)\n\nThe recipient is nudged when its session is idle. If its host process is gone (stale in chat_list), the message waits unread - a dead session never reads it.";
     expect(chatEchoText("thatch_chat_send", { to: "landru", body: "hello" }, out))
       .toBe("[chat] to Landru: hello");
     // Output shape unparseable: fall back to the addressed name.
@@ -480,6 +480,17 @@ describe("ChatPoller", () => {
     await poller.deliverPending();
     expect(deliveries[0].senders.sort()).toEqual(["alice", "carol"]);
     expect(deliveries[0].count).toBe(3);
+  });
+
+  test("a departed sender renders as unknown in the wake prompt", async () => {
+    db.sendChatMessage("ses_a", "bob", "from a sender about to leave");
+    db.unregisterChatSession("ses_a");
+    gateOpen = true;
+    await poller.deliverPending();
+    // Same convention chat_read uses: the directory row is gone, so the
+    // sender is unknown, not merely unnamed.
+    const last = deliveries[deliveries.length - 1];
+    expect(last.senders).toEqual([`unknown (${"ses_a".slice(0, 12)}, departed)`]);
   });
 
   test("start/stop/dispose manage the timer", () => {

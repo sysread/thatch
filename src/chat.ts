@@ -545,7 +545,10 @@ export class ChatPoller {
         if (!this.#opts.canDeliver(recipient)) continue;
         if (this.#nudgeBudget(recipient) <= 0) continue;
         try {
-          const senders = [...new Set(messages.map((m) => m.from_name ?? `departed (${m.from_session.slice(0, 12)})`))];
+          // "unknown (id, departed)" matches chat_read's rendering of a
+          // sender whose directory row is gone, so both surfaces use one
+          // convention for the same condition.
+          const senders = [...new Set(messages.map((m) => m.from_name ?? `unknown (${m.from_session.slice(0, 12)}, departed)`))];
           await this.#opts.deliver(recipient, senders, messages.length);
           // Count the nudge before the stamp: the cap must bind on prompts
           // actually sent, not on the DB write succeeding. A failing stamp

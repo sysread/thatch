@@ -1332,7 +1332,7 @@ const watchCancelDef: ToolDef = {
 
 /**
  * Cross-session chat: opt-in messaging between live opencode sessions on one
- * machine, routed through the shared thatch.db. All five tools are
+ * machine, routed through the shared thatch.db. The chat tools are
  * opencode-only because identity comes from the host session - the model
  * cannot know its own session ID, and MCP hosts have no sessions. The
  * registry and inbox are shared SQLite state, so a sender in one opencode
