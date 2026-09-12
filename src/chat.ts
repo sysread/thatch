@@ -49,6 +49,7 @@ export function isoMinutesAgo(minutes: number): string {
 export interface ChatSessionRow {
   session_id: string;
   name: string;
+  topic: string | null;
   project: string | null;
   registered_at: string;
   last_seen: string;
@@ -87,6 +88,10 @@ const MAX_BODY_LEN = 10_000;
 // baked-in name satisfies it.
 export const NAME_CHARSET = /^[\p{L}\p{N} '.\-]+$/u;
 
+// Topics are free text (unlike names) but must stay one line for the
+// chat_list roster, so whitespace runs collapse and the value is capped.
+const MAX_TOPIC_LEN = 80;
+
 // Timing defaults, shared by the poller and the chat_list staleness display
 // so both agree on what "stale" means.
 export const CHAT_POLL_INTERVAL_MS = 30_000;
@@ -105,17 +110,21 @@ export class ChatStore {
     this.#db = db;
   }
 
-  /**
-   * Joins the directory with a pool name: picks uniformly at random from the
+  /** Joins the directory with a pool name: picks uniformly at random from the
    * names no other session has claimed (case-insensitively). Idempotent for
    * an already-registered session - it keeps its current name (drawn:
    * false). Fails when every pool name is taken, or when concurrent
    * registrations win every draw attempt - see the redraw loop below.
    */
-  assign(sessionID: string, project: string | null): { ok: true; name: string; drawn: boolean } | { ok: false; error: string } {
+  assign(
+    sessionID: string,
+    project: string | null,
+    topic: string | null,
+  ): { ok: true; name: string; drawn: boolean } | { ok: false; error: string } {
     const existing = this.#find(sessionID);
     if (existing) {
       this.#touch(sessionID);
+      this.#maybeUpdateTopic(sessionID, existing.topic, topic);
       return { ok: true, name: existing.name, drawn: false };
     }
     // Two processes can snapshot the same free list and draw the same name;
@@ -129,7 +138,7 @@ export class ChatStore {
         return { ok: false, error: "Name pool exhausted - pass a custom name." };
       }
       const name = free[Math.floor(Math.random() * free.length)];
-      const claimed = this.#insertSession(sessionID, name, project);
+      const claimed = this.#insertSession(sessionID, name, project, topic);
       if (claimed.ok) return { ok: true, name, drawn: true };
     }
     return { ok: false, error: "Could not claim a pool name after several attempts - pass a custom name." };
@@ -143,14 +152,16 @@ export class ChatStore {
    * are the same name), so lookups and claims agree no matter what casing the
    * model or user types. Both paths stamp last_seen.
    */
-  register(sessionID: string, rawName: string, project: string | null): ChatResult {
+  register(sessionID: string, rawName: string, project: string | null, topic: string | null): ChatResult {
     const name = rawName.trim();
     const invalid = this.#invalidName(name);
     if (invalid) return { ok: false, error: invalid };
+    const cleanTopic = this.#cleanTopic(topic);
     const existing = this.#find(sessionID);
     if (existing) {
       if (existing.name === name) {
         this.#touch(sessionID);
+        this.#maybeUpdateTopic(sessionID, existing.topic, cleanTopic);
         return { ok: true };
       }
       // A NOCASE hit is only a collision when it belongs to a different
@@ -160,8 +171,9 @@ export class ChatStore {
         return this.#nameTaken(name);
       }
       try {
-        this.#db.run("UPDATE chat_sessions SET name = ?, last_seen = ? WHERE session_id = ?", [
+        this.#db.run("UPDATE chat_sessions SET name = ?, topic = ?, last_seen = ? WHERE session_id = ?", [
           name,
+          cleanTopic,
           nowIso(),
           sessionID,
         ]);
@@ -176,7 +188,7 @@ export class ChatStore {
     if (this.#findByName(name)) {
       return this.#nameTaken(name);
     }
-    return this.#insertSession(sessionID, name, project);
+    return this.#insertSession(sessionID, name, project, cleanTopic);
   }
 
   /** Leaves the directory. Messages already sent to or from the session are
@@ -190,7 +202,7 @@ export class ChatStore {
 
   list(): ChatSessionRow[] {
     return (this.#db
-      .query("SELECT session_id, name, project, registered_at, last_seen FROM chat_sessions ORDER BY name")
+      .query("SELECT session_id, name, topic, project, registered_at, last_seen FROM chat_sessions ORDER BY name")
       .all() as any[]).map(rowFromSession);
   }
 
@@ -235,6 +247,42 @@ export class ChatStore {
     );
     const row = this.#db.query("SELECT last_insert_rowid() AS id").get() as any;
     return { ok: true, id: row.id, recipient: { session_id: recipient.session_id, name: recipient.name } };
+  }
+
+  /**
+   * Posts a message to every other registered session at once. Stale
+   * sessions are skipped, not messaged - a host process that has stopped
+   * heartbeat-ing will never read the mail, and a broadcast is for reaching
+   * live agents. Each recipient gets its own inbox row, so the existing
+   * wake machinery (grouping, gating, rate cap) treats the broadcast as
+   * ordinary per-recipient mail.
+   */
+  broadcast(
+    fromSession: string,
+    body: string,
+  ): { ok: true; recipients: string[]; skipped: string[] } | { ok: false; error: string } {
+    const trimmed = body.trim();
+    if (!trimmed) return { ok: false, error: "Message body cannot be empty." };
+    if (trimmed.length > MAX_BODY_LEN) {
+      return { ok: false, error: `Message too long (max ${MAX_BODY_LEN} characters).` };
+    }
+    const sender = this.#find(fromSession);
+    if (!sender) return { ok: false, error: "You are not registered - call chat_register first." };
+    const recipients: string[] = [];
+    const skipped: string[] = [];
+    for (const row of this.list()) {
+      if (row.session_id === fromSession) continue;
+      if (isStale(row, CHAT_STALE_MINUTES)) {
+        skipped.push(row.name);
+        continue;
+      }
+      this.#db.run(
+        "INSERT INTO chat_messages (from_session, to_session, body, created_at) VALUES (?, ?, ?, ?)",
+        [fromSession, row.session_id, trimmed, nowIso()],
+      );
+      recipients.push(row.name);
+    }
+    return { ok: true, recipients, skipped };
   }
 
   /**
@@ -333,14 +381,14 @@ export class ChatStore {
 
   #find(sessionID: string): ChatSessionRow | null {
     const row = this.#db
-      .query("SELECT session_id, name, project, registered_at, last_seen FROM chat_sessions WHERE session_id = ?")
+      .query("SELECT session_id, name, topic, project, registered_at, last_seen FROM chat_sessions WHERE session_id = ?")
       .get(sessionID) as any;
     return row ? rowFromSession(row) : null;
   }
 
   #findByName(name: string): ChatSessionRow | null {
     const row = this.#db
-      .query("SELECT session_id, name, project, registered_at, last_seen FROM chat_sessions WHERE name = ? COLLATE NOCASE")
+      .query("SELECT session_id, name, topic, project, registered_at, last_seen FROM chat_sessions WHERE name = ? COLLATE NOCASE")
       .get(name) as any;
     return row ? rowFromSession(row) : null;
   }
@@ -358,6 +406,24 @@ export class ChatStore {
     return null;
   }
 
+  /** Collapses whitespace runs (topics must stay one roster line) and caps
+   *  the length. The null/empty distinction is load-bearing: null means
+   *  "omit on re-register, keep the existing topic", while empty or
+   *  whitespace-only means "clear it" - so this never turns one into the
+   *  other. Oversized topics are capped, never an error: a topic is
+   *  advisory. */
+  #cleanTopic(topic: string | null): string | null {
+    if (topic === null) return null;
+    return topic.replace(/\s+/g, " ").trim().slice(0, MAX_TOPIC_LEN);
+  }
+
+  /** Refreshes the topic on re-registration when it changed. Omitting the
+   *  topic (null) keeps the existing one; passing an empty topic clears it. */
+  #maybeUpdateTopic(sessionID: string, current: string | null, next: string | null): void {
+    if (next === null || next === current) return;
+    this.#db.run("UPDATE chat_sessions SET topic = ? WHERE session_id = ?", [next, sessionID]);
+  }
+
   /**
    * INSERTs a directory row, translating a UNIQUE-constraint violation into
    * the friendly taken message. The pre-checks are advisory only against
@@ -366,11 +432,11 @@ export class ChatStore {
    * { ok, error } contract as a raw SQLite error. Same pattern as
    * remember()'s slug-collision handling in db.ts.
    */
-  #insertSession(sessionID: string, name: string, project: string | null): ChatResult {
+  #insertSession(sessionID: string, name: string, project: string | null, topic: string | null): ChatResult {
     try {
       this.#db.run(
-        "INSERT INTO chat_sessions (session_id, name, project, registered_at, last_seen) VALUES (?, ?, ?, ?, ?)",
-        [sessionID, name, project, nowIso(), nowIso()],
+        "INSERT INTO chat_sessions (session_id, name, topic, project, registered_at, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
+        [sessionID, name, topic, project, nowIso(), nowIso()],
       );
       return { ok: true };
     } catch (err) {
@@ -396,6 +462,9 @@ function rowFromSession(r: any): ChatSessionRow {
   return {
     session_id: r.session_id,
     name: r.name,
+    // An empty-string topic (explicit clear) reads back as no topic, so the
+    // API never leaks the sentinel.
+    topic: r.topic || null,
     project: r.project ?? null,
     registered_at: r.registered_at,
     last_seen: r.last_seen,

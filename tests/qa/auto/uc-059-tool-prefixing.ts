@@ -24,7 +24,7 @@ const useCase: UseCase = {
   ].join("\n"),
   expected: [
     "- TOOL_DEFS exposes bare names: memory_remember, memory_recall, store_list, prediction_query, behavior_codify, etc.",
-    "- The MCP server's tools/list handler maps t.def.name from TOOL_DEFS, skipping opencodeOnly defs (get_session_info, session_search, session_get, watch_create, watch_branch_create, watch_list, watch_cancel, chat_register, chat_list, chat_send, chat_read, chat_unregister), so it exposes the shared bare names.",
+    "- The MCP server's tools/list handler maps t.def.name from TOOL_DEFS, skipping opencodeOnly defs (get_session_info, session_search, session_get, watch_create, watch_branch_create, watch_list, watch_cancel, chat_register, chat_list, chat_send, chat_read, chat_unregister, chat_broadcast), so it exposes the shared bare names.",
     "- opencode adds the thatch_ prefix via its plugin system. Claude Code and Cursor add the mcp__thatch__ prefix via their MCP client. The prefix is applied by the host, not by thatch.",
   ].join("\n"),
 
@@ -73,6 +73,7 @@ const useCase: UseCase = {
       "chat_send",
       "chat_read",
       "chat_unregister",
+      "chat_broadcast",
     ];
 
     for (const name of expected) {

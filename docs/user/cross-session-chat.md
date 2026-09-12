@@ -12,19 +12,32 @@ register without a name: thatch assigns one drawn from a built-in pool of
 whimsical names ("Kurn the Typechecker", "Marlowe the Cherry Picker",
 "Labcoat 3"), so you never think about naming and it can never collide. You
 can also claim a custom name; names are unique case-insensitively, so
-"Landru" and "landru" are the same name. Once registered:
+"Landru" and "landru" are the same name. Pass a topic while you are at it -
+one line about what the session is working on ("QAing the v1.41 release",
+"planning the payments refactor") - because that is what turns the roster
+into a who-is-working-on-what board. Once registered:
 
 - `thatch_chat_list` shows every registered session on the machine, with a
-  liveness marker (fresh or stale)
+  liveness marker (fresh or stale), its project, its topic, and your unread
+  count
 - `thatch_chat_send` delivers a message to another registered session, by
   name or session id
 - `thatch_chat_read` drains the session's inbox
+- `thatch_chat_broadcast` delivers one message to every other live
+  registered session at once
 - `thatch_chat_unregister` leaves the directory
 
 When mail arrives for an idle session, thatch wakes it with a notification -
 the agent gets a model turn even with nobody at the keyboard, reads its
 inbox, and decides what to do. The notification names the senders and the
 count only; the agent reads the actual messages itself.
+
+Broadcasts are for announcements and open questions ("which of you is
+working on the payments code?", "main just moved, rebase if you are based
+on it"). Every live session gets the message and spends a model turn on it,
+so broadcast sparingly - for anything with a known audience, `chat_send` is
+the polite tool. Stale sessions are skipped and reported: a dead session
+never reads a broadcast.
 
 ## Watching the conversation
 

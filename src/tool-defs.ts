@@ -1359,12 +1359,18 @@ const chatRegisterDef: ToolDef = {
     "this machine can message you and you can message them. Omit the name " +
     "to be assigned one from the built-in pool (recommended - cannot " +
     "collide); pass a name to claim it instead, case-insensitively unique. " +
-    "Safe to call again - the same name is a no-op, a new name renames you. " +
-    "Only top-level sessions should register; never register a sub-agent " +
+    "Include a topic: it is what other sessions see in chat_list when " +
+    "deciding who to talk to. Safe to call again - the same name is a " +
+    "no-op, a new name renames you, and a new topic updates it. Only " +
+    "top-level sessions should register; never register a sub-agent " +
     "session. opencode-only.",
   args: {
     name: z.string().optional().describe(
       "Custom display name. Omit to draw one from the built-in name pool.",
+    ),
+    topic: z.string().optional().describe(
+      "One line about what this session is working on (shown to other " +
+      "sessions in chat_list). Omit on re-register to keep the existing topic.",
     ),
   },
   opencodeOnly: true,
@@ -1373,18 +1379,21 @@ const chatRegisterDef: ToolDef = {
       return "Chat is unavailable: this host did not provide a session context.";
     }
     const custom = typeof args.name === "string" ? args.name : null;
+    const topic = typeof args.topic === "string" ? args.topic : null;
     if (custom !== null) {
-      const result = ctx.db.registerChatSession(host.sessionID, custom, ctx.defaultStore);
+      const result = ctx.db.registerChatSession(host.sessionID, custom, ctx.defaultStore, topic);
       if (!result.ok) return `Registration failed: ${result.error}`;
       return (
         `[registered] ${custom.trim()}\n` +
         `session_id: ${host.sessionID}\n` +
-        `project: ${ctx.defaultStore}\n\n` +
+        `project: ${ctx.defaultStore}\n` +
+        (topic ? `topic: ${topic.trim()}\n` : "") +
+        `\n` +
         `Other sessions can now message you by name with chat_send; use ` +
         `chat_list to see who else is available.`
       );
     }
-    const assigned = ctx.db.assignChatName(host.sessionID, ctx.defaultStore);
+    const assigned = ctx.db.assignChatName(host.sessionID, ctx.defaultStore, topic);
     if (!assigned.ok) return `Registration failed: ${assigned.error}`;
     const origin = assigned.drawn
       ? "Your name was drawn from the built-in pool."
@@ -1392,9 +1401,12 @@ const chatRegisterDef: ToolDef = {
     return (
       `[registered] ${assigned.name}\n` +
       `session_id: ${host.sessionID}\n` +
-      `project: ${ctx.defaultStore}\n\n` +
-      `${origin} Other sessions can now message you by name with chat_send; ` +
-      `use chat_list to see who else is available.`
+      `project: ${ctx.defaultStore}\n` +
+      (topic ? `topic: ${topic.trim()}\n` : "") +
+      `\n` +
+      `${origin} Other sessions can now message you by name with chat_send, ` +
+      `or reach everyone at once with chat_broadcast; use chat_list to see ` +
+      `who else is available.`
     );
   },
 };
@@ -1422,8 +1434,9 @@ const chatListDef: ToolDef = {
       const self = s.session_id === host.sessionID;
       const liveness = isStale(s, CHAT_STALE_MINUTES) ? "stale" : "fresh";
       const project = s.project ? ` project:${s.project}` : "";
+      const topic = s.topic ? ` topic:${s.topic}` : "";
       const mailbox = self ? (unread > 0 ? ` ${unread} unread` : "") : "";
-      return `- ${s.name} (${s.session_id.slice(0, 12)})${project} ${liveness}${self ? " [you]" : ""}${mailbox}`;
+      return `- ${s.name} (${s.session_id.slice(0, 12)})${project} ${liveness}${topic}${self ? " [you]" : ""}${mailbox}`;
     });
     return `[chat] ${sessions.length} session${sessions.length === 1 ? "" : "s"} registered\n${lines.join("\n")}`;
   },
@@ -1515,6 +1528,49 @@ const chatUnregisterDef: ToolDef = {
 };
 
 /**
+ * Broadcasts one message to every other live registered session. A separate
+ * tool rather than a magic chat_send recipient: "send to all" changes the
+ * behavior (fan-out, stale skipping, no address resolution), and a function
+ * that changes behavior drastically on a parameter value is two functions.
+ */
+const chatBroadcastDef: ToolDef = {
+  name: "chat_broadcast",
+  description:
+    "Broadcast one message to every other registered opencode session on " +
+    "this machine at once - for announcements and open questions (" +
+    "\"which of you is working on X?\", \"main just moved, rebase if you " +
+    "are based on it\"). Stale sessions (dead host processes) are skipped " +
+    "and reported, since they will never read the mail. Each recipient is " +
+    "woken like any chat message, so broadcast sparingly: every live " +
+    "session spends a model turn on it. opencode-only.",
+  args: {
+    body: z.string().describe(
+      "Message body, delivered to every other registered session. Keep it " +
+      "short and self-contained - the recipients may lack your context.",
+    ),
+  },
+  opencodeOnly: true,
+  async execute(args, ctx, host) {
+    if (!host) {
+      return "Chat is unavailable: this host did not provide a session context.";
+    }
+    const result = ctx.db.broadcastChatMessage(host.sessionID, args.body as string);
+    if (!result.ok) return `Not sent: ${result.error}`;
+    const lines = [
+      `[broadcast] to ${result.recipients.length} session${result.recipients.length === 1 ? "" : "s"}`,
+      `recipients: ${result.recipients.length > 0 ? result.recipients.join(", ") : "(none)"}`,
+    ];
+    if (result.skipped.length > 0) lines.push(`skipped stale: ${result.skipped.join(", ")}`);
+    return (
+      lines.join("\n") +
+      `\n\nEach recipient's session is nudged when idle, exactly like a ` +
+      `direct chat_send. Broadcast sparingly - every live session pays a ` +
+      `model turn for it.`
+    );
+  },
+};
+
+/**
  * All tool definitions, in the order they should be presented to the agent.
  * The opencode plugin wraps each in `tool()`; the MCP server exposes the
  * non-opencodeOnly ones via `tools/list` and dispatches `tools/call` to
@@ -1554,4 +1610,5 @@ export const TOOL_DEFS: ToolDef[] = [
   chatSendDef,
   chatReadDef,
   chatUnregisterDef,
+  chatBroadcastDef,
 ];

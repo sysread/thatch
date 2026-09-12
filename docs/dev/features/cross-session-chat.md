@@ -55,8 +55,7 @@ outlives a process, so liveness needs a signal beyond process lifetime.
 
 `chat_register` joins the directory. Without a name it draws one at random
 from the built-in pool (`src/chat-names.ts`): whimsical geek-culture names
-in the style of fnord's Nomenclater, statically baked in so assignment never
-costs a model call. Pool draws cannot collide with each other and skip any
+in the style of fnord's Nomenclater, statically baked in so assignment nevercosts a model call. Pool draws cannot collide with each other and skip any
 name a session already claimed; the pool is the recommended path because it
 cannot collide at all. With a name, the session claims it custom -
 uniqueness is case-insensitive ("Landru" and "landru" are one name), so two
@@ -75,6 +74,18 @@ Names are claimable by any session (no impersonation defense). The trust
 model is the same as the shared memory stores: every agent on this machine
 is the operator's agent.
 
+### Topics
+
+The optional topic is the roster's "who is working on what" signal: with a
+dozen registered sessions, a name like "Kurn the Typechecker" says nothing,
+but `topic:QAing the release` in `chat_list` tells a coordinator which
+session to address. Topics are free text, sanitized to one roster line
+(whitespace runs collapse, 80-character cap, advisory - oversizing degrades
+rather than errors). The null/empty distinction is deliberate: omitting the
+topic on re-register keeps the existing one; an empty topic clears it.
+Broadcast senders benefit most: `chat_broadcast` answers "which of you is
+working on X?" with the roster already in hand.
+
 ### Messages
 
 `chat_send` addresses a recipient by display name or session ID. Both
@@ -83,6 +94,16 @@ session's inbox oldest-first and stamps rows read. Message history survives
 unregistration; a departed sender degrades to an unknown name in the
 reader's view (the endpoints are deliberately not foreign keys - leaving the
 directory must not be blocked by history).
+
+`chat_broadcast` posts one message to every other registered session at
+once, one inbox row per recipient - the existing wake machinery (grouping,
+gating, rate cap) treats each as ordinary mail. Stale sessions are skipped
+and reported rather than messaged: a host that has stopped heartbeat-ing
+will never read the mail, and dead mail to a dead process is just clutter.
+The sender is excluded. It is a separate tool rather than a magic
+`chat_send` recipient because "send to all" changes the behavior (fan-out,
+stale skipping, no address resolution), and a function that changes
+behavior drastically on a parameter value is two functions.
 
 ### Polling, heartbeat, staleness
 
@@ -173,13 +194,14 @@ per hour. There are no environment overrides yet; add them the way
   helper
 - `src/chat-names.ts` - the static display-name pool (nomenclater style)
 - `src/db.ts` - the chat tables in schema init, the NOCASE collation
-  migration, delegated methods
+  migration and topic column migration, delegated methods
 - `src/tool-defs.ts` - the chat tool definitions
 - `src/index.ts` - poller construction, delivery closure, idle flush,
   session.deleted unregister, dispose, transcript echo in
   tool.execute.after
-- `src/prompts.ts` - `chatNotificationNudge()`, `chatEchoText()`, system
-  prompt Cross-Session Chat section, MCP absent-tools note
+- `src/prompts.ts` - `chatNotificationNudge()`, `chatEchoText()` /
+  `isChatEchoParts()`, system prompt Cross-Session Chat section, MCP
+  absent-tools note
 - `tests/chat.test.ts` - store, pool, migration, echo-text, and poller unit
   tests (temp-dir SQLite, injected delivery)
 - `tests/qa/auto/uc-097-chat.ts` - full lifecycle against a mocked poller

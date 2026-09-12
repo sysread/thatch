@@ -234,6 +234,7 @@ export class ThatchDB {
       CREATE TABLE IF NOT EXISTS chat_sessions (
         session_id    TEXT PRIMARY KEY,
         name          TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        topic         TEXT,
         project       TEXT,
         registered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
         last_seen     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
@@ -259,6 +260,17 @@ export class ThatchDB {
 
     this.#migrateColumns();
     this.#migrateChatNameCollation();
+    this.#migrateChatTopic();
+  }
+
+  // chat_sessions gained the topic column after the directory first
+  // shipped; pre-topic databases get it via ALTER (rows degrade to NULL
+  // topic, which renders as no topic in chat_list).
+  #migrateChatTopic(): void {
+    const cols = (this.#db.query("PRAGMA table_info(chat_sessions)").all() as any[]).map((r) => r.name);
+    if (cols.length > 0 && !cols.includes("topic")) {
+      this.#db.run("ALTER TABLE chat_sessions ADD COLUMN topic TEXT");
+    }
   }
 
   // Databases created before recall telemetry lack these columns; the CREATE
@@ -779,12 +791,16 @@ export class ThatchDB {
   // Cross-session chat: delegates to ChatStore
   // ---------------------------------------------------------------------------
 
-  registerChatSession(sessionID: string, name: string, project: string | null) {
-    return this.#chat.register(sessionID, name, project);
+  registerChatSession(sessionID: string, name: string, project: string | null, topic: string | null) {
+    return this.#chat.register(sessionID, name, project, topic);
   }
 
-  assignChatName(sessionID: string, project: string | null) {
-    return this.#chat.assign(sessionID, project);
+  assignChatName(sessionID: string, project: string | null, topic: string | null) {
+    return this.#chat.assign(sessionID, project, topic);
+  }
+
+  broadcastChatMessage(fromSession: string, body: string) {
+    return this.#chat.broadcast(fromSession, body);
   }
 
   unregisterChatSession(sessionID: string) {

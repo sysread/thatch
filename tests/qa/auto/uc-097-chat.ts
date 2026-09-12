@@ -49,8 +49,8 @@ const useCase: UseCase = {
   async run() {
     // Step 1: chat tools are opencode-only with bare names.
     const chatTools = TOOL_DEFS.filter((t) => t.name.startsWith("chat_"));
-    if (chatTools.length !== 5) {
-      console.log(`  FAIL: expected 5 chat tools, got ${chatTools.length}`);
+    if (chatTools.length !== 6) {
+      console.log(`  FAIL: expected 6 chat tools, got ${chatTools.length}`);
       return "FAIL";
     }
     if (!chatTools.every((t) => t.opencodeOnly)) {
@@ -70,20 +70,20 @@ const useCase: UseCase = {
 
     try {
       // Step 2: registration and name collisions.
-      if (!db.registerChatSession("ses_alpha", "alpha", "acme/widgets").ok) {
+      if (!db.registerChatSession("ses_alpha", "alpha", "acme/widgets", null).ok) {
         console.log("  FAIL: alpha registration failed");
         return "FAIL";
       }
-      if (!db.registerChatSession("ses_beta", "beta", "acme/widgets").ok) {
+      if (!db.registerChatSession("ses_beta", "beta", "acme/widgets", null).ok) {
         console.log("  FAIL: beta registration failed");
         return "FAIL";
       }
-      if (db.registerChatSession("ses_gamma", "alpha", "p").ok) {
+      if (db.registerChatSession("ses_gamma", "alpha", "p", null).ok) {
         console.log("  FAIL: name collision was accepted");
         return "FAIL";
       }
       // Case variants collide too: uniqueness is case-insensitive.
-      if (db.registerChatSession("ses_gamma", "ALPHA", "p").ok) {
+      if (db.registerChatSession("ses_gamma", "ALPHA", "p", null).ok) {
         console.log("  FAIL: case-variant name collision was accepted");
         return "FAIL";
       }
@@ -98,12 +98,12 @@ const useCase: UseCase = {
       }
 
       // Step 3: pool assignment. Draws come from the pool, are unused, and differ.
-      const drawA = db.assignChatName("ses_pool_a", "p");
+      const drawA = db.assignChatName("ses_pool_a", "p", null);
       if (!drawA.ok || !CHAT_NAME_POOL.includes(drawA.name)) {
         console.log(`  FAIL: pool draw invalid: ${JSON.stringify(drawA)}`);
         return "FAIL";
       }
-      const drawB = db.assignChatName("ses_pool_b", "p");
+      const drawB = db.assignChatName("ses_pool_b", "p", null);
       if (!drawB.ok || drawB.name === drawA.name) {
         console.log("  FAIL: two pool draws collided or the second failed");
         return "FAIL";
@@ -113,13 +113,13 @@ const useCase: UseCase = {
       // above (drawA, drawB) plus the custom claim account for the three
       // names removed from circulation, so the drain count cross-checks.
       const claimed = CHAT_NAME_POOL[0];
-      if (!db.registerChatSession("ses_pool_c", claimed, "p").ok) {
+      if (!db.registerChatSession("ses_pool_c", claimed, "p", null).ok) {
         console.log("  FAIL: custom claim of a free pool name was rejected");
         return "FAIL";
       }
       let draws = 0;
       for (;;) {
-        const draw = db.assignChatName(`ses_drain_${draws}`, "p");
+        const draw = db.assignChatName(`ses_drain_${draws}`, "p", null);
         if (!draw.ok) break;
         draws++;
         if (draw.name === claimed) {

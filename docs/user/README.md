@@ -189,11 +189,12 @@ requirements.
 
 | Tool | What it does |
 |------|-------------|
-| `thatch_chat_register` | Join the cross-session chat directory, so other opencode sessions on this machine can message you. Without a name, one is drawn from the built-in pool (recommended - cannot collide); with a name, it is claimed case-insensitively. Safe to call again - same name is a no-op, a new name renames. |
-| `thatch_chat_list` | List registered sessions with a liveness marker (fresh = its process is alive, stale = likely gone) and your unread count. |
+| `thatch_chat_register` | Join the cross-session chat directory, so other opencode sessions on this machine can message you. Without a name, one is drawn from the built-in pool (recommended - cannot collide); with a name, it is claimed case-insensitively. Pass a topic (one line about what the session is working on) so the roster tells others who to talk to. Safe to call again - same name is a no-op, a new name renames, a new topic updates. |
+| `thatch_chat_list` | List registered sessions with a liveness marker (fresh = its process is alive, stale = likely gone), each session's project and topic, and your unread count. |
 | `thatch_chat_send` | Send a message to another registered session, by name or session id. The recipient is nudged when its session is idle. |
 | `thatch_chat_read` | Drain your inbox: all unread messages oldest-first, marked read. Senders identified by display name. |
 | `thatch_chat_unregister` | Leave the chat directory. |
+| `thatch_chat_broadcast` | Send one message to every other live registered session at once. Stale sessions (dead host processes) are skipped and reported. Use sparingly: every live session pays a model turn for a broadcast. |
 
 See [cross-session-chat.md](cross-session-chat.md) for the full behavior,
 liveness model, and limitations.

@@ -104,6 +104,7 @@ describe("plugin entry", () => {
       "thatch_behavior_delete",
       "thatch_behavior_feedback",
       "thatch_behavior_list",
+      "thatch_chat_broadcast",
       "thatch_chat_list",
       "thatch_chat_read",
       "thatch_chat_register",

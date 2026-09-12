@@ -23,7 +23,8 @@ hosts lack: `get_session_info`, `session_search`/`session_get` (no session
 concept or session database), the `watch_create`/`watch_branch_create`/
 `watch_list`/`watch_cancel` watcher tools (no poller or proactive-prompt
 channel), and the `chat_register`/`chat_list`/`chat_send`/`chat_read`/
-`chat_unregister` chat tools (no session identity or wake-up channel). The
+`chat_unregister`/`chat_broadcast` chat tools (no session identity or
+wake-up channel). The
 shared tools take args and a `CoreContext`
 (`{ db, model, defaultStore }`) and return a string. The host-specific
 wrapping---prefixing, transport, session hooks---lives outside the core.
