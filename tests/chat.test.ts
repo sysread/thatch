@@ -4,9 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
-import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, type ChatTailRow } from "../src/chat";
+import { MockEmbeddingModel } from "./mocks/embeddings";
+import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, renderChatParticipant, type ChatTailRow } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
+import { TOOL_DEFS } from "../src/tool-defs";
+
+// The departed-sender convention is a cross-surface contract; pin its
+// exact shape so a reword in renderChatParticipant fails here.
+test("departed participants render with the shared unknown convention", () => {
+  expect(renderChatParticipant(null, "ses_abcdefgh1234")).toBe("unknown (ses_abcdefgh, departed)");
+  expect(renderChatParticipant("alice", "ses_x")).toBe("alice");
+  expect(renderChatParticipant(null, null)).toBe("unknown (, departed)");
+});
 
 let dbDir: string;
 let dbPath: string;
@@ -113,10 +123,13 @@ describe("ChatStore via ThatchDB", () => {
 
   test("names outside the shared charset are rejected", () => {
     // Parens would truncate the transcript echo's name parse; newlines and
-    // tabs would break chat_list's one-line roster.
+    // tabs would break chat_list's one-line roster. Underscores matter for
+    // a different reason: find() resolves name-first, and opencode session
+    // IDs contain underscores - a legal underscore name could shadow an ID.
     expect(db.registerChatSession("ses_a", "Deb (Debugger) Malloy", "p", null).ok).toBe(false);
     expect(db.registerChatSession("ses_a", "Bad\nName", "p", null).ok).toBe(false);
     expect(db.registerChatSession("ses_a", "Tab\tName", "p", null).ok).toBe(false);
+    expect(db.registerChatSession("ses_a", "ses_shadow", "p", null).ok).toBe(false);
     // Pool-style punctuation stays valid.
     expect(db.registerChatSession("ses_a", "K'Vir the Unmerged", "p", null).ok).toBe(true);
   });
@@ -427,6 +440,36 @@ describe("chat transcript echo text", () => {
     expect(chatEchoText("thatch_chat_list", {}, "[chat] 2 sessions registered")).toBeNull();
     expect(chatEchoText("thatch_chat_unregister", {}, "[unregistered] this session left the chat directory.")).toBeNull();
   });
+
+  test("every chat tool's real success output is a chatEchoText parse target", async () => {
+    // The parse-target contract (tool-defs section comment) enforced
+    // mechanically: run each real tool def against a temp DB and feed its
+    // actual output string to chatEchoText. A reformatted output that
+    // breaks the echo fails here, not silently on a live machine.
+    const dir = mkdtempSync(join(tmpdir(), "thatch-echo-rt-"));
+    const echoDb = new ThatchDB(join(dir, "echo.db"));
+    try {
+      const ctx = { db: echoDb, model: new MockEmbeddingModel(), defaultStore: "echo/rt" };
+      const call = (name: string, args: Record<string, unknown>, host = { sessionID: "ses_rt", agent: "test" }) =>
+        TOOL_DEFS.find((t) => t.name === name)!.execute(args, ctx as any, host as any);
+
+      const registered = await call("chat_register", { name: "Round Trip", topic: "echo test" });
+      expect(chatEchoText("thatch_chat_register", {}, registered)).toContain("Round Trip");
+
+      await call("chat_register", { name: "Other" }, { sessionID: "ses_other", agent: "test" });
+      const sent = await call("chat_send", { to: "Round Trip", body: "hello" }, { sessionID: "ses_other", agent: "test" });
+      expect(chatEchoText("thatch_chat_send", { to: "Round Trip", body: "body" }, sent)).toContain("Round Trip");
+
+      const read = await call("chat_read", {}, { sessionID: "ses_rt", agent: "test" });
+      expect(chatEchoText("thatch_chat_read", {}, read)).not.toBeNull();
+
+      const broadcast = await call("chat_broadcast", { body: "to everyone" });
+      expect(chatEchoText("thatch_chat_broadcast", { body: "to everyone" }, broadcast)).toContain("broadcast");
+    } finally {
+      echoDb.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("name pool invariants", () => {
@@ -591,6 +634,36 @@ describe("ChatPoller", () => {
     await capped.deliverPending();
     expect(deliveries.length).toBe(1);
     capped.dispose();
+  });
+
+  test("the cap counts a nudge even when the delivered_at stamp fails", async () => {
+    // The record-before-stamp ordering exists so a failing stamp cannot
+    // turn into an uncounted re-delivery loop - the exact ping-pong the
+    // cap exists to stop. Deliver succeeds; the stamp throws.
+    const stampThrows = new ChatPoller({
+      store: {
+        heartbeatChatSessions: () => {},
+        pendingChatNotifications: (ids, cutoff) => db.pendingChatNotifications(ids, cutoff),
+        markChatDelivered: () => {
+          throw new Error("db write failed");
+        },
+      },
+      hostedSessions: () => hosted,
+      deliver: async (sessionID, senders, count) => {
+        deliveries.push({ sessionID, senders, count });
+      },
+      canDeliver: () => true,
+      pollIntervalMs: 60_000,
+      maxNudgesPerHour: 1,
+    });
+    db.sendChatMessage("ses_a", "bob", "counted even if the stamp fails");
+    await stampThrows.deliverPending();
+    expect(deliveries.length).toBe(1);
+    // The mail stays pending (the stamp failed), but the budget is spent:
+    // a later cycle must not re-deliver, stamp failure or not.
+    await stampThrows.deliverPending();
+    expect(deliveries.length).toBe(1);
+    stampThrows.dispose();
   });
 
   test("re-nudges fire after the renudge window passes", async () => {

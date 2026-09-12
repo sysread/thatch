@@ -17,7 +17,7 @@ import { ThatchDB } from "../../../src/db";
 const useCase: UseCase = {
   name: "UC-099-chat-cli",
   preconditions: [
-    "- Bun on PATH; thatch installed",
+    "- Bun on PATH (the test runs the repo binary directly)",
     "- A DB with registered sessions and seeded messages",
   ].join("\n"),
   steps: [

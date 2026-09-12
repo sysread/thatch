@@ -221,7 +221,7 @@ describe("plugin entry", () => {
     const before = promptAsyncCalls.length;
     await hooks["tool.execute.after"]!(
       { tool: "thatch_chat_send", sessionID: "ses_echo", callID: "ce2", args: { to: "ghost", body: "hi" } },
-      { title: "chat send", output: "Not sent: no registered session named ghost.", metadata: {} },
+      { title: "chat send", output: `Not sent: No registered session named "ghost". Use chat_list to see who is available.`, metadata: {} },
     );
     await hooks["tool.execute.after"]!(
       { tool: "thatch_chat_list", sessionID: "ses_echo", callID: "ce3", args: {} },

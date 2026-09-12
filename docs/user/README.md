@@ -283,7 +283,7 @@ updated, removed, or already current.
 
 ### Code review skills
 
-Eight specialist review lenses, plus the synthesizer, context, followup,
+Nine specialist review lenses, plus the synthesizer, context, followup,
 response, walkthrough, and workflow skills that support the review pipeline:
 
 | Skill | Focus |

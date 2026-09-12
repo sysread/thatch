@@ -267,9 +267,9 @@ export class ThatchDB {
     this.#migrateChatBroadcastFlag();
   }
 
-  // chat_messages gained the via_broadcast marker after the directory
-  // shipped; pre-flag databases get it via ALTER (existing rows read as
-  // direct sends, which they were).
+  // chat_messages tables created before the via_broadcast column lack it;
+  // the ALTER adds it, and existing rows read as direct sends (which they
+  // were).
   #migrateChatBroadcastFlag(): void {
     const cols = (this.#db.query("PRAGMA table_info(chat_messages)").all() as any[]).map((r) => r.name);
     if (cols.length > 0 && !cols.includes("via_broadcast")) {
@@ -277,9 +277,9 @@ export class ThatchDB {
     }
   }
 
-  // chat_sessions gained the topic column after the directory first
-  // shipped; pre-topic databases get it via ALTER (rows degrade to NULL
-  // topic, which renders as no topic in chat_list).
+  // chat_sessions tables created before the topic column lack it; the
+  // ALTER adds it, and rows degrade to a NULL topic (rendered as no topic
+  // in chat_list).
   #migrateChatTopic(): void {
     const cols = (this.#db.query("PRAGMA table_info(chat_sessions)").all() as any[]).map((r) => r.name);
     if (cols.length > 0 && !cols.includes("topic")) {
@@ -311,8 +311,16 @@ export class ThatchDB {
   // constraint, so the repair is a table rebuild. Detection reads the
   // stored CREATE statement from sqlite_master: the NOCASE schema text
   // contains COLLATE NOCASE, the older one does not. Colliding rows
-  // collapse via INSERT OR IGNORE (first row wins); chat_messages has no
-  // foreign key into this table, so message history survives untouched.
+  // collapse via INSERT OR IGNORE (one row wins per case group; scan order
+  // decides which). chat_messages has no foreign key into this table, so
+  // message history survives untouched.
+  //
+  // ORDERING TRAP: the rebuild's CREATE and SELECT are pinned to the
+  // columns the OLDEST chat_sessions schema had, because a legacy table
+  // only has those columns - a SELECT naming a newer column would throw.
+  // This migration must run BEFORE any ALTER-based chat_sessions migration
+  // (which add newer columns afterward); when adding a column to
+  // chat_sessions, extend the ALTER-based migrations, not this SELECT.
   #migrateChatNameCollation(): void {
     const row = this.#db
       .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chat_sessions'")

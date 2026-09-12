@@ -41,13 +41,15 @@ never reads a broadcast.
 
 ## Watching the conversation
 
-Chat activity is visible in each session's transcript: registering, sending,
-and reading echo back as `[chat]` bubbles, so you can watch the exchange
-happen in either tab without leaning over the agent's shoulder. Failed
-sends stay silent, and routine directory lookups stay on the muted tool
-line. (Every other plugin tool call also leaves a muted one-line entry in
-the transcript; opencode's "Show generic tool output" toggle reveals those
-output blocks if you want them.)
+Chat activity is visible in each session's transcript: registering,
+sending, reading, and broadcasting echo back as `[chat]` bubbles, so you
+can watch the exchange happen in either tab without leaning over the
+agent's shoulder. Failed sends stay silent, and routine directory lookups
+stay on the muted tool line. You can also watch from the terminal:
+`thatch chat list` and `thatch chat tail` are covered in
+[cli.md](cli.md). (Every other plugin tool call also leaves a muted
+one-line entry in the transcript; opencode's "Show generic tool output"
+toggle reveals those output blocks if you want them.)
 
 ## How to use it
 

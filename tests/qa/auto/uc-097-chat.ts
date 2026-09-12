@@ -62,9 +62,9 @@ const useCase: UseCase = {
     const db = new ThatchDB(join(dbDir, "chat.db"));
     // Raw connection for aging timestamps past the re-nudge window.
     const raw = new Database(join(dbDir, "chat.db"));
-    // The mock's closure appends to `deliveries`, which TypeScript cannot
-    // track across the awaited poller calls - reading length through an
-    // annotated helper keeps the type number instead of a stale literal.
+    // The mock's closure appends to `deliveries`; reading the count
+    // through a helper keeps the assertions readable and the length reads
+    // fresh at every call site.
     const deliveries: Array<{ sessionID: string; senders: string[]; count: number }> = [];
     const delivered = (): number => deliveries.length;
 
@@ -112,7 +112,9 @@ const useCase: UseCase = {
       // to exhaustion; the claimed name must never be drawn. Two draws
       // above (drawA, drawB) plus the custom claim account for the three
       // names removed from circulation, so the drain count cross-checks.
-      const claimed = CHAT_NAME_POOL[0];
+      // Claim a name neither draw picked, or the claim legitimately
+      // collides and the use case would flake (~2% of runs).
+      const claimed = CHAT_NAME_POOL.find((n) => n !== drawA.name && n !== drawB.name)!;
       if (!db.registerChatSession("ses_pool_c", claimed, "p", null).ok) {
         console.log("  FAIL: custom claim of a free pool name was rejected");
         return "FAIL";

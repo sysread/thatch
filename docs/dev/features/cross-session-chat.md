@@ -13,8 +13,8 @@ User-facing behavior is documented in
 ## What it does
 
 - `thatch_chat_register` / `thatch_chat_list` / `thatch_chat_send` /
-  `thatch_chat_read` / `thatch_chat_unregister` tools (all opencode-only,
-  identity from the host session)
+  `thatch_chat_read` / `thatch_chat_unregister` / `thatch_chat_broadcast`
+  tools (all opencode-only, identity from the host session)
 - A shared SQLite directory and inbox in thatch.db, writable by any opencode
   process on the machine
 - A per-process poller that heartbeats hosted sessions and delivers wake
@@ -56,9 +56,10 @@ outlives a process, so liveness needs a signal beyond process lifetime.
 `chat_register` joins the directory. Without a name it draws one at random
 from the built-in pool (`src/chat-names.ts`): whimsical geek-culture names
 in the style of fnord's Nomenclater, statically baked in so assignment never
-costs a model call. Pool draws cannot collide with each other and skip any
-name a session already claimed; the pool is the recommended path because it
-cannot collide at all. With a name, the session claims it custom -
+costs a model call. Pool draws redraw on the rare collision a concurrent
+registration can cause, and skip any name a session already claimed by
+custom registration - so the pool is the recommended path. With a name,
+the session claims it as a custom name -
 uniqueness is case-insensitive ("Landru" and "landru" are one name), so two
 visually identical identities cannot coexist, and message addressing follows
 the same rule. Databases created before the case-insensitive constraint are
@@ -174,8 +175,10 @@ renders the roster with human-readable heartbeat ages, and
 `tests/chat.test.ts`): sent lines on first view, then new sends and newly-
 read messages per poll. `chat_messages.via_broadcast` marks fan-out rows so
 the tail renders one `-> broadcast` line per recipient instead of what
-would otherwise look like identical direct sends. The CLI is read-only on
-purpose - the wake machinery owns the write paths.
+would otherwise look like identical direct sends. The CLI takes no chat
+write actions (the wake machinery owns those paths); the only writes it
+can trigger are the schema migrations that run whenever any thatch
+process opens the database.
 
 ## Interactions with other features
 

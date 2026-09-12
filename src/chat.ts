@@ -73,7 +73,7 @@ export interface ChatInboxItem {
   created_at: string;
 }
 
-export type ChatResult = { ok: true } | { ok: false; error: string };
+export type ChatResult = { ok: true; topic: string | null } | { ok: false; error: string };
 
 // Display names appear inside wake prompts and chat_list output, so they are
 // capped tight. Bodies are capped so a runaway sender cannot turn a nudge
@@ -120,12 +120,13 @@ export class ChatStore {
     sessionID: string,
     project: string | null,
     topic: string | null,
-  ): { ok: true; name: string; drawn: boolean } | { ok: false; error: string } {
+  ): { ok: true; name: string; drawn: boolean; topic: string | null } | { ok: false; error: string } {
     const existing = this.#find(sessionID);
     if (existing) {
       this.#touch(sessionID);
-      this.#maybeUpdateTopic(sessionID, existing.topic, this.#cleanTopic(topic));
-      return { ok: true, name: existing.name, drawn: false };
+      const cleaned = this.#cleanTopic(topic);
+      this.#maybeUpdateTopic(sessionID, existing.topic, cleaned);
+      return { ok: true, name: existing.name, drawn: false, topic: cleaned ?? existing.topic };
     }
     // Two processes can snapshot the same free list and draw the same name;
     // the loser's INSERT hits the constraint. Redrawing from the names
@@ -138,8 +139,9 @@ export class ChatStore {
         return { ok: false, error: "Name pool exhausted - pass a custom name." };
       }
       const name = free[Math.floor(Math.random() * free.length)];
-      const claimed = this.#insertSession(sessionID, name, project, this.#cleanTopic(topic));
-      if (claimed.ok) return { ok: true, name, drawn: true };
+      const cleanTopic = this.#cleanTopic(topic);
+      const claimed = this.#insertSession(sessionID, name, project, cleanTopic);
+      if (claimed.ok) return { ok: true, name, drawn: true, topic: cleanTopic };
     }
     return { ok: false, error: "Could not claim a pool name after several attempts - pass a custom name." };
   }
@@ -162,7 +164,9 @@ export class ChatStore {
       if (existing.name === name) {
         this.#touch(sessionID);
         this.#maybeUpdateTopic(sessionID, existing.topic, cleanTopic);
-        return { ok: true };
+        // The kept topic: omitted keeps existing, "" clears to null (the
+        // read-side normalization this return path mirrors).
+        return { ok: true, topic: cleanTopic ?? existing.topic };
       }
       // A NOCASE hit is only a collision when it belongs to a different
       // session - otherwise this is the caller recasing its own name.
@@ -181,7 +185,7 @@ export class ChatStore {
           nowIso(),
           sessionID,
         ]);
-        return { ok: true };
+        return { ok: true, topic: nextTopic };
       } catch (err) {
         if (this.#isConstraintError(err)) {
           return this.#nameTaken(name);
@@ -192,7 +196,9 @@ export class ChatStore {
     if (this.#findByName(name)) {
       return this.#nameTaken(name);
     }
-    return this.#insertSession(sessionID, name, project, cleanTopic);
+    const inserted = this.#insertSession(sessionID, name, project, cleanTopic);
+    if (inserted.ok) return { ok: true, topic: cleanTopic };
+    return inserted;
   }
 
   /** Leaves the directory. Messages already sent to or from the session are
@@ -230,7 +236,7 @@ export class ChatStore {
     fromSession: string,
     toNameOrID: string,
     body: string,
-  ): { ok: true; id: number; recipient: { session_id: string; name: string } } | { ok: false; error: string } {
+  ): { ok: true; recipient: { session_id: string; name: string } } | { ok: false; error: string } {
     const trimmed = body.trim();
     if (!trimmed) return { ok: false, error: "Message body cannot be empty." };
     if (trimmed.length > MAX_BODY_LEN) {
@@ -249,8 +255,7 @@ export class ChatStore {
       "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast) VALUES (?, ?, ?, ?, 0)",
       [fromSession, recipient.session_id, trimmed, nowIso()],
     );
-    const row = this.#db.query("SELECT last_insert_rowid() AS id").get() as any;
-    return { ok: true, id: row.id, recipient: { session_id: recipient.session_id, name: recipient.name } };
+    return { ok: true, recipient: { session_id: recipient.session_id, name: recipient.name } };
   }
 
   /**
@@ -274,18 +279,23 @@ export class ChatStore {
     if (!sender) return { ok: false, error: "You are not registered - call chat_register first." };
     const recipients: string[] = [];
     const skipped: string[] = [];
-    for (const row of this.list()) {
-      if (row.session_id === fromSession) continue;
-      if (isStale(row, CHAT_STALE_MINUTES)) {
-        skipped.push(row.name);
-        continue;
+    // One transaction: a crash mid-loop rolls the whole fan-out back
+    // instead of leaving a partial broadcast where some recipients got the
+    // message and others silently did not.
+    this.#db.transaction(() => {
+      for (const row of this.list()) {
+        if (row.session_id === fromSession) continue;
+        if (isStale(row, CHAT_STALE_MINUTES)) {
+          skipped.push(row.name);
+          continue;
+        }
+        this.#db.run(
+          "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast) VALUES (?, ?, ?, ?, 1)",
+          [fromSession, row.session_id, trimmed, nowIso()],
+        );
+        recipients.push(row.name);
       }
-      this.#db.run(
-        "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast) VALUES (?, ?, ?, ?, 1)",
-        [fromSession, row.session_id, trimmed, nowIso()],
-      );
-      recipients.push(row.name);
-    }
+    })();
     return { ok: true, recipients, skipped };
   }
 
@@ -369,8 +379,8 @@ export class ChatStore {
         .all() as any[]
     ).map((r) => ({
       id: r.id,
-      from: r.from_name ?? (r.from_session ? `unknown (${String(r.from_session).slice(0, 12)}, departed)` : null),
-      to: r.to_name ?? (r.to_session ? `unknown (${String(r.to_session).slice(0, 12)}, departed)` : null),
+      from: renderChatParticipant(r.from_name, r.from_session),
+      to: renderChatParticipant(r.to_name, r.to_session),
       viaBroadcast: r.via_broadcast === 1,
       body: r.body,
       created_at: r.created_at,
@@ -479,10 +489,14 @@ export class ChatStore {
         "INSERT INTO chat_sessions (session_id, name, topic, project, registered_at, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
         [sessionID, name, topic, project, nowIso(), nowIso()],
       );
-      return { ok: true };
+      return { ok: true, topic };
     } catch (err) {
+      // The two constraints fail differently: a UNIQUE hit on name means
+      // someone else claimed it; a PK hit on session_id means this session
+      // is somehow registered twice, which is an identity event, not a
+      // naming one.
       if (this.#isConstraintError(err)) {
-        return this.#nameTaken(name);
+        return this.#alreadyRegistered();
       }
       throw err;
     }
@@ -493,9 +507,21 @@ export class ChatStore {
   }
 
   /** The one taken-message every claim path returns, so a rewording cannot
-   *  drift between the pre-checks and the race catches. */
+   *  drift between the pre-checks and the race catches. Points at the
+   *  guaranteed-success recovery (a pool draw) like every other failure
+   *  path in this feature. */
   #nameTaken(name: string): ChatResult {
-    return { ok: false, error: `Name "${name}" is taken by another session.` };
+    return {
+      ok: false,
+      error: `Name "${name}" is taken by another session - pick another name, or omit the name to draw one from the pool.`,
+    };
+  }
+
+  /** The one already-registered message for a session-ID PRIMARY KEY hit -
+   *  a constraint collision that is not a taken name (the caller's own
+   *  session row already exists under a different identity path). */
+  #alreadyRegistered(): ChatResult {
+    return { ok: false, error: "You are already registered - call chat_list to see your current name." };
   }
 }
 
@@ -506,10 +532,23 @@ function rowFromSession(r: any): ChatSessionRow {
     // An empty-string topic (explicit clear) reads back as no topic, so the
     // API never leaks the sentinel.
     topic: r.topic || null,
-    project: r.project ?? null,
+    project: r.project,
     registered_at: r.registered_at,
     last_seen: r.last_seen,
   };
+}
+
+/**
+ * Renders a chat participant for user-visible surfaces (wake prompts, the
+ * tail feed, chat_read): the display name when the directory row still
+ * exists, otherwise the shared unknown-departed convention. One helper
+ * because the exact string is a cross-surface convention - a reword here
+ * must reach every surface or the reader sees two names for the same
+ * condition.
+ */
+export function renderChatParticipant(name: string | null, sessionID: string | null | undefined): string {
+  if (name) return name;
+  return `unknown (${String(sessionID ?? "").slice(0, 12)}, departed)`;
 }
 
 // ---------------------------------------------------------------------------
@@ -727,7 +766,7 @@ export class ChatPoller {
           // "unknown (id, departed)" matches chat_read's rendering of a
           // sender whose directory row is gone, so both surfaces use one
           // convention for the same condition.
-          const senders = [...new Set(messages.map((m) => m.from_name ?? `unknown (${m.from_session.slice(0, 12)}, departed)`))];
+          const senders = [...new Set(messages.map((m) => renderChatParticipant(m.from_name, m.from_session)))];
           await this.#opts.deliver(recipient, senders, messages.length);
           // Count the nudge before the stamp: the cap must bind on prompts
           // actually sent, not on the DB write succeeding. A failing stamp

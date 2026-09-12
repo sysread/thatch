@@ -788,36 +788,43 @@ function clip(text: string, max: number): string {
 /**
  * Builds the visible echo for one chat tool call, or null when there is
  * nothing worth echoing. Only conversational events echo - register, send,
- * read; chat_list and chat_unregister stay on the muted tool line. Failed
- * calls never echo: success is gated on the tool's own output prefix, and
- * the recipient's display name is parsed from the send output so the echo
- * shows the resolved name rather than whatever casing the model typed.
+ * read, broadcast; chat_list and chat_unregister stay on the muted tool
+ * line. Failed calls never echo: success is gated on the tool's own output
+ * prefix, and the recipient's display name is parsed from the send output
+ * so the echo shows the resolved name rather than whatever casing the model
+ * typed.
  */
+
+/** The transcript-echo marker: stamped by every chatEchoText return and
+ *  matched by isChatEchoParts. One constant so the compiler enforces the
+ *  keep-in-sync rule this pair depends on. */
+export const CHAT_ECHO_PREFIX = "[chat] ";
+
 export function chatEchoText(tool: string, args: Record<string, unknown>, output: string): string | null {
   if (tool === "thatch_chat_register") {
     if (!output.startsWith("[registered]")) return null;
     const name = output.split("\n", 1)[0].slice("[registered] ".length).trim();
     // "registered in" covers every case the prefix line cannot distinguish:
     // first join, rename, and idempotent same-name re-register.
-    return `[chat] ${name} registered in the session directory`;
+    return `${CHAT_ECHO_PREFIX}${name} registered in the session directory`;
   }
   if (tool === "thatch_chat_send") {
     if (!output.startsWith("[sent]")) return null;
     const parsed = output.match(/\[sent\] to (.+?) \(/);
     const to = parsed?.[1] ?? (typeof args.to === "string" ? args.to : "unknown");
     const body = typeof args.body === "string" ? args.body : "";
-    return `[chat] to ${to}: ${clip(body, 200)}`;
+    return `${CHAT_ECHO_PREFIX}to ${to}: ${clip(body, 200)}`;
   }
   if (tool === "thatch_chat_read") {
     if (!output || output === "Inbox empty.") return null;
-    return `[chat] inbox\n${clip(output, 1500)}`;
+    return `${CHAT_ECHO_PREFIX}inbox\n${clip(output, 1500)}`;
   }
   if (tool === "thatch_chat_broadcast") {
     if (!output.startsWith("[broadcast]")) return null;
     const parsed = output.match(/\[broadcast\] to (\d+) session/);
     const n = parsed?.[1] ?? "0";
     const body = typeof args.body === "string" ? args.body : "";
-    return `[chat] broadcast to ${n} session${n === "1" ? "" : "s"}: ${clip(body, 200)}`;
+    return `${CHAT_ECHO_PREFIX}broadcast to ${n} session${n === "1" ? "" : "s"}: ${clip(body, 200)}`;
   }
   return null;
 }
@@ -841,5 +848,5 @@ export function chatEchoText(tool: string, args: Record<string, unknown>, output
  */
 export function isChatEchoParts(parts: unknown[]): boolean {
   const visible = (parts as any[]).filter((p) => p?.type === "text" && !p?.synthetic);
-  return visible.length > 0 && visible.every((p) => typeof p.text === "string" && p.text.startsWith("[chat] "));
+  return visible.length > 0 && visible.every((p) => typeof p.text === "string" && p.text.startsWith(CHAT_ECHO_PREFIX));
 }

@@ -16,7 +16,7 @@ import { sendNotification, defaultSpawner, type NotifyChannel, type Spawner } fr
 import { predictionVerb } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, type WatcherRegistry, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
-import { CHAT_STALE_MINUTES, isStale } from "./chat";
+import { CHAT_STALE_MINUTES, isStale, renderChatParticipant } from "./chat";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
 // creation time. Matches the thatch_find_duplicates threshold (0.85).
@@ -1361,7 +1361,8 @@ const chatRegisterDef: ToolDef = {
     "to be assigned one from the built-in pool (recommended - cannot " +
     "collide); pass a name to claim it instead, case-insensitively unique. " +
     "Include a topic: it is what other sessions see in chat_list when " +
-    "deciding who to talk to. Safe to call again - the same name is a " +
+    "deciding who to talk to. Pass an empty topic to clear it; omit it to " +
+    "keep the current one. Safe to call again - the same name is a " +
     "no-op, a new name renames you, and a new topic updates it. Only " +
     "top-level sessions should register; never register a sub-agent " +
     "session. opencode-only.",
@@ -1371,7 +1372,8 @@ const chatRegisterDef: ToolDef = {
     ),
     topic: z.string().optional().describe(
       "One line about what this session is working on (shown to other " +
-      "sessions in chat_list). Omit on re-register to keep the existing topic.",
+      "sessions in chat_list). Omit on re-register to keep the existing " +
+      "topic; pass an empty string to clear it.",
     ),
   },
   opencodeOnly: true,
@@ -1388,7 +1390,9 @@ const chatRegisterDef: ToolDef = {
         `[registered] ${custom.trim()}\n` +
         `session_id: ${host.sessionID}\n` +
         `project: ${ctx.defaultStore}\n` +
-        (topic ? `topic: ${topic.trim()}\n` : "") +
+        // The store returns the sanitized topic it kept, so the
+        // confirmation shows the roster value, not the raw input.
+        (result.topic ? `topic: ${result.topic}\n` : "") +
         `\n` +
         `Other sessions can now message you by name with chat_send; use ` +
         `chat_list to see who else is available.`
@@ -1403,7 +1407,7 @@ const chatRegisterDef: ToolDef = {
       `[registered] ${assigned.name}\n` +
       `session_id: ${host.sessionID}\n` +
       `project: ${ctx.defaultStore}\n` +
-      (topic ? `topic: ${topic.trim()}\n` : "") +
+      (assigned.topic ? `topic: ${assigned.topic}\n` : "") +
       `\n` +
       `${origin} Other sessions can now message you by name with chat_send, ` +
       `or reach everyone at once with chat_broadcast; use chat_list to see ` +
@@ -1454,7 +1458,7 @@ const chatSendDef: ToolDef = {
     "one machine's coordination channel - sessions on other machines or " +
     "MCP hosts cannot be reached. opencode-only.",
   args: {
-    to: z.string().describe("Recipient display name or session id (see chat_list)."),
+    to: z.string().describe("Recipient display name (see chat_list)."),
     body: z.string().describe("Message body. Keep it short and self-contained - the recipient may lack your context."),
   },
   opencodeOnly: true,
@@ -1502,7 +1506,7 @@ const chatReadDef: ToolDef = {
     const messages = ctx.db.readChatMessages(host.sessionID);
     if (messages.length === 0) return "Inbox empty.";
     const lines = messages.map((m) => {
-      const sender = m.from_name ?? `unknown (${m.from_session.slice(0, 12)}, departed)`;
+      const sender = renderChatParticipant(m.from_name, m.from_session);
       return `[from ${sender}, ${formatChatTimestamp(m.created_at)}] ${m.body}`;
     });
     return `${lines.join("\n")}\n(${messages.length} message${messages.length === 1 ? "" : "s"}, marked read)`;

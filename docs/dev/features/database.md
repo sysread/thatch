@@ -222,6 +222,7 @@ behavior_provenance(
 chat_sessions(
   session_id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  topic TEXT,
   project TEXT,
   registered_at TEXT NOT NULL,
   last_seen TEXT NOT NULL
@@ -244,12 +245,15 @@ chat_messages(
   body TEXT NOT NULL,
   created_at TEXT NOT NULL,
   delivered_at TEXT,
-  read_at TEXT
+  read_at TEXT,
+  via_broadcast INTEGER NOT NULL DEFAULT 0
 )
 ```
 
 - `delivered_at` is the last wake-prompt stamp (restamped on re-nudges);
-  `read_at` is set when the recipient drains its inbox. The endpoints are
+  `read_at` is set when the recipient drains its inbox. `via_broadcast`
+  marks rows a chat_broadcast fan-out created (the CLI tail renders them
+  as `-> broadcast`). The endpoints are
   plain columns, not foreign keys: unregistering a session must not be
   blocked by message history, and a departed sender degrades to an unknown
   name in the reader's view.

@@ -29,6 +29,16 @@ thatch hygiene                 # print the hygiene report
 thatch reminder [--json]       # print the session-start reminder
 ```
 
+`hygiene` prints the standalone hygiene report (duplicate candidates,
+stale entries, orphaned branch memories). See
+[hygiene.md](hygiene.md).
+
+`reminder` prints the full session-start reminder including the
+hygiene report. The `--json` flag wraps the output as
+`{"additional_context": "..."}` for Cursor's hook format. These
+commands are normally called by hooks, not by hand, but you can run
+them to see what the agent sees at session start.
+
 ## Cross-session chat
 
 Read-only access to the chat directory your opencode sessions share
@@ -37,7 +47,7 @@ Read-only access to the chat directory your opencode sessions share
 ```bash
 thatch chat list               # who is registered: name, age, project, topic
 thatch chat tail               # follow sent and read events, live
-thatch chat tail --once        # print the conversation so far and exit
+thatch chat tail --once        # print the messages sent so far and exit
 ```
 
 `chat list` shows every registered session with how long since its last
@@ -53,19 +63,11 @@ project, and the topic it registered with - the fastest way to answer
 [2026-09-12T21:08:03Z] Marlowe the Cherry Picker read a message from Kurn the Typechecker: direct ping
 ```
 
-Follow mode runs until Ctrl-C. The chat itself flows through the agents
-(the CLI is read-only; registration, sending, and reading all happen from
-opencode sessions via the `thatch_chat_*` tools).
-
-`hygiene` prints the standalone hygiene report (duplicate candidates,
-stale entries, orphaned branch memories). See
-[hygiene.md](hygiene.md).
-
-`reminder` prints the full session-start reminder including the
-hygiene report. The `--json` flag wraps the output as
-`{"additional_context": "..."}` for Cursor's hook format. These
-commands are normally called by hooks, not by hand, but you can run
-them to see what the agent sees at session start.
+Follow mode runs until Ctrl-C. Read events appear only in follow mode
+(they fire when an inbox is drained after the tail started). The chat
+itself flows through the agents (the CLI never sends, reads, or
+registers on a session's behalf; that happens from opencode sessions
+via the `thatch_chat_*` tools).
 
 ## Priming a new project
 

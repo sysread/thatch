@@ -10,7 +10,7 @@ import { hygieneReport } from "../src/hygiene";
 import { claudeSessionStartReminder } from "../src/prompts";
 import { setupClaudeCode, setupCursor } from "../src/setup";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
-import { chatTailDiff, formatChatTailEvent } from "../src/chat";
+import { chatTailDiff, formatChatTailEvent, isStale, CHAT_STALE_MINUTES } from "../src/chat";
 
 const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 const dbPath = process.env.THATCH_DB_PATH ?? join(configHome, "thatch", "thatch.db");
@@ -230,11 +230,11 @@ async function sessionCommand(rest: string[]): Promise<void> {
 /** "2m ago", "3h ago", "5d ago" - human-readable age for the chat roster. */
 function humanAge(iso: string, now = Date.now()): string {
   const seconds = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));
+  if (Number.isNaN(seconds)) return "unknown age";
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (minutes < 48 * 60) return `${Math.floor(minutes / 60)}h ago`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}h ago`;
   return `${Math.floor(minutes / (24 * 60))}d ago`;
 }
 
@@ -249,9 +249,13 @@ async function chatCommand(rest: string[]): Promise<void> {
         break;
       }
       for (const s of sessions) {
+        // Same staleness convention as the chat_list tool: an age past the
+        // threshold means the session's host process is probably gone.
+        const liveness = isStale(s, CHAT_STALE_MINUTES) ? "STALE" : "fresh";
         const parts = [
           s.name,
           `(${humanAge(s.last_seen)})`,
+          liveness,
           `project:${s.project ?? "unknown"}`,
         ];
         if (s.topic) parts.push(s.topic);
@@ -267,20 +271,35 @@ async function chatCommand(rest: string[]): Promise<void> {
       // logic lives in src/chat.ts (chatTailDiff), unit-tested there.
       const state = new Map<number, string | null>();
 
-      // First pass: print the backlog (every existing row as its sent
-      // line), then follow unless --once.
-      for (const event of chatTailDiff(state, db.chatMessageFeed()).events) {
-        if (event.kind === "sent") console.log(formatChatTailEvent(event));
-      }
-      if (onceOnly) break;
-
-      // Follow mode: re-query the shared DB handle each tick; Ctrl-C exits.
-      process.on("SIGINT", () => process.exit(0));
-      for (;;) {
-        await Bun.sleep(2000);
+      // Follow mode holds the handle open until Ctrl-C; the finally below
+      // closes it on every exit path, including the SIGINT handler's.
+      try {
+        // First pass: print the backlog (every existing row as its sent
+        // line), then follow unless --once.
         for (const event of chatTailDiff(state, db.chatMessageFeed()).events) {
-          console.log(formatChatTailEvent(event));
+          if (event.kind === "sent") console.log(formatChatTailEvent(event));
         }
+        if (onceOnly) break;
+
+        process.on("SIGINT", () => process.exit(0));
+        for (;;) {
+          await Bun.sleep(2000);
+          try {
+            for (const event of chatTailDiff(state, db.chatMessageFeed()).events) {
+              console.log(formatChatTailEvent(event));
+            }
+          } catch (err) {
+            // The surface's whole job is watching a shared, mutable file;
+            // a feed failure should say so, not die with a stack trace.
+            console.error(`[thatch chat tail] feed query failed: ${err}`);
+            console.error("The database may be locked or missing; exiting.");
+            return;
+          }
+        }
+      } finally {
+        db.close();
+        // The script tail also closes; closing twice is harmless and the
+        // early-return paths need this one.
       }
       break;
     }

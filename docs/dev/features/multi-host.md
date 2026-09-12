@@ -188,6 +188,7 @@ behavior, with some features having no MCP counterpart.
 | Tool batching | N/A (in-process) | PostToolBatch (batch) | postToolUse (per-tool) |
 | `get_session_info` (session identity) | Yes | No | No |
 | `session_search` / `session_get` (conversation archaeology) | Yes (tools) | CLI only (`thatch session ...`) | CLI only (`thatch session ...`) |
+| `watch_*` (PR and branch watchers) | Yes (tools) | No | No |
 | `chat_*` (cross-session chat) | Yes | No | No |
 
 For the full parity matrix, see [../mcp-parity.md](../mcp-parity.md).

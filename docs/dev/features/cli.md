@@ -51,7 +51,8 @@ Read-only window on the cross-session chat directory ([cross-session-chat.md](cr
 - `chat tail [--once]` follows the message stream. Sent lines have the shape
   `[timestamp] from -> to: body` (broadcast rows render `broadcast` via the
   `via_broadcast` marker); in follow mode, an inbox drain emits a read line
-  (`[timestamp] to read a message from from: preview`). The diff logic is
+  (`[timestamp] ${reader} read a message from ${sender}: preview` — the
+  reader is the recipient draining its inbox). The diff logic is
   `chatTailDiff()`/`formatChatTailEvent()` in `src/chat.ts`, unit-tested
   there; `--once` prints one snapshot and exits, because a snapshot has no
   previous state to diff read events against.

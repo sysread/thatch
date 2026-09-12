@@ -154,7 +154,16 @@ export const server: Plugin = async ({ client, worktree }) => {
   // it at call time, after full initialization, same as the watcher gate.
   const chatPoller = new ChatPoller({
     store: db,
-    hostedSessions: () => [...sessionStatus.keys()],
+    hostedSessions: () => {
+      // Sub-agent children share this process's sessionStatus (their
+      // status events land here), but they are never legitimate chat
+      // participants - a registered child would be heartbeat-ed
+      // fresh-forever and burn nudge budget on undeliverable wake
+      // prompts. Keep them out of the hosted set even when guidance
+      // against registering them is ignored.
+      const hosted = [...sessionStatus.keys()].filter((id) => !childToParent.has(id));
+      return hosted;
+    },
     deliver: async (sessionID, senders, count) => {
       await client.session.promptAsync({
         path: { id: sessionID },
@@ -471,7 +480,12 @@ export const server: Plugin = async ({ client, worktree }) => {
                 parts: [{ type: "text", text: echo }],
               },
             })
-            .catch(() => {});
+            .catch((err) => {
+              // The echo must never fail the tool call, but a silent catch
+              // would hide a systemic promptAsync failure (bubbles would
+              // stop appearing everywhere with no diagnostics).
+              console.error(`[thatch] chat echo delivery failed: ${err}`);
+            });
         }
         return;
       }
@@ -842,6 +856,11 @@ export const server: Plugin = async ({ client, worktree }) => {
       }
       if (event.type === "session.deleted") {
         const id = event.properties.info.id;
+        // Shrink the chat poller's hosted set FIRST: the rest of this
+        // branch runs extraction calls that could throw on a transient DB
+        // error, and a leaked status key would keep heartbeat-ing a dead
+        // session as permanently fresh.
+        sessionStatus.delete(id);
         // A child deleted before completing never processed its payload.
         const parentID = childToParent.get(id);
         if (parentID) {
@@ -854,12 +873,9 @@ export const server: Plugin = async ({ client, worktree }) => {
         extractionChildren.delete(id);
         // A deleted parent takes its accepted entries with it, and its
         // watchers die with it - the session that would receive their
-        // notifications no longer exists. Dropping it from sessionStatus
-        // also shrinks the chat poller's hosted set, so no later cycle
-        // selects its mail.
+        // notifications no longer exists.
         extraction.completeAccepted(id);
         extracting.delete(id);
-        sessionStatus.delete(id);
         watchers.cancelSession(id);
         // Leaving the chat directory is the graceful-exit fast path; a
         // crashed process never fires session.deleted, so the heartbeat
