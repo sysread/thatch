@@ -224,14 +224,16 @@ export class ThatchDB {
 
     // Cross-session chat: the machine-wide session directory and message
     // inbox, shared by every opencode process (delivery itself stays local
-    // to each host process - see src/chat.ts). Message endpoints are plain
+    // to each host process - see src/chat.ts). Display-name uniqueness is
+    // case-insensitive ("Landru" and "landru" are one name), so two visually
+    // identical identities cannot coexist. Message endpoints are plain
     // columns, not foreign keys, on purpose: unregistering a session must
     // not be blocked by message history, and a departed sender degrades to
     // an unknown name in the reader's view rather than vanishing rows.
     this.#db.run(`
       CREATE TABLE IF NOT EXISTS chat_sessions (
         session_id    TEXT PRIMARY KEY,
-        name          TEXT NOT NULL UNIQUE,
+        name          TEXT NOT NULL UNIQUE COLLATE NOCASE,
         project       TEXT,
         registered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
         last_seen     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
@@ -256,6 +258,7 @@ export class ThatchDB {
     this.#db.run("INSERT OR IGNORE INTO stores (name) VALUES ('global')");
 
     this.#migrateColumns();
+    this.#migrateChatNameCollation();
   }
 
   // Databases created before recall telemetry lack these columns; the CREATE
@@ -274,6 +277,34 @@ export class ThatchDB {
         this.#db.run(`ALTER TABLE entries ADD COLUMN ${col} ${decl}`);
       }
     }
+  }
+
+  // chat_sessions shipped with a case-SENSITIVE unique constraint, which let
+  // "Landru" and "landru" coexist as distinct identities. SQLite cannot
+  // ALTER a column constraint, so the fix is a table rebuild. Detection
+  // reads the stored CREATE statement from sqlite_master: the new schema
+  // text contains COLLATE NOCASE, the old one does not. Colliding rows
+  // collapse via INSERT OR IGNORE (first row wins); chat_messages has no
+  // foreign key into this table, so message history survives untouched.
+  #migrateChatNameCollation(): void {
+    const row = this.#db
+      .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chat_sessions'")
+      .get() as any;
+    if (!row?.sql || /COLLATE\s+NOCASE/i.test(row.sql)) return;
+    this.#db.transaction(() => {
+      this.#db.run(`
+        CREATE TABLE chat_sessions_migrated (
+          session_id    TEXT PRIMARY KEY,
+          name          TEXT NOT NULL UNIQUE COLLATE NOCASE,
+          project       TEXT,
+          registered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+          last_seen     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+        )
+      `);
+      this.#db.run("INSERT OR IGNORE INTO chat_sessions_migrated SELECT session_id, name, project, registered_at, last_seen FROM chat_sessions");
+      this.#db.run("DROP TABLE chat_sessions");
+      this.#db.run("ALTER TABLE chat_sessions_migrated RENAME TO chat_sessions");
+    })();
   }
 
   // ---------------------------------------------------------------------------
@@ -749,6 +780,10 @@ export class ThatchDB {
 
   registerChatSession(sessionID: string, name: string, project: string | null) {
     return this.#chat.register(sessionID, name, project);
+  }
+
+  assignChatName(sessionID: string, project: string | null) {
+    return this.#chat.assign(sessionID, project);
   }
 
   unregisterChatSession(sessionID: string) {

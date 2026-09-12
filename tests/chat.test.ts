@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES } from "../src/chat";
+import { CHAT_NAME_POOL } from "../src/chat-names";
+import { chatEchoText } from "../src/prompts";
 
 let dbDir: string;
 let dbPath: string;
@@ -58,6 +60,15 @@ describe("ChatStore via ThatchDB", () => {
     const clash = db.registerChatSession("ses_b", "alice", "p");
     expect(clash.ok).toBe(false);
     if (!clash.ok) expect(clash.error).toContain("taken");
+  });
+
+  test("name uniqueness is case-insensitive", () => {
+    expect(db.registerChatSession("ses_a", "Landru", "p").ok).toBe(true);
+    expect(db.registerChatSession("ses_b", "landru", "p").ok).toBe(false);
+    // Lookups and message addressing follow the same rule.
+    expect(db.findChatSession("LANDRU")?.session_id).toBe("ses_a");
+    db.registerChatSession("ses_b", "bob", "p");
+    expect(db.sendChatMessage("ses_b", "LANDRU", "hi").ok).toBe(true);
   });
 
   test("re-registering renames; re-registering the same name is idempotent", () => {
@@ -117,6 +128,92 @@ describe("ChatStore via ThatchDB", () => {
     expect(db.unreadChatCount("ses_b")).toBe(0);
     expect(db.readChatMessages("ses_b")).toEqual([]);
     expect(db.readChatMessages("ses_a")).toEqual([]);
+  });
+});
+
+describe("name pool assignment", () => {
+  test("assign draws an unused pool name; two sessions never draw the same", () => {
+    const first = db.assignChatName("ses_a", "p");
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(CHAT_NAME_POOL).toContain(first.name);
+    const second = db.assignChatName("ses_b", "p");
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.name).not.toBe(first.name);
+  });
+
+  test("assign is idempotent for an already-registered session", () => {
+    db.registerChatSession("ses_a", "custom-name", "p");
+    const again = db.assignChatName("ses_a", "p");
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.name).toBe("custom-name");
+  });
+
+  test("a custom claim removes that pool name from future draws", () => {
+    const claimed = CHAT_NAME_POOL[0];
+    expect(db.registerChatSession("ses_a", claimed, "p").ok).toBe(true);
+    // Draw until the pool is nearly exhausted; the claimed name never reappears.
+    for (let i = 0; i < CHAT_NAME_POOL.length - 2; i++) {
+      const draw = db.assignChatName(`ses_${i}`, "p");
+      expect(draw.ok).toBe(true);
+      if (draw.ok) expect(draw.name).not.toBe(claimed);
+    }
+  });
+
+  test("the pool can be exhausted, with a clear error", () => {
+    for (let i = 0; i < CHAT_NAME_POOL.length; i++) {
+      const draw = db.assignChatName(`ses_${i}`, "p");
+      expect(draw.ok).toBe(true);
+    }
+    const exhausted = db.assignChatName("ses_overflow", "p");
+    expect(exhausted.ok).toBe(false);
+    if (!exhausted.ok) expect(exhausted.error).toContain("exhausted");
+  });
+});
+
+describe("chat name-collation migration", () => {
+  test("a case-sensitive legacy table is rebuilt with NOCASE uniqueness", () => {
+    db.close();
+    raw.close();
+    rmSync(dbDir, { recursive: true, force: true });
+    dbDir = mkdtempSync(join(tmpdir(), "thatch-chat-mig-"));
+    dbPath = join(dbDir, "test.db");
+    // Build the v1 schema by hand: plain case-sensitive UNIQUE, with the
+    // colliding rows the old constraint allowed.
+    const legacy = new Database(dbPath);
+    legacy.run(`
+      CREATE TABLE chat_sessions (
+        session_id    TEXT PRIMARY KEY,
+        name          TEXT NOT NULL UNIQUE,
+        project       TEXT,
+        registered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        last_seen     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+      )
+    `);
+    legacy.run("INSERT INTO chat_sessions (session_id, name) VALUES ('ses_a', 'Landru')");
+    legacy.run("INSERT INTO chat_sessions (session_id, name) VALUES ('ses_b', 'landru')");
+    legacy.run("INSERT INTO chat_sessions (session_id, name) VALUES ('ses_c', 'Bob')");
+    legacy.close();
+
+    // Opening with ThatchDB runs the migration at schema init.
+    db = new ThatchDB(dbPath);
+    raw = new Database(dbPath);
+    const rows = db.listChatSessions();
+    expect(rows.length).toBe(2);
+    const names = new Set(rows.map((r) => r.name.toLowerCase()));
+    expect(names.has("landru")).toBe(true);
+    expect(names.has("bob")).toBe(true);
+    // The new constraint is live: the surviving Landru cannot be re-claimed
+    // in any casing by another session.
+    const survivor = rows.find((r) => r.name.toLowerCase() === "landru")!;
+    const clash = db.registerChatSession("ses_new", survivor.name === "Landru" ? "landru" : "Landru", "p");
+    expect(clash.ok).toBe(false);
+    // And re-opening is a no-op (the stored CREATE statement now says NOCASE).
+    db.close();
+    db = new ThatchDB(dbPath);
+    expect(db.listChatSessions().length).toBe(2);
   });
 });
 
@@ -183,6 +280,39 @@ describe("staleness", () => {
     const rows = new Map(db.listChatSessions().map((r) => [r.session_id, r]));
     expect(isStale(rows.get("ses_hosted")!, CHAT_STALE_MINUTES)).toBe(false);
     expect(isStale(rows.get("ses_other")!, CHAT_STALE_MINUTES)).toBe(true);
+  });
+});
+
+describe("chat transcript echo text", () => {
+  test("register echoes the claimed name; failures stay silent", () => {
+    expect(chatEchoText("thatch_chat_register", {}, "[registered] Kurn the Typechecker\nsession_id: ses_x"))
+      .toBe("[chat] Kurn the Typechecker joined the session directory");
+    expect(chatEchoText("thatch_chat_register", {}, "Registration failed: name taken")).toBeNull();
+  });
+
+  test("send echoes the resolved recipient name with a clipped body", () => {
+    const out = "[sent] to Landru (ses_f6c9e9a0)\n\nThe recipient is nudged when idle.";
+    expect(chatEchoText("thatch_chat_send", { to: "landru", body: "hello" }, out))
+      .toBe("[chat] to Landru: hello");
+    // Output shape unparseable: fall back to the addressed name.
+    expect(chatEchoText("thatch_chat_send", { to: "bob", body: "hi" }, "[sent] to bob"))
+      .toBe("[chat] to bob: hi");
+    expect(chatEchoText("thatch_chat_send", { to: "Landru", body: "x".repeat(300) }, out))
+      .toBe("[chat] to Landru: " + "x".repeat(200) + "...");
+    expect(chatEchoText("thatch_chat_send", { to: "ghost", body: "hi" }, "Not sent: no registered session.")).toBeNull();
+  });
+
+  test("read echoes the inbox; empty inbox stays silent", () => {
+    expect(chatEchoText("thatch_chat_read", {}, "Inbox empty.")).toBeNull();
+    expect(chatEchoText("thatch_chat_read", {}, "[from Landru] hi\n(1 message, marked read)"))
+      .toBe("[chat] inbox\n[from Landru] hi\n(1 message, marked read)");
+    const echo = chatEchoText("thatch_chat_read", {}, "y".repeat(2000));
+    expect(echo).toBe("[chat] inbox\n" + "y".repeat(1500) + "...");
+  });
+
+  test("list and unregister never echo", () => {
+    expect(chatEchoText("thatch_chat_list", {}, "[chat] 2 sessions registered")).toBeNull();
+    expect(chatEchoText("thatch_chat_unregister", {}, "[unregistered] this session left.")).toBeNull();
   });
 });
 

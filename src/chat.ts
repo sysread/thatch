@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { CHAT_NAME_POOL } from "./chat-names";
 
 /**
  * Cross-session chat: opt-in messaging between live opencode sessions on one
@@ -87,9 +88,33 @@ export class ChatStore {
   }
 
   /**
+   * Joins the directory with a pool name: picks uniformly at random from the
+   * names no other session has claimed (case-insensitively). Idempotent for
+   * an already-registered session - it keeps its current name. Fails only
+   * when every pool name is taken.
+   */
+  assign(sessionID: string, project: string | null): { ok: true; name: string } | { ok: false; error: string } {
+    const existing = this.#find(sessionID);
+    if (existing) return { ok: true, name: existing.name };
+    const taken = new Set(this.list().map((r) => r.name.toLowerCase()));
+    const free = CHAT_NAME_POOL.filter((n) => !taken.has(n.toLowerCase()));
+    if (free.length === 0) {
+      return { ok: false, error: "Name pool exhausted - pass a custom name." };
+    }
+    const name = free[Math.floor(Math.random() * free.length)];
+    this.#db.run(
+      "INSERT INTO chat_sessions (session_id, name, project, registered_at, last_seen) VALUES (?, ?, ?, ?, ?)",
+      [sessionID, name, project, nowIso(), nowIso()],
+    );
+    return { ok: true, name };
+  }
+
+  /**
    * Joins the directory, or refreshes an existing registration. Re-registering
    * with the same session ID renames the session; the new name must not be
-   * claimed by a different session. Both paths stamp last_seen.
+   * claimed by a different session. Uniqueness is case-insensitive ("Landru"
+   * and "landru" are the same name), so lookups and claims agree no matter
+   * what casing the model or user types. Both paths stamp last_seen.
    */
   register(sessionID: string, rawName: string, project: string | null): ChatResult {
     const name = rawName.trim();
@@ -138,7 +163,7 @@ export class ChatStore {
       .all() as any[]).map(rowFromSession);
   }
 
-  /** Resolves a recipient by display name or session ID. */
+  /** Resolves a recipient by display name (case-insensitive) or session ID. */
   find(nameOrID: string): ChatSessionRow | null {
     return this.#findByName(nameOrID) ?? this.#find(nameOrID);
   }
@@ -267,7 +292,7 @@ export class ChatStore {
 
   #findByName(name: string): ChatSessionRow | null {
     const row = this.#db
-      .query("SELECT session_id, name, project, registered_at, last_seen FROM chat_sessions WHERE name = ?")
+      .query("SELECT session_id, name, project, registered_at, last_seen FROM chat_sessions WHERE name = ? COLLATE NOCASE")
       .get(name) as any;
     return row ? rowFromSession(row) : null;
   }

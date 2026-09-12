@@ -6,6 +6,7 @@ import { registerUseCase, type UseCase } from "../runner";
 import { TOOL_DEFS } from "../../../src/tool-defs";
 import { ThatchDB } from "../../../src/db";
 import { ChatPoller, nowIso } from "../../../src/chat";
+import { CHAT_NAME_POOL } from "../../../src/chat-names";
 
 /**
  * UC-097: Cross-session chat round-trip.
@@ -24,17 +25,19 @@ const useCase: UseCase = {
   ].join("\n"),
   steps: [
     "1. Verify the chat tools are opencode-only in TOOL_DEFS.",
-    "2. Register two sessions; confirm name collisions are rejected.",
-    "3. Send a message and confirm send validation (ghost recipient, unregistered sender, self-send).",
-    "4. Poll with the delivery gate closed; confirm messages stay pending.",
-    "5. Open the gate; confirm one grouped wake prompt with sender names, and messages marked delivered.",
-    "6. Read the inbox; confirm it drains and stamps read.",
-    "7. Confirm the re-nudge path re-queues delivered-but-unread mail, and the rate cap blocks repeats.",
-    "8. Unregister; confirm message history survives.",
+    "2. Register two sessions; confirm name collisions are rejected, including case variants.",
+    "3. Assign names from the built-in pool; confirm draws are unused, distinct, and sensitive to custom claims.",
+    "4. Send a message and confirm send validation (ghost recipient, unregistered sender, self-send).",
+    "5. Poll with the delivery gate closed; confirm messages stay pending.",
+    "6. Open the gate; confirm one grouped wake prompt with sender names, and messages marked delivered.",
+    "7. Read the inbox; confirm it drains and stamps read.",
+    "8. Confirm the re-nudge path re-queues delivered-but-unread mail, and the rate cap blocks repeats.",
+    "9. Unregister; confirm message history survives.",
   ].join("\n"),
   expected: [
     "- chat_register, chat_list, chat_send, chat_read, and chat_unregister are marked opencodeOnly.",
-    "- A name can only be claimed by one session; re-registering renames.",
+    "- A name can only be claimed by one session, case-insensitively; lookups and message addressing follow the same rule.",
+    "- Pool assignment (register without a name) draws an unused pool name, never repeats a draw, and skips names claimed by custom registrations.",
     "- Send requires both endpoints registered and distinct.",
     "- The poller delivers only when canDeliver passes; undelivered mail stays pending.",
     "- Delivery groups a recipient's messages into one prompt (senders + count) and stamps delivered_at.",
@@ -79,6 +82,55 @@ const useCase: UseCase = {
       }
       if (db.registerChatSession("ses_gamma", "alpha", "p").ok) {
         console.log("  FAIL: name collision was accepted");
+        return "FAIL";
+      }
+      // Case variants collide too: uniqueness is case-insensitive.
+      if (db.registerChatSession("ses_gamma", "ALPHA", "p").ok) {
+        console.log("  FAIL: case-variant name collision was accepted");
+        return "FAIL";
+      }
+      // Lookups and addressing follow the same rule.
+      if (db.findChatSession("AlPhA")?.session_id !== "ses_alpha") {
+        console.log("  FAIL: case-insensitive lookup failed");
+        return "FAIL";
+      }
+      if (!db.sendChatMessage("ses_beta", "ALPHA", "cased ping").ok) {
+        console.log("  FAIL: case-insensitive addressing failed");
+        return "FAIL";
+      }
+
+      // Pool assignment: draws come from the pool, are unused, and differ.
+      const drawA = db.assignChatName("ses_pool_a", "p");
+      if (!drawA.ok || !CHAT_NAME_POOL.includes(drawA.name)) {
+        console.log(`  FAIL: pool draw invalid: ${JSON.stringify(drawA)}`);
+        return "FAIL";
+      }
+      const drawB = db.assignChatName("ses_pool_b", "p");
+      if (!drawB.ok || drawB.name === drawA.name) {
+        console.log("  FAIL: two pool draws collided or the second failed");
+        return "FAIL";
+      }
+      // A custom claim removes that name from future draws. Drain the pool
+      // to exhaustion; the claimed name must never be drawn. Two draws
+      // above (drawA, drawB) plus the custom claim account for the three
+      // names removed from circulation, so the drain count cross-checks.
+      const claimed = CHAT_NAME_POOL[0];
+      if (!db.registerChatSession("ses_pool_c", claimed, "p").ok) {
+        console.log("  FAIL: custom claim of a free pool name was rejected");
+        return "FAIL";
+      }
+      let draws = 0;
+      for (;;) {
+        const draw = db.assignChatName(`ses_drain_${draws}`, "p");
+        if (!draw.ok) break;
+        draws++;
+        if (draw.name === claimed) {
+          console.log("  FAIL: a custom-claimed pool name was drawn again");
+          return "FAIL";
+        }
+      }
+      if (draws !== CHAT_NAME_POOL.length - 3) {
+        console.log(`  FAIL: expected ${CHAT_NAME_POOL.length - 3} free pool names, drew ${draws}`);
         return "FAIL";
       }
 

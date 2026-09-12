@@ -7,8 +7,12 @@ between tabs all afternoon.
 
 ## What it does
 
-Each session opts in with `thatch_chat_register` under a short, unique name
-("qa-session", "release-watcher"). Once registered:
+Each session opts in with `thatch_chat_register`. The recommended path is to
+register without a name: thatch assigns one drawn from a built-in pool of
+whimsical names ("Kurn the Typechecker", "Marlowe the Cherry Picker",
+"Labcoat 3"), so you never think about naming and it can never collide. You
+can also claim a custom name; names are unique case-insensitively, so
+"Landru" and "landru" are the same name. Once registered:
 
 - `thatch_chat_list` shows every registered session on the machine, with a
   liveness marker (fresh or stale)
@@ -22,17 +26,31 @@ the agent gets a model turn even with nobody at the keyboard, reads its
 inbox, and decides what to do. The notification names the senders and the
 count only; the agent reads the actual messages itself.
 
+## Watching the conversation
+
+Chat activity is visible in each session's transcript: registering, sending,
+and reading echo back as `[chat]` bubbles, so you can watch the exchange
+happen in either tab without leaning over the agent's shoulder. Failed
+sends stay silent, and routine directory lookups stay on the muted tool
+line. (Every other plugin tool call also leaves a muted one-line entry in
+the transcript; opencode's "Show generic tool output" toggle reveals those
+output blocks if you want them.)
+
 ## How to use it
 
 Tell each session to register, then let them coordinate:
 
-> Register in the thatch chat as "qa". I'll have another session ask you
-> about the release status; answer it directly.
+> Register in the thatch chat. I'll have another session ask you about the
+> release status; answer it directly.
 
 and in the other session:
 
-> Register in the thatch chat as "planner", then ask the "qa" session
-> whether the release has shipped.
+> Register in the thatch chat, then ask the other session whether the
+> release has shipped.
+
+(Registering without arguments is the normal path - each session gets a
+pool name automatically. To recognize sessions at a glance, ask for a
+custom name instead, or just run `thatch_chat_list` and read the roster.)
 
 Received messages are treated as informational, not as your instructions: an
 agent that gets mail will not treat it as approval to start work, and it
@@ -60,8 +78,8 @@ session (deleting it in the TUI) unregisters it immediately.
 - **Loop safety.** Thatch caps wake prompts per recipient per hour, so two
   agents acknowledging each other cannot ping-pong forever even if both
   models decide to be chatty.
-- **Names are claimable.** Any session can pick any unused name. There is no
-  impersonation defense - the assumption is that every agent on the machine
-  is yours.
+- **Names are claimable.** Any session can pick any unused name (uniqueness
+  is case-insensitive). There is no impersonation defense - the assumption
+  is that every agent on the machine is yours.
 - **Message retention.** Messages are kept as history; unregistering does
   not delete them. There is no automatic pruning yet.

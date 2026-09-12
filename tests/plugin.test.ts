@@ -43,6 +43,10 @@ import {
 
 let hooks: Awaited<ReturnType<typeof server>>;
 let dbDir: string;
+// Records every promptAsync the plugin issues so transcript-echo tests can
+// assert on delivery. Captured at call time (synchronously inside the mock)
+// so assertions work immediately after a hook invocation.
+const promptAsyncCalls: any[] = [];
 
 beforeAll(async () => {
   dbDir = mkdtempSync(join(tmpdir(), "thatch-plugin-test-"));
@@ -56,7 +60,9 @@ beforeAll(async () => {
   const mockClient = {
     session: {
       prompt: async () => {},
-      promptAsync: async () => {},
+      promptAsync: async (opts: any) => {
+        promptAsyncCalls.push(opts);
+      },
       create: async () => ({ data: { id: "test-child" } }),
       delete: async () => {},
     },
@@ -191,6 +197,36 @@ describe("plugin entry", () => {
 
   test("has tool.execute.after hook", () => {
     expect(typeof hooks["tool.execute.after"]).toBe("function");
+  });
+
+  test("chat tool calls echo visible parts back into the transcript", async () => {
+    const before = promptAsyncCalls.length;
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_chat_send", sessionID: "ses_echo", callID: "ce1", args: { to: "Landru", body: "hello there" } },
+      { title: "chat send", output: "[sent] to Landru (ses_f6c9e9a0)\n\nThe recipient is nudged when idle.", metadata: {} },
+    );
+    expect(promptAsyncCalls.length).toBe(before + 1);
+    const call = promptAsyncCalls[promptAsyncCalls.length - 1];
+    expect(call.path.id).toBe("ses_echo");
+    // noReply stores the part without starting a model turn; non-synthetic
+    // is what makes the TUI render it.
+    expect(call.body.noReply).toBe(true);
+    expect(call.body.parts[0].type).toBe("text");
+    expect(call.body.parts[0].text).toBe("[chat] to Landru: hello there");
+    expect(call.body.parts[0].synthetic).toBeUndefined();
+  });
+
+  test("failed chat sends and non-conversational chat tools do not echo", async () => {
+    const before = promptAsyncCalls.length;
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_chat_send", sessionID: "ses_echo", callID: "ce2", args: { to: "ghost", body: "hi" } },
+      { title: "chat send", output: "Not sent: no registered session named ghost.", metadata: {} },
+    );
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_chat_list", sessionID: "ses_echo", callID: "ce3", args: {} },
+      { title: "chat list", output: "[chat] 1 session registered", metadata: {} },
+    );
+    expect(promptAsyncCalls.length).toBe(before);
   });
 
   test("buffered tool interactions surface as a payload nudge, scoped per session", async () => {

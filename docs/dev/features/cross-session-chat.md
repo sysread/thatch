@@ -53,12 +53,23 @@ outlives a process, so liveness needs a signal beyond process lifetime.
 
 ### Registration and identity
 
-`chat_register` joins the directory under a unique display name; identity is
-the host session ID, which the model cannot know or forge. Re-registering
-renames. Unregistered sessions are invisible and unmessageable in both
-directions. Only top-level sessions should register - sub-agent children are
-ephemeral - which the tool descriptions and system prompt state; there is no
-mechanical barrier, a documented v1 trust posture.
+`chat_register` joins the directory. Without a name it draws one at random
+from the built-in pool (`src/chat-names.ts`): whimsical geek-culture names
+in the style of fnord's Nomenclater, statically baked in so assignment never
+costs a model call. Pool draws cannot collide with each other and skip any
+name a session already claimed; the pool is the recommended path because it
+cannot collide at all. With a name, the session claims it custom -
+uniqueness is case-insensitive ("Landru" and "landru" are one name), so two
+visually identical identities cannot coexist, and message addressing follows
+the same rule. Databases created before the case-insensitive constraint are
+rebuilt at schema init (first row wins per case group; message history
+survives because the endpoints are not foreign keys).
+
+Identity is the host session ID, which the model cannot know or forge.
+Re-registering renames. Unregistered sessions are invisible and
+unmessageable in both directions. Only top-level sessions should register -
+sub-agent children are ephemeral - which the tool descriptions and system
+prompt state; there is no mechanical barrier, a documented v1 trust posture.
 
 Names are claimable by any session (no impersonation defense). The trust
 model is the same as the shared memory stores: every agent on this machine
@@ -101,6 +112,25 @@ hour (default 6, in-memory on purpose - it is a loop guard, not accounting).
 Without it, two agents politely acknowledging each other would ping-pong
 forever, each wake triggering a reply that wakes the other.
 
+### Transcript echo
+
+Plugin tools render in the opencode TUI as muted one-line generic entries,
+with the output block behind a default-off toggle - so without help, a chat
+exchange is invisible to the human watching the session. The plugin's
+`tool.execute.after` hook builds a short echo for the conversational events
+(`chatEchoText()` in `src/prompts.ts`: register, send, read) and delivers it
+as a non-synthetic, `noReply` promptAsync part: rendered as a visible
+bubble in the transcript, no model turn started (the server's prompt path
+returns before the completion loop). Failed calls never echo; `chat_list`
+and `chat_unregister` stay on the muted tool line.
+
+The trade-off: non-synthetic is what makes the TUI render the part, and it
+also means later turns see the echo in context - a small duplication of the
+tool call it mirrors, accepted for visibility. Echo bodies are clipped
+(send: the body; read: the formatted inbox) so a bubble stays cheap. Echo
+delivery is fire-and-forget: a failure must never fail the tool call it
+follows.
+
 ## Interactions with other features
 
 - Watchers ([watchers.md](watchers.md)): chat reuses the delivery gate
@@ -126,16 +156,20 @@ per hour. There are no environment overrides yet; add them the way
 
 ## Source files
 
-- `src/chat.ts` - ChatStore (directory + inbox SQL), ChatPoller (heartbeat,
-  gated delivery, re-nudge, rate cap), staleness helper
-- `src/db.ts` - the two chat tables in schema init, delegated methods
+- `src/chat.ts` - ChatStore (directory + inbox SQL, pool assignment),
+  ChatPoller (heartbeat, gated delivery, re-nudge, rate cap), staleness
+  helper
+- `src/chat-names.ts` - the static display-name pool (nomenclater style)
+- `src/db.ts` - the two chat tables in schema init, the NOCASE collation
+  migration, delegated methods
 - `src/tool-defs.ts` - the five chat tool definitions
 - `src/index.ts` - poller construction, delivery closure, idle flush,
-  session.deleted unregister, dispose
-- `src/prompts.ts` - `chatNotificationNudge()`, system prompt
-  Cross-Session Chat section, MCP absent-tools note
-- `tests/chat.test.ts` - store and poller unit tests (temp-dir SQLite,
-  injected delivery)
+  session.deleted unregister, dispose, transcript echo in
+  tool.execute.after
+- `src/prompts.ts` - `chatNotificationNudge()`, `chatEchoText()`, system
+  prompt Cross-Session Chat section, MCP absent-tools note
+- `tests/chat.test.ts` - store, pool, migration, echo-text, and poller unit
+  tests (temp-dir SQLite, injected delivery)
 - `tests/qa/auto/uc-097-chat.ts` - full lifecycle against a mocked poller
 - `tests/qa/live/uc-098-chat-cross-session.ts` - two real sessions exchange
   a message through the shared DB

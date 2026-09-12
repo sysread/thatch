@@ -221,7 +221,7 @@ behavior_provenance(
 ```sql
 chat_sessions(
   session_id TEXT PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
   project TEXT,
   registered_at TEXT NOT NULL,
   last_seen TEXT NOT NULL
@@ -230,7 +230,9 @@ chat_sessions(
 
 - The machine-wide session directory. `last_seen` is the heartbeat: each
   host process refreshes it for its own sessions every poll cycle, and a
-  stale value marks a crashed or closed process.
+  stale value marks a crashed or closed process. Name uniqueness is
+  case-insensitive; databases created with the case-sensitive v1 constraint
+  are rebuilt at schema init (first row wins per case group).
 
 ### chat_messages
 

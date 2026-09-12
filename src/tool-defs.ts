@@ -1341,20 +1341,24 @@ const watchCancelDef: ToolDef = {
  */
 
 /**
- * Joins the chat directory with a unique display name. Registration is the
- * gate for both directions: unregistered sessions cannot send or receive.
+ * Joins the chat directory. Without a name, draws one at random from the
+ * built-in name pool (whimsical, geek-flavored, guaranteed unused) - the
+ * recommended path, since it cannot collide. With a name, claims it
+ * case-insensitively; registration is the gate for both directions.
  */
 const chatRegisterDef: ToolDef = {
   name: "chat_register",
   description:
-    "Join the cross-session chat directory under a short, unique display " +
-    "name, so other opencode sessions on this machine can message you and " +
-    "you can message them. Idempotent - re-registering with a new name " +
-    "renames you. Only top-level sessions should register; never register " +
-    "a sub-agent session. opencode-only.",
+    "Join the cross-session chat directory so other opencode sessions on " +
+    "this machine can message you and you can message them. Omit the name " +
+    "to be assigned one from the built-in pool (recommended - cannot " +
+    "collide); pass a name to claim it instead, case-insensitively unique. " +
+    "Idempotent - re-registering with a new name renames you. Only " +
+    "top-level sessions should register; never register a sub-agent " +
+    "session. opencode-only.",
   args: {
-    name: z.string().describe(
-      "Short, unique display name other sessions will see and address you by.",
+    name: z.string().optional().describe(
+      "Custom display name. Omit to draw one from the built-in name pool.",
     ),
   },
   opencodeOnly: true,
@@ -1362,15 +1366,27 @@ const chatRegisterDef: ToolDef = {
     if (!host) {
       return "Chat is unavailable: this host did not provide a session context.";
     }
-    const result = ctx.db.registerChatSession(host.sessionID, args.name as string, ctx.defaultStore);
-    if (!result.ok) return `Registration failed: ${result.error}`;
-    const trimmed = (args.name as string).trim();
+    const custom = typeof args.name === "string" ? args.name : null;
+    if (custom !== null) {
+      const result = ctx.db.registerChatSession(host.sessionID, custom, ctx.defaultStore);
+      if (!result.ok) return `Registration failed: ${result.error}`;
+      return (
+        `[registered] ${custom.trim()}\n` +
+        `session_id: ${host.sessionID}\n` +
+        `project: ${ctx.defaultStore}\n\n` +
+        `Other sessions can now message you by name with chat_send; use ` +
+        `chat_list to see who else is available.`
+      );
+    }
+    const assigned = ctx.db.assignChatName(host.sessionID, ctx.defaultStore);
+    if (!assigned.ok) return `Registration failed: ${assigned.error}`;
     return (
-      `[registered] ${trimmed}\n` +
+      `[registered] ${assigned.name}\n` +
       `session_id: ${host.sessionID}\n` +
       `project: ${ctx.defaultStore}\n\n` +
-      `Other sessions can now message you by name with chat_send; use ` +
-      `chat_list to see who else is available.`
+      `Your name was drawn from the built-in pool. Other sessions can now ` +
+      `message you by name with chat_send; use chat_list to see who else ` +
+      `is available.`
     );
   },
 };

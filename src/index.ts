@@ -22,7 +22,7 @@ import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
 import { WatcherRegistry, ghApiRun, ghAvailable } from "./watchers";
-import { watcherNotificationNudge, chatNotificationNudge } from "./prompts";
+import { watcherNotificationNudge, chatNotificationNudge, chatEchoText } from "./prompts";
 import { ChatPoller } from "./chat";
 import pkg from "../package.json";
 
@@ -441,6 +441,35 @@ export const server: Plugin = async ({ client, worktree }) => {
         const metrics = childMetrics.get(input.sessionID) ?? { new: 0, updated: 0, deleted: 0 };
         metrics.deleted++;
         childMetrics.set(input.sessionID, metrics);
+        return;
+      }
+      // Chat conversational events echo back into the transcript as visible
+      // message parts. Plugin tools render as muted one-line entries with
+      // the output hidden behind a default-off TUI toggle, so without this
+      // the human watching a session never sees the conversation happen.
+      // Delivery is a non-synthetic noReply promptAsync: the part renders
+      // as a visible bubble and starts no model turn (the server's prompt
+      // path returns before the completion loop). Non-synthetic also means
+      // later turns see the echo in context - a small duplication of the
+      // tool call it mirrors, accepted for visibility. Fire-and-forget: an
+      // echo failure must never fail the tool call it follows.
+      if (input.tool.startsWith("thatch_chat_")) {
+        const echo = chatEchoText(
+          input.tool,
+          (input.args ?? {}) as Record<string, unknown>,
+          typeof output.output === "string" ? output.output : "",
+        );
+        if (echo) {
+          void client.session
+            .promptAsync({
+              path: { id: input.sessionID },
+              body: {
+                noReply: true,
+                parts: [{ type: "text", text: echo }],
+              },
+            })
+            .catch(() => {});
+        }
         return;
       }
       if (input.tool.startsWith("thatch_") || input.tool === "skill" || input.tool === "task") return;
