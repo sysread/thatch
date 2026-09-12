@@ -43,7 +43,7 @@ the review:
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of the code's behavior? |
 | `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
 | `thatch-review-highlights` | Positive finding detection: clever solutions, cleanup done along the way, documentation that helps. Medium-high bar. |
-| `thatch-review-mentorship` | Peer-mentorship lens: teaching-grade notes on unseen helpers/internal packages, companion techniques, house patterns, test-craft, API-shape principles, next-reader discoverability. Informational only, never blocking. |
+| `thatch-review-technique` | Technique lens: teaching-grade notes on unseen helpers/internal packages, companion techniques, house patterns, test-craft, API-shape principles, next-reader discoverability. Informational only, never blocking. |
 
 Each specialist is a self-contained static-analysis pass. They can run
 individually or as part of the coordinated review.

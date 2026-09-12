@@ -219,7 +219,7 @@ describe("setupClaudeCode (project-local)", () => {
     expect(skillNames).toContain("thatch-review-breadcrumbs");
     expect(skillNames).toContain("thatch-review-mark-and-sweep");
     expect(skillNames).toContain("thatch-review-highlights");
-    expect(skillNames).toContain("thatch-review-mentorship");
+    expect(skillNames).toContain("thatch-review-technique");
     expect(skillNames).toContain("thatch-review-synthesizer");
     expect(skillNames).toContain("thatch-review-context");
     expect(skillNames).toContain("thatch-code-archaeology");
@@ -682,7 +682,7 @@ describe("setupCursor (project-local)", () => {
     expect(skillNames).toContain("thatch-project-primer");
     expect(skillNames).toContain("thatch-review-mark-and-sweep");
     expect(skillNames).toContain("thatch-review-highlights");
-    expect(skillNames).toContain("thatch-review-mentorship");
+    expect(skillNames).toContain("thatch-review-technique");
     expect(skillNames).toContain("thatch-review-economy");
     expect(skillNames).toContain("thatch-review-followup");
     expect(skillNames).toContain("thatch-change-walkthrough");
