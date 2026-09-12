@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
-import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES } from "../src/chat";
+import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoSecondsAgo as cutoffAgo } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
 
@@ -29,12 +29,6 @@ afterEach(() => {
 });
 
 const ISO_SECOND = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
-
-/** A re-nudge cutoff `minutes` in the past - the shape the poller passes in
- *  production. Using nowIso() directly would be a degenerate zero-minute
- *  window where fresh deliveries still compare <= cutoff. */
-const cutoffAgo = (minutes: number) =>
-  new Date(Date.now() - minutes * 60_000).toISOString().slice(0, 19) + "Z";
 
 describe("ChatStore via ThatchDB", () => {
   test("register creates a directory row; timestamps match the strftime format", () => {
@@ -69,6 +63,23 @@ describe("ChatStore via ThatchDB", () => {
     expect(db.findChatSession("LANDRU")?.session_id).toBe("ses_a");
     db.registerChatSession("ses_b", "bob", "p");
     expect(db.sendChatMessage("ses_b", "LANDRU", "hi").ok).toBe(true);
+  });
+
+  test("a session can recase its own name", () => {
+    expect(db.registerChatSession("ses_a", "Landru", "p").ok).toBe(true);
+    const recase = db.registerChatSession("ses_a", "landru", "p");
+    expect(recase.ok).toBe(true);
+    expect(db.findChatSession("LANDRU")?.name).toBe("landru");
+  });
+
+  test("names outside the shared charset are rejected", () => {
+    // Parens would truncate the transcript echo's name parse; newlines and
+    // tabs would break chat_list's one-line roster.
+    expect(db.registerChatSession("ses_a", "Deb (Debugger) Malloy", "p").ok).toBe(false);
+    expect(db.registerChatSession("ses_a", "Bad\nName", "p").ok).toBe(false);
+    expect(db.registerChatSession("ses_a", "Tab\tName", "p").ok).toBe(false);
+    // Pool-style punctuation stays valid.
+    expect(db.registerChatSession("ses_a", "K'Vir the Unmerged", "p").ok).toBe(true);
   });
 
   test("re-registering renames; re-registering the same name is idempotent", () => {
@@ -112,6 +123,11 @@ describe("ChatStore via ThatchDB", () => {
     expect(db.sendChatMessage("ses_a", "bob", "x".repeat(10_001)).ok).toBe(false);
     const ok = db.sendChatMessage("ses_a", "bob", "hello bob");
     expect(ok.ok).toBe(true);
+    // The resolved recipient rides along - callers never re-lookup.
+    if (ok.ok) {
+      expect(ok.recipient.name).toBe("bob");
+      expect(ok.recipient.session_id).toBe("ses_b");
+    }
     // Session-id addressing works too.
     expect(db.sendChatMessage("ses_b", "ses_a", "hello alice").ok).toBe(true);
   });
@@ -256,9 +272,20 @@ describe("chat delivery selection", () => {
     db.registerChatSession("ses_c", "carol", "p");
     db.sendChatMessage("ses_a", "bob", "for bob");
     db.sendChatMessage("ses_a", "carol", "for carol");
-    const pending = db.pendingChatNotifications(["ses_b"], cutoffAgo(15));
+    const pending = db.pendingChatNotifications(["ses_b"], nowIso());
     expect(pending.length).toBe(1);
     expect(pending[0].to_session).toBe("ses_b");
+  });
+
+  test("unregistering stops wake selection for kept-but-unread mail", () => {
+    db.sendChatMessage("ses_a", "bob", "unread after exit");
+    // Degenerate zero-minute window: everything unread is selectable.
+    expect(db.pendingChatNotifications(["ses_b"], nowIso()).length).toBe(1);
+    db.unregisterChatSession("ses_b");
+    // The mail is kept (still unread, chat_read can still drain it), but
+    // no wake prompt may target a session that left the directory.
+    expect(db.unreadChatCount("ses_b")).toBe(1);
+    expect(db.pendingChatNotifications(["ses_b"], nowIso()).length).toBe(0);
   });
 });
 

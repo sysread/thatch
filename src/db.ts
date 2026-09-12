@@ -279,11 +279,12 @@ export class ThatchDB {
     }
   }
 
-  // chat_sessions shipped with a case-SENSITIVE unique constraint, which let
-  // "Landru" and "landru" coexist as distinct identities. SQLite cannot
-  // ALTER a column constraint, so the fix is a table rebuild. Detection
-  // reads the stored CREATE statement from sqlite_master: the new schema
-  // text contains COLLATE NOCASE, the old one does not. Colliding rows
+  // A chat_sessions table created before the NOCASE uniqueness change has a
+  // case-SENSITIVE unique constraint, which let "Landru" and "landru"
+  // coexist as distinct identities. SQLite cannot ALTER a column
+  // constraint, so the repair is a table rebuild. Detection reads the
+  // stored CREATE statement from sqlite_master: the NOCASE schema text
+  // contains COLLATE NOCASE, the older one does not. Colliding rows
   // collapse via INSERT OR IGNORE (first row wins); chat_messages has no
   // foreign key into this table, so message history survives untouched.
   #migrateChatNameCollation(): void {
@@ -291,7 +292,7 @@ export class ThatchDB {
       .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chat_sessions'")
       .get() as any;
     if (!row?.sql || /COLLATE\s+NOCASE/i.test(row.sql)) return;
-    this.#db.transaction(() => {
+    this.transaction(() => {
       this.#db.run(`
         CREATE TABLE chat_sessions_migrated (
           session_id    TEXT PRIMARY KEY,
@@ -304,7 +305,7 @@ export class ThatchDB {
       this.#db.run("INSERT OR IGNORE INTO chat_sessions_migrated SELECT session_id, name, project, registered_at, last_seen FROM chat_sessions");
       this.#db.run("DROP TABLE chat_sessions");
       this.#db.run("ALTER TABLE chat_sessions_migrated RENAME TO chat_sessions");
-    })();
+    });
   }
 
   // ---------------------------------------------------------------------------

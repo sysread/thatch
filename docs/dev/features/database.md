@@ -231,8 +231,8 @@ chat_sessions(
 - The machine-wide session directory. `last_seen` is the heartbeat: each
   host process refreshes it for its own sessions every poll cycle, and a
   stale value marks a crashed or closed process. Name uniqueness is
-  case-insensitive; databases created with the case-sensitive v1 constraint
-  are rebuilt at schema init (first row wins per case group).
+  case-insensitive; databases whose chat_sessions table predates the NOCASE
+  constraint are rebuilt at schema init (first row wins per case group).
 
 ### chat_messages
 
@@ -278,9 +278,9 @@ Embeddings are raw Float32Array bytes stored as BLOBs. Serialization honors `byt
 
 - Memory store ([memory-store.md](memory-store.md)): `entries` table is the core; `stores` table is the registry
 - Deduplication ([deduplication.md](deduplication.md)): `dedup_pairs` table tracks reviewed pairs
-- Prediction engine ([prediction-engine.md](prediction-engine.md)): 4 prediction tables
-- Behavior engine ([behavior-engine.md](behavior-engine.md)): 4 behavior tables
-- Cross-session chat ([cross-session-chat.md](cross-session-chat.md)): 2 chat tables shared across opencode processes
+- Prediction engine ([prediction-engine.md](prediction-engine.md)): the prediction tables
+- Behavior engine ([behavior-engine.md](behavior-engine.md)): the behavior tables
+- Cross-session chat ([cross-session-chat.md](cross-session-chat.md)): the chat tables, shared across opencode processes
 - Hygiene ([hygiene.md](hygiene.md)): `staleEntryCount` uses `recall_count` and `last_recalled_at`; `branchesInStore` uses `branch` column
 
 ## Source files

@@ -229,6 +229,31 @@ describe("plugin entry", () => {
     expect(promptAsyncCalls.length).toBe(before);
   });
 
+  test("chat transcript echoes skip the nudge machinery entirely", async () => {
+    // Buffer an interaction so the extraction nudge would fire on any
+    // ordinary message for this session - without the echo skip, the echo
+    // bubble would get the nudge attached to a message no model turn reads.
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_echo_skip", callID: "ce9", args: { command: "ls" } },
+      { title: "list files", output: "README.md", metadata: {} },
+    );
+    const echoOutput: any = {
+      message: { id: "msg_echo" },
+      parts: [{ type: "text", text: "[chat] to Landru: hello there friend" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_echo_skip", messageID: "msg_echo" } as any, echoOutput);
+    expect(echoOutput.parts.length).toBe(1);
+
+    // The same session with the same pending buffer, but a real user
+    // message: the nudge machinery still runs.
+    const realOutput: any = {
+      message: { id: "msg_real" },
+      parts: [{ type: "text", text: "hello there friend" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_echo_skip", messageID: "msg_real" } as any, realOutput);
+    expect(realOutput.parts.length).toBe(2);
+  });
+
   test("buffered tool interactions surface as a payload nudge, scoped per session", async () => {
     await hooks["tool.execute.after"]!(
       { tool: "bash", sessionID: "ses_a", callID: "c1", args: { command: "ls" } },

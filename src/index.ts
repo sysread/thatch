@@ -22,7 +22,7 @@ import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
 import { WatcherRegistry, ghApiRun, ghAvailable } from "./watchers";
-import { watcherNotificationNudge, chatNotificationNudge, chatEchoText } from "./prompts";
+import { watcherNotificationNudge, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
 import { ChatPoller } from "./chat";
 import pkg from "../package.json";
 
@@ -87,9 +87,11 @@ export const server: Plugin = async ({ client, worktree }) => {
   const runningVersion = pkg.version;
 
   // Latest observed opencode session status per session ("busy" | "idle" |
-  // "retry"). The event hook records these; the watcher registry's
-  // canDeliver gate reads them so proactive notification prompts only fire
-  // into idle sessions - never into a turn that is already running.
+  // "retry"). The event hook records these. Readers: the watcher registry's
+  // and the chat poller's canDeliver gates (proactive prompts only fire
+  // into idle sessions, never into a running turn), and the chat poller's
+  // hostedSessions set (the sessions this process may deliver chat mail to
+  // - the map's keys).
   const sessionStatus = new Map<string, string>();
 
   // In-memory watcher registry for proactive event notifications (GitHub PR
@@ -499,6 +501,12 @@ export const server: Plugin = async ({ client, worktree }) => {
     // a summary, so a nudge that says "use thatch_memory_recall" triggers a
     // blocked-tool error.
     "chat.message": async (input, output) => {
+      // Chat transcript echoes are non-synthetic noReply parts, so they
+      // arrive here like any user message - but no model turn ever reads
+      // them, and the nudge machinery would embed and scan their text for
+      // nothing (and fire spurious toasts when thresholds cross). Skip
+      // them entirely.
+      if (isChatEchoParts(output.parts)) return;
       if (compacting.has(input.sessionID)) {
         // The session is marked as compacting. If this message is the
         // compaction summary generation itself (has a compaction-type part),

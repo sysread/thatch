@@ -5,7 +5,7 @@ import { Database } from "bun:sqlite";
 import { registerUseCase, type UseCase } from "../runner";
 import { TOOL_DEFS } from "../../../src/tool-defs";
 import { ThatchDB } from "../../../src/db";
-import { ChatPoller, nowIso } from "../../../src/chat";
+import { ChatPoller, nowIso, isoSecondsAgo as cutoffAgo } from "../../../src/chat";
 import { CHAT_NAME_POOL } from "../../../src/chat-names";
 
 /**
@@ -32,18 +32,18 @@ const useCase: UseCase = {
     "6. Open the gate; confirm one grouped wake prompt with sender names, and messages marked delivered.",
     "7. Read the inbox; confirm it drains and stamps read.",
     "8. Confirm the re-nudge path re-queues delivered-but-unread mail, and the rate cap blocks repeats.",
-    "9. Unregister; confirm message history survives.",
+    "9. Unregister; confirm message history survives and wake prompts stop for the unregistered recipient.",
   ].join("\n"),
   expected: [
     "- chat_register, chat_list, chat_send, chat_read, and chat_unregister are marked opencodeOnly.",
     "- A name can only be claimed by one session, case-insensitively; lookups and message addressing follow the same rule.",
     "- Pool assignment (register without a name) draws an unused pool name, never repeats a draw, and skips names claimed by custom registrations.",
-    "- Send requires both endpoints registered and distinct.",
+    "- Send requires both endpoints registered and distinct, and returns the resolved recipient.",
     "- The poller delivers only when canDeliver passes; undelivered mail stays pending.",
     "- Delivery groups a recipient's messages into one prompt (senders + count) and stamps delivered_at.",
-    "- read drains the inbox oldest-first and stamps read_at; read mail is never re-nudged.",
+    "- read drains the inbox oldest-first and stamps read_at on exactly the returned rows; read mail is never re-nudged.",
     "- The per-recipient nudge cap stops repeated wake prompts within the hour window.",
-    "- Unregister keeps messages as history; the departed sender degrades to an unknown name.",
+    "- Unregister keeps messages as history (departed senders degrade to unknown names) and stops wake selection for the unregistered recipient's unread mail.",
   ].join("\n"),
 
   async run() {
@@ -62,8 +62,6 @@ const useCase: UseCase = {
     const db = new ThatchDB(join(dbDir, "chat.db"));
     // Raw connection for aging timestamps past the re-nudge window.
     const raw = new Database(join(dbDir, "chat.db"));
-    const cutoffAgo = (minutes: number) =>
-      new Date(Date.now() - minutes * 60_000).toISOString().slice(0, 19) + "Z";
     // The mock's closure appends to `deliveries`, which TypeScript cannot
     // track across the awaited poller calls - reading length through an
     // annotated helper keeps the type number instead of a stale literal.
@@ -99,7 +97,7 @@ const useCase: UseCase = {
         return "FAIL";
       }
 
-      // Pool assignment: draws come from the pool, are unused, and differ.
+      // Step 3: pool assignment. Draws come from the pool, are unused, and differ.
       const drawA = db.assignChatName("ses_pool_a", "p");
       if (!drawA.ok || !CHAT_NAME_POOL.includes(drawA.name)) {
         console.log(`  FAIL: pool draw invalid: ${JSON.stringify(drawA)}`);
@@ -134,7 +132,7 @@ const useCase: UseCase = {
         return "FAIL";
       }
 
-      // Step 3: send validation.
+      // Step 4: send validation.
       if (db.sendChatMessage("ses_alpha", "ghost", "hi").ok) {
         console.log("  FAIL: send to unregistered recipient accepted");
         return "FAIL";
@@ -152,7 +150,7 @@ const useCase: UseCase = {
         return "FAIL";
       }
 
-      // Steps 4-5: gated delivery with a mocked poller. The poller is never
+      // Steps 5-6: gated delivery with a mocked poller. The poller is never
       // started - deliverPending is driven directly, so no timer exists.
       let gateOpen = false;
       const poller = new ChatPoller({
@@ -180,7 +178,7 @@ const useCase: UseCase = {
         return "FAIL";
       }
 
-      // Step 6: read drains and stamps.
+      // Step 7: read drains and stamps.
       const inbox = db.readChatMessages("ses_beta");
       if (inbox.length !== 1 || inbox[0].body !== "ping from alpha" || inbox[0].from_name !== "alpha") {
         console.log(`  FAIL: unexpected inbox: ${JSON.stringify(inbox)}`);
@@ -191,7 +189,7 @@ const useCase: UseCase = {
         return "FAIL";
       }
 
-      // Step 7: re-nudge and the rate cap.
+      // Step 8: re-nudge and the rate cap.
       if (!db.sendChatMessage("ses_alpha", "beta", "second ping").ok) {
         console.log("  FAIL: second send rejected");
         return "FAIL";
@@ -233,7 +231,8 @@ const useCase: UseCase = {
         return "FAIL";
       }
 
-      // Step 8: unregister keeps history.
+      // Step 9: unregister keeps history - and unregistering the recipient
+      // stops wake selection for kept-but-unread mail.
       db.unregisterChatSession("ses_alpha");
       if (db.findChatSession("alpha")) {
         console.log("  FAIL: unregister left the directory row behind");
@@ -246,6 +245,17 @@ const useCase: UseCase = {
       const history = db.pendingChatNotifications(["ses_beta"], nowIso());
       if (history.length !== 1 || history[0].from_name !== null) {
         console.log("  FAIL: departed sender did not degrade to unknown name");
+        return "FAIL";
+      }
+      // The recipient leaving the directory stops wake prompts for its
+      // kept-but-unread mail - the chat_unregister tool's promise.
+      db.unregisterChatSession("ses_beta");
+      if (db.unreadChatCount("ses_beta") !== 1) {
+        console.log("  FAIL: unregistering the recipient lost its mail");
+        return "FAIL";
+      }
+      if (db.pendingChatNotifications(["ses_beta"], nowIso()).length !== 0) {
+        console.log("  FAIL: unregistered recipient still selectable for wake prompts");
         return "FAIL";
       }
       return "PASS";

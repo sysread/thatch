@@ -100,7 +100,11 @@ or delivered more than the re-nudge window ago (default 15 minutes).
 Delivery is gated by the same `canDeliver` predicate watchers use - the
 recipient must be idle and not compacting - and the idle event handler
 flushes pending mail directly so it lands promptly instead of waiting for
-the next cycle. Failed deliveries stay pending and retry.
+the next cycle. Failed deliveries stay pending and retry. Only registered
+recipients are ever selected: unregistering stops wake prompts for
+kept-but-unread mail, which is the `chat_unregister` tool's promise.
+Delivery is at-least-once - a crash after the wake prompt but before the
+delivered_at stamp re-nudges the same batch on the next cycle.
 
 One wake prompt covers all of a recipient's pending messages: sender names
 and a count, pointer-only like watcher notifications, with the model calling
@@ -129,7 +133,11 @@ also means later turns see the echo in context - a small duplication of the
 tool call it mirrors, accepted for visibility. Echo bodies are clipped
 (send: the body; read: the formatted inbox) so a bubble stays cheap. Echo
 delivery is fire-and-forget: a failure must never fail the tool call it
-follows.
+follows. Because the opencode server fires the `chat.message` hook for
+every prompt part before the `noReply` early-return, the plugin's
+`chat.message` handler skips messages whose visible text is entirely
+`[chat]`-prefixed bubbles (`isChatEchoParts`) - otherwise every echo would
+run the nudge machinery for a message no model turn reads.
 
 ## Interactions with other features
 
@@ -142,8 +150,10 @@ follows.
 - Session lifecycle ([session-lifecycle.md](session-lifecycle.md)):
   `session.status` feeds the delivery gate and the hosted-session set;
   `session.deleted` unregisters.
-- Extraction pipeline ([extraction.md](extraction.md)): a chat notification
-  turn's tool calls are buffered and extracted like any other turn.
+- Extraction pipeline ([extraction.md](extraction.md)): chat tool calls
+  are `thatch_*` tools and excluded from buffering like all thatch tools;
+  non-thatch tool calls made during a chat notification turn are buffered
+  and extracted like any other turn's.
 - Multi-host ([multi-host.md](multi-host.md)): opencode-only. MCP hosts have
   no session identity, no poller, and no prompt channel.
 

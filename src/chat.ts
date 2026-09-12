@@ -11,9 +11,13 @@ import { CHAT_NAME_POOL } from "./chat-names";
  * delivery: each process polls the inbox for messages addressed to sessions
  * it hosts and wake-prompts them through its own SDK client. A sender never
  * prompts a session in another process - only the recipient's host delivers.
- * This keeps the watcher registry's core property (no process prompts a
- * session it does not host) while crossing process boundaries, so there is
- * exactly one possible deliverer per message and no double-delivery race.
+ * This crosses process boundaries while preserving the watcher rationale's core
+ * property: no process ever prompts a session it does not host, so there is
+ * exactly one possible deliverer per message and no cross-process double
+ * delivery. Within a host process, delivery is at-least-once: a crash between
+ * the wake prompt and its delivered_at stamp re-nudges the same mail after
+ * restart, which is the safe direction for prompts that only point at the
+ * inbox.
  *
  * Liveness is heartbeat-based. A crashed process fires no session.deleted
  * event, so the only reliable offline signal is a stale last_seen value: each
@@ -31,7 +35,15 @@ import { CHAT_NAME_POOL } from "./chat-names";
  *  strftime('%Y-%m-%dT%H:%M:%SZ','now') default so string comparison between
  *  SQLite-generated and JS-generated timestamps stays consistent. */
 export function nowIso(): string {
-  return new Date().toISOString().slice(0, 19) + "Z";
+  return isoSecondsAgo(0);
+}
+
+/** An ISO timestamp `minutes` in the past, in the same second-resolution
+ *  format. The poller passes this shape as the re-nudge cutoff; tests use
+ *  it for the same purpose, so the format expression lives in exactly one
+ *  place. */
+export function isoSecondsAgo(minutes: number): string {
+  return new Date(Date.now() - minutes * 60_000).toISOString().slice(0, 19) + "Z";
 }
 
 export interface ChatSessionRow {
@@ -69,6 +81,12 @@ export type ChatResult = { ok: true } | { ok: false; error: string };
 const MAX_NAME_LEN = 40;
 const MAX_BODY_LEN = 10_000;
 
+// Custom names share the pool's charset: letters, numbers, spaces,
+// apostrophes, hyphens, periods. Parens would truncate the transcript
+// echo's name parse; newlines or tabs would break chat_list's one-line
+// roster format.
+const NAME_CHARSET = /^[\p{L}\p{N} '.\-]+$/u;
+
 // Timing defaults, shared by the poller and the chat_list staleness display
 // so both agree on what "stale" means.
 export const CHAT_POLL_INTERVAL_MS = 30_000;
@@ -90,62 +108,68 @@ export class ChatStore {
   /**
    * Joins the directory with a pool name: picks uniformly at random from the
    * names no other session has claimed (case-insensitively). Idempotent for
-   * an already-registered session - it keeps its current name. Fails only
-   * when every pool name is taken.
+   * an already-registered session - it keeps its current name (drawn:
+   * false). Fails only when every pool name is taken.
    */
-  assign(sessionID: string, project: string | null): { ok: true; name: string } | { ok: false; error: string } {
+  assign(sessionID: string, project: string | null): { ok: true; name: string; drawn: boolean } | { ok: false; error: string } {
     const existing = this.#find(sessionID);
-    if (existing) return { ok: true, name: existing.name };
+    if (existing) {
+      this.#touch(sessionID);
+      return { ok: true, name: existing.name, drawn: false };
+    }
     const taken = new Set(this.list().map((r) => r.name.toLowerCase()));
     const free = CHAT_NAME_POOL.filter((n) => !taken.has(n.toLowerCase()));
     if (free.length === 0) {
       return { ok: false, error: "Name pool exhausted - pass a custom name." };
     }
     const name = free[Math.floor(Math.random() * free.length)];
-    this.#db.run(
-      "INSERT INTO chat_sessions (session_id, name, project, registered_at, last_seen) VALUES (?, ?, ?, ?, ?)",
-      [sessionID, name, project, nowIso(), nowIso()],
-    );
-    return { ok: true, name };
+    const claimed = this.#insertSession(sessionID, name, project);
+    if (!claimed.ok) return claimed;
+    return { ok: true, name, drawn: true };
   }
 
   /**
    * Joins the directory, or refreshes an existing registration. Re-registering
-   * with the same session ID renames the session; the new name must not be
-   * claimed by a different session. Uniqueness is case-insensitive ("Landru"
-   * and "landru" are the same name), so lookups and claims agree no matter
-   * what casing the model or user types. Both paths stamp last_seen.
+   * with the same session ID renames the session (including changing only
+   * the casing of its own name); the new name must not be claimed by a
+   * different session. Uniqueness is case-insensitive ("Landru" and "landru"
+   * are the same name), so lookups and claims agree no matter what casing the
+   * model or user types. Both paths stamp last_seen.
    */
   register(sessionID: string, rawName: string, project: string | null): ChatResult {
     const name = rawName.trim();
-    if (!name) return { ok: false, error: "Name cannot be empty." };
-    if (name.length > MAX_NAME_LEN) {
-      return { ok: false, error: `Name too long (max ${MAX_NAME_LEN} characters).` };
-    }
+    const invalid = this.#invalidName(name);
+    if (invalid) return { ok: false, error: invalid };
     const existing = this.#find(sessionID);
     if (existing) {
       if (existing.name === name) {
         this.#touch(sessionID);
         return { ok: true };
       }
-      if (this.#findByName(name)) {
+      // A NOCASE hit is only a collision when it belongs to a different
+      // session - otherwise this is the caller recasing its own name.
+      const clash = this.#findByName(name);
+      if (clash && clash.session_id !== sessionID) {
         return { ok: false, error: `Name "${name}" is taken by another session.` };
       }
-      this.#db.run("UPDATE chat_sessions SET name = ?, last_seen = ? WHERE session_id = ?", [
-        name,
-        nowIso(),
-        sessionID,
-      ]);
-      return { ok: true };
+      try {
+        this.#db.run("UPDATE chat_sessions SET name = ?, last_seen = ? WHERE session_id = ?", [
+          name,
+          nowIso(),
+          sessionID,
+        ]);
+        return { ok: true };
+      } catch (err) {
+        if (this.#isConstraintError(err)) {
+          return { ok: false, error: `Name "${name}" is taken by another session.` };
+        }
+        throw err;
+      }
     }
     if (this.#findByName(name)) {
       return { ok: false, error: `Name "${name}" is taken by another session.` };
     }
-    this.#db.run(
-      "INSERT INTO chat_sessions (session_id, name, project, registered_at, last_seen) VALUES (?, ?, ?, ?, ?)",
-      [sessionID, name, project, nowIso(), nowIso()],
-    );
-    return { ok: true };
+    return this.#insertSession(sessionID, name, project);
   }
 
   /** Leaves the directory. Messages already sent to or from the session are
@@ -170,9 +194,17 @@ export class ChatStore {
 
   /**
    * Posts a message. Both endpoints must be registered; a session cannot
-   * message itself (the inbox drain and the reply would be the same turn).
+   * message itself (nothing is coordinated: the message would sit unread
+   * until the sender drains its own inbox, and the wake prompt would be the
+   * sender nudging itself). Returns the resolved recipient so callers never
+   * need a second lookup - a re-lookup could race a concurrent unregister
+   * and fail after the message already landed.
    */
-  send(fromSession: string, toNameOrID: string, body: string): { ok: true; id: number } | { ok: false; error: string } {
+  send(
+    fromSession: string,
+    toNameOrID: string,
+    body: string,
+  ): { ok: true; id: number; recipient: { session_id: string; name: string } } | { ok: false; error: string } {
     const trimmed = body.trim();
     if (!trimmed) return { ok: false, error: "Message body cannot be empty." };
     if (trimmed.length > MAX_BODY_LEN) {
@@ -192,12 +224,15 @@ export class ChatStore {
       [fromSession, recipient.session_id, trimmed, nowIso()],
     );
     const row = this.#db.query("SELECT last_insert_rowid() AS id").get() as any;
-    return { ok: true, id: row.id };
+    return { ok: true, id: row.id, recipient: { session_id: recipient.session_id, name: recipient.name } };
   }
 
   /**
    * Drains the calling session's inbox: returns unread messages oldest-first
-   * and stamps them read. An empty inbox returns an empty array.
+   * and stamps exactly those rows read. The stamp is scoped to the selected
+   * ids, not re-derived - a message arriving from another process between
+   * the SELECT and the UPDATE must stay unread so the poller re-nudges it;
+   * an unscoped stamp would swallow it silently.
    */
   read(sessionID: string): ChatInboxItem[] {
     const rows = this.#db
@@ -210,9 +245,10 @@ export class ChatStore {
       )
       .all(sessionID) as any[];
     if (rows.length === 0) return [];
-    this.#db.run("UPDATE chat_messages SET read_at = ? WHERE to_session = ? AND read_at IS NULL", [
+    const marks = rows.map(() => "?").join(",");
+    this.#db.run(`UPDATE chat_messages SET read_at = ? WHERE id IN (${marks})`, [
       nowIso(),
-      sessionID,
+      ...rows.map((r) => r.id),
     ]);
     return rows.map((r) => ({
       id: r.id,
@@ -246,10 +282,12 @@ export class ChatStore {
   /**
    * Messages that need a wake prompt for the given sessions: unread and
    * either never delivered, or delivered so long ago that a re-nudge is due.
-   * The cutoff is passed by the poller (its renudge window, as an ISO
-   * timestamp); delivered_at comparison is string comparison, which works
-   * because every timestamp in these tables uses the same second-resolution
-   * format.
+   * Only registered recipients are selected - unregistering must stop wake
+   * prompts for kept-but-unread mail, which is exactly what the
+   * chat_unregister tool promises. The cutoff is passed by the poller (its
+   * renudge window, as an ISO timestamp); delivered_at comparison is string
+   * comparison, which works because every timestamp in these tables uses
+   * the same second-resolution format.
    */
   pendingNotifications(sessionIDs: string[], renudgeCutoff: string): ChatNotificationRow[] {
     if (sessionIDs.length === 0) return [];
@@ -263,6 +301,7 @@ export class ChatStore {
            WHERE m.read_at IS NULL
              AND m.to_session IN (${marks})
              AND (m.delivered_at IS NULL OR m.delivered_at <= ?)
+             AND EXISTS (SELECT 1 FROM chat_sessions cs WHERE cs.session_id = m.to_session)
            ORDER BY m.id`,
         )
         .all(...sessionIDs, renudgeCutoff) as any[]
@@ -300,6 +339,42 @@ export class ChatStore {
   #touch(sessionID: string): void {
     this.#db.run("UPDATE chat_sessions SET last_seen = ? WHERE session_id = ?", [nowIso(), sessionID]);
   }
+
+  #invalidName(name: string): string | null {
+    if (!name) return "Name cannot be empty.";
+    if (name.length > MAX_NAME_LEN) return `Name too long (max ${MAX_NAME_LEN} characters).`;
+    if (!NAME_CHARSET.test(name)) {
+      return "Names may contain letters, numbers, spaces, apostrophes, hyphens, and periods.";
+    }
+    return null;
+  }
+
+  /**
+   * INSERTs a directory row, translating a UNIQUE-constraint violation into
+   * the friendly taken message. The pre-checks are advisory only against
+   * other processes: two sessions claiming one free name in the same
+   * instant both pass the check, and the loser's INSERT must not escape the
+   * { ok, error } contract as a raw SQLite error. Same pattern as
+   * remember()'s slug-collision handling in db.ts.
+   */
+  #insertSession(sessionID: string, name: string, project: string | null): ChatResult {
+    try {
+      this.#db.run(
+        "INSERT INTO chat_sessions (session_id, name, project, registered_at, last_seen) VALUES (?, ?, ?, ?, ?)",
+        [sessionID, name, project, nowIso(), nowIso()],
+      );
+      return { ok: true };
+    } catch (err) {
+      if (this.#isConstraintError(err)) {
+        return { ok: false, error: `Name "${name}" is taken by another session.` };
+      }
+      throw err;
+    }
+  }
+
+  #isConstraintError(err: unknown): boolean {
+    return String((err as any)?.code ?? err).includes("CONSTRAINT");
+  }
 }
 
 function rowFromSession(r: any): ChatSessionRow {
@@ -316,9 +391,12 @@ function rowFromSession(r: any): ChatSessionRow {
 // Poller
 // ---------------------------------------------------------------------------
 
-/** The poller's narrow view of the store. ThatchDB satisfies this structurally
- *  through its delegated chat methods, so the poller never needs the full
- *  ChatStore and tests can pass a plain object. */
+/** The poller's narrow view of the store: the three chat methods it needs.
+ *  ThatchDB satisfies this structurally through its delegated chat methods.
+ *  The interface pins the poller to exactly these dependencies and keeps
+ *  chat.ts from importing db.ts (their module cycle stays type-only); a
+ *  test that wants a fake store can pass a plain object, though the suite
+ *  currently uses real temp-dir databases. */
 export interface ChatPollerStore {
   heartbeatChatSessions(sessionIDs: string[]): void;
   pendingChatNotifications(sessionIDs: string[], renudgeCutoff: string): ChatNotificationRow[];
@@ -338,8 +416,8 @@ export interface ChatPollerOptions {
    *  pending and retry on later cycles. */
   canDeliver: (sessionID: string) => boolean;
   /** Poll interval. Default 30s - frequent enough that wake prompts feel
-   *  prompt, cheap enough that the shared DB sees one light query per cycle
-   *  per process. */
+   *  prompt, cheap enough that the shared DB sees only a couple of light
+   *  statements per cycle per process. */
   pollIntervalMs?: number;
   /** A delivered-but-unread message re-queues a nudge after this long.
    *  Default 15 minutes. */
@@ -381,6 +459,9 @@ export class ChatPoller {
   start(): void {
     if (this.#timer !== null) return;
     this.#timer = setInterval(() => void this.poll(), this.#opts.pollIntervalMs);
+    // Never keep the host process alive just for the poller - matches the
+    // watcher registry's timer.
+    this.#timer.unref?.();
   }
 
   stop(): void {
@@ -400,7 +481,11 @@ export class ChatPoller {
    * One poll cycle: heartbeat hosted sessions, then deliver whatever is
    * pending for sessions that can accept a prompt. Re-entrant calls are
    * dropped, matching the watcher registry - a slow cycle overlapping the
-   * next would double-deliver the same messages.
+   * next would double-deliver the same messages. Store failures are caught
+   * here, not just deliver failures: the timer discards the returned
+   * promise, so an escaping SQLite error would surface as an unhandled
+   * rejection in the plugin host process. A failed cycle logs and retries
+   * on the next tick.
    */
   async poll(): Promise<void> {
     if (this.#polling) return;
@@ -409,6 +494,8 @@ export class ChatPoller {
       const hosted = this.#opts.hostedSessions();
       this.#opts.store.heartbeatChatSessions(hosted);
       await this.deliverPending();
+    } catch (err) {
+      console.error(`[thatch] chat poll failed: ${err}`);
     } finally {
       this.#polling = false;
     }
@@ -418,16 +505,16 @@ export class ChatPoller {
    * Delivers pending messages for every hosted session that can accept a
    * prompt. Sessions that are busy keep their messages pending; the idle
    * event handler calls this directly so mail lands promptly instead of
-   * waiting for the next cycle. Failures stay pending and retry.
+   * waiting for the next cycle. Failures stay pending and retry. Delivery
+   * is at-least-once: a crash after the wake prompt but before
+   * markChatDelivered re-nudges the same batch on the next cycle.
    */
   async deliverPending(): Promise<void> {
     if (this.#delivering) return;
     this.#delivering = true;
     try {
       const hosted = this.#opts.hostedSessions();
-      const cutoff = new Date(Date.now() - this.#opts.renudgeMinutes * 60_000)
-        .toISOString()
-        .slice(0, 19) + "Z";
+      const cutoff = isoSecondsAgo(this.#opts.renudgeMinutes);
       const pending = this.#opts.store.pendingChatNotifications(hosted, cutoff);
       if (pending.length === 0) return;
 
