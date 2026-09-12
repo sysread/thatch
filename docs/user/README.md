@@ -12,6 +12,7 @@ This README is the overview. Each feature has its own guide:
 - [memory.md](memory.md): persistent memory store
 - [extraction.md](extraction.md): automatic fact extraction from tool calls
 - [watchers.md](watchers.md): event-driven notifications (PR and branch watching)
+- [cross-session-chat.md](cross-session-chat.md): sessions messaging each other on one machine
 - [notifications.md](notifications.md): banner and voice notifications, user config
 - [prediction-engine.md](prediction-engine.md): user decision model
 - [behavior-engine.md](behavior-engine.md): agent self-discipline rules
@@ -183,6 +184,19 @@ search` - JSONL output designed for piping to `jq` or `grep`.
 
 See [watchers.md](watchers.md) for the full behavior, lifetime, and
 requirements.
+
+### Chat tools (opencode only)
+
+| Tool | What it does |
+|------|-------------|
+| `thatch_chat_register` | Join the cross-session chat directory under a short, unique display name, so other opencode sessions on this machine can message you. Idempotent - re-registering renames. |
+| `thatch_chat_list` | List registered sessions with a liveness marker (fresh = its process is alive, stale = likely gone) and your unread count. |
+| `thatch_chat_send` | Send a message to another registered session, by name or session id. The recipient is nudged when its session is idle. |
+| `thatch_chat_read` | Drain your inbox: all unread messages oldest-first, marked read. Senders identified by display name. |
+| `thatch_chat_unregister` | Leave the chat directory. |
+
+See [cross-session-chat.md](cross-session-chat.md) for the full behavior,
+liveness model, and limitations.
 
 ## Automatic behaviors
 

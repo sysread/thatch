@@ -40,8 +40,11 @@ OpenCode plugin path
   ├── index.ts        → plugin entry: wires DB/model/extraction, registers tools + hooks
   ├── tools.ts        → thin opencode tool() wrappers over tool-defs
   ├── extraction.ts   → in-memory ring buffer + shared payload builders
-  └── watchers.ts     → in-memory watcher registry + poller (opencode-only,
-                        event-driven PR notifications delivered as prompts)
+  ├── watchers.ts     → in-memory watcher registry + poller (opencode-only,
+  │                     event-driven PR notifications delivered as prompts)
+  └── chat.ts         → cross-session chat: shared SQLite directory + inbox
+                        (ChatStore) and the per-process wake-up poller
+                        (ChatPoller, opencode-only)
 
 MCP server path
   ├── mcp.ts          → stdio JSON-RPC server: z.toJSONSchema() for tools/list,
@@ -76,6 +79,7 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `notify.ts` | Out-of-band notification dispatch: darwin (`osascript` banner + `/usr/bin/say` voice), linux (`notify-send` + `spd-say`/`espeak`), other platforms report unsupported. Injectable spawner (`CoreContext.spawner`) so tests never fire real commands. Backs the `notify_user` tool. |
 | `session-db.ts` | Read-only access to the opencode session database (opencode.db): session timeline (`session list`), full part/message retrieval (`session get`), OpenAI chat-completions transcript builder (`session transcript`), and decoded-content search (`session search`). Backs the `thatch session` CLI subcommands and the opencode-only `session_search`/`session_get` tools. Path resolution honors `OPENCODE_DB`, then the XDG default; the db opens read-only so a thatch bug cannot corrupt host history. |
 | `watchers.ts` | In-memory watcher registry and background poller for event-driven notifications (opencode-only). Watches GitHub PRs and branches via `gh api` (injected `GhRunner`), diffs against last-seen state, queues pointer-only events per session, and delivers them through a plugin-supplied callback when the session is idle. Process-lifetime state by design - no SQLite. |
+| `chat.ts` | Cross-session chat between opencode sessions on one machine (opencode-only). `ChatStore` holds the shared directory and inbox in SQLite so any process can read/write them; `ChatPoller` heartbeats hosted sessions and delivers wake prompts through an injected callback when the recipient is idle - only the recipient's host process delivers, so there is no cross-process double-delivery. Heartbeat staleness flags crashed sessions; a per-recipient nudge rate cap is the anti-loop hard brake. See [features/cross-session-chat.md](features/cross-session-chat.md). |
 | `sideband.ts` | Unix domain socket server + client. The MCP server (long-lived, warm model) runs `SidebandServer` so one-shot hook processes can ask it to embed a prompt and search for matches without loading the model themselves. Handles three methods: `match` (recall nudge), `predictions` (prediction auto-fire), and `behaviors` (behavior auto-fire). Socket path is a hash of the DB path — both processes compute it independently. |
 | `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, prompt-aware recall nudge (`recallNudge` / `claudeRecallNudge`), prediction nudge (`predictionNudge`), behavior nudge (`behaviorNudge`), prediction verb selection (`predictionVerb`), Claude Code CLAUDE.md instructions, Cursor AGENTS.md instructions, Claude Code hook text. |
 | `skills.ts` | `SKILL.md` content for all thatch skills, plus the installer. Skills are split into `SHARED_SKILLS` (fact-extractor, dedup-classifier, project-primer, the review specialists, review synthesizer, review context, code archaeology, review followup, review response, change walkthrough, code walkthrough, session reflection, coding-workflow, thatch-pr-description, thatch-ticket-description, thatch-split-overlarge-pr, memory-verify, knowledge-export — work on all three hosts) and `OPENCODE_ONLY_SKILLS` (code-review coordinator — requires sub-agent support, not installed for Claude Code or Cursor). `installSkills(dir, skills)` defaults to `SHARED_SKILLS`; the opencode plugin passes `[...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]`. |

@@ -1,6 +1,6 @@
 # Database
 
-Thatch stores all data in a single SQLite file. The schema is organized around three concerns: memory entries, the prediction engine, and the behavior engine.
+Thatch stores all data in a single SQLite file. The schema is organized around four concerns: memory entries, the prediction engine, the behavior engine, and cross-session chat.
 
 ## Configuration
 
@@ -10,13 +10,14 @@ Thatch stores all data in a single SQLite file. The schema is organized around t
 
 ## Schema overview
 
-The tables fall into three groups:
+The tables fall into four groups:
 
 | Group | Tables | Purpose |
 |-------|--------|---------|
 | Memory | `stores`, `entries`, `dedup_pairs` | Core memory CRUD + dedup verdicts |
 | Prediction engine | `prediction_matchers`, `predictions`, `prediction_edges`, `prediction_provenance` | User decision model |
 | Behavior engine | `behavior_matchers`, `behaviors`, `behavior_edges`, `behavior_provenance` | LLM self-discipline rules |
+| Cross-session chat | `chat_sessions`, `chat_messages` | Session directory + message inbox (shared across opencode processes) |
 
 The prediction and behavior engines share the same four-table shape (matchers, items, edges, provenance) with different table names. They are separate because the semantics differ: predictions model what the user wants; behaviors model what the LLM should do.
 
@@ -213,6 +214,46 @@ behavior_provenance(
 
 - `signal`: "confirm" (ham), "disconfirm" (spam), or "codify".
 
+## Cross-session chat tables
+
+### chat_sessions
+
+```sql
+chat_sessions(
+  session_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  project TEXT,
+  registered_at TEXT NOT NULL,
+  last_seen TEXT NOT NULL
+)
+```
+
+- The machine-wide session directory. `last_seen` is the heartbeat: each
+  host process refreshes it for its own sessions every poll cycle, and a
+  stale value marks a crashed or closed process.
+
+### chat_messages
+
+```sql
+chat_messages(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  from_session TEXT NOT NULL,
+  to_session TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  delivered_at TEXT,
+  read_at TEXT
+)
+```
+
+- `delivered_at` is the last wake-prompt stamp (restamped on re-nudges);
+  `read_at` is set when the recipient drains its inbox. The endpoints are
+  plain columns, not foreign keys: unregistering a session must not be
+  blocked by message history, and a departed sender degrades to an unknown
+  name in the reader's view.
+
+See [cross-session-chat.md](cross-session-chat.md) for the delivery model.
+
 ## Schema migration
 
 `recall_count`, `last_recalled_at`, and `archived` are added to pre-existing databases by an idempotent column migration at init. The migration uses `PRAGMA table_info` to check for the column's existence, then `ALTER TABLE ADD COLUMN` if missing. This handles databases created before these columns existed.
@@ -237,6 +278,7 @@ Embeddings are raw Float32Array bytes stored as BLOBs. Serialization honors `byt
 - Deduplication ([deduplication.md](deduplication.md)): `dedup_pairs` table tracks reviewed pairs
 - Prediction engine ([prediction-engine.md](prediction-engine.md)): 4 prediction tables
 - Behavior engine ([behavior-engine.md](behavior-engine.md)): 4 behavior tables
+- Cross-session chat ([cross-session-chat.md](cross-session-chat.md)): 2 chat tables shared across opencode processes
 - Hygiene ([hygiene.md](hygiene.md)): `staleEntryCount` uses `recall_count` and `last_recalled_at`; `branchesInStore` uses `branch` column
 
 ## Source files
