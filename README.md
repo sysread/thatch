@@ -66,7 +66,7 @@ Include thatch's instructions in your agent's system prompt manually; see
 
 ## What's inside
 
-Thatch gives your agent three layers of persistent context:
+Thatch gives your agent:
 
 - **Memory** -- save, search, and recall knowledge across sessions with
   local embeddings (bge-small-en-v1.5) and SQLite. Every project gets its
@@ -92,8 +92,14 @@ Thatch gives your agent three layers of persistent context:
   only). The agent registers a watch on a GitHub PR or branch (main); thatch polls it in the
   background and prompts the session when comments, commits, CI results, or
   status changes arrive. Notifications carry pointer data only.
-- **Notifications + user config** -- the agent can ping you out-of-band when
-  a long-running outcome lands: a desktop banner, a spoken voice
+- **Cross-session chat** -- your opencode sessions can message each other
+  (opencode only, same machine). A session registers under a unique name,
+  others see it in the directory, and messages land in its inbox -- with a
+  wake-up prompt when the recipient is idle, so parallel sessions coordinate
+  without routing every question through you. Loop-safe: messages are
+  informational to the receiving agent, and wake prompts are rate-capped.
+- **Notifications + user config** -- the agent can ping you out-of-band when a
+  long-running outcome lands: a desktop banner, a spoken voice
   announcement, or both (macOS and Linux). Preferences live in a
   hand-editable config file (`~/.config/thatch/config.json`) that the agent
   manages through `config_get`/`config_set` -- ask it to change your voice
