@@ -32,6 +32,15 @@ const useCase: UseCase = {
   ].join("\n"),
 
   async run(ctx: QaContext): Promise<UseCaseResult> {
+    // This use case spawns `opencode run` itself, so the runner's
+    // no-custom-run PATH guard does not cover it. Skip rather than ENOENT
+    // on machines without the binary, matching the runner's convention.
+    const which = Bun.spawnSync(["sh", "-c", "command -v opencode"]);
+    if (which.exitCode !== 0) {
+      console.log("  [MANUAL] UC-098-chat-cross-session - skipped (opencode not on PATH)");
+      return "MANUAL-ONLY";
+    }
+
     const spawnSession = async (prompt: string): Promise<string> => {
       const proc = Bun.spawn(["opencode", "run", "--dir", ctx.dir, "--model", MODEL, "--auto", prompt], {
         env: ctx.env,

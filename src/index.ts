@@ -87,11 +87,12 @@ export const server: Plugin = async ({ client, worktree }) => {
   const runningVersion = pkg.version;
 
   // Latest observed opencode session status per session ("busy" | "idle" |
-  // "retry"). The event hook records these. Readers: the watcher registry's
-  // and the chat poller's canDeliver gates (proactive prompts only fire
-  // into idle sessions, never into a running turn), and the chat poller's
-  // hostedSessions set (the sessions this process may deliver chat mail to
-  // - the map's keys).
+  // "retry"). Keys enter from session.status events and leave only in
+  // session.deleted (which shrinks the chat poller's hosted set). Readers:
+  // the watcher registry's and the chat poller's canDeliver gates
+  // (proactive prompts only fire into idle sessions, never into a running
+  // turn), and the chat poller's hostedSessions set (the sessions this
+  // process may deliver chat mail to - the map's keys).
   const sessionStatus = new Map<string, string>();
 
   // In-memory watcher registry for proactive event notifications (GitHub PR
@@ -853,7 +854,9 @@ export const server: Plugin = async ({ client, worktree }) => {
         extractionChildren.delete(id);
         // A deleted parent takes its accepted entries with it, and its
         // watchers die with it - the session that would receive their
-        // notifications no longer exists.
+        // notifications no longer exists. Dropping it from sessionStatus
+        // also shrinks the chat poller's hosted set, so no later cycle
+        // selects its mail.
         extraction.completeAccepted(id);
         extracting.delete(id);
         sessionStatus.delete(id);

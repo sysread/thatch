@@ -1,6 +1,6 @@
 # Database
 
-Thatch stores all data in a single SQLite file. The schema is organized around four concerns: memory entries, the prediction engine, the behavior engine, and cross-session chat.
+Thatch stores all data in a single SQLite file. The schema is organized around feature concerns: memory entries, the prediction engine, the behavior engine, and cross-session chat.
 
 ## Configuration
 
@@ -10,7 +10,7 @@ Thatch stores all data in a single SQLite file. The schema is organized around f
 
 ## Schema overview
 
-The tables fall into four groups:
+The tables fall into these groups:
 
 | Group | Tables | Purpose |
 |-------|--------|---------|

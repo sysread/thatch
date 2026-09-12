@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
-import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoSecondsAgo as cutoffAgo } from "../src/chat";
+import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
 
@@ -152,6 +152,7 @@ describe("name pool assignment", () => {
     const first = db.assignChatName("ses_a", "p");
     expect(first.ok).toBe(true);
     if (!first.ok) return;
+    expect(first.drawn).toBe(true);
     expect(CHAT_NAME_POOL).toContain(first.name);
     const second = db.assignChatName("ses_b", "p");
     expect(second.ok).toBe(true);
@@ -164,6 +165,7 @@ describe("name pool assignment", () => {
     const again = db.assignChatName("ses_a", "p");
     expect(again.ok).toBe(true);
     if (!again.ok) return;
+    expect(again.drawn).toBe(false);
     expect(again.name).toBe("custom-name");
   });
 
@@ -196,7 +198,7 @@ describe("chat name-collation migration", () => {
     rmSync(dbDir, { recursive: true, force: true });
     dbDir = mkdtempSync(join(tmpdir(), "thatch-chat-mig-"));
     dbPath = join(dbDir, "test.db");
-    // Build the v1 schema by hand: plain case-sensitive UNIQUE, with the
+    // Build the pre-NOCASE schema by hand: plain case-sensitive UNIQUE, with the
     // colliding rows the old constraint allowed.
     const legacy = new Database(dbPath);
     legacy.run(`
@@ -313,7 +315,7 @@ describe("staleness", () => {
 describe("chat transcript echo text", () => {
   test("register echoes the claimed name; failures stay silent", () => {
     expect(chatEchoText("thatch_chat_register", {}, "[registered] Kurn the Typechecker\nsession_id: ses_x"))
-      .toBe("[chat] Kurn the Typechecker joined the session directory");
+      .toBe("[chat] Kurn the Typechecker registered in the session directory");
     expect(chatEchoText("thatch_chat_register", {}, "Registration failed: name taken")).toBeNull();
   });
 
@@ -331,15 +333,34 @@ describe("chat transcript echo text", () => {
 
   test("read echoes the inbox; empty inbox stays silent", () => {
     expect(chatEchoText("thatch_chat_read", {}, "Inbox empty.")).toBeNull();
-    expect(chatEchoText("thatch_chat_read", {}, "[from Landru] hi\n(1 message, marked read)"))
-      .toBe("[chat] inbox\n[from Landru] hi\n(1 message, marked read)");
+    // Fixture mirrors the real chat_read output, timestamps included.
+    expect(chatEchoText("thatch_chat_read", {}, "[from Landru, Sep 11 14:32Z] hi\n(1 message, marked read)"))
+      .toBe("[chat] inbox\n[from Landru, Sep 11 14:32Z] hi\n(1 message, marked read)");
     const echo = chatEchoText("thatch_chat_read", {}, "y".repeat(2000));
     expect(echo).toBe("[chat] inbox\n" + "y".repeat(1500) + "...");
   });
 
   test("list and unregister never echo", () => {
     expect(chatEchoText("thatch_chat_list", {}, "[chat] 2 sessions registered")).toBeNull();
-    expect(chatEchoText("thatch_chat_unregister", {}, "[unregistered] this session left.")).toBeNull();
+    expect(chatEchoText("thatch_chat_unregister", {}, "[unregistered] this session left the chat directory.")).toBeNull();
+  });
+});
+
+describe("name pool invariants", () => {
+  test("every pool name satisfies the shared charset", () => {
+    for (const name of CHAT_NAME_POOL) {
+      expect(NAME_CHARSET.test(name), `pool name "${name}" fails the charset`).toBe(true);
+      expect(name.length).toBeLessThanOrEqual(40);
+    }
+  });
+
+  test("no two pool names collide case-insensitively", () => {
+    const seen = new Set<string>();
+    for (const name of CHAT_NAME_POOL) {
+      const key = name.toLowerCase();
+      expect(seen.has(key), `pool name "${name}" collides case-insensitively`).toBe(false);
+      seen.add(key);
+    }
   });
 });
 

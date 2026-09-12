@@ -82,7 +82,7 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `chat.ts` | Cross-session chat between opencode sessions on one machine (opencode-only). `ChatStore` holds the shared directory and inbox in SQLite so any process can read/write them; `ChatPoller` heartbeats hosted sessions and delivers wake prompts through an injected callback when the recipient is idle - only the recipient's host process delivers, so there is no cross-process double-delivery. Heartbeat staleness flags crashed sessions; a per-recipient nudge rate cap is the anti-loop hard brake. See [features/cross-session-chat.md](features/cross-session-chat.md). |
 | `chat-names.ts` | The static display-name pool for the chat directory: whimsical geek-culture names in fnord's Nomenclater style, baked in so name assignment never costs a model call. `chat_register` without a name draws from it. |
 | `sideband.ts` | Unix domain socket server + client. The MCP server (long-lived, warm model) runs `SidebandServer` so one-shot hook processes can ask it to embed a prompt and search for matches without loading the model themselves. Handles three methods: `match` (recall nudge), `predictions` (prediction auto-fire), and `behaviors` (behavior auto-fire). Socket path is a hash of the DB path — both processes compute it independently. |
-| `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, prompt-aware recall nudge (`recallNudge` / `claudeRecallNudge`), prediction nudge (`predictionNudge`), behavior nudge (`behaviorNudge`), prediction verb selection (`predictionVerb`), Claude Code CLAUDE.md instructions, Cursor AGENTS.md instructions, Claude Code hook text. |
+| `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, prompt-aware recall nudge (`recallNudge` / `claudeRecallNudge`), prediction nudge (`predictionNudge`), behavior nudge (`behaviorNudge`), prediction verb selection (`predictionVerb`), watcher notification (`watcherNotificationNudge`), version warning (`versionWarningNudge`), chat wake notification (`chatNotificationNudge`), chat transcript echo text and echo recognizer (`chatEchoText` / `isChatEchoParts`), Claude Code CLAUDE.md instructions, Cursor AGENTS.md instructions, Claude Code hook text. |
 | `skills.ts` | `SKILL.md` content for all thatch skills, plus the installer. Skills are split into `SHARED_SKILLS` (fact-extractor, dedup-classifier, project-primer, the review specialists, review synthesizer, review context, code archaeology, review followup, review response, change walkthrough, code walkthrough, session reflection, coding-workflow, thatch-pr-description, thatch-ticket-description, thatch-split-overlarge-pr, memory-verify, knowledge-export — work on all three hosts) and `OPENCODE_ONLY_SKILLS` (code-review coordinator — requires sub-agent support, not installed for Claude Code or Cursor). `installSkills(dir, skills)` defaults to `SHARED_SKILLS`; the opencode plugin passes `[...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]`. |
 | `scoring-engine.ts` | Generic four-table scoring engine with Bayesian confidence. Shared base for prediction and behavior engines — each wraps it with table-specific names. |
 | `prediction.ts` | Thin wrapper around `ScoringEngine` with prediction-specific table names. |
@@ -335,12 +335,16 @@ behavior cycle (agent-driven, self-graded)
   `behavior_matchers(id PK, store, description, embedding BLOB, model, created_at, updated_at)`,
   `behaviors(id PK, store, statement, rationale, embedding BLOB, model, confidence REAL, confirm_count REAL, disconfirm_count REAL, created_at, updated_at)`,
   `behavior_edges(matcher_id, behavior_id, weight REAL, PK(matcher_id, behavior_id), FK CASCADE)`,
-  `behavior_provenance(id PK, behavior_id, signal, detail, created_at, FK CASCADE)`.
+  `behavior_provenance(id PK, behavior_id, signal, detail, created_at, FK CASCADE)`,
+  `chat_sessions(session_id PK, name UNIQUE COLLATE NOCASE, project, registered_at, last_seen)`,
+  `chat_messages(id PK AUTOINCREMENT, from_session, to_session, body, created_at, delivered_at, read_at)`.
 - `recall_count`, `last_recalled_at`, and `archived` are added to pre-existing
   databases by an idempotent column migration at init (`PRAGMA table_info` +
   `ALTER TABLE`). The `archived` column is `INTEGER NOT NULL DEFAULT 0` (0 =
   live, 1 = archived); search, dedup, and staleness queries all exclude
-  archived entries by default.
+  archived entries by default. A second init migration rebuilds a
+  pre-NOCASE `chat_sessions` table to enforce case-insensitive name
+  uniqueness (see [features/database.md](features/database.md)).
 - Embeddings are raw Float32Array bytes. Serialization honors
   `byteOffset`/`byteLength` — transformers.js can return views into larger
   tensor buffers, and serializing the whole backing buffer corrupts vectors.

@@ -5,7 +5,7 @@ import { Database } from "bun:sqlite";
 import { registerUseCase, type UseCase } from "../runner";
 import { TOOL_DEFS } from "../../../src/tool-defs";
 import { ThatchDB } from "../../../src/db";
-import { ChatPoller, nowIso, isoSecondsAgo as cutoffAgo } from "../../../src/chat";
+import { ChatPoller, nowIso, isoMinutesAgo as cutoffAgo } from "../../../src/chat";
 import { CHAT_NAME_POOL } from "../../../src/chat-names";
 
 /**

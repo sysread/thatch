@@ -793,7 +793,9 @@ export function chatEchoText(tool: string, args: Record<string, unknown>, output
   if (tool === "thatch_chat_register") {
     if (!output.startsWith("[registered]")) return null;
     const name = output.split("\n", 1)[0].slice("[registered] ".length).trim();
-    return `[chat] ${name} joined the session directory`;
+    // "registered in" covers every case the prefix line cannot distinguish:
+    // first join, rename, and idempotent same-name re-register.
+    return `[chat] ${name} registered in the session directory`;
   }
   if (tool === "thatch_chat_send") {
     if (!output.startsWith("[sent]")) return null;
@@ -817,6 +819,14 @@ export function chatEchoText(tool: string, args: Record<string, unknown>, output
  * the full nudge machinery (an embedding plus recall, prediction, and
  * behavior scans) and attach nudge parts to a message that never gets a
  * model turn.
+ *
+ * The "[chat] " prefix is the only signal available: noReply is not visible
+ * in the hook payload, so a structural check is impossible. The same
+ * literal is stamped by chatEchoText above - keep the two in sync. The
+ * accepted false positive: a genuine user message whose every visible part
+ * starts with the prefix is skipped too (one turn loses its advisory
+ * nudges; nothing is swallowed and the next ordinary message restores
+ * them).
  */
 export function isChatEchoParts(parts: unknown[]): boolean {
   const visible = (parts as any[]).filter((p) => p?.type === "text" && !p?.synthetic);

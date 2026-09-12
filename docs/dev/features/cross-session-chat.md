@@ -69,7 +69,7 @@ Identity is the host session ID, which the model cannot know or forge.
 Re-registering renames. Unregistered sessions are invisible and
 unmessageable in both directions. Only top-level sessions should register -
 sub-agent children are ephemeral - which the tool descriptions and system
-prompt state; there is no mechanical barrier, a documented v1 trust posture.
+prompt state; there is no mechanical barrier, a documented trust posture.
 
 Names are claimable by any session (no impersonation defense). The trust
 model is the same as the shared memory stores: every agent on this machine
@@ -137,7 +137,9 @@ follows. Because the opencode server fires the `chat.message` hook for
 every prompt part before the `noReply` early-return, the plugin's
 `chat.message` handler skips messages whose visible text is entirely
 `[chat]`-prefixed bubbles (`isChatEchoParts`) - otherwise every echo would
-run the nudge machinery for a message no model turn reads.
+run the nudge machinery for a message no model turn reads. The accepted
+edge: a real user message whose every visible part starts with the prefix
+is skipped the same way, losing that one turn's advisory nudges.
 
 ## Interactions with other features
 
@@ -170,9 +172,9 @@ per hour. There are no environment overrides yet; add them the way
   ChatPoller (heartbeat, gated delivery, re-nudge, rate cap), staleness
   helper
 - `src/chat-names.ts` - the static display-name pool (nomenclater style)
-- `src/db.ts` - the two chat tables in schema init, the NOCASE collation
+- `src/db.ts` - the chat tables in schema init, the NOCASE collation
   migration, delegated methods
-- `src/tool-defs.ts` - the five chat tool definitions
+- `src/tool-defs.ts` - the chat tool definitions
 - `src/index.ts` - poller construction, delivery closure, idle flush,
   session.deleted unregister, dispose, transcript echo in
   tool.execute.after

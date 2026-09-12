@@ -35,14 +35,14 @@ import { CHAT_NAME_POOL } from "./chat-names";
  *  strftime('%Y-%m-%dT%H:%M:%SZ','now') default so string comparison between
  *  SQLite-generated and JS-generated timestamps stays consistent. */
 export function nowIso(): string {
-  return isoSecondsAgo(0);
+  return isoMinutesAgo(0);
 }
 
 /** An ISO timestamp `minutes` in the past, in the same second-resolution
  *  format. The poller passes this shape as the re-nudge cutoff; tests use
  *  it for the same purpose, so the format expression lives in exactly one
  *  place. */
-export function isoSecondsAgo(minutes: number): string {
+export function isoMinutesAgo(minutes: number): string {
   return new Date(Date.now() - minutes * 60_000).toISOString().slice(0, 19) + "Z";
 }
 
@@ -61,7 +61,6 @@ export interface ChatNotificationRow {
   to_session: string;
   from_session: string;
   from_name: string | null;
-  created_at: string;
 }
 
 /** A message as returned to the reading agent. */
@@ -84,8 +83,9 @@ const MAX_BODY_LEN = 10_000;
 // Custom names share the pool's charset: letters, numbers, spaces,
 // apostrophes, hyphens, periods. Parens would truncate the transcript
 // echo's name parse; newlines or tabs would break chat_list's one-line
-// roster format.
-const NAME_CHARSET = /^[\p{L}\p{N} '.\-]+$/u;
+// roster format. Exported so the pool conformance test can pin that every
+// baked-in name satisfies it.
+export const NAME_CHARSET = /^[\p{L}\p{N} '.\-]+$/u;
 
 // Timing defaults, shared by the poller and the chat_list staleness display
 // so both agree on what "stale" means.
@@ -109,7 +109,8 @@ export class ChatStore {
    * Joins the directory with a pool name: picks uniformly at random from the
    * names no other session has claimed (case-insensitively). Idempotent for
    * an already-registered session - it keeps its current name (drawn:
-   * false). Fails only when every pool name is taken.
+   * false). Fails when every pool name is taken, or when concurrent
+   * registrations win every draw attempt - see the redraw loop below.
    */
   assign(sessionID: string, project: string | null): { ok: true; name: string; drawn: boolean } | { ok: false; error: string } {
     const existing = this.#find(sessionID);
@@ -117,15 +118,21 @@ export class ChatStore {
       this.#touch(sessionID);
       return { ok: true, name: existing.name, drawn: false };
     }
-    const taken = new Set(this.list().map((r) => r.name.toLowerCase()));
-    const free = CHAT_NAME_POOL.filter((n) => !taken.has(n.toLowerCase()));
-    if (free.length === 0) {
-      return { ok: false, error: "Name pool exhausted - pass a custom name." };
+    // Two processes can snapshot the same free list and draw the same name;
+    // the loser's INSERT hits the constraint. Redrawing from the names
+    // still free (the taken set is re-read each attempt) keeps the pool
+    // path's cannot-collide promise even under concurrent registration.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const taken = new Set(this.list().map((r) => r.name.toLowerCase()));
+      const free = CHAT_NAME_POOL.filter((n) => !taken.has(n.toLowerCase()));
+      if (free.length === 0) {
+        return { ok: false, error: "Name pool exhausted - pass a custom name." };
+      }
+      const name = free[Math.floor(Math.random() * free.length)];
+      const claimed = this.#insertSession(sessionID, name, project);
+      if (claimed.ok) return { ok: true, name, drawn: true };
     }
-    const name = free[Math.floor(Math.random() * free.length)];
-    const claimed = this.#insertSession(sessionID, name, project);
-    if (!claimed.ok) return claimed;
-    return { ok: true, name, drawn: true };
+    return { ok: false, error: "Could not claim a pool name after several attempts - pass a custom name." };
   }
 
   /**
@@ -150,7 +157,7 @@ export class ChatStore {
       // session - otherwise this is the caller recasing its own name.
       const clash = this.#findByName(name);
       if (clash && clash.session_id !== sessionID) {
-        return { ok: false, error: `Name "${name}" is taken by another session.` };
+        return this.#nameTaken(name);
       }
       try {
         this.#db.run("UPDATE chat_sessions SET name = ?, last_seen = ? WHERE session_id = ?", [
@@ -161,13 +168,13 @@ export class ChatStore {
         return { ok: true };
       } catch (err) {
         if (this.#isConstraintError(err)) {
-          return { ok: false, error: `Name "${name}" is taken by another session.` };
+          return this.#nameTaken(name);
         }
         throw err;
       }
     }
     if (this.#findByName(name)) {
-      return { ok: false, error: `Name "${name}" is taken by another session.` };
+      return this.#nameTaken(name);
     }
     return this.#insertSession(sessionID, name, project);
   }
@@ -187,7 +194,10 @@ export class ChatStore {
       .all() as any[]).map(rowFromSession);
   }
 
-  /** Resolves a recipient by display name (case-insensitive) or session ID. */
+  /** Resolves a recipient by display name (case-insensitive) or session ID.
+   *  Name-first is safe only because opencode session IDs contain
+   *  underscores and NAME_CHARSET excludes them, so no legal display name
+   *  can shadow an ID; if either format ever changes, resolve IDs first. */
   find(nameOrID: string): ChatSessionRow | null {
     return this.#findByName(nameOrID) ?? this.#find(nameOrID);
   }
@@ -295,7 +305,7 @@ export class ChatStore {
     return (
       this.#db
         .query(
-          `SELECT m.id, m.to_session, m.from_session, s.name AS from_name, m.created_at
+          `SELECT m.id, m.to_session, m.from_session, s.name AS from_name
            FROM chat_messages m
            LEFT JOIN chat_sessions s ON s.session_id = m.from_session
            WHERE m.read_at IS NULL
@@ -310,7 +320,6 @@ export class ChatStore {
       to_session: r.to_session,
       from_session: r.from_session,
       from_name: r.from_name ?? null,
-      created_at: r.created_at,
     }));
   }
 
@@ -366,7 +375,7 @@ export class ChatStore {
       return { ok: true };
     } catch (err) {
       if (this.#isConstraintError(err)) {
-        return { ok: false, error: `Name "${name}" is taken by another session.` };
+        return this.#nameTaken(name);
       }
       throw err;
     }
@@ -374,6 +383,12 @@ export class ChatStore {
 
   #isConstraintError(err: unknown): boolean {
     return String((err as any)?.code ?? err).includes("CONSTRAINT");
+  }
+
+  /** The one taken-message every claim path returns, so a rewording cannot
+   *  drift between the pre-checks and the race catches. */
+  #nameTaken(name: string): ChatResult {
+    return { ok: false, error: `Name "${name}" is taken by another session.` };
   }
 }
 
@@ -393,8 +408,9 @@ function rowFromSession(r: any): ChatSessionRow {
 
 /** The poller's narrow view of the store: the three chat methods it needs.
  *  ThatchDB satisfies this structurally through its delegated chat methods.
- *  The interface pins the poller to exactly these dependencies and keeps
- *  chat.ts from importing db.ts (their module cycle stays type-only); a
+ *  The interface pins the poller to exactly these dependencies and removes
+ *  chat.ts's need to import db.ts at all - db.ts already value-imports
+ *  ChatStore, so a reverse import would form a runtime module cycle. A
  *  test that wants a fake store can pass a plain object, though the suite
  *  currently uses real temp-dir databases. */
 export interface ChatPollerStore {
@@ -514,7 +530,7 @@ export class ChatPoller {
     this.#delivering = true;
     try {
       const hosted = this.#opts.hostedSessions();
-      const cutoff = isoSecondsAgo(this.#opts.renudgeMinutes);
+      const cutoff = isoMinutesAgo(this.#opts.renudgeMinutes);
       const pending = this.#opts.store.pendingChatNotifications(hosted, cutoff);
       if (pending.length === 0) return;
 
@@ -529,10 +545,14 @@ export class ChatPoller {
         if (!this.#opts.canDeliver(recipient)) continue;
         if (this.#nudgeBudget(recipient) <= 0) continue;
         try {
-          const senders = [...new Set(messages.map((m) => m.from_name ?? m.from_session))];
+          const senders = [...new Set(messages.map((m) => m.from_name ?? `departed (${m.from_session.slice(0, 12)})`))];
           await this.#opts.deliver(recipient, senders, messages.length);
-          this.#opts.store.markChatDelivered(messages.map((m) => m.id));
+          // Count the nudge before the stamp: the cap must bind on prompts
+          // actually sent, not on the DB write succeeding. A failing stamp
+          // leaves the mail pending, and an uncounted re-delivery every
+          // cycle would be the ping-pong the cap exists to stop.
           this.#recordNudge(recipient);
+          this.#opts.store.markChatDelivered(messages.map((m) => m.id));
         } catch (err) {
           console.error(`[thatch] chat delivery to ${recipient} failed: ${err}`);
         }

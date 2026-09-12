@@ -7,8 +7,8 @@
  * Klingons, Discworld, Sandman, D&D, pulp detectives with software puns,
  * hackerspeak callsigns, AI puns, golden-age sci-fi, spoofed famous robots,
  * unnamed-cast extras). fnord generates its names with an LLM at runtime;
- * thatch bakes the pool in so registration never costs a model call and is
- * fully deterministic.
+ * thatch bakes the pool in - static contents, no model call - while the
+ * draw itself is random (see ChatStore.assign).
  *
  * A session may still claim a custom name (chat_register's optional arg);
  * the pool is the default and keeps the directory colorful with zero

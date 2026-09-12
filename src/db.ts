@@ -796,6 +796,9 @@ export class ThatchDB {
   }
 
   findChatSession(nameOrID: string) {
+    // Facade surface: production resolves recipients inside send()/find();
+    // this delegation exists so callers (and tests) can resolve a session
+    // by name or ID without reaching past the ThatchDB API.
     return this.#chat.find(nameOrID);
   }
 

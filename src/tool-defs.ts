@@ -1339,10 +1339,11 @@ const watchCancelDef: ToolDef = {
  * process can reach a recipient in another; delivery is local to the
  * recipient's host process (see src/chat.ts).
  *
- * The success-output prefixes these tools emit ("[registered] NAME" and
- * "[sent] to NAME (id)") are parse targets for chatEchoText in
- * src/prompts.ts, which builds the transcript echo. Reformat them in the
- * same change as chatEchoText and its tests.
+ * The success-output strings these tools emit are parse targets for
+ * chatEchoText in src/prompts.ts, which builds the transcript echo: the
+ * "[registered] NAME" and "[sent] to NAME (session-id prefix)" shapes, and
+ * the exact "Inbox empty." sentinel that suppresses the read echo.
+ * Reformat them in the same change as chatEchoText and its tests.
  */
 
 /**
