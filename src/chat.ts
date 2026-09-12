@@ -124,7 +124,7 @@ export class ChatStore {
     const existing = this.#find(sessionID);
     if (existing) {
       this.#touch(sessionID);
-      this.#maybeUpdateTopic(sessionID, existing.topic, topic);
+      this.#maybeUpdateTopic(sessionID, existing.topic, this.#cleanTopic(topic));
       return { ok: true, name: existing.name, drawn: false };
     }
     // Two processes can snapshot the same free list and draw the same name;
@@ -138,7 +138,7 @@ export class ChatStore {
         return { ok: false, error: "Name pool exhausted - pass a custom name." };
       }
       const name = free[Math.floor(Math.random() * free.length)];
-      const claimed = this.#insertSession(sessionID, name, project, topic);
+      const claimed = this.#insertSession(sessionID, name, project, this.#cleanTopic(topic));
       if (claimed.ok) return { ok: true, name, drawn: true };
     }
     return { ok: false, error: "Could not claim a pool name after several attempts - pass a custom name." };
@@ -171,9 +171,13 @@ export class ChatStore {
         return this.#nameTaken(name);
       }
       try {
+        // An omitted topic (null) keeps the existing one, same as the
+        // same-name path below - a rename is a re-register, and the tool
+        // treats name and topic updates as independent.
+        const nextTopic = cleanTopic ?? existing.topic;
         this.#db.run("UPDATE chat_sessions SET name = ?, topic = ?, last_seen = ? WHERE session_id = ?", [
           name,
-          cleanTopic,
+          nextTopic,
           nowIso(),
           sessionID,
         ]);

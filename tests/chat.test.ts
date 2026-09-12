@@ -89,12 +89,26 @@ describe("ChatStore via ThatchDB", () => {
     // Empty: clear it.
     expect(db.registerChatSession("ses_a", "alice", "p", "").ok).toBe(true);
     expect(db.findChatSession("alice")?.topic).toBeNull();
-    // The pool-draw path carries a topic too.
+    // The pool-draw path carries a topic too, sanitized like the custom path.
     const draw = db.assignChatName("ses_b", "p", "plotting the machine age");
     expect(draw.ok).toBe(true);
     if (draw.ok) {
       expect(db.findChatSession(draw.name)?.topic).toBe("plotting the machine age");
     }
+    const dirty = db.assignChatName("ses_c", "p", "  multi\nline   topic  that runs far past the eighty character limit for topics ");
+    expect(dirty.ok).toBe(true);
+    if (dirty.ok) {
+      expect(db.findChatSession(dirty.name)?.topic).toBe("multi line topic that runs far past the eighty character limit for topics");
+    }
+  });
+
+  test("a rename with an omitted topic keeps the existing one", () => {
+    db.registerChatSession("ses_a", "alice", "p", "QAing the release");
+    expect(db.registerChatSession("ses_a", "ally", "p", null).ok).toBe(true);
+    expect(db.findChatSession("ally")?.topic).toBe("QAing the release");
+    // Explicit empty still clears, on the rename path too.
+    expect(db.registerChatSession("ses_a", "alice", "p", "").ok).toBe(true);
+    expect(db.findChatSession("alice")?.topic).toBeNull();
   });
 
   test("names outside the shared charset are rejected", () => {
