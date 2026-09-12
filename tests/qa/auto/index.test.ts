@@ -79,3 +79,4 @@ import "./uc-057-hygiene-healthy-store";
 import "./uc-058-hygiene-outside-git";
 import "./uc-095-watchers";
 import "./uc-096-notify-user";
+import "./uc-097-chat";
