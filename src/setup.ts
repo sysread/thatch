@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { claudeInstructions, cursorInstructions } from "./prompts";
-import { installSkills, type SkillFile } from "./skills";
+import { installSkills, type InstallReport } from "./skills";
 
 // ---------------------------------------------------------------------------
 // Path resolution
@@ -14,7 +14,7 @@ interface SetupPaths {
   claudeMdPath: string;
   /** .claude/settings.json or $CLAUDE_CONFIG_DIR/settings.json for hooks. */
   settingsPath: string;
-  /** Skills directory (always under the Claude config dir). */
+  /** Skills directory: project .claude/skills/ (local) or config-dir skills/ (global). */
   skillsDir: string;
   /** Whether this is a global install. */
   global: boolean;
@@ -24,9 +24,7 @@ interface SetupPaths {
  * Resolve the Claude config directory. `CLAUDE_CONFIG_DIR` overrides the
  * default `~/.claude` location - used by people running multiple accounts
  * side by side (per Claude Code env-vars docs). Settings, CLAUDE.md, and
- * skills are all stored under this path in global scope. Project-local
- * installs only use it for skills (which are always user-scoped); the
- * project's own .claude/settings.json and CLAUDE.md stay in the repo.
+ * skills are all stored under this path in global scope.
  */
 function claudeConfigDir(homeDir: string): string {
   return process.env.CLAUDE_CONFIG_DIR ?? join(homeDir, ".claude");
@@ -34,7 +32,6 @@ function claudeConfigDir(homeDir: string): string {
 
 function resolvePaths(global: boolean, projectDir: string, homeDir: string): SetupPaths {
   const configDir = claudeConfigDir(homeDir);
-  const skillsDir = join(configDir, "skills");
 
   if (global) {
     return {
@@ -45,7 +42,9 @@ function resolvePaths(global: boolean, projectDir: string, homeDir: string): Set
       // here also fixes a pre-existing bug where we wrote to `~/CLAUDE.md`.
       claudeMdPath: join(configDir, "CLAUDE.md"),
       settingsPath: join(configDir, "settings.json"),
-      skillsDir,
+      // Global installs put skills where every project can read them:
+      // the Claude config dir (Claude Code auto-discovers it).
+      skillsDir: join(configDir, "skills"),
       global: true,
     };
   }
@@ -54,9 +53,10 @@ function resolvePaths(global: boolean, projectDir: string, homeDir: string): Set
     mcpConfigPath: join(projectDir, ".mcp.json"),
     claudeMdPath: join(projectDir, "CLAUDE.md"),
     settingsPath: join(projectDir, ".claude", "settings.json"),
-    // Skills are always user-scoped, so they always live under the config
-    // dir - even when settings and CLAUDE.md are project-local.
-    skillsDir,
+    // Project-local installs keep skills in the repo so they version with
+    // the project and every contributor gets them. Claude Code discovers
+    // project skills at .claude/skills/ alongside its own project config.
+    skillsDir: join(projectDir, ".claude", "skills"),
     global: false,
   };
 }
@@ -209,18 +209,50 @@ function replaceThatchHooks(
 }
 
 // ---------------------------------------------------------------------------
-// Skills - install to $CLAUDE_CONFIG_DIR/skills/ (or ~/.claude/skills/ by default)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Main setup entry point
 // ---------------------------------------------------------------------------
+
+/**
+ * Thatch skills found in the OTHER scope's directory. A local run checks the
+ * user config dir; a global run checks the project. Setup never touches the
+ * other scope, so these copies drift on their own - surfacing them lets the
+ * CLI warn about leftovers (e.g. user-scope skills from before a repo moved
+ * to project-local installs).
+ */
+export interface OtherScopeSkills {
+  dir: string;
+  count: number;
+}
+
+/**
+ * Count thatch-* skill directories (or symlinks) under a skills dir without
+ * touching anything. Returns 0 when the dir doesn't exist.
+ */
+function countThatchSkills(dir: string): number {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  return entries.filter(
+    (e) => (e.isDirectory() || e.isSymbolicLink()) && e.name.startsWith("thatch-"),
+  ).length;
+}
+
+function otherScopeInfo(dir: string): OtherScopeSkills | null {
+  const count = countThatchSkills(dir);
+  return count > 0 ? { dir, count } : null;
+}
 
 export interface SetupResult {
   mcpConfig: string | null;
   claudeMd: string;
   settings: string;
-  skills: SkillFile[];
+  /** Skill install report for the directory this run wrote to. */
+  skills: InstallReport;
+  /** Thatch skills in the opposite scope's dir, if any; never written by this run. */
+  otherScopeSkills: OtherScopeSkills | null;
   global: boolean;
   /** For global installs, the `claude mcp add` command to run. */
   mcpAddCommand: string | null;
@@ -232,9 +264,9 @@ export interface SetupResult {
  * and installs skill files. All operations are idempotent - re-running setup
  * updates content that has drifted without clobbering unrelated configuration.
  *
- * Honors `CLAUDE_CONFIG_DIR` for all user-scoped paths (settings, CLAUDE.md,
- * skills). Project-local installs only use it for skills; the project's own
- * .claude/settings.json and CLAUDE.md stay in the repo.
+ * Skills follow the install scope: project-local runs write them to the
+ * repo's .claude/skills/, global runs to $CLAUDE_CONFIG_DIR/skills/. Honors
+ * `CLAUDE_CONFIG_DIR` for all user-scoped paths (settings, CLAUDE.md, skills).
  *
  * @param thatchBin Absolute path to the thatch binary
  * @param global Whether to install globally or project-locally
@@ -259,11 +291,19 @@ export function setupClaudeCode(
   writeHooks(paths.settingsPath, thatchBin);
   const skills = installSkills(paths.skillsDir);
 
+  // The scope this run did NOT write to. Local runs leave user-scope copies
+  // behind (pre-existing global installs); global runs leave project-local
+  // copies in the repo. Either way the user should hear about them.
+  const otherDir = global
+    ? join(projectDir, ".claude", "skills")
+    : join(claudeConfigDir(home), "skills");
+
   return {
     mcpConfig: paths.mcpConfigPath,
     claudeMd: paths.claudeMdPath,
     settings: paths.settingsPath,
     skills,
+    otherScopeSkills: otherScopeInfo(otherDir),
     global,
     mcpAddCommand: global
       ? `claude mcp add --scope user thatch -- ${thatchBin} mcp`
@@ -295,7 +335,6 @@ interface CursorSetupPaths {
 
 function resolveCursorPaths(global: boolean, projectDir: string, homeDir: string): CursorSetupPaths {
   const configDir = cursorConfigDir(homeDir);
-  const skillsDir = join(configDir, "skills");
 
   if (global) {
     return {
@@ -304,7 +343,8 @@ function resolveCursorPaths(global: boolean, projectDir: string, homeDir: string
       mcpConfigPath: join(configDir, "mcp.json"),
       agentsMdPath: join(configDir, "AGENTS.md"),
       hooksPath: join(configDir, "hooks.json"),
-      skillsDir,
+      // Global installs put skills where every project can read them.
+      skillsDir: join(configDir, "skills"),
       global: true,
     };
   }
@@ -313,7 +353,9 @@ function resolveCursorPaths(global: boolean, projectDir: string, homeDir: string
     mcpConfigPath: join(projectDir, ".cursor", "mcp.json"),
     agentsMdPath: join(projectDir, "AGENTS.md"),
     hooksPath: join(projectDir, ".cursor", "hooks.json"),
-    skillsDir,
+    // Project-local installs keep skills in the repo; Cursor auto-discovers
+    // project skills at .cursor/skills/.
+    skillsDir: join(projectDir, ".cursor", "skills"),
     global: false,
   };
 }
@@ -374,7 +416,10 @@ export interface CursorSetupResult {
   mcpConfig: string;
   agentsMd: string;
   hooks: string;
-  skills: SkillFile[];
+  /** Skill install report for the directory this run wrote to. */
+  skills: InstallReport;
+  /** Thatch skills in the opposite scope's dir, if any; never written by this run. */
+  otherScopeSkills: OtherScopeSkills | null;
   global: boolean;
 }
 
@@ -385,8 +430,10 @@ export interface CursorSetupResult {
  * skill files. All operations are idempotent.
  *
  * Cursor's global MCP config is a simple file write (unlike Claude Code which
- * needs `claude mcp add --scope user`). Skills install to ~/.cursor/skills/
- * (auto-discovered by Cursor, which also reads ~/.claude/skills/ for compat).
+ * needs `claude mcp add --scope user`). Skills follow the install scope:
+ * project-local runs write them to the repo's .cursor/skills/, global runs to
+ * the Cursor config dir's skills/ (Cursor also reads .claude/skills/ dirs
+ * for compatibility).
  *
  * @param thatchBin Absolute path to the thatch binary
  * @param global Whether to install globally or project-locally
@@ -408,13 +455,20 @@ export function setupCursor(
   writeCursorHooks(paths.hooksPath, thatchBin);
   const skills = installSkills(paths.skillsDir);
 
+  // Same other-scope logic as the Claude path: surface skills this run did
+  // not touch so the CLI can warn about leftovers.
+  const otherDir = global
+    ? join(projectDir, ".cursor", "skills")
+    : join(cursorConfigDir(home), "skills");
+
   return {
     mcpConfig: paths.mcpConfigPath,
     agentsMd: paths.agentsMdPath,
-     hooks: paths.hooksPath,
-     skills,
-     global,
-   };
+    hooks: paths.hooksPath,
+    skills,
+    otherScopeSkills: otherScopeInfo(otherDir),
+    global,
+  };
 }
 
 // ---------------------------------------------------------------------------

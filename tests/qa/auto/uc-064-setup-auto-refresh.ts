@@ -57,7 +57,8 @@ const useCase: UseCase = {
       const claudeMdBefore = readFileSync(claudeMdPath, "utf8");
       const settingsBefore = readFileSync(settingsPath, "utf8");
 
-      const skillsDir = join(configDir, "skills");
+      // Project-local setup installs skills into the repo's .claude/skills/.
+      const skillsDir = join(projectDir, ".claude", "skills");
       const skillPath = join(skillsDir, "thatch-fact-extractor", "SKILL.md");
       const skillCanonical = readFileSync(skillPath, "utf8");
 
@@ -113,11 +114,11 @@ const useCase: UseCase = {
       return "PASS";
     } finally {
       rmSync(join(projectDir, "CLAUDE.md"), { force: true });
+      // Covers .claude/settings.json and the project-installed .claude/skills/.
       rmSync(join(projectDir, ".claude"), { recursive: true, force: true });
       rmSync(join(projectDir, ".mcp.json"), { force: true });
       rmSync(join(configDir, "CLAUDE.md"), { force: true });
       rmSync(join(configDir, "settings.json"), { force: true });
-      rmSync(join(configDir, "skills"), { recursive: true, force: true });
 
       if (origClaudeProjectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR;
       else process.env.CLAUDE_PROJECT_DIR = origClaudeProjectDir;

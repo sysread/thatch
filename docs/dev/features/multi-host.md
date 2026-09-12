@@ -74,9 +74,10 @@ at session start.
 so the agent sees `mcp__thatch__memory_remember`. Thatch itself does not apply
 this prefix.
 
-**Skills**: installed to `$CLAUDE_CONFIG_DIR/skills/`---shared skills only.
-The code-review coordinator skill is opencode-only because it requires
-sub-agent dispatch, which Claude Code does not support.
+**Skills**: installed to the scope's skills dir (repo `.claude/skills/` for
+project-local setup, `$CLAUDE_CONFIG_DIR/skills/` for `--global`)---shared
+skills only. The code-review coordinator skill is opencode-only because it
+requires sub-agent dispatch, which Claude Code does not support.
 
 **Session behavior**: driven by external CLI hook processes (`bin/thatch`).
 The hooks are registered in `.claude/settings.json` during setup. Each hook

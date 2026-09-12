@@ -112,9 +112,10 @@ and `--cursor` pass only the shared set.
 
 ## Install mechanics
 
-- **Location**: `$XDG_CONFIG_HOME/opencode/skills` (opencode),
-  `$CLAUDE_CONFIG_DIR/skills` (Claude Code), `~/.cursor/skills` (Cursor).
-  Always user-scoped — never into the worktree.
+- **Location**: `$XDG_CONFIG_HOME/opencode/skills` (opencode);
+  scope-dependent for MCP hosts — the repo's `.claude/skills/` or
+  `.cursor/skills/` for project-local `thatch setup`, the host config
+  dirs (`$CLAUDE_CONFIG_DIR/skills`, `~/.cursor/skills`) for `--global`.
 - **Trigger**: opencode installs at plugin init; Claude Code/Cursor install via
   `thatch setup`.
 - **Drift detection**: `installSkills` only writes when the on-disk content

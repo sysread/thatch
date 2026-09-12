@@ -27,15 +27,17 @@ const useCase: UseCase = {
     "5. Check whether the `thatch-code-review` coordinator skill is present.",
   ].join("\n"),
   expected: [
-    "- Claude Code and Cursor install exactly **26 shared skills** to the skills",
-    "  dir — the coordinator (`thatch-code-review`) is **absent** (it needs",
+    "- Claude Code and Cursor install exactly **26 shared skills** to the scope's",
+    "  skills dir (repo `.claude/skills/` and `.cursor/skills/` for project-local",
+    "  setup) — the coordinator (`thatch-code-review`) is **absent** (it needs",
     "  sub-agents, which those hosts lack).",
     "- opencode installs **27** — the 26 shared plus the coordinator.",
     "- The locally edited `SKILL.md` is **overwritten** with the canonical content",
     "  on the next `setup`/init (drift detection: a file is only rewritten when its",
     "  content differs from the definition). Unrelated skill files are untouched.",
-    "- Skills never land in the worktree — always under the user-scoped config dir",
-    "  (`~/.claude/skills`, `~/.cursor/skills`, `$XDG_CONFIG_HOME/opencode/skills`).",
+    "- Skills install only into the scope's directory: the repo's host skills dir",
+    "  for `--local`, the user config dirs (`~/.claude/skills`, `~/.cursor/skills`)",
+    "  for `--global`, and `$XDG_CONFIG_HOME/opencode/skills` for the plugin.",
   ].join("\n"),
 
   async run(ctx: QaContext) {
@@ -59,10 +61,10 @@ const useCase: UseCase = {
 
     // --- Step 2: Skill counts (26 for Claude/Cursor, 27 for opencode) ---
 
-    // Claude: 26 shared, no coordinator
-    const claudeSkillsDir = join(env.CLAUDE_CONFIG_DIR, "skills");
+    // Claude: 26 shared, no coordinator, in the repo's .claude/skills/
+    const claudeSkillsDir = join(dir, ".claude", "skills");
     if (!existsSync(claudeSkillsDir)) {
-      console.log("  FAIL: Claude skills dir not created");
+      console.log("  FAIL: Claude skills dir not created in the repo");
       return "FAIL";
     }
     const claudeSkills = readdirSync(claudeSkillsDir, { withFileTypes: true })
@@ -78,10 +80,10 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // Cursor: 26 shared, no coordinator
-    const cursorSkillsDir = join(env.HOME, ".cursor", "skills");
+    // Cursor: 26 shared, no coordinator, in the repo's .cursor/skills/
+    const cursorSkillsDir = join(dir, ".cursor", "skills");
     if (!existsSync(cursorSkillsDir)) {
-      console.log("  FAIL: Cursor skills dir not created");
+      console.log("  FAIL: Cursor skills dir not created in the repo");
       return "FAIL";
     }
     const cursorSkills = readdirSync(cursorSkillsDir, { withFileTypes: true })
@@ -140,11 +142,17 @@ const useCase: UseCase = {
 
     // --- Step 4: Re-run setup (drift recovery) ---
 
-    await run(["setup", "--claude"]);
+    const r4 = await run(["setup", "--claude"]);
 
     // Drifted skill should be overwritten with canonical content.
     if (readFileSync(driftSkillPath, "utf8") !== canonicalContent) {
       console.log("  FAIL: drifted SKILL.md was not overwritten with canonical content");
+      return "FAIL";
+    }
+
+    // The re-run reports the repair: 1 updated, the rest unchanged.
+    if (!r4.stdout.toString().includes("1 updated")) {
+      console.log("  FAIL: drift-recovery stdout does not report '1 updated'");
       return "FAIL";
     }
 
@@ -154,10 +162,20 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // --- Step 5: Skills never land in the worktree ---
+    // --- Step 5: Skills land only in the expected host dirs ---
 
+    // No stray top-level skills/ dir in the worktree, and no user-scope dirs
+    // created by the project-local runs.
     if (existsSync(join(dir, "skills"))) {
-      console.log("  FAIL: skills/ dir found in worktree (should be user-scoped only)");
+      console.log("  FAIL: stray skills/ dir found at the repo root");
+      return "FAIL";
+    }
+    if (existsSync(join(env.CLAUDE_CONFIG_DIR, "skills"))) {
+      console.log("  FAIL: project-local run created $CLAUDE_CONFIG_DIR/skills");
+      return "FAIL";
+    }
+    if (existsSync(join(env.HOME, ".cursor", "skills"))) {
+      console.log("  FAIL: project-local run created ~/.cursor/skills");
       return "FAIL";
     }
 

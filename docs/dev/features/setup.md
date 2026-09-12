@@ -52,8 +52,9 @@ Four artifacts, all idempotent:
    → `thatch reminder`, `PostToolBatch` → `thatch buffer-batch`,
    `UserPromptSubmit` → `thatch flush-tools`. Nested format:
    `{hooks:{Event:{hooks:[{type,command}]}}}`.
-4. **Skills** --- installs to `$CLAUDE_CONFIG_DIR/skills/` (always
-   user-scoped, even for project-local setup). `SHARED_SKILLS` only --- the
+4. **Skills** --- installs to the scope's skills dir: the repo's
+   `.claude/skills/` for project-local, `$CLAUDE_CONFIG_DIR/skills/` for
+   `--global`. `SHARED_SKILLS` only --- the
    code-review coordinator requires sub-agent dispatch, which Claude Code
    does not support.
 
@@ -73,7 +74,9 @@ Four artifacts, same idempotent pattern:
    `{version:1, hooks:{event:[{command}]}}`. Three hooks: `sessionStart`
    → `thatch reminder --json`, `postToolUse` → `thatch buffer-tool`,
    `beforeSubmitPrompt` → `thatch flush-tools --json`.
-4. **Skills** --- installs to `$CURSOR_CONFIG_DIR/skills/` (shared only).
+4. **Skills** --- installs to the scope's skills dir: the repo's
+   `.cursor/skills/` for project-local, `$CURSOR_CONFIG_DIR/skills/` for
+   `--global` (shared only).
 
 ### Marker system (`appendBlock`)
 
@@ -184,8 +187,12 @@ example, an older `thatch echo` hook is replaced with the current
 1. **All operations are idempotent.** Re-running setup updates drifted content
    without clobbering. Instructions use markers, hooks filter by `thatch`
    string, MCP config preserves existing servers, skills diff before writing.
-2. **Skills are always user-scoped**, even in project-local setup. Claude Code
-   and Cursor load skills from the user config dir, not the project.
+2. **Skills follow the setup scope.** Project-local installs write skills to
+   the repo's `.claude/skills/` / `.cursor/skills/` (Claude Code and Cursor
+   both discover project skills there); `--global` writes to the user config
+   dirs. Setup reports the directory plus added/updated/removed/unchanged
+   counts, and notes (without touching) any thatch skills found in the
+   opposite scope.
 3. **`appendBlock` leaves content alone if markers do not parse.** A start
    marker without an end marker means the file was edited externally. Writing
    would risk clobbering content after the start marker.

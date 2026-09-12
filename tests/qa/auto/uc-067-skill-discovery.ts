@@ -19,8 +19,8 @@ const useCase: UseCase = {
     "- `thatch setup --claude` and/or `--cursor` has been run",
   ].join("\n"),
   steps: [
-    "1. Run `thatch setup --claude`. Verify SKILL.md files exist under $CLAUDE_CONFIG_DIR/skills/thatch-*/.",
-    "2. Run `thatch setup --cursor`. Verify SKILL.md files exist under ~/.cursor/skills/thatch-*/.",
+    "1. Run `thatch setup --claude`. Verify SKILL.md files exist under the repo's .claude/skills/thatch-*/.",
+    "2. Run `thatch setup --cursor`. Verify SKILL.md files exist under the repo's .cursor/skills/thatch-*/.",
   ].join("\n"),
   expected: [
     "- Each host's skills directory contains thatch-*/SKILL.md files after setup.",
@@ -40,9 +40,10 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    const claudeSkillsDir = join(env.CLAUDE_CONFIG_DIR, "skills");
+    // Project-local setup installs skills into the repo's .claude/skills/.
+    const claudeSkillsDir = join(dir, ".claude", "skills");
     if (!existsSync(claudeSkillsDir)) {
-      console.log("  FAIL: Claude skills dir not created");
+      console.log("  FAIL: Claude skills dir not created in the repo");
       return "FAIL";
     }
 
@@ -72,7 +73,8 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    const cursorSkillsDir = join(env.HOME, ".cursor", "skills");
+    // Project-local setup installs skills into the repo's .cursor/skills/.
+    const cursorSkillsDir = join(dir, ".cursor", "skills");
     if (!existsSync(cursorSkillsDir)) {
       console.log("  FAIL: Cursor skills dir not created");
       return "FAIL";

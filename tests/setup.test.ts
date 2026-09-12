@@ -196,15 +196,18 @@ describe("setupClaudeCode (project-local)", () => {
     expect(thatchHooks[0].hooks[0].command).toContain("flush-tools");
   });
 
-  test("installs skill files to ~/.claude/skills/", () => {
+  test("installs skills to the repo's .claude/skills/ (project-local)", () => {
     const result = setupClaudeCode("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
     // Shared skills only — opencode-only skills (thatch-code-review) are not
     // installed for Claude Code because they require sub-agent support.
-    expect(result.skills.length).toBe(26);
+    expect(result.skills.dir).toBe(join(projectDir, ".claude", "skills"));
+    expect(result.skills.added.length).toBe(26);
+    expect(result.skills.updated).toEqual([]);
+    expect(result.skills.unchanged).toEqual([]);
+    expect(result.skills.removed).toEqual([]);
 
-
-    const skillNames = result.skills.map((s) => s.name);
+    const skillNames = result.skills.added.map((s) => s.name);
     expect(skillNames).toContain("thatch-fact-extractor");
     expect(skillNames).toContain("thatch-dedup-classifier");
     expect(skillNames).toContain("thatch-project-primer");
@@ -230,7 +233,7 @@ describe("setupClaudeCode (project-local)", () => {
     expect(skillNames).toContain("thatch-review-response");
     expect(skillNames).not.toContain("thatch-code-review");
 
-    for (const skill of result.skills) {
+    for (const skill of result.skills.added) {
       expect(existsSync(skill.path)).toBe(true);
       const content = readFileSync(skill.path, "utf8");
       // Syntax check: YAML frontmatter with name/description (not content fidelity)
@@ -241,6 +244,9 @@ describe("setupClaudeCode (project-local)", () => {
       const frontEnd = content.indexOf("\n---", 3);
       expect(frontEnd).toBeGreaterThan(3);
     }
+
+    // A project-local run must not create user-scoped skills.
+    expect(existsSync(join(fakeHome, ".claude", "skills"))).toBe(false);
   });
 });
 
@@ -327,8 +333,10 @@ describe("CLAUDE_CONFIG_DIR override", () => {
 
       expect(result.claudeMd).toBe(join(customDir, "CLAUDE.md"));
       expect(result.settings).toBe(join(customDir, "settings.json"));
-      // skills are returned with absolute paths under the custom dir
-      for (const skill of result.skills) {
+      // skills are installed under the custom dir
+      expect(result.skills.dir).toBe(join(customDir, "skills"));
+      expect(result.skills.added.length).toBe(26);
+      for (const skill of result.skills.added) {
         expect(skill.path.startsWith(customDir + "/")).toBe(true);
       }
       // Default ~/.claude paths must NOT be created under the fake home.
@@ -344,25 +352,26 @@ describe("CLAUDE_CONFIG_DIR override", () => {
     }
   });
 
-  test("project-local install keeps project paths but puts skills under $CLAUDE_CONFIG_DIR", () => {
+  test("project-local install keeps everything in the repo (skills included)", () => {
     const customDir = mkdtempSync(join(tmpdir(), "thatch-custom-config-"));
     process.env.CLAUDE_CONFIG_DIR = customDir;
     try {
       const result = setupClaudeCode("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
-      // Project-local: CLAUDE.md and settings stay in the project repo.
+      // Project-local: CLAUDE.md, settings, AND skills stay in the repo.
       expect(result.claudeMd).toBe(join(projectDir, "CLAUDE.md"));
       expect(result.settings).toBe(join(projectDir, ".claude", "settings.json"));
       expect(existsSync(join(projectDir, "CLAUDE.md"))).toBe(true);
       expect(existsSync(join(projectDir, ".claude", "settings.json"))).toBe(true);
 
-      // Skills always live under the Claude config dir — even for project-local.
-      for (const skill of result.skills) {
-        expect(skill.path.startsWith(customDir + "/")).toBe(true);
+      expect(result.skills.dir).toBe(join(projectDir, ".claude", "skills"));
+      expect(result.skills.added.length).toBe(26);
+      for (const skill of result.skills.added) {
+        expect(skill.path.startsWith(projectDir + "/")).toBe(true);
       }
-      expect(existsSync(join(customDir, "skills"))).toBe(true);
 
-      // Default ~/.claude/skills must NOT exist in the fake home.
+      // Neither the custom config dir nor ~/.claude/skills may be created.
+      expect(existsSync(join(customDir, "skills"))).toBe(false);
       expect(existsSync(join(fakeHome, ".claude", "skills"))).toBe(false);
     } finally {
       rmSync(customDir, { recursive: true, force: true });
@@ -374,6 +383,162 @@ describe("CLAUDE_CONFIG_DIR override", () => {
 
     expect(result.claudeMd).toBe(join(fakeHome, ".claude", "CLAUDE.md"));
     expect(result.settings).toBe(join(fakeHome, ".claude", "settings.json"));
+    expect(result.skills.dir).toBe(join(fakeHome, ".claude", "skills"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// installSkills report
+// ---------------------------------------------------------------------------
+
+describe("installSkills report", () => {
+  test("fresh directory reports every skill as added", () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-skills-report-"));
+    try {
+      const report = installSkills(dir);
+      expect(report.dir).toBe(dir);
+      expect(report.added.length).toBe(SHARED_SKILLS.length);
+      expect(report.updated).toEqual([]);
+      expect(report.unchanged).toEqual([]);
+      expect(report.removed).toEqual([]);
+      expect(report.added.map((s) => s.name)).toContain("thatch-fact-extractor");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("re-run reports every skill as unchanged", () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-skills-report-"));
+    try {
+      installSkills(dir);
+      const report = installSkills(dir);
+      expect(report.added).toEqual([]);
+      expect(report.updated).toEqual([]);
+      expect(report.removed).toEqual([]);
+      expect(report.unchanged.length).toBe(SHARED_SKILLS.length);
+      expect(report.unchanged).toContain("thatch-fact-extractor");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("drifted content is reported as updated and repaired", () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-skills-report-"));
+    try {
+      installSkills(dir);
+      const file = join(dir, "thatch-fact-extractor", "SKILL.md");
+      writeFileSync(file, "drifted content");
+      const report = installSkills(dir);
+      expect(report.added).toEqual([]);
+      expect(report.updated.map((s) => s.name)).toEqual(["thatch-fact-extractor"]);
+      expect(report.unchanged.length).toBe(SHARED_SKILLS.length - 1);
+      // The drift is repaired from the artifact source.
+      expect(readFileSync(file, "utf8")).toBe(
+        SHARED_SKILLS.find((s) => s.name === "thatch-fact-extractor")!.content,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("stale thatch-* skill directories are removed and reported", () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-skills-report-"));
+    try {
+      mkdirSync(join(dir, "thatch-retired-skill"), { recursive: true });
+      writeFileSync(join(dir, "thatch-retired-skill", "SKILL.md"), "old");
+      const report = installSkills(dir);
+      expect(report.removed).toEqual(["thatch-retired-skill"]);
+      expect(existsSync(join(dir, "thatch-retired-skill"))).toBe(false);
+      expect(report.added.length).toBe(SHARED_SKILLS.length);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("non-thatch skill directories are neither removed nor reported", () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-skills-report-"));
+    try {
+      mkdirSync(join(dir, "someone-elses-skill"), { recursive: true });
+      writeFileSync(join(dir, "someone-elses-skill", "SKILL.md"), "keep me");
+      const report = installSkills(dir);
+      expect(report.removed).toEqual([]);
+      expect(existsSync(join(dir, "someone-elses-skill", "SKILL.md"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Other-scope skills note
+// ---------------------------------------------------------------------------
+
+describe("other-scope skills note", () => {
+  test("claude local: user-scope thatch skills are surfaced, not touched", () => {
+    const userSkills = join(fakeHome, ".claude", "skills");
+    mkdirSync(join(userSkills, "thatch-legacy"), { recursive: true });
+    writeFileSync(join(userSkills, "thatch-legacy", "SKILL.md"), "old copy");
+
+    const result = setupClaudeCode("/usr/local/bin/thatch", false, projectDir, fakeHome);
+
+    expect(result.otherScopeSkills).toEqual({ dir: userSkills, count: 1 });
+    // The user-scope copy is left exactly as it was.
+    expect(readFileSync(join(userSkills, "thatch-legacy", "SKILL.md"), "utf8")).toBe("old copy");
+  });
+
+  test("claude local: clean user scope yields no note", () => {
+    const result = setupClaudeCode("/usr/local/bin/thatch", false, projectDir, fakeHome);
+    expect(result.otherScopeSkills).toBeNull();
+  });
+
+  test("claude local: honors CLAUDE_CONFIG_DIR when probing the user scope", () => {
+    const customDir = mkdtempSync(join(tmpdir(), "thatch-custom-config-"));
+    process.env.CLAUDE_CONFIG_DIR = customDir;
+    try {
+      const userSkills = join(customDir, "skills");
+      mkdirSync(join(userSkills, "thatch-legacy"), { recursive: true });
+      writeFileSync(join(userSkills, "thatch-legacy", "SKILL.md"), "old copy");
+
+      const result = setupClaudeCode("/usr/local/bin/thatch", false, projectDir, fakeHome);
+
+      expect(result.otherScopeSkills).toEqual({ dir: userSkills, count: 1 });
+      expect(existsSync(join(fakeHome, ".claude", "skills"))).toBe(false);
+    } finally {
+      rmSync(customDir, { recursive: true, force: true });
+    }
+  });
+
+  test("claude global: project-scope thatch skills are surfaced", () => {
+    const projectSkills = join(projectDir, ".claude", "skills");
+    mkdirSync(join(projectSkills, "thatch-local"), { recursive: true });
+    writeFileSync(join(projectSkills, "thatch-local", "SKILL.md"), "project copy");
+
+    const result = setupClaudeCode("/usr/local/bin/thatch", true, projectDir, fakeHome);
+
+    expect(result.otherScopeSkills).toEqual({ dir: projectSkills, count: 1 });
+    // The project copy is left exactly as it was.
+    expect(readFileSync(join(projectSkills, "thatch-local", "SKILL.md"), "utf8")).toBe("project copy");
+  });
+
+  test("cursor local: user-scope thatch skills are surfaced", () => {
+    const userSkills = join(fakeHome, ".cursor", "skills");
+    mkdirSync(join(userSkills, "thatch-legacy"), { recursive: true });
+    writeFileSync(join(userSkills, "thatch-legacy", "SKILL.md"), "old copy");
+
+    const result = setupCursor("/usr/local/bin/thatch", false, projectDir, fakeHome);
+
+    expect(result.otherScopeSkills).toEqual({ dir: userSkills, count: 1 });
+  });
+
+  test("cursor global: project-scope thatch skills are surfaced", () => {
+    const projectSkills = join(projectDir, ".cursor", "skills");
+    mkdirSync(join(projectSkills, "thatch-local"), { recursive: true });
+    writeFileSync(join(projectSkills, "thatch-local", "SKILL.md"), "project copy");
+
+    const result = setupCursor("/usr/local/bin/thatch", true, projectDir, fakeHome);
+
+    expect(result.otherScopeSkills).toEqual({ dir: projectSkills, count: 1 });
+    expect(readFileSync(join(projectSkills, "thatch-local", "SKILL.md"), "utf8")).toBe("project copy");
   });
 });
 
@@ -502,13 +667,16 @@ describe("setupCursor (project-local)", () => {
       h.command.includes("thatch")).length).toBe(1);
   });
 
-  test("installs skill files to ~/.cursor/skills/", () => {
+  test("installs skills to the repo's .cursor/skills/ (project-local)", () => {
     const result = setupCursor("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
-    expect(result.skills.length).toBe(26);
+    expect(result.skills.dir).toBe(join(projectDir, ".cursor", "skills"));
+    expect(result.skills.added.length).toBe(26);
+    expect(result.skills.updated).toEqual([]);
+    expect(result.skills.unchanged).toEqual([]);
+    expect(result.skills.removed).toEqual([]);
 
-
-    const skillNames = result.skills.map((s) => s.name);
+    const skillNames = result.skills.added.map((s) => s.name);
     expect(skillNames).toContain("thatch-fact-extractor");
     expect(skillNames).toContain("thatch-dedup-classifier");
     expect(skillNames).toContain("thatch-project-primer");
@@ -525,12 +693,15 @@ describe("setupCursor (project-local)", () => {
     expect(skillNames).toContain("thatch-review-response");
     expect(skillNames).not.toContain("thatch-code-review");
 
-    for (const skill of result.skills) {
+    for (const skill of result.skills.added) {
       expect(existsSync(skill.path)).toBe(true);
       expect(skill.path).toContain(".cursor/skills");
       const content = readFileSync(skill.path, "utf8");
       expect(content).toContain("name: ");
     }
+
+    // A project-local run must not create user-scoped skills.
+    expect(existsSync(join(fakeHome, ".cursor", "skills"))).toBe(false);
   });
 });
 
@@ -560,10 +731,12 @@ describe("setupCursor (global)", () => {
     expect(existsSync(result.hooks)).toBe(true);
   });
 
-  test("skills installed to ~/.cursor/skills/", () => {
+  test("skills installed to ~/.cursor/skills/ (global)", () => {
     const result = setupCursor("/usr/local/bin/thatch", true, projectDir, fakeHome);
 
-    for (const skill of result.skills) {
+    expect(result.skills.dir).toBe(join(fakeHome, ".cursor", "skills"));
+    expect(result.skills.added.length).toBe(26);
+    for (const skill of result.skills.added) {
       expect(skill.path.startsWith(join(fakeHome, ".cursor", "skills"))).toBe(true);
     }
   });

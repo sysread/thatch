@@ -33,7 +33,7 @@ function usage(): never {
   thatch buffer-tool               Append a single postToolUse interaction to the queue (Cursor hook only)
   thatch flush-tools [--json]      Peek the queue + print an extraction nudge (hook only)
   thatch flush-predictions [--json] Query predictions for the prompt (hook only)
-  thatch setup --claude [--cursor] [--global]
+  thatch setup --claude [--cursor] [--local|--global]
                                    Install config + instructions + hooks + skills
   thatch session list -s <id> [--after T] [--before T]
                                    JSONL timeline of a session's parts (one line per part)
@@ -383,12 +383,19 @@ switch (command) {
 
   case "setup": {
     const isGlobal = args.includes("--global");
+    // --local is the default scope; accepted explicitly so the flag the
+    // user types always matches what the command does.
+    const isLocal = args.includes("--local");
     const isClaude = args.includes("--claude");
     const isCursor = args.includes("--cursor");
 
+    if (isGlobal && isLocal) {
+      console.error("Choose one scope: --local or --global.");
+      process.exit(1);
+    }
     if (!isClaude && !isCursor) {
       console.error("Specify at least one host: --claude and/or --cursor.");
-      console.error("Usage: thatch setup --claude [--cursor] [--global]");
+      console.error("Usage: thatch setup --claude [--cursor] [--local|--global]");
       process.exit(1);
     }
 
@@ -400,6 +407,22 @@ switch (command) {
     const thatchBin = thatchOnPath ?? resolve(process.argv[1] ?? process.execPath);
     const dir = projectDir();
 
+    // Shared reporting: where skills went and what the pass did, so an
+    // idempotent re-run still tells the user something true.
+    const printSkills = (result: { skills: { dir: string; added: unknown[]; updated: unknown[]; removed: string[]; unchanged: string[] }; otherScopeSkills: { dir: string; count: number } | null; global: boolean }) => {
+      const { added, updated, removed, unchanged } = result.skills;
+      console.log(`  Skills:        ${result.skills.dir}`);
+      console.log(`                 ${added.length} added, ${updated.length} updated, ${removed.length} removed, ${unchanged.length} unchanged`);
+      if (result.otherScopeSkills) {
+        const { dir: otherDir, count } = result.otherScopeSkills;
+        if (result.global) {
+          console.log(`  Note: ${count} thatch skills exist in ${otherDir} (project scope); --global does not update them.`);
+        } else {
+          console.log(`  Note: ${count} thatch skills remain in ${otherDir} (user scope; not updated by this run). Run setup with --global to refresh them, or remove them if this repo now owns its skills.`);
+        }
+      }
+    };
+
     if (isClaude) {
       const result = setupClaudeCode(thatchBin, isGlobal, dir);
 
@@ -410,10 +433,7 @@ switch (command) {
       }
       console.log(`  Instructions:  ${result.claudeMd}`);
       console.log(`  Hooks:         ${result.settings}`);
-      const skillsDir = result.skills[0]?.path
-        ? result.skills[0].path.split("/").slice(0, -1).join("/")
-        : "(no skills installed)";
-      console.log(`  Skills:        ${skillsDir} (${result.skills.length} files)`);
+      printSkills(result);
       console.log();
       if (result.mcpAddCommand) {
         console.log("To register the MCP server globally, run:");
@@ -432,10 +452,7 @@ switch (command) {
       console.log(`  MCP config:    ${result.mcpConfig}`);
       console.log(`  Instructions:  ${result.agentsMd}`);
       console.log(`  Hooks:         ${result.hooks}`);
-      const skillsDir = result.skills[0]?.path
-        ? result.skills[0].path.split("/").slice(0, -1).join("/")
-        : "(no skills installed)";
-      console.log(`  Skills:        ${skillsDir} (${result.skills.length} files)`);
+      printSkills(result);
       console.log();
       console.log("Restart Cursor for the changes to take effect.");
     }

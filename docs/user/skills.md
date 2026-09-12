@@ -7,11 +7,12 @@ frontmatter (name, description) that opencode auto-discovers.
 
 ## How they work
 
-On startup, thatch installs skill files into your global config
-(`~/.config/opencode/skills/` for opencode, `~/.claude/skills/` for
-Claude Code, `~/.cursor/skills/` for Cursor). The host's skill
-discovery scans these directories and presents them to the agent as
-available skills.
+On startup, thatch installs skill files into the host's skills
+directory: the repo's `.claude/skills/` or `.cursor/skills/` for
+project-local `thatch setup`, `~/.claude/skills/` or `~/.cursor/skills/`
+for `--global`, and `~/.config/opencode/skills/` for the opencode
+plugin. The host's skill discovery scans these directories and
+presents them to the agent as available skills.
 
 The agent loads a skill when the user's request matches the skill's
 description, or when another skill or the system prompt directs the

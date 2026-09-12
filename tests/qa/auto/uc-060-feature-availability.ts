@@ -19,8 +19,8 @@ const useCase: UseCase = {
     "- `thatch setup --claude` and `thatch setup --cursor` will be run as part of the test",
   ].join("\n"),
   steps: [
-    "1. Run `thatch setup --claude`. List $CLAUDE_CONFIG_DIR/skills/.",
-    "2. Run `thatch setup --cursor`. List ~/.cursor/skills/.",
+    "1. Run `thatch setup --claude`. List the repo's `.claude/skills/`.",
+    "2. Run `thatch setup --cursor`. List the repo's `.cursor/skills/`.",
     "3. Check whether thatch-code-review appears in each directory.",
   ].join("\n"),
   expected: [
@@ -42,9 +42,9 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    const claudeSkillsDir = join(env.CLAUDE_CONFIG_DIR, "skills");
+    const claudeSkillsDir = join(dir, ".claude", "skills");
     if (!existsSync(claudeSkillsDir)) {
-      console.log("  FAIL: Claude skills dir not created");
+      console.log("  FAIL: Claude skills dir not created in the repo");
       return "FAIL";
     }
 
@@ -69,9 +69,9 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    const cursorSkillsDir = join(env.HOME, ".cursor", "skills");
+    const cursorSkillsDir = join(dir, ".cursor", "skills");
     if (!existsSync(cursorSkillsDir)) {
-      console.log("  FAIL: Cursor skills dir not created");
+      console.log("  FAIL: Cursor skills dir not created in the repo");
       return "FAIL";
     }
 

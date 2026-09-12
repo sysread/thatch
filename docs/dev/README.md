@@ -119,10 +119,12 @@ Two of these hooks were dead for weeks because failures were invisible.
 5. **Store creation is implicit.** First `remember` to a new store creates it.
 6. **Default recall scope is repo + global.** The tool layer hardcodes this.
 7. **Skills are plugin-owned files.** Installed to
-   `$XDG_CONFIG_HOME/opencode/skills` (opencode), `~/.claude/skills/`
-   (Claude Code), or `~/.cursor/skills/` (Cursor) — never into the
-   worktree; drifted content is overwritten on plugin init or re-running
-   `thatch setup`. Skills are split into `SHARED_SKILLS` (work on all
+   `$XDG_CONFIG_HOME/opencode/skills` (opencode); for MCP hosts,
+   scope-dependent — the repo's `.claude/skills/` or `.cursor/skills/`
+   for project-local `thatch setup`, `~/.claude/skills/` or
+   `~/.cursor/skills/` for `--global`. Drifted content is overwritten
+   on plugin init or re-running `thatch setup`. Skills are split into
+   `SHARED_SKILLS` (work on all
    three hosts) and `OPENCODE_ONLY_SKILLS` (require sub-agent support,
    not installed for Claude Code or Cursor). The opencode plugin
    installs both arrays; `thatch setup --claude` and `--cursor` install

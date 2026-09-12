@@ -248,9 +248,12 @@ agent can tell the user to run `thatch setup`.
 
 On startup thatch installs [skills] into your global opencode config
 (`~/.config/opencode/skills/`, or `$XDG_CONFIG_HOME/opencode/skills`).
-With `thatch setup --claude`, skills install to `~/.claude/skills/` (or
-`$CLAUDE_CONFIG_DIR/skills/`); with `thatch setup --cursor`, to
-`~/.cursor/skills/`.
+With `thatch setup --claude`, skills follow the install scope: the
+repo's `.claude/skills/` for project-local, `~/.claude/skills/` (or
+`$CLAUDE_CONFIG_DIR/skills/`) for `--global`. `thatch setup --cursor`
+works the same way with `.cursor/skills/` and `~/.cursor/skills/`.
+Setup reports the skills directory and how many skills were added,
+updated, removed, or already current.
 
 ### Memory skills
 

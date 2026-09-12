@@ -48,13 +48,24 @@ Thatch runs as an MCP server. The setup command installs the server
 config, instructions, hooks, and skills:
 
 ```bash
-thatch setup --claude            # project-local (writes .mcp.json, CLAUDE.md, .claude/)
+thatch setup --claude            # project-local (.mcp.json, CLAUDE.md, .claude/)
 thatch setup --claude --global   # user-scoped (~/.claude/)
 ```
 
+Skills follow the install scope: project-local installs them to the
+repo's `.claude/skills/` so they version with the project; `--global`
+installs them to `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills/`).
+
 `bun` must be on PATH (the thatch binary runs under bun). Setup is
 idempotent. Re-running it updates drifted content without clobbering
-unrelated config.
+unrelated config, and reports what it did: the skills directory plus
+how many skills were added, updated (replaced with a newer version),
+removed (retired), or already current.
+
+If thatch skills exist in the scope you did not install to (for
+example, `~/.claude/skills/` copies left over from before a repo moved
+to project-local skills), setup prints a note naming that directory.
+It never touches the other scope.
 
 For a global install, setup prints the `claude mcp add --scope user`
 command to run instead of writing a project `.mcp.json`.
@@ -65,6 +76,9 @@ command to run instead of writing a project `.mcp.json`.
 thatch setup --cursor            # project-local (.cursor/mcp.json, AGENTS.md, .cursor/hooks.json)
 thatch setup --cursor --global   # user-scoped (~/.cursor/)
 ```
+
+Skills follow the install scope: project-local installs them to the
+repo's `.cursor/skills/`; `--global` installs them to `~/.cursor/skills/`.
 
 Cursor uses a flat hooks format (`{version, hooks:{event:[{command}]}}`)
 and `--json` output for hook commands.

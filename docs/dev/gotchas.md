@@ -124,10 +124,13 @@ here first. These are the things that have already cost time.
 
 ## Setup
 
-- **Skills are always user-scoped**, even in project-local setup. The project's
-  `.claude/settings.json` and `CLAUDE.md` stay in the repo, but skills live
-  under `$CLAUDE_CONFIG_DIR/skills/` / `~/.cursor/skills/`. Installing into the
-  worktree would mutate the user's repo.
+- **Skills follow the setup scope.** Project-local installs write skills to
+  the repo's `.claude/skills/` / `.cursor/skills/` (they version with the
+  project); `--global` writes to `$CLAUDE_CONFIG_DIR/skills/` /
+  `~/.cursor/skills/`. A run never touches the opposite scope: if thatch
+  skills already exist there (e.g. user-scope copies from an older local
+  setup), setup reports them in a note but leaves them alone, so they can
+  drift stale until refreshed or deleted.
 - **`appendBlock` leaves content alone if the markers don't parse.** If the
   start marker is found but the end marker isn't, the whole block is skipped
   rather than half-replaced. Fix the markers or delete the block manually.

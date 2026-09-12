@@ -50,8 +50,9 @@ const useCase: UseCase = {
     const claudeMdBefore = readFileSync(claudeMdPath, "utf8");
     const settingsBefore = readFileSync(settingsPath, "utf8");
 
-    // Record a skill file's canonical content.
-    const skillsDir = join(env.CLAUDE_CONFIG_DIR, "skills");
+    // Record a skill file's canonical content. Project-local setup installs
+    // skills into the repo's .claude/skills/.
+    const skillsDir = join(dir, ".claude", "skills");
     const skillPath = join(skillsDir, "thatch-fact-extractor", "SKILL.md");
     const skillCanonical = readFileSync(skillPath, "utf8");
 

@@ -19,8 +19,8 @@ const useCase: UseCase = {
     "- Target config dirs writable (`$XDG_CONFIG_HOME`, `$CLAUDE_CONFIG_DIR`, `~/.cursor`)",
   ].join("\n"),
   steps: [
-    "1. From a project root: `thatch setup --claude`",
-    "2. From the same project root: `thatch setup --cursor`",
+    "1. From a project root: `thatch setup --claude --local`",
+    "2. From the same project root: `thatch setup --cursor --local`",
     "3. Repeat both commands (re-run idempotence and drift recovery)",
     "4. Add a non-thatch hook to `.claude/settings.json` and `.cursor/hooks.json`,",
     "   then re-run setup",
@@ -31,17 +31,22 @@ const useCase: UseCase = {
     "  appends a thatch block to `CLAUDE.md` bracketed by start/end markers (replaced, not",
     "  duplicated, on re-run), writes `.claude/settings.json` hooks (`SessionStart` -> `thatch reminder`,",
     "  `PostToolBatch` -> `thatch buffer-batch`, `UserPromptSubmit` -> `thatch flush-tools`), and installs",
-    "  **26 shared skills** (no code-review coordinator) to `$CLAUDE_CONFIG_DIR/skills/` — user-scoped",
-    "  even in project-local mode.",
+    "  **26 shared skills** (no code-review coordinator) to the repo's `.claude/skills/`.",
     "- `--cursor` project-local writes `.cursor/mcp.json`, appends to `AGENTS.md`, writes",
     "  `.cursor/hooks.json` in the **flat format** (`{version:1, hooks:{...}}`): `sessionStart` ->",
     "  `thatch reminder --json`, `postToolUse` -> `thatch buffer-tool`, `beforeSubmitPrompt` ->",
-    "  `thatch flush-tools --json`; and installs 26 shared skills to `~/.cursor/skills/`.",
+    "  `thatch flush-tools --json`; and installs 26 shared skills to the repo's `.cursor/skills/`.",
+    "- Setup reports where skills were installed plus per-run counts",
+    "  (added / updated / removed / unchanged). A fresh install prints `26 added`; a re-run",
+    "  prints `26 unchanged` and identical file contents.",
+    "- When the opposite scope holds thatch skills (e.g. user-scope copies left over from an",
+    "  older setup), setup prints a note naming that directory and leaves the copies alone.",
     "- Re-run is idempotent: instructions are not duplicated, thatch hooks are replaced (not appended),",
     "  and non-thatch hooks are preserved. A legacy `thatch echo` hook is replaced with `flush-tools`.",
-    "- `--global` (Claude) writes `~/.claude/CLAUDE.md` + `~/.claude/settings.json` but **no project",
-    "  `.mcp.json`** — it prints a `claude mcp add --scope user` command instead. `--global` (Cursor)",
-    "  writes `~/.cursor/mcp.json`, `~/.cursor/AGENTS.md`, `~/.cursor/hooks.json`, `~/.cursor/skills/`.",
+    "- `--global` (Claude) writes `~/.claude/CLAUDE.md` + `~/.claude/settings.json` + skills to",
+    "  `$CLAUDE_CONFIG_DIR/skills/` but **no project `.mcp.json`** — it prints a `claude mcp add",
+    "  --scope user` command instead. `--global` (Cursor) writes `~/.cursor/mcp.json`,",
+    "  `~/.cursor/AGENTS.md`, `~/.cursor/hooks.json`, `~/.cursor/skills/`.",
   ].join("\n"),
 
   async run(ctx: QaContext) {
@@ -50,11 +55,11 @@ const useCase: UseCase = {
     const dir = ctx.dir;
     const run = (args: string[]) => $`${bin} ${args}`.env(env).cwd(dir).quiet().nothrow();
 
-    // --- Step 1: thatch setup --claude (project-local) ---
+    // --- Step 1: thatch setup --claude --local (project-local) ---
 
-    const r1 = await run(["setup", "--claude"]);
+    const r1 = await run(["setup", "--claude", "--local"]);
     if (r1.exitCode !== 0) {
-      console.log("  FAIL: `thatch setup --claude` exited non-zero");
+      console.log("  FAIL: `thatch setup --claude --local` exited non-zero");
       console.log(`  stderr: ${r1.stderr.toString()}`);
       return "FAIL";
     }
@@ -113,10 +118,10 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // Claude skills: 26 shared, no coordinator, under $CLAUDE_CONFIG_DIR/skills/
-    const claudeSkillsDir = join(env.CLAUDE_CONFIG_DIR, "skills");
+    // Claude skills: 26 shared, no coordinator, in the repo's .claude/skills/
+    const claudeSkillsDir = join(dir, ".claude", "skills");
     if (!existsSync(claudeSkillsDir)) {
-      console.log("  FAIL: Claude skills dir not created");
+      console.log("  FAIL: Claude skills dir not created in the repo");
       return "FAIL";
     }
     const claudeSkillNames = readdirSync(claudeSkillsDir, { withFileTypes: true })
@@ -132,11 +137,27 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // --- Step 2: thatch setup --cursor (project-local) ---
+    // Reporting: stdout names the skills dir and the install counts.
+    const out1 = r1.stdout.toString();
+    if (!out1.includes(claudeSkillsDir)) {
+      console.log("  FAIL: setup stdout does not name the Claude skills dir");
+      return "FAIL";
+    }
+    if (!out1.includes("26 added")) {
+      console.log("  FAIL: setup stdout does not report '26 added' on fresh install");
+      return "FAIL";
+    }
+    // A project-local run must not create user-scoped skills.
+    if (existsSync(join(env.CLAUDE_CONFIG_DIR, "skills"))) {
+      console.log("  FAIL: project-local run created $CLAUDE_CONFIG_DIR/skills");
+      return "FAIL";
+    }
 
-    const r2 = await run(["setup", "--cursor"]);
+    // --- Step 2: thatch setup --cursor --local (project-local) ---
+
+    const r2 = await run(["setup", "--cursor", "--local"]);
     if (r2.exitCode !== 0) {
-      console.log("  FAIL: `thatch setup --cursor` exited non-zero");
+      console.log("  FAIL: `thatch setup --cursor --local` exited non-zero");
       console.log(`  stderr: ${r2.stderr.toString()}`);
       return "FAIL";
     }
@@ -189,10 +210,10 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // Cursor skills: 26 shared, no coordinator, under ~/.cursor/skills/
-    const cursorSkillsDir = join(env.HOME, ".cursor", "skills");
+    // Cursor skills: 26 shared, no coordinator, in the repo's .cursor/skills/
+    const cursorSkillsDir = join(dir, ".cursor", "skills");
     if (!existsSync(cursorSkillsDir)) {
-      console.log("  FAIL: Cursor skills dir not created");
+      console.log("  FAIL: Cursor skills dir not created in the repo");
       return "FAIL";
     }
     const cursorSkillNames = readdirSync(cursorSkillsDir, { withFileTypes: true })
@@ -207,6 +228,20 @@ const useCase: UseCase = {
       console.log("  FAIL: thatch-code-review coordinator should NOT be installed for Cursor");
       return "FAIL";
     }
+    const out2 = r2.stdout.toString();
+    if (!out2.includes(cursorSkillsDir)) {
+      console.log("  FAIL: setup stdout does not name the Cursor skills dir");
+      return "FAIL";
+    }
+    if (!out2.includes("26 added")) {
+      console.log("  FAIL: setup stdout does not report '26 added' on fresh install");
+      return "FAIL";
+    }
+    // A project-local run must not create user-scoped skills.
+    if (existsSync(join(env.HOME, ".cursor", "skills"))) {
+      console.log("  FAIL: project-local run created ~/.cursor/skills");
+      return "FAIL";
+    }
 
     // --- Step 3: Idempotence — re-run should produce identical files ---
 
@@ -215,8 +250,8 @@ const useCase: UseCase = {
     const settingsBefore = readFileSync(settingsPath, "utf8");
     const cursorHooksBefore = readFileSync(cursorHooksPath, "utf8");
 
-    await run(["setup", "--claude"]);
-    await run(["setup", "--cursor"]);
+    const r3c = await run(["setup", "--claude"]);
+    const r3x = await run(["setup", "--cursor"]);
 
     if (readFileSync(claudeMdPath, "utf8") !== claudeMdBefore) {
       console.log("  FAIL: CLAUDE.md changed on re-run (not idempotent)");
@@ -232,6 +267,16 @@ const useCase: UseCase = {
     }
     if (readFileSync(cursorHooksPath, "utf8") !== cursorHooksBefore) {
       console.log("  FAIL: .cursor/hooks.json changed on re-run (not idempotent)");
+      return "FAIL";
+    }
+
+    // Reporting: a no-op re-run reports every skill as unchanged.
+    if (!r3c.stdout.toString().includes("26 unchanged")) {
+      console.log("  FAIL: re-run stdout does not report '26 unchanged' for Claude");
+      return "FAIL";
+    }
+    if (!r3x.stdout.toString().includes("26 unchanged")) {
+      console.log("  FAIL: re-run stdout does not report '26 unchanged' for Cursor");
       return "FAIL";
     }
 
@@ -304,6 +349,16 @@ const useCase: UseCase = {
       console.log("  FAIL: --global (Claude) should print 'claude mcp add --scope user' command");
       return "FAIL";
     }
+    // Global skills land in the config dir, and the run reports them there.
+    const claudeGlobalSkills = join(env.CLAUDE_CONFIG_DIR, "skills");
+    if (!existsSync(claudeGlobalSkills)) {
+      console.log("  FAIL: global run did not create $CLAUDE_CONFIG_DIR/skills");
+      return "FAIL";
+    }
+    if (!claudeGlobal.stdout.toString().includes(claudeGlobalSkills)) {
+      console.log("  FAIL: global (Claude) stdout does not name the config-dir skills path");
+      return "FAIL";
+    }
 
     // Cursor --global: writes everything to ~/.cursor/.
     const cursorGlobal = await run(["setup", "--cursor", "--global"]);
@@ -321,6 +376,10 @@ const useCase: UseCase = {
         console.log(`  FAIL: global ~/.cursor/${label} not written`);
         return "FAIL";
       }
+    }
+    if (!cursorGlobal.stdout.toString().includes(join(env.HOME, ".cursor", "skills"))) {
+      console.log("  FAIL: global (Cursor) stdout does not name the ~/.cursor/skills path");
+      return "FAIL";
     }
 
     return "PASS";

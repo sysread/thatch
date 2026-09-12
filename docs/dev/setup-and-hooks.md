@@ -49,11 +49,12 @@ the TUI is not connected (headless mode).
 | MCP config | `.mcp.json` (`mcpServers.thatch`, stdio, `["mcp"]`) | none — prints `claude mcp add --scope user thatch -- <bin> mcp` |
 | Instructions | `CLAUDE.md` (idempotent `appendBlock`) | `$CLAUDE_CONFIG_DIR/CLAUDE.md` |
 | Hooks | `.claude/settings.json` | `$CLAUDE_CONFIG_DIR/settings.json` |
-| Skills | `$CLAUDE_CONFIG_DIR/skills/` (always user-scoped) | same |
+| Skills | `.claude/skills/` (in the repo) | `$CLAUDE_CONFIG_DIR/skills/` |
 
 `CLAUDE_CONFIG_DIR` overrides the default `~/.claude` for all user-scoped
-paths. Project-local keeps `.mcp.json`, `CLAUDE.md`, and `.claude/settings.json`
-in the repo; only skills are user-scoped.
+paths. Project-local keeps everything in the repo: `.mcp.json`, `CLAUDE.md`,
+`.claude/settings.json`, and `.claude/skills/` (so skills version with the
+project and every contributor gets them).
 
 ### Hook events (nested `settings.json`)
 
@@ -88,7 +89,7 @@ Cursor uses the same stdio MCP server as Claude Code; only the hooks differ.
 | MCP config | `.cursor/mcp.json` | `$CURSOR_CONFIG_DIR/mcp.json` (or `~/.cursor/mcp.json`) |
 | Instructions | `AGENTS.md` (idempotent `appendBlock`, Cursor-marked) | `$CURSOR_CONFIG_DIR/AGENTS.md` |
 | Hooks | `.cursor/hooks.json` (flat) | `$CURSOR_CONFIG_DIR/hooks.json` |
-| Skills | `$CURSOR_CONFIG_DIR/skills/` (shared only) | same |
+| Skills | `.cursor/skills/` (in the repo) | `$CURSOR_CONFIG_DIR/skills/` |
 
 Cursor has no documented env override like `CLAUDE_CONFIG_DIR`; `CURSOR_CONFIG_DIR`
 is honored for symmetry and forward-compatibility. Cursor has no equivalent of

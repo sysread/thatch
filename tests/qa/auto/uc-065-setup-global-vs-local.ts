@@ -28,9 +28,9 @@ const useCase: UseCase = {
     "6. Check that ~/.cursor/mcp.json, AGENTS.md, hooks.json, and skills/ were written.",
   ].join("\n"),
   expected: [
-    "- Claude global: CLAUDE.md and settings.json in config dir. No project .mcp.json. stdout includes `claude mcp add --scope user`.",
+    "- Claude global: CLAUDE.md, settings.json, and skills/ in the config dir. No project .mcp.json. stdout includes `claude mcp add --scope user`.",
     "- Cursor global: mcp.json, AGENTS.md, hooks.json, and skills/ all in ~/.cursor/.",
-    "- Skills are always user-scoped, even in project-local mode.",
+    "- Skills follow the install scope: user config dirs for --global, the repo's .claude/skills/ and .cursor/skills/ for project-local.",
   ].join("\n"),
 
   async run(ctx: QaContext) {
