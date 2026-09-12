@@ -30,8 +30,8 @@ afterEach(() => {
 });
 
 describe("TOOL_DEFS", () => {
-  test("exports all 28 tools", () => {
-    expect(TOOL_DEFS.length).toBe(28);
+  test("exports all 33 tools", () => {
+    expect(TOOL_DEFS.length).toBe(33);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -62,10 +62,15 @@ describe("TOOL_DEFS", () => {
       "watch_branch_create",
       "watch_list",
       "watch_cancel",
+      "chat_register",
+      "chat_list",
+      "chat_send",
+      "chat_read",
+      "chat_unregister",
     ]);
   });
 
-  test("only the session and watch tools are opencode-only", () => {
+  test("only the session, watch, and chat tools are opencode-only", () => {
     const opencodeOnly = TOOL_DEFS.filter((t) => t.opencodeOnly).map((t) => t.name);
     expect(opencodeOnly).toEqual([
       "get_session_info",
@@ -75,6 +80,11 @@ describe("TOOL_DEFS", () => {
       "watch_branch_create",
       "watch_list",
       "watch_cancel",
+      "chat_register",
+      "chat_list",
+      "chat_send",
+      "chat_read",
+      "chat_unregister",
     ]);
   });
 

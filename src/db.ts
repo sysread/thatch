@@ -4,11 +4,13 @@ import {
   PredictionEngine,
 } from "./prediction";
 import { BehaviorEngine } from "./behavior";
+import { ChatStore } from "./chat";
 import { PREDICTION_K, PREDICTION_P0, PREDICTION_W_SOFT } from "./scoring-engine";
 
 export { cosineSimilarity } from "./vector-math";
 export type { PredictionNudgeItem, MatcherRow, PredictionRow, ScoredPrediction } from "./prediction";
 export type { BehaviorNudgeItem, BehaviorRow, ScoredBehavior } from "./behavior";
+export type { ChatSessionRow, ChatInboxItem, ChatNotificationRow, ChatResult } from "./chat";
 
 export interface MemoryRow {
   slug: string;
@@ -53,6 +55,7 @@ export class ThatchDB {
   #db: Database;
   #predictions: PredictionEngine;
   #behaviors: BehaviorEngine;
+  #chat: ChatStore;
 
   constructor(path: string) {
     this.#db = new Database(path, { create: true });
@@ -66,6 +69,7 @@ export class ThatchDB {
     this.#db.run("PRAGMA foreign_keys = ON");
     this.#predictions = new PredictionEngine(this.#db);
     this.#behaviors = new BehaviorEngine(this.#db);
+    this.#chat = new ChatStore(this.#db);
     this.#initSchema();
   }
 
@@ -215,6 +219,37 @@ export class ThatchDB {
         detail       TEXT,
         created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
         FOREIGN KEY (behavior_id) REFERENCES behaviors(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Cross-session chat: the machine-wide session directory and message
+    // inbox, shared by every opencode process (delivery itself stays local
+    // to each host process - see src/chat.ts). Message endpoints are plain
+    // columns, not foreign keys, on purpose: unregistering a session must
+    // not be blocked by message history, and a departed sender degrades to
+    // an unknown name in the reader's view rather than vanishing rows.
+    this.#db.run(`
+      CREATE TABLE IF NOT EXISTS chat_sessions (
+        session_id    TEXT PRIMARY KEY,
+        name          TEXT NOT NULL UNIQUE,
+        project       TEXT,
+        registered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        last_seen     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+      )
+    `);
+
+    // delivered_at is the last wake-prompt stamp: set when the recipient's
+    // host accepts a nudge, restamped on re-nudges (which resets the
+    // re-nudge timer). read_at is set when the recipient drains its inbox.
+    this.#db.run(`
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_session TEXT NOT NULL,
+        to_session   TEXT NOT NULL,
+        body         TEXT NOT NULL,
+        created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        delivered_at TEXT,
+        read_at      TEXT
       )
     `);
 
@@ -706,6 +741,50 @@ export class ThatchDB {
 
   listBehaviors(store: string) {
     return this.#behaviors.listBehaviors(store);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cross-session chat: delegates to ChatStore
+  // ---------------------------------------------------------------------------
+
+  registerChatSession(sessionID: string, name: string, project: string | null) {
+    return this.#chat.register(sessionID, name, project);
+  }
+
+  unregisterChatSession(sessionID: string) {
+    return this.#chat.unregister(sessionID);
+  }
+
+  listChatSessions() {
+    return this.#chat.list();
+  }
+
+  findChatSession(nameOrID: string) {
+    return this.#chat.find(nameOrID);
+  }
+
+  sendChatMessage(fromSession: string, toNameOrID: string, body: string) {
+    return this.#chat.send(fromSession, toNameOrID, body);
+  }
+
+  readChatMessages(sessionID: string) {
+    return this.#chat.read(sessionID);
+  }
+
+  unreadChatCount(sessionID: string) {
+    return this.#chat.unreadCount(sessionID);
+  }
+
+  heartbeatChatSessions(sessionIDs: string[]) {
+    return this.#chat.heartbeat(sessionIDs);
+  }
+
+  pendingChatNotifications(sessionIDs: string[], renudgeCutoff: string) {
+    return this.#chat.pendingNotifications(sessionIDs, renudgeCutoff);
+  }
+
+  markChatDelivered(ids: number[]) {
+    return this.#chat.markDelivered(ids);
   }
 
   // ---------------------------------------------------------------------------

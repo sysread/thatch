@@ -22,7 +22,8 @@ import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
 import { WatcherRegistry, ghApiRun, ghAvailable } from "./watchers";
-import { watcherNotificationNudge } from "./prompts";
+import { watcherNotificationNudge, chatNotificationNudge } from "./prompts";
+import { ChatPoller } from "./chat";
 import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
@@ -139,6 +140,41 @@ export const server: Plugin = async ({ client, worktree }) => {
     if (!ok) console.error("[thatch] gh CLI not found - watch tools will report unavailable");
   });
   watchers.start();
+
+  // Cross-session chat delivery. The inbox is shared SQLite state (any
+  // process reads/writes it), but this poller only ever delivers to sessions
+  // hosted by THIS process - the recipient's host is the single deliverer,
+  // so there is no cross-process double-delivery race. Wake prompts use the
+  // same synthetic-part mechanism as watcher notifications; the toast
+  // covers the TUI-hidden part so the user sees why the model woke up.
+  // canDeliver closes over `compacting` (declared below): the closure reads
+  // it at call time, after full initialization, same as the watcher gate.
+  const chatPoller = new ChatPoller({
+    store: db,
+    hostedSessions: () => [...sessionStatus.keys()],
+    deliver: async (sessionID, senders, count) => {
+      await client.session.promptAsync({
+        path: { id: sessionID },
+        body: {
+          parts: [{ type: "text", text: chatNotificationNudge(senders, count), synthetic: true }],
+        },
+      });
+      try {
+        await client.tui.showToast({
+          body: {
+            message: `\u{1F4AC} chat: ${count} unread from ${senders.join(", ")}`,
+            variant: "info",
+            duration: 5000,
+          },
+        });
+      } catch {
+        // TUI may not be connected. Best-effort.
+      }
+    },
+    canDeliver: (sessionID) =>
+      !compacting.has(sessionID) && sessionStatus.get(sessionID) === "idle",
+  });
+  chatPoller.start();
 
   // Sessions currently being compacted. chat.message nudges are skipped while
   // a session is in this set - the agent can't call tools during summary
@@ -757,6 +793,13 @@ export const server: Plugin = async ({ client, worktree }) => {
         } catch (err) {
           console.error(`[thatch] watcher delivery on idle failed: ${err}`);
         }
+        // Same for chat messages: mail that arrived mid-turn lands now
+        // instead of waiting for the next poll cycle.
+        try {
+          await chatPoller.deliverPending();
+        } catch (err) {
+          console.error(`[thatch] chat delivery on idle failed: ${err}`);
+        }
         return;
       }
       if (event.type === "session.deleted") {
@@ -778,6 +821,14 @@ export const server: Plugin = async ({ client, worktree }) => {
         extracting.delete(id);
         sessionStatus.delete(id);
         watchers.cancelSession(id);
+        // Leaving the chat directory is the graceful-exit fast path; a
+        // crashed process never fires session.deleted, so the heartbeat
+        // staleness in chat_list is the covering signal for that case.
+        try {
+          db.unregisterChatSession(id);
+        } catch (err) {
+          console.error(`[thatch] chat unregister on delete failed: ${err}`);
+        }
         return;
       }
 
@@ -816,6 +867,7 @@ export const server: Plugin = async ({ client, worktree }) => {
     dispose: async () => {
       stopVersionChecker();
       watchers.dispose();
+      chatPoller.dispose();
       // Release native ONNX sessions while the worker is still healthy. Left
       // to Bun's teardown, their NAPI finalizers panic the process (see
       // BgeEmbeddingModel.dispose).
