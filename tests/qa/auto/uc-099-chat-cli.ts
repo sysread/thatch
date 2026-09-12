@@ -51,13 +51,15 @@ const useCase: UseCase = {
       const raw = new Database(ctx.env.THATCH_DB_PATH);
       raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_ghost'");
       raw.close();
-      // Traffic: a direct send, a broadcast (skips the stale ghost), and a
-      // message from a sender that then leaves the directory.
+      // Traffic: a direct send, a broadcast (skips the stale ghost), a
+      // message from a sender that then leaves the directory, and a read
+      // (beta drains its inbox) so the tail shows a read line too.
       seeded.sendChatMessage("ses_alpha", "ses_beta", "direct ping");
       seeded.broadcastChatMessage("ses_alpha", "the machine age begins");
       seeded.registerChatSession("ses_mortal", "mortal", "acme/widgets", null);
       seeded.sendChatMessage("ses_mortal", "ses_beta", "my last words");
       seeded.unregisterChatSession("ses_mortal");
+      seeded.readChatMessages("ses_beta");
     } finally {
       seeded.close();
     }
@@ -98,6 +100,9 @@ const useCase: UseCase = {
       console.log(`  FAIL: departed sender did not degrade to unknown:\n${tailText}`);
       return "FAIL";
     }
+    // Read events never appear in a --once snapshot by design (they fire
+    // only in follow mode, when a read happens after the tail started);
+    // the diff logic is unit-tested in tests/chat.test.ts (chatTailDiff).
     return "PASS";
   },
 };

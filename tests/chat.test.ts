@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
-import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET } from "../src/chat";
+import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, type ChatTailRow } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
 
@@ -444,6 +444,55 @@ describe("name pool invariants", () => {
       expect(seen.has(key), `pool name "${name}" collides case-insensitively`).toBe(false);
       seen.add(key);
     }
+  });
+});
+
+describe("chat tail diff", () => {
+  const row = (over: Partial<ChatTailRow> & { id: number }): ChatTailRow => ({
+    from: "alice",
+    to: "bob",
+    viaBroadcast: false,
+    body: "hello",
+    created_at: "2026-09-12T10:00:00Z",
+    read_at: null,
+    ...over,
+  });
+
+  test("new rows emit sent events; broadcast rows mark the recipient", () => {
+    const { events, state } = chatTailDiff(new Map(), [
+      row({ id: 1 }),
+      row({ id: 2, viaBroadcast: true, to: null, body: "rise up" }),
+      row({ id: 3, from: null, to: "bob", body: "from a departed sender" }),
+    ]);
+    expect(events.map((e) => e.kind)).toEqual(["sent", "sent", "sent"]);
+    expect(events[0]).toMatchObject({ from: "alice", to: "bob" });
+    expect(events[1]).toMatchObject({ to: "broadcast" });
+    expect(events[2]).toMatchObject({ from: "unknown" });
+    expect([...state.keys()]).toEqual([1, 2, 3]);
+  });
+
+  test("a row's read_at appearing emits a read event exactly once", () => {
+    const state = new Map([[7, null]]);
+    const first = chatTailDiff(state, [row({ id: 7, read_at: "2026-09-12T10:01:00Z" })]);
+    expect(first.events).toEqual([
+      { kind: "read", timestamp: "2026-09-12T10:01:00Z", reader: "bob", from: "alice", body: "hello" },
+    ]);
+    // The second poll over the same state is silent.
+    expect(chatTailDiff(first.state, [row({ id: 7, read_at: "2026-09-12T10:01:00Z" })]).events).toEqual([]);
+  });
+
+  test("a message inserted and read between polls emits only its sent line", () => {
+    const { events } = chatTailDiff(new Map(), [row({ id: 5, read_at: "2026-09-12T10:01:00Z" })]);
+    expect(events.map((e) => e.kind)).toEqual(["sent"]);
+  });
+
+  test("rendering clips long bodies on read events and marks broadcasts", () => {
+    const sent = { kind: "sent" as const, timestamp: "T", from: "a", to: "b", body: "hi" };
+    expect(formatChatTailEvent(sent)).toBe("[T] a -> b: hi");
+    const broadcast = { ...sent, to: "broadcast" };
+    expect(formatChatTailEvent(broadcast)).toBe("[T] a -> broadcast: hi");
+    const read = { kind: "read" as const, timestamp: "T", reader: "bob", from: "a", body: "x".repeat(70) };
+    expect(formatChatTailEvent(read)).toBe("[T] bob read a message from a: " + "x".repeat(60) + "...");
   });
 });
 

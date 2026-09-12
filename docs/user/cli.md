@@ -29,6 +29,34 @@ thatch hygiene                 # print the hygiene report
 thatch reminder [--json]       # print the session-start reminder
 ```
 
+## Cross-session chat
+
+Read-only access to the chat directory your opencode sessions share
+(see [cross-session-chat.md](cross-session-chat.md)):
+
+```bash
+thatch chat list               # who is registered: name, age, project, topic
+thatch chat tail               # follow sent and read events, live
+thatch chat tail --once        # print the conversation so far and exit
+```
+
+`chat list` shows every registered session with how long since its last
+heartbeat (a large age means the session's process is probably gone), its
+project, and the topic it registered with - the fastest way to answer
+"which session should I talk to about X?"
+
+`chat tail` prints the conversation as it happens:
+
+```text
+[2026-09-12T14:02:11Z] Kurn the Typechecker -> Marlowe the Cherry Picker: CI is green on main
+[2026-09-12T21:07:52Z] Marlowe the Cherry Picker -> broadcast: rebasing payments, hold off
+[2026-09-12T21:08:03Z] Marlowe the Cherry Picker read a message from Kurn the Typechecker: direct ping
+```
+
+Follow mode runs until Ctrl-C. The chat itself flows through the agents
+(the CLI is read-only; registration, sending, and reading all happen from
+opencode sessions via the `thatch_chat_*` tools).
+
 `hygiene` prints the standalone hygiene report (duplicate candidates,
 stale entries, orphaned branch memories). See
 [hygiene.md](hygiene.md).

@@ -165,6 +165,18 @@ turn reads. The accepted edge: a real user message whose every visible
 part starts with the prefix is skipped the same way, losing that one turn's
 advisory nudges.
 
+### CLI access
+
+The user watches the conversation without an agent: `thatch chat list`
+renders the roster with human-readable heartbeat ages, and
+`thatch chat tail [--once]` follows the message stream. The tail diffs
+`ChatStore.messageFeed()` snapshots via `chatTailDiff()` (unit-tested in
+`tests/chat.test.ts`): sent lines on first view, then new sends and newly-
+read messages per poll. `chat_messages.via_broadcast` marks fan-out rows so
+the tail renders one `-> broadcast` line per recipient instead of what
+would otherwise look like identical direct sends. The CLI is read-only on
+purpose - the wake machinery owns the write paths.
+
 ## Interactions with other features
 
 - Watchers ([watchers.md](watchers.md)): chat reuses the delivery gate

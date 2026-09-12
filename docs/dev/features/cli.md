@@ -1,10 +1,8 @@
 # CLI (bin/thatch)
 
-The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection, MCP server startup, hook commands for MCP hosts, and the setup installer.
+The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection, MCP server startup, hook commands for MCP hosts, the setup installer, session archaeology over the opencode database, and a read-only window on the cross-session chat directory.
 
 ## Subcommands
-
-15 subcommands:
 
 | Command | Args | Flags | Stdin | Purpose |
 |---------|------|-------|-------|---------|
@@ -22,6 +20,9 @@ The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection, M
 | `flush-tools [--json]` | none | `--json` | JSON | Peek queue + extraction/recall/prediction/behavior/write nudge |
 | `flush-predictions [--json]` | none | `--json` | JSON | Standalone prediction-only nudge |
 | `setup --claude [--cursor] [--global]` | none | `--claude`, `--cursor`, `--global` | none | Install config + instructions + hooks + skills |
+| `session list/get/transcript/search` | per subcommand | `-s/--session`, `--id`, `--after`, `--before`, `--regex`, `--limit` | none | Read-only archaeology on the opencode session database (JSONL output) |
+| `chat list` | none | none | none | Registered chat sessions: name, human-readable age, project, topic |
+| `chat tail [--once]` | none | `--once` | none | Follow cross-session chat: sent and read events (`--once` prints the backlog and exits) |
 | (unknown) | none | none | none | Print usage, exit 1 |
 
 ## Global behavior
@@ -41,6 +42,20 @@ Runs the thatch-project-primer skill via an external CLI. Searches `PATH` in ord
 
 Inherits stdio, exits with the child's exit code. Errors and exits 1 if none found.
 
+## chat
+
+Read-only window on the cross-session chat directory ([cross-session-chat.md](cross-session-chat.md)):
+
+- `chat list` renders the roster: display name, human-readable age since the
+  last heartbeat, project, and topic when set.
+- `chat tail [--once]` follows the message stream. Sent lines have the shape
+  `[timestamp] from -> to: body` (broadcast rows render `broadcast` via the
+  `via_broadcast` marker); in follow mode, an inbox drain emits a read line
+  (`[timestamp] to read a message from from: preview`). The diff logic is
+  `chatTailDiff()`/`formatChatTailEvent()` in `src/chat.ts`, unit-tested
+  there; `--once` prints one snapshot and exits, because a snapshot has no
+  previous state to diff read events against.
+
 ## Environment variables
 
 | Variable | Purpose | Default |
@@ -59,7 +74,7 @@ Inherits stdio, exits with the child's exit code. Errors and exits 1 if none fou
 
 ## Source files
 
-- `bin/thatch` — the CLI (Bun script, 486 lines)
+- `bin/thatch` — the CLI (Bun script)
 - `bin/release` — release helper (bash, separate from the main CLI)
 
 ## Interactions with other features
@@ -70,6 +85,8 @@ Inherits stdio, exits with the child's exit code. Errors and exits 1 if none fou
 - Extraction ([extraction.md](extraction.md)): `buffer-batch`, `buffer-tool`, `flush-tools` subcommands
 - Hygiene ([hygiene.md](hygiene.md)): `hygiene`, `reminder` subcommands
 - Multi-host ([multi-host.md](multi-host.md)): `mcp` subcommand starts the MCP server for Claude Code and Cursor
+- Session archaeology: the `session` subcommand group (see the table above) reads the opencode session database via `src/session-db.ts`
+- Cross-session chat ([cross-session-chat.md](cross-session-chat.md)): the `chat` subcommand group reads the shared chat directory and inbox
 
 ## Key invariants
 

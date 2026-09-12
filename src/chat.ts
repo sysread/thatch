@@ -346,7 +346,7 @@ export class ChatStore {
    * recipient display names resolved (departed senders degrade to unknown),
    * oldest first. The CLI diffs consecutive snapshots to emit sent and
    * read events; the table is machine-scale, so a full scan per poll is
-   * cheap. Also used by `chat list`'s unread accounting.
+   * cheap.
    */
   messageFeed(): Array<{
     id: number;
@@ -510,6 +510,75 @@ function rowFromSession(r: any): ChatSessionRow {
     registered_at: r.registered_at,
     last_seen: r.last_seen,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Tail events (pure logic behind `thatch chat tail`)
+// ---------------------------------------------------------------------------
+
+export type ChatTailEvent =
+  | { kind: "sent"; timestamp: string; from: string; to: string; body: string }
+  | { kind: "read"; timestamp: string; reader: string; from: string; body: string };
+
+/** One message row as the tail diff consumes it. */
+export interface ChatTailRow {
+  id: number;
+  from: string | null;
+  to: string | null;
+  viaBroadcast: boolean;
+  body: string;
+  created_at: string;
+  read_at: string | null;
+}
+
+/**
+ * Diffs one feed snapshot against the previous one, emitting sent events
+ * for rows the poller has not seen and read events for rows whose read_at
+ * appeared since the last poll. Pure: the caller owns the state map (start
+ * empty for a fresh tail) and updates it from the returned state. A message
+ * inserted and read between two polls emits only its sent line - the sent
+ * event is the primary record, and the read of a message nobody saw as sent
+ * adds nothing.
+ */
+export function chatTailDiff(
+  prev: Map<number, string | null>,
+  rows: Array<ChatTailRow>,
+): { events: ChatTailEvent[]; state: Map<number, string | null> } {
+  const events: ChatTailEvent[] = [];
+  for (const r of rows) {
+    const isNew = !prev.has(r.id);
+    if (isNew) {
+      events.push({
+        kind: "sent",
+        timestamp: r.created_at,
+        from: r.from ?? "unknown",
+        to: r.viaBroadcast ? "broadcast" : r.to ?? "unknown",
+        body: r.body,
+      });
+    } else {
+      const prevRead = prev.get(r.id) ?? null;
+      if (r.read_at !== null && prevRead === null) {
+        events.push({
+          kind: "read",
+          timestamp: r.read_at,
+          reader: r.to ?? "unknown",
+          from: r.from ?? "unknown",
+          body: r.body,
+        });
+      }
+    }
+    prev.set(r.id, r.read_at);
+  }
+  return { events, state: prev };
+}
+
+/** Renders one tail event in the CLI's line format. */
+export function formatChatTailEvent(event: ChatTailEvent): string {
+  if (event.kind === "sent") {
+    return `[${event.timestamp}] ${event.from} -> ${event.to}: ${event.body}`;
+  }
+  const clipped = event.body.length > 60 ? event.body.slice(0, 60) + "..." : event.body;
+  return `[${event.timestamp}] ${event.reader} read a message from ${event.from}: ${clipped}`;
 }
 
 // ---------------------------------------------------------------------------
