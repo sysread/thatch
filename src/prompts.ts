@@ -131,8 +131,10 @@ not approval to advance other pending work.
 
 ## Cross-Session Chat
 
-in with thatch_chat_register - omit the name to draw one from the built-in
-pool (recommended; cannot collide), or pass a name to claim a custom one.
+Other opencode sessions on this machine can message you through thatch.
+Opt in with thatch_chat_register - omit the name to draw one from the
+built-in pool (recommended; cannot collide), or pass a name to claim a
+custom one.
 Include a topic: other sessions use the roster (thatch_chat_list) to decide
 who to talk to. thatch_chat_send delivers a message to a registered
 session, thatch_chat_broadcast reaches every live session at once (use it

@@ -244,15 +244,18 @@ export class ThatchDB {
     // delivered_at is the last wake-prompt stamp: set when the recipient's
     // host accepts a nudge, restamped on re-nudges (which resets the
     // re-nudge timer). read_at is set when the recipient drains its inbox.
+    // via_broadcast marks rows a chat_broadcast fan-out created, so the
+    // tail feed can render one broadcast line instead of N direct sends.
     this.#db.run(`
       CREATE TABLE IF NOT EXISTS chat_messages (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        from_session TEXT NOT NULL,
-        to_session   TEXT NOT NULL,
-        body         TEXT NOT NULL,
-        created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-        delivered_at TEXT,
-        read_at      TEXT
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_session  TEXT NOT NULL,
+        to_session    TEXT NOT NULL,
+        body          TEXT NOT NULL,
+        created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        delivered_at  TEXT,
+        read_at       TEXT,
+        via_broadcast INTEGER NOT NULL DEFAULT 0
       )
     `);
 
@@ -261,6 +264,17 @@ export class ThatchDB {
     this.#migrateColumns();
     this.#migrateChatNameCollation();
     this.#migrateChatTopic();
+    this.#migrateChatBroadcastFlag();
+  }
+
+  // chat_messages gained the via_broadcast marker after the directory
+  // shipped; pre-flag databases get it via ALTER (existing rows read as
+  // direct sends, which they were).
+  #migrateChatBroadcastFlag(): void {
+    const cols = (this.#db.query("PRAGMA table_info(chat_messages)").all() as any[]).map((r) => r.name);
+    if (cols.length > 0 && !cols.includes("via_broadcast")) {
+      this.#db.run("ALTER TABLE chat_messages ADD COLUMN via_broadcast INTEGER NOT NULL DEFAULT 0");
+    }
   }
 
   // chat_sessions gained the topic column after the directory first
@@ -801,6 +815,10 @@ export class ThatchDB {
 
   broadcastChatMessage(fromSession: string, body: string) {
     return this.#chat.broadcast(fromSession, body);
+  }
+
+  chatMessageFeed() {
+    return this.#chat.messageFeed();
   }
 
   unregisterChatSession(sessionID: string) {

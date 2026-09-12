@@ -1341,9 +1341,10 @@ const watchCancelDef: ToolDef = {
  *
  * The success-output strings these tools emit are parse targets for
  * chatEchoText in src/prompts.ts, which builds the transcript echo: the
- * "[registered] NAME" and "[sent] to NAME (session-id prefix)" shapes, and
- * the exact "Inbox empty." sentinel that suppresses the read echo.
- * Reformat them in the same change as chatEchoText and its tests.
+ * "[registered] NAME" and "[sent] to NAME (session-id prefix)" shapes, the
+ * "[broadcast] to N session[s]" fan-out header, and the exact
+ * "Inbox empty." sentinel that suppresses the read echo. Reformat them in
+ * the same change as chatEchoText and its tests.
  */
 
 /**

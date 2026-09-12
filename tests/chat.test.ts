@@ -414,9 +414,12 @@ describe("chat transcript echo text", () => {
     const out = "[broadcast] to 3 sessions\nrecipients: bob, carol, dave\n\nEach recipient's session is nudged when idle.";
     expect(chatEchoText("thatch_chat_broadcast", { body: "rise up" }, out))
       .toBe("[chat] broadcast to 3 sessions: rise up");
-    // Singular count, unparseable output falls back to zero, failure silent.
+    // Singular count parses too; a [broadcast]-prefixed output with an
+    // unparseable count degrades to zero rather than echoing a wrong count.
     expect(chatEchoText("thatch_chat_broadcast", { body: "hi" }, "[broadcast] to 1 session\nrecipients: bob"))
       .toBe("[chat] broadcast to 1 session: hi");
+    expect(chatEchoText("thatch_chat_broadcast", { body: "hi" }, "[broadcast] to many sessions"))
+      .toBe("[chat] broadcast to 0 sessions: hi");
     expect(chatEchoText("thatch_chat_broadcast", { body: "hi" }, "Not sent: unregistered.")).toBeNull();
   });
 

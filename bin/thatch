@@ -44,6 +44,9 @@ function usage(): never {
                                    Full conversation as OpenAI chat-completions JSONL
   thatch session search <query> [--session <id>] [--regex] [--limit N]
                                    JSONL of matching parts across sessions (decoded content)
+  thatch chat list                 Registered chat sessions: name, age, project, topic
+  thatch chat tail [--once]        Follow cross-session chat: sent and read events
+                                   (--once prints current state and exits)
 
 Stores default to the repo detected from git remote. Use "global" for the
 global store. Use "all" with search to search project + global together.`);
@@ -216,6 +219,91 @@ async function sessionCommand(rest: string[]): Promise<void> {
     }
   } finally {
     db.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// chat subcommand group - read-only window on the cross-session chat
+// ---------------------------------------------------------------------------
+
+/** "2m ago", "3h ago", "5d ago" - human-readable age for the chat roster. */
+function humanAge(iso: string, now = Date.now()): string {
+  const seconds = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (minutes < 48 * 60) return `${Math.floor(minutes / 60)}h ago`;
+  return `${Math.floor(minutes / (24 * 60))}d ago`;
+}
+
+async function chatCommand(rest: string[]): Promise<void> {
+  const [sub, ...restArgs] = rest;
+
+  switch (sub) {
+    case "list": {
+      const sessions = db.listChatSessions();
+      if (sessions.length === 0) {
+        console.log("No sessions registered. Sessions join with thatch_chat_register from opencode.");
+        break;
+      }
+      for (const s of sessions) {
+        const parts = [
+          s.name,
+          `(${humanAge(s.last_seen)})`,
+          `project:${s.project ?? "unknown"}`,
+        ];
+        if (s.topic) parts.push(s.topic);
+        console.log(parts.join("  "));
+      }
+      break;
+    }
+
+    case "tail": {
+      const onceOnly = restArgs.includes("--once");
+      // Diff state: the highest message id seen and each row's read_at, so
+      // a poll emits only newly-inserted messages and newly-read rows.
+      let lastId = 0;
+      const readStamps = new Map<number, string | null>();
+      const feed = () => db.chatMessageFeed();
+
+      const emitEvents = (rows: ReturnType<ThatchDB["chatMessageFeed"]>): void => {
+        for (const r of rows) {
+          if (r.id > lastId) {
+            const to = r.viaBroadcast ? "broadcast" : r.to ?? "unknown";
+            console.log(`[${r.created_at}] ${r.from ?? "unknown"} -> ${to}: ${r.body}`);
+          } else {
+            const prev = readStamps.get(r.id) ?? null;
+            if (r.read_at !== null && prev === null) {
+              console.log(`[${r.read_at}] ${r.to ?? "unknown"} read a message from ${r.from ?? "unknown"}: ${r.body.slice(0, 60)}${r.body.length > 60 ? "..." : ""}`);
+            }
+          }
+          readStamps.set(r.id, r.read_at);
+          if (r.id > lastId) lastId = r.id;
+        }
+      };
+
+      // First pass: print the backlog (every existing row as its sent
+      // line), then follow unless --once.
+      for (const r of feed()) {
+        const to = r.viaBroadcast ? "broadcast" : r.to ?? "unknown";
+        console.log(`[${r.created_at}] ${r.from ?? "unknown"} -> ${to}: ${r.body}`);
+        readStamps.set(r.id, r.read_at);
+        lastId = r.id;
+      }
+      if (onceOnly) break;
+
+      // Follow mode: re-query the shared DB handle each tick; Ctrl-C exits.
+      process.on("SIGINT", () => process.exit(0));
+      for (;;) {
+        await Bun.sleep(2000);
+        emitEvents(feed());
+      }
+      break;
+    }
+
+    default:
+      usage();
   }
 }
 
@@ -461,6 +549,11 @@ switch (command) {
 
   case "session": {
     await sessionCommand(args);
+    break;
+  }
+
+  case "chat": {
+    await chatCommand(args);
     break;
   }
 

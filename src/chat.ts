@@ -246,7 +246,7 @@ export class ChatStore {
       return { ok: false, error: "You cannot message yourself." };
     }
     this.#db.run(
-      "INSERT INTO chat_messages (from_session, to_session, body, created_at) VALUES (?, ?, ?, ?)",
+      "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast) VALUES (?, ?, ?, ?, 0)",
       [fromSession, recipient.session_id, trimmed, nowIso()],
     );
     const row = this.#db.query("SELECT last_insert_rowid() AS id").get() as any;
@@ -281,7 +281,7 @@ export class ChatStore {
         continue;
       }
       this.#db.run(
-        "INSERT INTO chat_messages (from_session, to_session, body, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast) VALUES (?, ?, ?, ?, 1)",
         [fromSession, row.session_id, trimmed, nowIso()],
       );
       recipients.push(row.name);
@@ -339,6 +339,43 @@ export class ChatStore {
       nowIso(),
       ...sessionIDs,
     ]);
+  }
+
+  /**
+   * The full message feed for `thatch chat tail`: every row with sender and
+   * recipient display names resolved (departed senders degrade to unknown),
+   * oldest first. The CLI diffs consecutive snapshots to emit sent and
+   * read events; the table is machine-scale, so a full scan per poll is
+   * cheap. Also used by `chat list`'s unread accounting.
+   */
+  messageFeed(): Array<{
+    id: number;
+    from: string | null;
+    to: string | null;
+    viaBroadcast: boolean;
+    body: string;
+    created_at: string;
+    read_at: string | null;
+  }> {
+    return (
+      this.#db
+        .query(
+          `SELECT m.id, m.from_session, m.to_session, fs.name AS from_name, ts.name AS to_name, m.via_broadcast, m.body, m.created_at, m.read_at
+           FROM chat_messages m
+           LEFT JOIN chat_sessions fs ON fs.session_id = m.from_session
+           LEFT JOIN chat_sessions ts ON ts.session_id = m.to_session
+           ORDER BY m.id`,
+        )
+        .all() as any[]
+    ).map((r) => ({
+      id: r.id,
+      from: r.from_name ?? (r.from_session ? `unknown (${String(r.from_session).slice(0, 12)}, departed)` : null),
+      to: r.to_name ?? (r.to_session ? `unknown (${String(r.to_session).slice(0, 12)}, departed)` : null),
+      viaBroadcast: r.via_broadcast === 1,
+      body: r.body,
+      created_at: r.created_at,
+      read_at: r.read_at ?? null,
+    }));
   }
 
   /**

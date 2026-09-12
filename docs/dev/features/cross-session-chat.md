@@ -55,7 +55,8 @@ outlives a process, so liveness needs a signal beyond process lifetime.
 
 `chat_register` joins the directory. Without a name it draws one at random
 from the built-in pool (`src/chat-names.ts`): whimsical geek-culture names
-in the style of fnord's Nomenclater, statically baked in so assignment nevercosts a model call. Pool draws cannot collide with each other and skip any
+in the style of fnord's Nomenclater, statically baked in so assignment never
+costs a model call. Pool draws cannot collide with each other and skip any
 name a session already claimed; the pool is the recommended path because it
 cannot collide at all. With a name, the session claims it custom -
 uniqueness is case-insensitive ("Landru" and "landru" are one name), so two
@@ -143,24 +144,26 @@ Plugin tools render in the opencode TUI as muted one-line generic entries,
 with the output block behind a default-off toggle - so without help, a chat
 exchange is invisible to the human watching the session. The plugin's
 `tool.execute.after` hook builds a short echo for the conversational events
-(`chatEchoText()` in `src/prompts.ts`: register, send, read) and delivers it
-as a non-synthetic, `noReply` promptAsync part: rendered as a visible
-bubble in the transcript, no model turn started (the server's prompt path
-returns before the completion loop). Failed calls never echo; `chat_list`
-and `chat_unregister` stay on the muted tool line.
+(`chatEchoText()` in `src/prompts.ts`: register, send, read, broadcast) and
+delivers it as a non-synthetic, `noReply` promptAsync part: rendered as a
+visible bubble in the transcript, no model turn started (the server's
+prompt path returns before the completion loop). Failed calls never echo;
+`chat_list` and `chat_unregister` stay on the muted tool line. Broadcasts
+echo their fan-out count with the clipped body.
 
 The trade-off: non-synthetic is what makes the TUI render the part, and it
 also means later turns see the echo in context - a small duplication of the
 tool call it mirrors, accepted for visibility. Echo bodies are clipped
-(send: the body; read: the formatted inbox) so a bubble stays cheap. Echo
-delivery is fire-and-forget: a failure must never fail the tool call it
-follows. Because the opencode server fires the `chat.message` hook for
-every prompt part before the `noReply` early-return, the plugin's
-`chat.message` handler skips messages whose visible text is entirely
-`[chat]`-prefixed bubbles (`isChatEchoParts`) - otherwise every echo would
-run the nudge machinery for a message no model turn reads. The accepted
-edge: a real user message whose every visible part starts with the prefix
-is skipped the same way, losing that one turn's advisory nudges.
+(send: the body; read: the formatted inbox; broadcast: the body) so a
+bubble stays cheap. Echo delivery is fire-and-forget: a failure must never
+fail the tool call it follows. Because the opencode server fires the
+`chat.message` hook for every prompt part before the `noReply`
+early-return, the plugin's `chat.message` handler skips messages whose
+visible text is entirely `[chat]`-prefixed bubbles (`isChatEchoParts`) -
+otherwise every echo would run the nudge machinery for a message no model
+turn reads. The accepted edge: a real user message whose every visible
+part starts with the prefix is skipped the same way, losing that one turn's
+advisory nudges.
 
 ## Interactions with other features
 

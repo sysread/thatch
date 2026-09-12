@@ -35,7 +35,7 @@ const useCase: UseCase = {
     "9. Unregister; confirm message history survives and wake prompts stop for the unregistered recipient.",
   ].join("\n"),
   expected: [
-    "- chat_register, chat_list, chat_send, chat_read, and chat_unregister are marked opencodeOnly.",
+    "- chat_register, chat_list, chat_send, chat_read, chat_unregister, and chat_broadcast are marked opencodeOnly.",
     "- A name can only be claimed by one session, case-insensitively; lookups and message addressing follow the same rule.",
     "- Pool assignment (register without a name) draws an unused pool name, never repeats a draw, and skips names claimed by custom registrations.",
     "- Send requires both endpoints registered and distinct, and returns the resolved recipient.",
