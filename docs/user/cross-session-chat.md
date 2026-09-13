@@ -84,8 +84,10 @@ session (deleting it in the TUI) unregisters it immediately.
 
 ## Requirements and limitations
 
-- **opencode only.** The chat tools need session identity and a wake-up
-  channel; MCP hosts (Claude Code, Cursor) have neither.
+- **Wake-up delivery is opencode only.** The chat tools work everywhere
+  (other hosts declare their identity with `as`), but only opencode can
+  start a turn when a message arrives; Claude Code and Cursor see pending
+  mail at their next prompt (the flush-tools hook line, or `chat_status`).
 - **Same machine only.** The directory and inbox live in thatch's local
   database. There is no network relay.
 - **Opt-in.** Unregistered sessions cannot be messaged and cannot send.

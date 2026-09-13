@@ -185,7 +185,7 @@ search` - JSONL output designed for piping to `jq` or `grep`.
 See [watchers.md](watchers.md) for the full behavior, lifetime, and
 requirements.
 
-### Chat tools (opencode only)
+### Chat tools
 
 | Tool | What it does |
 |------|-------------|

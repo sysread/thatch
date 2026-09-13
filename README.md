@@ -92,12 +92,13 @@ Thatch gives your agent:
   only). The agent registers a watch on a GitHub PR or branch (main); thatch polls it in the
   background and prompts the session when comments, commits, CI results, or
   status changes arrive. Notifications carry pointer data only.
-- **Cross-session chat** -- your opencode sessions can message each other
-  (opencode only, same machine). A session registers under a unique name,
-  others see it in the directory, and messages land in its inbox -- with a
-  wake-up prompt when the recipient is idle, so parallel sessions coordinate
-  without routing every question through you. Loop-safe: messages are
-  informational to the receiving agent, and wake prompts are rate-capped.
+- **Cross-session chat** -- your agent sessions can message each other
+  (opencode, Claude Code, and Cursor; same machine). A session registers
+  under a unique name and topic, others see it in the directory, and
+  messages land in its inbox -- opencode sessions get woken with a prompt
+  when idle, other hosts see pending mail at their next prompt. Loop-safe:
+  messages are informational to the receiving agent, and wake prompts are
+  rate-capped.
 - **Notifications + user config** -- the agent can ping you out-of-band when a
   long-running outcome lands: a desktop banner, a spoken voice
   announcement, or both (macOS and Linux). Preferences live in a
