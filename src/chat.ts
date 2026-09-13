@@ -434,6 +434,8 @@ export class ChatStore {
     id: number;
     from: string | null;
     to: string | null;
+    fromTopic: string | null;
+    toTopic: string | null;
     viaBroadcast: boolean;
     body: string;
     created_at: string;
@@ -442,7 +444,7 @@ export class ChatStore {
     return (
       this.#db
         .query(
-          `SELECT m.id, m.from_session, m.to_session, fs.name AS from_name, ts.name AS to_name, m.via_broadcast, m.body, m.created_at, m.read_at
+          `SELECT m.id, m.from_session, m.to_session, fs.name AS from_name, ts.name AS to_name, fs.topic AS from_topic, ts.topic AS to_topic, m.via_broadcast, m.body, m.created_at, m.read_at
            FROM chat_messages m
            LEFT JOIN chat_sessions fs ON fs.session_id = m.from_session
            LEFT JOIN chat_sessions ts ON ts.session_id = m.to_session
@@ -453,6 +455,8 @@ export class ChatStore {
       id: r.id,
       from: renderChatParticipant(r.from_name, r.from_session),
       to: renderChatParticipant(r.to_name, r.to_session),
+      fromTopic: r.from_topic ?? null,
+      toTopic: r.to_topic ?? null,
       viaBroadcast: r.via_broadcast === 1,
       body: r.body,
       created_at: r.created_at,
@@ -629,14 +633,16 @@ export function renderChatParticipant(name: string | null, sessionID: string | n
 // ---------------------------------------------------------------------------
 
 export type ChatTailEvent =
-  | { kind: "sent"; timestamp: string; from: string; to: string; body: string }
-  | { kind: "read"; timestamp: string; reader: string; from: string; body: string };
+  | { kind: "sent"; timestamp: string; from: string; to: string; fromTopic: string | null; toTopic: string | null; body: string }
+  | { kind: "read"; timestamp: string; reader: string; from: string; fromTopic: string | null; toTopic: string | null; body: string };
 
 /** One message row as the tail diff consumes it. */
 export interface ChatTailRow {
   id: number;
   from: string | null;
   to: string | null;
+  fromTopic: string | null;
+  toTopic: string | null;
   viaBroadcast: boolean;
   body: string;
   created_at: string;
@@ -665,6 +671,8 @@ export function chatTailDiff(
         timestamp: r.created_at,
         from: r.from ?? "unknown",
         to: r.viaBroadcast ? "broadcast" : r.to ?? "unknown",
+        fromTopic: r.fromTopic,
+        toTopic: r.viaBroadcast ? null : r.toTopic,
         body: r.body,
       });
     } else {
@@ -675,6 +683,8 @@ export function chatTailDiff(
           timestamp: r.read_at,
           reader: r.to ?? "unknown",
           from: r.from ?? "unknown",
+          fromTopic: r.fromTopic,
+          toTopic: r.toTopic,
           body: r.body,
         });
       }
@@ -728,25 +738,33 @@ const ANSI = {
   nameFg: (s: string) => `\x1b[96m${s}\x1b[0m`, // bright cyan
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`, // dim (timestamps, "read")
   rule: (s: string) => `\x1b[2m${s}\x1b[0m`, // dim (the drawn separator)
+  // Session-of-origin annotation: italic + bright-black (muted gray).
+  originLabel: (s: string) => `\x1b[3;90m<${s}>\x1b[0m`,
 };
 
-const CARD_INDENT = "      "; // aligns card content past the 7-column label chip
+const CARD_INDENT = ""; // cards sit flush with the separator (no extra indent)
 
 export function formatChatTailCard(event: ChatTailEvent): string {
   const lines: string[] = [];
   const when = ANSI.dim(localWhen(event.timestamp));
-  const chip = (label: string, value: string) => `${CARD_INDENT}${ANSI.labelBg(label)} ${ANSI.nameFg(value)}`;
+  // The session-of-origin annotation: the participant's registered topic,
+  // italic + muted bright-black, after the name. Omitted for participants
+  // without a topic (and for the broadcast pseudo-recipient, whose topic
+  // is null by construction).
+  const origin = (topic: string | null) => (topic ? ` ${ANSI.originLabel(topic)}` : "");
+  const chip = (label: string, value: string, topic: string | null) =>
+    `${CARD_INDENT}${ANSI.labelBg(label)} ${ANSI.nameFg(value)}${origin(topic)}`;
   if (event.kind === "sent") {
-    lines.push(chip("From", event.from));
-    lines.push(chip("To", event.to));
-    lines.push(chip("When", when));
+    lines.push(chip("From", event.from, event.fromTopic));
+    lines.push(chip("To", event.to, event.toTopic));
+    lines.push(chip("When", when, null));
     lines.push("");
     lines.push(event.body);
   } else {
     const clipped = event.body.length > 60 ? event.body.slice(0, 60) + "..." : event.body;
-    lines.push(chip("From", event.reader));
-    lines.push(`${CARD_INDENT}${ANSI.dim("read")} ${ANSI.nameFg(event.from)}`);
-    lines.push(chip("When", when));
+    lines.push(chip("From", event.reader, event.toTopic));
+    lines.push(`${CARD_INDENT}${ANSI.dim("read")} ${ANSI.nameFg(event.from)}${origin(event.fromTopic)}`);
+    lines.push(chip("When", when, null));
     lines.push("");
     lines.push(clipped);
   }

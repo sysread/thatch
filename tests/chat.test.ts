@@ -494,6 +494,8 @@ describe("chat tail diff", () => {
   const row = (over: Partial<ChatTailRow> & { id: number }): ChatTailRow => ({
     from: "alice",
     to: "bob",
+    fromTopic: null,
+    toTopic: null,
     viaBroadcast: false,
     body: "hello",
     created_at: "2026-09-12T10:00:00Z",
@@ -514,11 +516,27 @@ describe("chat tail diff", () => {
     expect([...state.keys()]).toEqual([1, 2, 3]);
   });
 
+  test("topics ride through to sent and read events", () => {
+    // First poll: both rows are new (row 2 unread), so both emit sent.
+    const first = chatTailDiff(new Map(), [
+      row({ id: 1, fromTopic: "watching CI", toTopic: "plotting rebase" }),
+      row({ id: 2, fromTopic: "watching CI" }),
+    ]);
+    expect(first.events[0]).toMatchObject({ kind: "sent", from: "alice", fromTopic: "watching CI", to: "bob", toTopic: "plotting rebase" });
+    // Second poll: row 2's read stamp appears (null -> set) and emits a
+    // read event, with the sender's topic riding along for the annotation.
+    const second = chatTailDiff(first.state, [
+      row({ id: 2, fromTopic: "watching CI", read_at: "2026-09-12T10:02:00Z" }),
+    ]);
+    expect(second.events).toHaveLength(1);
+    expect(second.events[0]).toMatchObject({ kind: "read", reader: "bob", from: "alice", fromTopic: "watching CI" });
+  });
+
   test("a row's read_at appearing emits a read event exactly once", () => {
     const state = new Map([[7, null]]);
     const first = chatTailDiff(state, [row({ id: 7, read_at: "2026-09-12T10:01:00Z" })]);
     expect(first.events).toEqual([
-      { kind: "read", timestamp: "2026-09-12T10:01:00Z", reader: "bob", from: "alice", body: "hello" },
+      { kind: "read", timestamp: "2026-09-12T10:01:00Z", reader: "bob", from: "alice", fromTopic: null, toTopic: null, body: "hello" },
     ]);
     // The second poll over the same state is silent.
     expect(chatTailDiff(first.state, [row({ id: 7, read_at: "2026-09-12T10:01:00Z" })]).events).toEqual([]);
@@ -530,35 +548,35 @@ describe("chat tail diff", () => {
   });
 
   test("rendering clips long bodies on read events and marks broadcasts", () => {
-    const sent = { kind: "sent" as const, timestamp: "T", from: "a", to: "b", body: "hi" };
+    const sent = { kind: "sent" as const, timestamp: "T", from: "a", to: "b", fromTopic: null, toTopic: null, body: "hi" };
     expect(formatChatTailEvent(sent)).toBe("[T] a -> b: hi");
     const broadcast = { ...sent, to: "broadcast" };
     expect(formatChatTailEvent(broadcast)).toBe("[T] a -> broadcast: hi");
-    const read = { kind: "read" as const, timestamp: "T", reader: "bob", from: "a", body: "x".repeat(70) };
+    const read = { kind: "read" as const, timestamp: "T", reader: "bob", from: "a", fromTopic: null, toTopic: null, body: "x".repeat(70) };
     expect(formatChatTailEvent(read)).toBe("[T] bob read a message from a: " + "x".repeat(60) + "...");
   });
 
   test("cards render styled header block, full body, local timezone, and drawn separator", () => {
-    const sent = { kind: "sent" as const, timestamp: "2026-09-12T19:46:00Z", from: "Al Go Rithm", to: "Brute the Dream Farrier", body: "the machine age begins" };
+    const sent = { kind: "sent" as const, timestamp: "2026-09-12T19:46:00Z", from: "Al Go Rithm", to: "Brute the Dream Farrier", fromTopic: null, toTopic: null, body: "the machine age begins" };
     const card = formatChatTailCard(sent);
     // Labels are bg-styled with padding spaces, names are fg-styled: the
     // plain text survives stripping ANSI codes (with the label's padding).
     const plain = card.replace(/\x1b\[[0-9;]*m/g, "");
-    // Content column: 6-space indent + chip (space + 5-wide label + space)
-    // = content starts at 0-indexed column 7, aligned on every line.
-    expect(plain.split("\n")[0]).toBe("       From   Al Go Rithm");
-    expect(plain.split("\n")[1]).toBe("       To     Brute the Dream Farrier");
+    // Cards sit flush (no indent): content starts at column 1 - the
+    // chip's own leading pad space.
+    expect(plain.split("\n")[0]).toBe(" From   Al Go Rithm");
+    expect(plain.split("\n")[1]).toBe(" To     Brute the Dream Farrier");
     // The tz abbreviation is environment-dependent (UTC under bun test,
     // the local zone in a real terminal), so assert only date and time.
-    expect(plain.split("\n")[2]).toMatch(/^ {7}When {3}2026-09-12 19:46 /);
+    expect(plain.split("\n")[2]).toMatch(/^ When {3}2026-09-12 19:46 /);
     expect(card).toContain("\x1b[44m\x1b[97m From  \x1b[0m");
     expect(card).toContain("\x1b[96mAl Go Rithm\x1b[0m");
     expect(card.split("\n")[4]).toBe("the machine age begins");
     expect(CHAT_TAIL_SEPARATOR).toBe("_".repeat(60));
     // Read cards put the reader in the From slot.
-    const read = { kind: "read" as const, timestamp: "T", reader: "bob", from: "alice", body: "hi" };
+    const read = { kind: "read" as const, timestamp: "T", reader: "bob", from: "alice", fromTopic: null, toTopic: null, body: "hi" };
     const readCard = formatChatTailCard(read);
-    expect(readCard.replace(/\x1b\[[0-9;]*m/g, "").split("\n")[1]).toBe("      read alice");
+    expect(readCard.replace(/\x1b\[[0-9;]*m/g, "").split("\n")[1]).toBe("read alice");
   });
 });
 

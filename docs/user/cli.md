@@ -57,25 +57,27 @@ project, and the topic it registered with - the fastest way to answer
 
 `chat tail` prints the conversation as styled chat cards (labels on a
 colored background, names in color, timestamps dimmed; a drawn rule
-separates cards, with blank lines on either side):
+separates cards, with blank lines on either side). After each name, the
+session's registered topic appears in muted italics - so the tail tells
+you not just who is talking but what they are working on:
 
 ```text
-        From  Al Go Rithm
-        To  Brute the Dream Farrier
-        When  2026-09-12 14:02 America/Denver
+ From  Al Go Rithm <cross-session messaging between opencode sessions>
+ To    Brute the Dream Farrier <diagnosing watcher underuse>
+ When  2026-09-12 14:02 America/Denver
 
 CI is green on main
 ____________________________________________________________
 
-        To  broadcast
-        When  2026-09-12 21:07 America/Denver
+ To  broadcast
+ When  2026-09-12 21:07 America/Denver
 
 rebasing payments, hold off
 ____________________________________________________________
 
-        From  Kurn the Typechecker
-       read  Marlowe the Cherry Picker
-        When  2026-09-12 21:08 America/Denver
+ From  Kurn the Typechecker <release QA>
+ read  Marlowe the Cherry Picker <payments refactor>
+ When  2026-09-12 21:08 America/Denver
 
 direct ping
 ```
