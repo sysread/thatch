@@ -1,10 +1,11 @@
 # Watchers
 
-Watchers monitor external sources - today, GitHub pull requests and
-branches - and inject a notification into the conversation when
-something happens. You ask the agent to watch a PR or a branch; thatch
-polls it in the background; the agent gets woken up when a watched
-event occurs. No one has to keep asking "any updates yet?"
+Watchers monitor external sources - today, GitHub pull requests,
+branches, and local shell commands - and inject a notification into
+the conversation when something happens. You ask the agent to watch a
+PR, a branch, or a command; thatch polls it in the background; the
+agent gets woken up when a watched event occurs. No one has to keep
+asking "any updates yet?"
 
 ## What it does
 
@@ -34,6 +35,23 @@ Branch watched events:
   on the branch, optionally filtered by workflow name (substring,
   case-insensitive)
 
+Command watched events:
+
+- `command_success` - the watched command exited 0. The agent calls
+  `thatch_watch_command_create` with a shell command that works as a
+  **condition variable, not a data pipe**: the watcher re-runs it every
+  poll and reads only the exit code - the command's output is
+  discarded, never delivered. A command watch is one-shot by design:
+  the first exit 0 fires one notification, then the watcher cancels
+  itself. The command must be a fast, idempotent status check (a
+  marker-file test, a health endpoint curl, a `gh run list` query).
+  Blocking waits like `gh run watch` or `tail -f` are not refused -
+  the tool guidance tells the agent not to use them, and a blocking
+  command is killed at the per-run timeout each cycle and
+  treated as not-done-yet. The command runs once at registration as
+  validation: a command that already exits 0 is refused (the condition
+  is already met), as is a command-not-found.
+
 Notifications are delivered as synthetic parts: the model sees them,
 the transcript does not. A notification triggers a model turn, so the
 agent can act on the event even while you are away.
@@ -49,6 +67,15 @@ text flowing into a model's context is a prompt-injection vector.
 Machine status fields come from the GitHub API rather than
 user-written text, so they are safe to deliver. The agent fetches
 everything else on demand with `gh` when it decides to act.
+
+Command watches follow the same rule with a stricter boundary: the
+notification carries the exit code and duration only. The command's
+stdout and stderr are discarded - command output can be external
+content (a curl response, a build log), so it never rides a
+notification. The agent re-runs the command or reads logs itself when
+it acts. The command runs in the project directory as the local user;
+each run is killed at a 30-second timeout
+(`THATCH_WATCH_COMMAND_TIMEOUT_SECONDS` overrides it).
 
 ## How to use it
 
@@ -72,6 +99,8 @@ Other tools:
 
 - `thatch_watch_branch_create` - watch a branch (typically main) for
   commits, CI check runs, and workflow runs
+- `thatch_watch_command_create` - wait on any local condition via a
+  shell command that exits 0 when the wait is over
 - `thatch_watch_list` - shows the session's active watchers
 - `thatch_watch_cancel` - cancels one by id
 
@@ -81,11 +110,13 @@ Watchers are in-memory and process-scoped:
 
 - Ending the opencode process (or restarting it) drops all watchers.
 - A watcher expires after 8 hours by default.
-- Each session can hold up to 5 active watchers.
+- Each session can hold up to 5 active watchers (all sources share
+  the budget).
 - A one-shot watch cancels itself after its first event - a single
   "tell me when this run finishes" request leaves nothing polling
   afterwards. Standing watches (the default) keep going until they
-  are cancelled, expire, or the process ends.
+  are cancelled, expire, or the process ends. Command watches are
+  always one-shot.
 
 If opencode restarts while a watch is active, re-register it - the
 session's conversation survives, so the policy you stated is still
@@ -96,8 +127,9 @@ there.
 - **opencode only.** MCP hosts (Claude Code, Cursor) have no way for a
   plugin to start a conversation turn, so the watch tools are not
   available there.
-- **Requires the `gh` CLI** to be installed and authenticated. Watch
-  creation reports a clear error if it is not.
+- **Requires the `gh` CLI** to be installed and authenticated for PR
+  and branch watches. Watch creation reports a clear error if it is
+  not. Command watches need only `bash`, not `gh`.
 - **Polling, not webhooks.** Events appear on the next poll cycle
   (60 seconds by default), not instantly.
 - **No delivery during an active turn.** If the agent is mid-turn when

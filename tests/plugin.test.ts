@@ -133,6 +133,7 @@ describe("plugin entry", () => {
       "thatch_store_list",
       "thatch_watch_branch_create",
       "thatch_watch_cancel",
+      "thatch_watch_command_create",
       "thatch_watch_create",
       "thatch_watch_list",
     ]);

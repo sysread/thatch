@@ -18,6 +18,7 @@ export function createTools(
     extractionPayloadProvider?: CoreContext["extractionPayloadProvider"];
     drainExtractionQueue?: CoreContext["drainExtractionQueue"];
     watcherRegistry?: WatcherRegistry;
+    projectDir?: string;
   },
 ): Record<string, ReturnType<typeof tool>> {
   const ctx: CoreContext = {
@@ -27,6 +28,7 @@ export function createTools(
     extractionPayloadProvider: extensions?.extractionPayloadProvider,
     drainExtractionQueue: extensions?.drainExtractionQueue,
     watchers: extensions?.watcherRegistry,
+    projectDir: extensions?.projectDir,
   };
 
   const tools: Record<string, ReturnType<typeof tool>> = {};

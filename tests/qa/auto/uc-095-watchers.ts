@@ -31,7 +31,7 @@ const useCase: UseCase = {
     "5. Cancel the watcher and confirm session cleanup leaves nothing behind.",
   ].join("\n"),
   expected: [
-    "- watch_create, watch_list, and watch_cancel are marked opencodeOnly.",
+    "- All watch_* tools are marked opencodeOnly.",
     "- create() captures baseline PR state (head SHA, comment ids) and reports gh failures as errors.",
     "- poll() diffs against the last-seen state, filters to watched event types, and delivers via the injected callback.",
     "- Events for sessions that cannot accept a prompt stay pending; deliverPending() flushes them when the gate opens.",
@@ -41,8 +41,8 @@ const useCase: UseCase = {
   async run(_ctx: QaContext) {
     // Step 1: watch tools are opencode-only.
     const watchTools = TOOL_DEFS.filter((t) => t.name.startsWith("watch_"));
-    if (watchTools.length !== 4) {
-      console.log(`  FAIL: expected 4 watch tools, got ${watchTools.length}`);
+    if (watchTools.length !== 5) {
+      console.log(`  FAIL: expected 5 watch tools, got ${watchTools.length}`);
       return "FAIL";
     }
     if (!watchTools.every((t) => t.opencodeOnly)) {
@@ -51,8 +51,8 @@ const useCase: UseCase = {
     }
 
     // The event vocabulary is stable and documented.
-    if (WATCHER_EVENT_TYPES.length !== 11) {
-      console.log(`  FAIL: expected 11 event types, got ${WATCHER_EVENT_TYPES.length}`);
+    if (WATCHER_EVENT_TYPES.length !== 12) {
+      console.log(`  FAIL: expected 12 event types, got ${WATCHER_EVENT_TYPES.length}`);
       return "FAIL";
     }
 

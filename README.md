@@ -89,9 +89,12 @@ Thatch gives your agent:
   `session_get`, opencode only) and as CLI subcommands (`thatch session
   list/get/transcript/search`, JSONL output designed for piping to `jq`).
 - **Watchers** -- event-driven notifications from external sources (opencode
-  only). The agent registers a watch on a GitHub PR or branch (main); thatch polls it in the
-  background and prompts the session when comments, commits, CI results, or
-  status changes arrive. Notifications carry pointer data only.
+  only). The agent registers a watch on a GitHub PR, a branch (main), or a
+  local shell command; thatch polls it in the
+  background and prompts the session when comments, commits, CI results, status changes, or a
+  watched command's exit-0 condition arrive. Notifications carry pointer
+  data plus machine status (check conclusions, exit codes), never external
+  content.
 - **Cross-session chat** -- your agent sessions can message each other
   (opencode, Claude Code, and Cursor; same machine). A session registers
   under a unique name and topic, others see it in the directory, and
@@ -122,10 +125,13 @@ host.
 Everything is local. The embedding model downloads once from Hugging Face Hub
 and is cached. No data leaves your machine.
 
-One exception: watchers (opencode only) call the GitHub API through the `gh`
-CLI to poll PRs you explicitly asked to watch, using your existing gh
-authentication. Thatch never sees or stores the token, and notifications
-carry pointer data only - GitHub comment text never enters your context
+One exception: PR and branch watchers (opencode only) call the GitHub API
+through the `gh` CLI to poll targets you explicitly asked to watch, using
+your existing gh authentication; command watchers run local shell commands
+in the project directory, reading only their exit codes. Thatch never sees
+or stores the gh token, and notifications
+carry pointer data plus machine status (check conclusions, exit codes),
+never external content - GitHub comment text never enters your context
 unless the agent fetches it.
 
 ## Development
