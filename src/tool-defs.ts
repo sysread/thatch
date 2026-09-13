@@ -19,7 +19,7 @@ import {
 import { sendNotification, defaultSpawner, type NotifyChannel, type Spawner } from "./notify";
 import { predictionVerb, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
-import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, type WatcherRegistry, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
+import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, type WatcherRegistry, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
 import { CHAT_STALE_MINUTES, isStale, renderChatParticipant, mcpSessionID, type ChatHostKind } from "./chat";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
@@ -79,6 +79,9 @@ export interface CoreContext {
    *  path - MCP hosts have no poller, no event bus, and no way to deliver a
    *  proactive prompt, so watch tools are opencode-only. */
   watchers?: WatcherRegistry;
+  /** The plugin host's project directory. Command watchers run their
+   *  commands here. Only wired on the opencode path, alongside watchers. */
+  projectDir?: string;
   /** Injectable command runner for notify_user. Defaults to Bun.spawn.
    *  Tests inject a mock so notifications never actually fire or speak. */
   spawner?: Spawner;
@@ -1282,6 +1285,9 @@ const watchListDef: ToolDef = {
     const minutesLeft = (w: { expiresAt: number }) => Math.max(0, Math.round((w.expiresAt - Date.now()) / 60_000));
     return watchers
       .map((w) => {
+        if (w.source === "command") {
+          return `${w.id}: cmd: ${commandTargetLabel(w.command)} [${w.source}]${w.once ? " [once]" : ""} events=[${w.events.join(",")}] expires in ${minutesLeft(w)}m lastExit=${w.state.lastExit}`;
+        }
         const target = w.source === "pr" ? `${w.repo}#${w.pr}` : `${w.repo}@${w.branch}`;
         return `${w.id}: ${target} [${w.source}]${w.once ? " [once]" : ""} events=[${w.events.join(",")}] expires in ${minutesLeft(w)}m head=${w.state.headSha.slice(0, 7)}`;
       })
@@ -1369,6 +1375,76 @@ const watchBranchCreateDef: ToolDef = {
 };
 
 /**
+ * Registers a background watcher on a local shell command. The command is a
+ * CONDITION VARIABLE, not a data pipe: the poller re-runs it every cycle and
+ * reads only its exit code - stdout and stderr are discarded, never delivered.
+ * The session gets one synthetic notification the first time the command
+ * exits 0, and the watcher cancels itself. This is the generic "wait for an
+ * arbitrary condition" escape hatch: wait for a marker file, an endpoint to
+ * come up, a lock to clear. opencode-only, like the other watch tools.
+ * Requires bash, not the gh CLI.
+ */
+const watchCommandCreateDef: ToolDef = {
+  name: "watch_command_create",
+  description:
+    "Register a local shell command as a background condition and get " +
+    "notified in this session when it first exits 0. THE COMMAND IS A " +
+    "CONDITION VARIABLE, NOT A DATA PIPE: the watcher only reads its exit " +
+    "code - stdout and stderr are discarded, never returned to you. Write " +
+    "the command as a fast, idempotent status check (exit 0 = the wait is " +
+    "over) such as 'test -f marker', 'curl -sf endpoint >/dev/null', or a " +
+    "'gh run list --json' query - NOT a command whose output you want, and " +
+    "NOT a blocking wait (no 'gh run watch', 'tail -f', or 'sleep': the " +
+    "per-run timeout kills a blocking command each cycle, wasting up to " +
+    "30s of the shared poll cycle on a check that can never succeed). " +
+    "Use this for long or unknown-duration waits on any local condition " +
+    "instead of sleep-polling. The command runs in this project directory " +
+    "via bash -c about every 60s, killed at a 30s per-run timeout " +
+    "(THATCH_WATCH_COMMAND_TIMEOUT_SECONDS overrides; a timed-out run " +
+    "means not-done-yet). One-shot by design: it fires once on the first " +
+    "exit 0, auto-cancels, and the notification carries only the exit code " +
+    "and duration - re-run the command or read logs yourself if you need " +
+    "details. The command runs once at registration as validation: if it " +
+    "already exits 0 the watcher is refused (the condition is already met - " +
+    "proceed instead), and a command-not-found (exit 127) is refused too. " +
+    "Counts against the per-session watcher limit; expires with the " +
+    "session's other watchers.",
+  args: {
+    command: z.string().min(1).describe(
+      "The shell command to run as a condition: a fast, idempotent status " +
+      "check that exits 0 when the wait is over. Its output is discarded.",
+    ),
+  },
+  opencodeOnly: true,
+  async execute(args, ctx, host) {
+    if (!host) {
+      return "Watching is unavailable: this host did not provide a session context.";
+    }
+    if (!ctx.watchers) {
+      return "Watching is unavailable: no watcher registry was wired by this host.";
+    }
+    if (!ctx.projectDir) {
+      return "Watching is unavailable: no project directory was wired by this host.";
+    }
+    const command = args.command as string;
+    const result = await ctx.watchers.createCommand(host.sessionID, command, ctx.projectDir);
+    if (!result.ok) return `Watcher not created: ${result.error}`;
+    const w = result.watcher;
+    return (
+      `[watching] cmd: ${commandTargetLabel(w.command)}\n` +
+      `id: ${w.id}\n` +
+      `mode: one-shot - fires on the first exit 0, then auto-cancels\n` +
+      `lastExit: ${w.state.lastExit} (baseline exit code; 124 = the baseline run was killed at the timeout)\n\n` +
+      `The command re-runs about every ${ctx.watchers.pollSeconds}s and the first check already happened at registration - ` +
+      `the next run lands within ~${ctx.watchers.pollSeconds}s. ` +
+      `You will receive a system notification when the command exits 0; it carries the exit code and duration only. ` +
+      `State any handling policy for that notification now (e.g. what to do once the condition is met) - ` +
+      `the notification is the signal, not the data: re-run the command or read logs yourself when it arrives.`
+    );
+  },
+};
+
+/**
  * Cancels one watcher. opencode-only, session-scoped: cancelling by id only
  * works for the session that created it.
  */
@@ -1376,7 +1452,7 @@ const watchCancelDef: ToolDef = {
   name: "watch_cancel",
   description: "Cancel one of this session's watchers by id. opencode-only.",
   args: {
-    id: z.string().describe("The watcher id from watch_create, watch_branch_create, or watch_list."),
+    id: z.string().describe("The watcher id from watch_create, watch_branch_create, watch_command_create, or watch_list."),
   },
   opencodeOnly: true,
   async execute(args, ctx, host) {
@@ -1796,6 +1872,7 @@ export const TOOL_DEFS: ToolDef[] = [
   sessionGetDef,
   watchCreateDef,
   watchBranchCreateDef,
+  watchCommandCreateDef,
   watchListDef,
   watchCancelDef,
   chatRegisterDef,

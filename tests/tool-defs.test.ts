@@ -31,8 +31,8 @@ afterEach(() => {
 });
 
 describe("TOOL_DEFS", () => {
-  test("exports all 35 tools", () => {
-    expect(TOOL_DEFS.length).toBe(35);
+  test("exports all 36 tools", () => {
+    expect(TOOL_DEFS.length).toBe(36);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -61,6 +61,7 @@ describe("TOOL_DEFS", () => {
       "session_get",
       "watch_create",
       "watch_branch_create",
+      "watch_command_create",
       "watch_list",
       "watch_cancel",
       "chat_register",
@@ -81,6 +82,7 @@ describe("TOOL_DEFS", () => {
       "session_get",
       "watch_create",
       "watch_branch_create",
+      "watch_command_create",
       "watch_list",
       "watch_cancel",
     ]);
@@ -782,6 +784,73 @@ describe("watch_branch_create", () => {
 
   test("explains unavailability without a host context (MCP path)", async () => {
     const result = await findTool().execute({ branch: "main" }, ctx);
+    expect(result).toContain("unavailable");
+  });
+});
+
+describe("watch_command_create", () => {
+  const findTool = () => TOOL_DEFS.find((t) => t.name === "watch_command_create")!;
+  const host = { sessionID: "ses_cmd_test", agent: "build" };
+
+  function registryWith(overrides: Record<string, unknown> = {}): WatcherRegistry {
+    return new WatcherRegistry({
+      deliver: async () => {},
+      canDeliver: () => true,
+      ghRunner: async () => {
+        throw new Error("gh is not used by command watches");
+      },
+      commandRunner: async () => ({ exitCode: 1, timedOut: false, stderr: "", durationMs: 500 }),
+      pollIntervalMs: 60_000,
+      ...overrides,
+    });
+  }
+
+  test("registers a command watcher and reports the one-shot mode", async () => {
+    const registry = registryWith();
+    const watchCtx = { ...ctx, watchers: registry, projectDir: "/tmp/project" };
+    const result = await findTool().execute({ command: "test -f /tmp/marker" }, watchCtx, host);
+    expect(result).toContain("[watching] cmd: test -f /tmp/marker");
+    expect(result).toContain("id: watch_");
+    expect(result).toContain("one-shot - fires on the first exit 0");
+    expect(result).toContain("lastExit: 1");
+    expect(result).toContain("carries the exit code and duration only");
+    expect(registry.listForSession(host.sessionID)).toHaveLength(1);
+  });
+
+  test("refuses when the command already exits 0", async () => {
+    const registry = registryWith({ commandRunner: async () => ({ exitCode: 0, timedOut: false, stderr: "", durationMs: 100 }) });
+    const watchCtx = { ...ctx, watchers: registry, projectDir: "/tmp/project" };
+    const result = await findTool().execute({ command: "true" }, watchCtx, host);
+    expect(result).toContain("Watcher not created");
+    expect(result).toContain("condition is already met");
+  });
+
+  test("refuses exit-127 commands with the stderr tail", async () => {
+    const registry = registryWith({ commandRunner: async () => ({ exitCode: 127, timedOut: false, stderr: "bash: nope: command not found", durationMs: 50 }) });
+    const watchCtx = { ...ctx, watchers: registry, projectDir: "/tmp/project" };
+    const result = await findTool().execute({ command: "nope" }, watchCtx, host);
+    expect(result).toContain("Watcher not created");
+    expect(result).toContain("127");
+    expect(result).toContain("command not found");
+  });
+
+  test("reports spawn failures clearly", async () => {
+    const registry = registryWith({ commandRunner: async () => { throw new Error("spawn gone"); } });
+    const watchCtx = { ...ctx, watchers: registry, projectDir: "/tmp/project" };
+    const result = await findTool().execute({ command: "anything" }, watchCtx, host);
+    expect(result).toContain("Watcher not created");
+    expect(result).toContain("spawn gone");
+  });
+
+  test("explains unavailability without a wired project directory", async () => {
+    const registry = registryWith();
+    const watchCtx = { ...ctx, watchers: registry };
+    const result = await findTool().execute({ command: "test -f /tmp/marker" }, watchCtx, host);
+    expect(result).toContain("unavailable");
+  });
+
+  test("explains unavailability without a host context (MCP path)", async () => {
+    const result = await findTool().execute({ command: "test -f /tmp/marker" }, ctx);
     expect(result).toContain("unavailable");
   });
 });

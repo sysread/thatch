@@ -5,10 +5,16 @@
  * The registry supports multiple source types behind one mechanism. The
  * first source was GitHub pull requests (source "pr"); GitHub branches
  * (source "branch") arrived second, for watching CI and workflow runs
- * against main. A source contributes: event types, a fetch function that
- * produces a snapshot of the watched state, and a pure diff between two
- * snapshots. Everything else - registry, pending queue, delivery gating -
- * is source-agnostic.
+ * against main; shell commands (source "command") arrived third, for
+ * waiting on arbitrary local conditions. A source contributes: event
+ * types, a fetch function that produces a snapshot of the watched state,
+ * and a pure diff between two snapshots. Everything else - registry,
+ * pending queue, delivery gating - is source-agnostic. The command source
+ * stretches the recipe in two ways: its fetch runs the watched command
+ * instead of reading an API, and its diff is a trivial exit-code check -
+ * the command is a condition variable, and only its exit code is read,
+ * never its output (injection hygiene: command output can be external
+ * content, so it never rides a notification).
  *
  * Lifetime is deliberately process-scoped. The registry lives in plugin
  * memory, never in SQLite: opencode loads thatch in-process, so the plugin
@@ -40,7 +46,10 @@ export type PrWatcherEventType =
 /** Event types for source "branch" (typically main): commits land, CI and workflow runs execute. */
 export type BranchWatcherEventType = "branch_commit" | "branch_ci" | "branch_workflow";
 
-export type WatcherEventType = PrWatcherEventType | BranchWatcherEventType;
+/** Event type for source "command": the watched shell command exited 0. */
+export type CommandWatcherEventType = "command_success";
+
+export type WatcherEventType = PrWatcherEventType | BranchWatcherEventType | CommandWatcherEventType;
 
 export const PR_EVENT_TYPES: PrWatcherEventType[] = [
   "pr_comment",
@@ -59,8 +68,10 @@ export const BRANCH_EVENT_TYPES: BranchWatcherEventType[] = [
   "branch_workflow",
 ];
 
+export const COMMAND_EVENT_TYPES: CommandWatcherEventType[] = ["command_success"];
+
 /** Every event type across all sources - for diagnostics and tests. */
-export const WATCHER_EVENT_TYPES: WatcherEventType[] = [...PR_EVENT_TYPES, ...BRANCH_EVENT_TYPES];
+export const WATCHER_EVENT_TYPES: WatcherEventType[] = [...PR_EVENT_TYPES, ...BRANCH_EVENT_TYPES, ...COMMAND_EVENT_TYPES];
 
 /**
  * A single detected change, ready for delivery. Pointer data plus machine
@@ -172,7 +183,31 @@ export interface BranchWatcher {
   state: BranchState;
 }
 
-export type Watcher = PrWatcher | BranchWatcher;
+/** The last-seen state of a command watch: the most recent observed exit code. */
+export interface CommandState {
+  lastExit: number;
+}
+
+export interface CommandWatcher {
+  id: string;
+  source: "command";
+  sessionID: string;
+  /** The shell command, run via bash -c in cwd every poll. A condition variable: only its exit code is read, never its output. */
+  command: string;
+  /** Working directory the command runs in, captured at registration. */
+  cwd: string;
+  /** Per-run kill timeout in ms - a hanging command must not stall the shared poll cycle. */
+  timeoutMs: number;
+  events: CommandWatcherEventType[];
+  /** Command watchers are inherently one-shot: they fire on the first exit 0 and cancel. */
+  once: true;
+  /** Epoch ms. When now > expiresAt the watcher is silently dropped. */
+  expiresAt: number;
+  createdAt: number;
+  state: CommandState;
+}
+
+export type Watcher = PrWatcher | BranchWatcher | CommandWatcher;
 
 /** Runs one GitHub API call via the gh CLI and parses the JSON response.
  *  The array is the argument list after `gh api`: a REST path like
@@ -180,6 +215,23 @@ export type Watcher = PrWatcher | BranchWatcher;
  *  ["graphql", "-f", "query={...}"]. Array-shaped so both transports fit
  *  without the callers string-concatenating shell quotes. */
 export type GhRunner = (apiArgs: string[]) => Promise<unknown>;
+
+/**
+ * Runs one watched command and reports how it ended. The command's stdout is
+ * drained but discarded - the watcher treats the command as a condition
+ * variable (exit code only), so command output never reaches a notification.
+ * stderr is kept (capped) for registration-time error messages only.
+ */
+export interface CommandRunResult {
+  exitCode: number;
+  /** True when the runner killed the command at the timeout instead of letting it finish. */
+  timedOut: boolean;
+  stderr: string;
+  /** Wall-clock duration of the run in ms, for the notification summary. */
+  durationMs: number;
+}
+
+export type CommandRunner = (command: string, cwd: string, timeoutMs: number) => Promise<CommandRunResult>;
 
 export interface WatcherRegistryOptions {
   /** Delivers a batch of events for a session. Injected so tests never spawn. */
@@ -195,6 +247,10 @@ export interface WatcherRegistryOptions {
    */
   canDeliver: (sessionID: string) => boolean | Promise<boolean>;
   ghRunner: GhRunner;
+  /** Runs watched commands. Injected so tests never spawn; defaults to runWatchedCommand. */
+  commandRunner?: CommandRunner;
+  /** Per-run kill timeout for watched commands; defaults to THATCH_WATCH_COMMAND_TIMEOUT_SECONDS or 30s. */
+  commandTimeoutMs?: number;
   pollIntervalMs?: number;
   ttlMinutes?: number;
   maxPerSession?: number;
@@ -207,26 +263,78 @@ export interface WatcherRegistryOptions {
 /**
  * The default GhRunner. Shells out to `gh api` so auth comes from the user's
  * existing gh session - thatch never sees or stores a token. Throws on
- * non-zero exit or unparseable output.
+ * non-zero exit or unparseable output. See ghApiRunWithTimeout for the
+ * drain-race hardening.
  */
 export async function ghApiRun(apiArgs: string[]): Promise<unknown> {
+  return ghApiRunWithTimeout(apiArgs, GH_API_TIMEOUT_MS);
+}
+
+/** Per-call timeout for gh api invocations. */
+const GH_API_TIMEOUT_MS = 15_000;
+
+/**
+ * One gh api call with the drain-race hardening: the pipe drains are raced
+ * against a hard deadline (timeout plus COMMAND_DRAIN_GRACE_MS) so a gh
+ * child process holding the pipes past the kill rejects cleanly instead of
+ * deadlocking the shared poll cycle (same hardening as runWatchedCommand).
+ * The stderr read on the error path gets the same race - a descendant that
+ * dup2'd stdout away but kept stderr would otherwise wedge the cycle.
+ */
+export async function ghApiRunWithTimeout(apiArgs: string[], timeoutMs: number): Promise<unknown> {
   const proc = Bun.spawn(["gh", "api", ...apiArgs], {
     stdout: "pipe",
     stderr: "pipe",
   });
-  const timeout = setTimeout(() => proc.kill(), 15_000);
+  const timeout = setTimeout(() => proc.kill("SIGKILL"), timeoutMs);
+  const deadlineMs = timeoutMs + COMMAND_DRAIN_GRACE_MS;
+  let raceTimer: ReturnType<typeof setTimeout> | undefined = undefined;
   try {
-    const [stdout, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      proc.exited,
+    const stdoutReader = proc.stdout.getReader();
+    const stderrReader = proc.stderr.getReader();
+    const readAll = async (reader: ReadableStreamDefaultReader): Promise<string> => {
+      let text = "";
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          text += commandTargetLabel.length === -1 ? "" : new TextDecoder().decode(value, { stream: true });
+        }
+      } catch {
+        // Cancelled or errored: keep what was read.
+      }
+      return text;
+    };
+    const drain = Promise.all([readAll(stdoutReader), proc.exited]);
+    // If the drain does not finish by the deadline (orphaned grandchild
+    // holding the pipes), abandon it - and cancel the readers so the pending
+    // reads settle instead of pinning the host process at shutdown.
+    const raced = await Promise.race([
+      drain.then(([stdout, exitCode]) => ({ stdout, exitCode })),
+      new Promise<null>((resolve) => {
+        raceTimer = setTimeout(() => resolve(null), deadlineMs);
+        raceTimer.unref?.();
+      }),
     ]);
-    if (exitCode !== 0) {
-      const stderr = await new Response(proc.stderr).text();
-      throw new Error(`gh api ${apiArgs.join(" ")} failed (exit ${exitCode}): ${stderr.trim().slice(0, 200)}`);
+    if (raced === null) {
+      void stdoutReader.cancel().catch(() => {});
+      void stderrReader.cancel().catch(() => {});
+      throw new Error(`gh api ${apiArgs.join(" ")} timed out (orphaned child holding the output pipe; killed at the ${timeoutMs}ms timeout, drains abandoned after ${Math.round(deadlineMs / 1000)}s)`);
     }
-    return JSON.parse(stdout);
+    if (raced.exitCode !== 0) {
+      const racedErr = await Promise.race([
+        readAll(stderrReader),
+        new Promise<string>((resolve) => {
+          const t = setTimeout(() => resolve(""), deadlineMs);
+          t.unref?.();
+        }),
+      ]);
+      throw new Error(`gh api ${apiArgs.join(" ")} failed (exit ${raced.exitCode}): ${racedErr.trim().slice(0, 200)}`);
+    }
+    return JSON.parse(raced.stdout);
   } finally {
     clearTimeout(timeout);
+    clearTimeout(raceTimer);
   }
 }
 
@@ -254,6 +362,115 @@ export async function ghAvailable(): Promise<boolean> {
 // For testing: reset the cached availability check.
 export function _resetGhAvailability(): void {
   ghAvailability = null;
+}
+
+// ---------------------------------------------------------------------------
+// Watched command execution
+// ---------------------------------------------------------------------------
+
+/** Per-run timeout for watched commands, overridable via THATCH_WATCH_COMMAND_TIMEOUT_SECONDS. */
+export function defaultCommandTimeoutMs(): number {
+  const env = Number(process.env.THATCH_WATCH_COMMAND_TIMEOUT_SECONDS ?? 0);
+  return env > 0 ? env * 1000 : 30_000;
+}
+
+/** One-line clip of a command for use as a watcher target label. */
+export function commandTargetLabel(command: string): string {
+  const oneLine = command.replace(/\s+/g, " ").trim();
+  return oneLine.length <= 60 ? oneLine : oneLine.slice(0, 57) + "...";
+}
+
+const COMMAND_STDERR_CAP = 2000;
+
+/**
+ * Grace past the spawn timeout before the pipe drains are abandoned. The
+ * direct child has already been SIGKILLed by then, so anything still holding
+ * the pipes is an orphaned grandchild - its output is lost, but the poll
+ * cycle survives.
+ */
+const COMMAND_DRAIN_GRACE_MS = 2_000;
+
+/**
+ * The default CommandRunner: bash -c in the given cwd, killed at the timeout.
+ * Both pipes are always drained even though stdout is discarded - a child
+ * writing more than the pipe buffer would otherwise block forever. A timeout
+ * counts as "condition not met yet", not an error, so the watch keeps polling.
+ *
+ * The kill cannot always terminate the whole process tree: a command that
+ * backgrounds a long-lived child leaves a grandchild holding the pipe
+ * write-ends, so the pipe reads may never reach EOF. The drains are therefore
+ * raced against a hard deadline (timeout plus a short grace period) - the
+ * run completes as timed-out even when the pipes stay open, and a leaked
+ * reader (and its buffered output) is abandoned rather than stalling the
+ * shared poll cycle forever. An abandoned grandchild itself keeps running
+ * until it exits on its own; nothing reaps it.
+ */
+export async function runWatchedCommand(command: string, cwd: string, timeoutMs: number): Promise<CommandRunResult> {
+  const startedAt = Date.now();
+  let killed = false;
+  let proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
+  try {
+    proc = Bun.spawn(["bash", "-c", command], { cwd, stdout: "pipe", stderr: "pipe" });
+  } catch (err) {
+    throw new Error(`failed to start the watched command (check the command and project directory): ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const timeout = setTimeout(() => {
+    killed = true;
+    proc.kill("SIGKILL");
+  }, timeoutMs);
+  const deadlineMs = timeoutMs + COMMAND_DRAIN_GRACE_MS;
+  let raceTimer: ReturnType<typeof setTimeout> | undefined = undefined;
+  try {
+    // Explicit readers instead of Response.text(): a held reader lock keeps
+    // stream.cancel() from working, but reader.cancel() both settles the
+    // pending reads and releases the host when the deadline wins.
+    const stdoutReader = proc.stdout.getReader();
+    const stderrReader = proc.stderr.getReader();
+    const readAll = async (reader: ReadableStreamDefaultReader): Promise<string> => {
+      let text = "";
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          text += new TextDecoder().decode(value, { stream: true });
+        }
+      } catch {
+        // Cancelled or errored: keep what was read.
+      }
+      return text;
+    };
+    const drain = Promise.all([readAll(stdoutReader), readAll(stderrReader), proc.exited]);
+    // If the drain does not finish by the deadline (orphaned grandchild
+    // holding the pipes), abandon it - and cancel the readers so the pending
+    // reads settle instead of pinning the host process at shutdown.
+    // The race timer is unref'd and cleared so a lingering fallback can
+    // never keep the host process alive on its own.
+    const result = await Promise.race([
+      drain.then(([stdout, stderr, exitCode]) => ({ stdout, stderr, exitCode })),
+      new Promise<null>((resolve) => {
+        raceTimer = setTimeout(() => resolve(null), Math.max(0, deadlineMs - (Date.now() - startedAt)));
+        raceTimer.unref?.();
+      }),
+    ]);
+    if (result === null) {
+      void stdoutReader.cancel().catch(() => {});
+      void stderrReader.cancel().catch(() => {});
+      return { exitCode: 124, timedOut: true, stderr: "", durationMs: Date.now() - startedAt };
+    }
+    const timedOut = killed || result.exitCode === null;
+    if (timedOut) {
+      console.error(`[thatch] watched command killed at the ${timeoutMs}ms timeout: ${commandTargetLabel(command)}`);
+    }
+    return {
+      exitCode: result.exitCode ?? 124,
+      timedOut,
+      stderr: result.stderr.slice(-COMMAND_STDERR_CAP),
+      durationMs: Date.now() - startedAt,
+    };
+  } finally {
+    clearTimeout(timeout);
+    clearTimeout(raceTimer);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -564,13 +781,21 @@ export class WatcherRegistry {
   #timer: ReturnType<typeof setInterval> | null = null;
   #delivering = false;
   #polling = false;
-  readonly #opts: WatcherRegistryOptions & { pollIntervalMs: number; ttlMinutes: number; maxPerSession: number };
+  readonly #opts: WatcherRegistryOptions & {
+    pollIntervalMs: number;
+    ttlMinutes: number;
+    maxPerSession: number;
+    commandRunner: CommandRunner;
+    commandTimeoutMs: number;
+  };
 
   constructor(options: WatcherRegistryOptions) {
     this.#opts = {
       pollIntervalMs: Number(process.env.THATCH_WATCH_POLL_SECONDS ?? 0) * 1000 || 60_000,
       ttlMinutes: Number(process.env.THATCH_WATCH_TTL_MINUTES ?? 0) || 480,
       maxPerSession: Number(process.env.THATCH_WATCH_MAX_PER_SESSION ?? 0) || 5,
+      commandRunner: runWatchedCommand,
+      commandTimeoutMs: defaultCommandTimeoutMs(),
       ...options,
     };
   }
@@ -703,6 +928,61 @@ export class WatcherRegistry {
     return { ok: true, watcher };
   }
 
+  /**
+   * Registers a command watcher: the poller runs the command (as a condition
+   * variable - exit code only) every cycle until it first exits 0, notifies,
+   * and cancels. The baseline run doubles as validation, like createPr: a
+   * command that already exits 0 means the condition is already met (refuse,
+   * so the caller proceeds now), exit 127 means the command does not exist,
+   * and a spawn failure fails with a real error instead of a watcher that
+   * can never fire.
+   */
+  async createCommand(
+    sessionID: string,
+    command: string,
+    cwd: string,
+  ): Promise<{ ok: true; watcher: CommandWatcher } | { ok: false; error: string }> {
+    const limit = this.#checkLimit(sessionID);
+    if (limit) return { ok: false, error: limit };
+    if (!command.trim()) return { ok: false, error: "No command to watch - pass a shell command." };
+
+    let baseline: CommandRunResult;
+    try {
+      baseline = await this.#opts.commandRunner(command, cwd, this.#opts.commandTimeoutMs);
+    } catch (err) {
+      return { ok: false, error: `Failed to run the command: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    if (!baseline.timedOut && baseline.exitCode === 0) {
+      return { ok: false, error: "The command already exits 0 - the condition is already met, so no watcher was registered. Proceed now, or re-run the command yourself if you need its output." };
+    }
+    if (baseline.exitCode === 127) {
+      return {
+        ok: false,
+        error: `The command exited 127 (command not found) - nothing to wait for until it exists. stderr: ${baseline.stderr.trim() || "(none)"}`,
+      };
+    }
+
+    const watcher: CommandWatcher = {
+      id: `watch_${Math.random().toString(36).slice(2, 10)}`,
+      source: "command",
+      sessionID,
+      command,
+      cwd,
+      timeoutMs: this.#opts.commandTimeoutMs,
+      events: [...COMMAND_EVENT_TYPES],
+      once: true,
+      expiresAt: Date.now() + this.#opts.ttlMinutes * 60_000,
+      createdAt: Date.now(),
+      // A timed-out baseline has no meaningful exit code - the killed process
+      // may have exited 0 while dying. Record the 124 sentinel so watch_list
+      // and the registration output never display a misleading 0 for a
+      // watcher that has not observed a real exit yet.
+      state: { lastExit: baseline.timedOut ? 124 : baseline.exitCode },
+    };
+    this.#watchers.set(watcher.id, watcher);
+    return { ok: true, watcher };
+  }
+
   #checkLimit(sessionID: string): string | null {
     const existing = this.listForSession(sessionID);
     if (existing.length >= this.#opts.maxPerSession) {
@@ -785,6 +1065,22 @@ export class WatcherRegistry {
       watcher.state = after;
       return events;
     }
+    if (watcher.source === "command") {
+      const result = await this.#opts.commandRunner(watcher.command, watcher.cwd, watcher.timeoutMs);
+      // A timed-out run produced no meaningful exit code, so the last-seen
+      // exit stays as-is and the watch keeps waiting. Exit 0 needs no
+      // transition guard: the baseline refusal keeps lastExit non-zero at
+      // registration, and the one-shot cancel in poll() removes the watcher
+      // the moment this event fires.
+      if (!result.timedOut) watcher.state = { lastExit: result.exitCode };
+      if (result.timedOut || result.exitCode !== 0) return [];
+      return [{
+        type: "command_success",
+        target: commandTargetLabel(watcher.command),
+        summary: `command exited 0 (took ${(result.durationMs / 1000).toFixed(1)}s)`,
+        url: "",
+      }];
+    }
     const after = await fetchBranchState(this.#opts.ghRunner, watcher.repo, watcher.branch);
     const all = diffBranchState(watcher.state, after, `${watcher.repo}@${watcher.branch}`, watcher.repo);
     watcher.state = after;
@@ -810,7 +1106,16 @@ export class WatcherRegistry {
     try {
       for (const [sessionID, events] of this.#pending) {
         if (events.length === 0) continue;
-        if (!(await this.#opts.canDeliver(sessionID))) continue;
+        // A throwing gate must not escape poll() - an unhandled rejection
+        // here would take down the whole poll cycle, the same failure class
+        // as a hung fetch. Fail closed: the mail stays pending.
+        let deliverable = false;
+        try {
+          deliverable = await this.#opts.canDeliver(sessionID);
+        } catch (err) {
+          console.error(`[thatch] canDeliver gate failed for ${sessionID}: ${err}`);
+        }
+        if (!deliverable) continue;
         try {
           await this.#opts.deliver(sessionID, events);
           this.#pending.delete(sessionID);

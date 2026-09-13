@@ -1,11 +1,17 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { watcherNotificationNudge } from "../src/prompts";
+import { runWatchedCommand } from "../src/watchers";
 import {
   WatcherRegistry,
   diffPrState,
   diffBranchState,
   fetchPrState,
   fetchBranchState,
+  commandTargetLabel,
+  COMMAND_EVENT_TYPES,
   PR_EVENT_TYPES,
   BRANCH_EVENT_TYPES,
   WATCHER_EVENT_TYPES,
@@ -388,7 +394,9 @@ describe("WatcherRegistry", () => {
     });
     await reg.createPr("s1", "acme/widgets", 7, ["pr_ci"]);
     // Force a state change that produces only a pr_commit event.
-    reg.listForSession("s1")[0].state.headSha = "old";
+    const prWatcher = reg.listForSession("s1")[0];
+    if (prWatcher.source !== "pr") throw new Error("expected a pr watcher");
+    prWatcher.state.headSha = "old";
     await reg.poll();
     expect(delivered).toHaveLength(0);
     expect(reg.pendingCount("s1")).toBe(0);
@@ -398,7 +406,9 @@ describe("WatcherRegistry", () => {
     canDeliver = false;
     const reg = makeRegistry();
     await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
-    reg.listForSession("s1")[0].state.headSha = "old";
+    const prWatcher = reg.listForSession("s1")[0];
+    if (prWatcher.source !== "pr") throw new Error("expected a pr watcher");
+    prWatcher.state.headSha = "old";
     await reg.poll();
     expect(delivered).toHaveLength(0);
     expect(reg.pendingCount("s1")).toBe(1);
@@ -421,7 +431,9 @@ describe("WatcherRegistry", () => {
       pollIntervalMs: 60_000,
     });
     await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
-    reg.listForSession("s1")[0].state.headSha = "old";
+    const prWatcher = reg.listForSession("s1")[0];
+    if (prWatcher.source !== "pr") throw new Error("expected a pr watcher");
+    prWatcher.state.headSha = "old";
     await reg.poll();
     expect(reg.pendingCount("s1")).toBe(1);
 
@@ -443,7 +455,9 @@ describe("WatcherRegistry", () => {
     canDeliver = false;
     const reg = makeRegistry();
     await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
-    reg.listForSession("s1")[0].state.headSha = "old";
+    const prWatcher = reg.listForSession("s1")[0];
+    if (prWatcher.source !== "pr") throw new Error("expected a pr watcher");
+    prWatcher.state.headSha = "old";
     await reg.poll();
     expect(reg.pendingCount("s1")).toBe(1);
     reg.cancelSession("s1");
@@ -492,9 +506,9 @@ describe("WatcherRegistry", () => {
 
 describe("watcher event types", () => {
   test("covers the documented vocabulary", () => {
-    const expected: WatcherEventType[] = [...PR_EVENT_TYPES, ...BRANCH_EVENT_TYPES];
+    const expected: WatcherEventType[] = [...PR_EVENT_TYPES, ...BRANCH_EVENT_TYPES, ...COMMAND_EVENT_TYPES];
     expect(WATCHER_EVENT_TYPES).toEqual(expected);
-    expect(expected).toHaveLength(11);
+    expect(expected).toHaveLength(12);
   });
 });
 
@@ -732,6 +746,293 @@ test("branch diffs cap at 10 events like PR diffs", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Command watchers in the registry
+// ---------------------------------------------------------------------------
+
+describe("command watchers in the registry", () => {
+  let delivered: Array<{ sessionID: string; events: WatcherEvent[] }>;
+  let canDeliver: boolean;
+
+  beforeEach(() => {
+    delivered = [];
+    canDeliver = true;
+  });
+
+  /** Builds a fake CommandRunner whose exit code comes from this closure. */
+  const makeRegistry = (
+    exits: number[],
+    overrides: { maxPerSession?: number; commandTimeoutMs?: number } = {},
+  ) => {
+    let run = 0;
+    return new WatcherRegistry({
+      deliver: async (s, e) => {
+        delivered.push({ sessionID: s, events: e });
+      },
+      canDeliver: () => canDeliver,
+      ghRunner: quietGh(),
+      commandRunner: async () => {
+        const exitCode = exits[Math.min(run, exits.length - 1)];
+        run++;
+        return { exitCode, timedOut: false, stderr: exitCode === 127 ? "bash: nope: command not found" : "", durationMs: 1200 };
+      },
+      commandTimeoutMs: 30_000,
+      pollIntervalMs: 60_000,
+      ...overrides,
+    });
+  };
+
+  test("createCommand captures the baseline and fires on the first exit 0", async () => {
+    // Baseline exits 1; the first poll exits 1 (no event); the second exits 0.
+    const reg = makeRegistry([1, 1, 0]);
+    const result = await reg.createCommand("s1", "test -f /tmp/marker", "/tmp");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.watcher.once).toBe(true);
+    expect(result.watcher.state.lastExit).toBe(1);
+
+    await reg.poll();
+    expect(delivered).toHaveLength(0);
+    expect(reg.listForSession("s1")).toHaveLength(1);
+
+    await reg.poll();
+    expect(reg.listForSession("s1")).toHaveLength(0);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].events).toHaveLength(1);
+    const event = delivered[0].events[0];
+    expect(event.type).toBe("command_success");
+    expect(event.summary).toContain("exited 0");
+    expect(event.summary).toContain("1.2s");
+    expect(event.url).toBe("");
+    reg.dispose();
+  });
+
+  test("a command that already exits 0 is refused - the condition is already met", async () => {
+    const reg = makeRegistry([0]);
+    const result = await reg.createCommand("s1", "true", "/tmp");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("already exits 0");
+    expect(reg.listForSession("s1")).toHaveLength(0);
+  });
+
+  test("a command that exits 127 is refused - nothing exists to wait for", async () => {
+    const reg = makeRegistry([127]);
+    const result = await reg.createCommand("s1", "nope", "/tmp");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("127");
+    expect(result.error).toContain("command not found");
+    expect(reg.listForSession("s1")).toHaveLength(0);
+  });
+
+  test("a spawn failure is refused with a real error", async () => {
+    const reg = new WatcherRegistry({
+      deliver: async (s, e) => {
+        delivered.push({ sessionID: s, events: e });
+      },
+      canDeliver: () => canDeliver,
+      ghRunner: quietGh(),
+      commandRunner: async () => {
+        throw new Error("bash exploded");
+      },
+      pollIntervalMs: 60_000,
+    });
+    const result = await reg.createCommand("s1", "anything", "/tmp");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("bash exploded");
+    expect(reg.listForSession("s1")).toHaveLength(0);
+  });
+
+  test("a timed-out run means not-done-yet: no event, watcher survives", async () => {
+    let run = 0;
+    const reg = new WatcherRegistry({
+      deliver: async (s, e) => {
+        delivered.push({ sessionID: s, events: e });
+      },
+      canDeliver: () => canDeliver,
+      ghRunner: quietGh(),
+      commandRunner: async () => {
+        run++;
+        return run === 1
+          ? { exitCode: 1, timedOut: false, stderr: "", durationMs: 100 }
+          : { exitCode: 124, timedOut: true, stderr: "", durationMs: 30_000 };
+      },
+      pollIntervalMs: 60_000,
+    });
+    const result = await reg.createCommand("s1", "slow thing", "/tmp");
+    expect(result.ok).toBe(true);
+    await reg.poll();
+    expect(delivered).toHaveLength(0);
+    expect(reg.listForSession("s1")).toHaveLength(1);
+    // The timed-out run left the last-seen exit untouched.
+    const cmdWatcher = reg.listForSession("s1")[0];
+    if (cmdWatcher.source !== "command") throw new Error("expected a command watcher");
+    expect(cmdWatcher.state.lastExit).toBe(1);
+    reg.dispose();
+  });
+
+  test("a persistent non-zero exit keeps polling without events", async () => {
+    const reg = makeRegistry([1, 1, 1, 1]);
+    await reg.createCommand("s1", "test -f /tmp/marker", "/tmp");
+    for (let i = 0; i < 3; i++) await reg.poll();
+    expect(delivered).toHaveLength(0);
+    expect(reg.listForSession("s1")).toHaveLength(1);
+    reg.dispose();
+  });
+
+  test("command watchers share the per-session limit with other sources", async () => {
+    const reg = makeRegistry([1, 1], { maxPerSession: 2 });
+    await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
+    const result = await reg.createCommand("s1", "test -f /tmp/marker", "/tmp");
+    expect(result.ok).toBe(true);
+    const second = await reg.createCommand("s1", "test -f /tmp/other", "/tmp");
+    expect(second.ok).toBe(false);
+    if (second.ok) return;
+    expect(second.error).toContain("Watcher limit reached");
+    reg.dispose();
+  });
+});
+
+test("commandTargetLabel collapses whitespace and clips long commands", () => {
+  expect(commandTargetLabel("test -f /tmp/marker")).toBe("test -f /tmp/marker");
+  expect(commandTargetLabel("gh   run   list")).toBe("gh run list");
+  const long = "a".repeat(80);
+  const clipped = commandTargetLabel(long);
+  expect(clipped.length).toBeLessThanOrEqual(60);
+  expect(clipped.endsWith("...")).toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// runWatchedCommand (real processes - the injected-runner tests cannot see
+// spawn failures, timeouts, or pipe-holding grandchildren)
+// ---------------------------------------------------------------------------
+
+describe("runWatchedCommand", () => {
+  test("reports a clean exit with duration", async () => {
+    const result = await runWatchedCommand("exit 0", "/tmp", 30_000);
+    expect(result.exitCode).toBe(0);
+    expect(result.timedOut).toBe(false);
+    expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  test("reports a failing exit and drains stderr", async () => {
+    const result = await runWatchedCommand("echo boom-not-found 1>&2; exit 3", "/tmp", 30_000);
+    expect(result.exitCode).toBe(3);
+    expect(result.timedOut).toBe(false);
+    expect(result.stderr).toContain("boom-not-found");
+  });
+
+  test("kills a hanging command at the timeout and reports timedOut", async () => {
+    const result = await runWatchedCommand("sleep 20", "/tmp", 500);
+    expect(result.timedOut).toBe(true);
+    // 137 = SIGKILL from the watchdog. Consumers only read the timedOut
+    // flag; the raw code is informational.
+    expect(result.exitCode).toBe(137);
+    expect(result.durationMs).toBeLessThan(10_000);
+  });
+
+  test("survives a grandchild holding the pipe open past the kill", async () => {
+    // The command backgrounds a long-lived child that inherits stdout's
+    // write end and never exits. bash dies at the timeout; the grandchild
+    // keeps the pipe open. Without the drain race this call would hang
+    // forever - which is exactly the shared-poll-cycle stall the race exists
+    // to prevent.
+    const started = Date.now();
+    const result = await runWatchedCommand('sleep 20 & echo started; wait', "/tmp", 500);
+    expect(result.timedOut).toBe(true);
+    // The abandoned-drain return shape: 124 sentinel, nothing captured.
+    expect(result.exitCode).toBe(124);
+    expect(result.stderr).toBe("");
+    // deadline = timeout + grace; allow generous CI slack on top.
+    expect(Date.now() - started).toBeLessThan(15_000);
+  }, 20_000);
+
+  test("refuses a nonexistent working directory with a real error", async () => {
+    let threw: unknown = null;
+    try {
+      await runWatchedCommand("true", "/definitely/not/a/real/dir", 30_000);
+    } catch (err) {
+      threw = err;
+    }
+    expect(threw).toBeInstanceOf(Error);
+    expect((threw as Error).message).toContain("project directory");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Poll-cycle resilience: a throwing gate or a hung gh call must not kill the
+// poller (the same failure class as a hung watched command)
+// ---------------------------------------------------------------------------
+
+describe("poll resilience", () => {
+  test("a throwing canDeliver gate fails closed and leaves the mail pending", async () => {
+    const delivered: Array<{ sessionID: string; events: WatcherEvent[] }> = [];
+    const reg = new WatcherRegistry({
+      deliver: async (sessionID, events) => {
+        delivered.push({ sessionID, events });
+      },
+      canDeliver: () => {
+        throw new Error("server unreachable");
+      },
+      ghRunner: quietGh(),
+      pollIntervalMs: 60_000,
+    });
+    await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
+    const w = reg.listForSession("s1")[0];
+    if (w.source !== "pr") throw new Error("expected a pr watcher");
+    w.state.headSha = "old";
+    // Must not throw out of poll - a throw here would be an unhandled
+    // rejection in the host process and would wedge the #polling guard.
+    await reg.poll();
+    expect(reg.pendingCount("s1")).toBe(1);
+    expect(delivered).toHaveLength(0);
+    reg.dispose();
+  });
+
+  test("ghApiRun races its drain: a fake gh whose child holds the pipe still resolves", async () => {
+    // A fake `gh` that backgrounds a pipe-holding sleeper and exits 1. The
+    // orphaned sleeper inherits the output pipe's write end, so stdout never
+    // EOFs and ghApiRun's drain loses the race - it must reject cleanly
+    // instead of hanging until the sleeper exits.
+    //
+    // Bun resolves spawned binaries from the PATH the PROCESS was started
+    // with, so mutating process.env.PATH in-process does not select the fake.
+    // Run a child bun with the fake gh on its PATH from birth; the child
+    // calls the parameterized transport with a small timeout and prints the
+    // outcome.
+    const binDir = mkdtempSync(join(tmpdir(), "thatch-fake-gh-"));
+    writeFileSync(join(binDir, "gh"), "#!/bin/sh\nsleep 30 &\nexit 1\n", { mode: 0o755 });
+    const childScript = `
+      const { ghApiRunWithTimeout } = await import(${JSON.stringify(join(process.cwd(), "src/watchers.ts"))});
+      const t0 = Date.now();
+      try { await ghApiRunWithTimeout(["/x"], 500); console.log("UNEXPECTED-SUCCESS"); }
+      catch (e) { console.log(JSON.stringify({ ms: Date.now() - t0, msg: e.message })); }
+    `;
+    try {
+      const proc = Bun.spawn(["bun", "-e", childScript], {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = await new Response(proc.stdout).text();
+      await proc.exited;
+      const line = out.split("\n").find((l) => l.startsWith("{"));
+      expect(line).toBeDefined();
+      const parsed = JSON.parse(line!);
+      // The abandonment path fires before the exit-code branch - the orphaned
+      // sleeper holds the pipe, so the message is the timeout, not "exit 1".
+      expect(parsed.msg).toMatch(/timed out/);
+      expect(parsed.msg).toMatch(/orphaned child holding the output pipe/);
+      // 500ms kill + 2s grace; generous slack for CI.
+      expect(parsed.ms).toBeLessThan(15_000);
+    } finally {
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  }, 40_000);
+});
+
+// ---------------------------------------------------------------------------
 // watcherNotificationNudge
 // ---------------------------------------------------------------------------
 
@@ -753,5 +1054,15 @@ describe("watcherNotificationNudge", () => {
   test("cadence line appears only when pollSeconds is passed", () => {
     expect(watcherNotificationNudge("acme/widgets#7", events, 60)).toContain("polled every ~60s");
     expect(watcherNotificationNudge("acme/widgets#7", events)).not.toContain("polled every");
+  });
+
+  test("command events render without a dangling URL and with the command detail hint", () => {
+    const text = watcherNotificationNudge("test -f /tmp/marker", [
+      { type: "command_success", summary: "command exited 0 (took 1.2s)", url: "" },
+    ]);
+    expect(text).toContain("- command_success: command exited 0 (took 1.2s)");
+    expect(text).not.toMatch(/1\.2s\s+$/m);
+    expect(text).toContain("re-run it or read logs yourself");
+    expect(text).not.toContain("conclusions are in the summaries above");
   });
 });

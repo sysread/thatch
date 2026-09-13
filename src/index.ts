@@ -127,19 +127,20 @@ export const server: Plugin = async ({ client, worktree }) => {
   };
 
   // In-memory watcher registry for proactive event notifications (GitHub PR
-  // watching today). Deliberately process-scoped: no SQLite, no cross-restart
-  // state. See src/watchers.ts for the rationale.
+  // and branch watching, plus local command watches). Deliberately
+  // process-scoped: no SQLite, no cross-restart state. See src/watchers.ts
+  // for the rationale.
   //
   // Delivery prompts the session with a synthetic part - the same mechanism
   // opencode uses for background task completions - so a watched event
   // triggers a model turn even when the user is away. Events carry pointer
-  // data plus machine status (check conclusions); the model fetches logs and
-  // further details itself with gh.
+  // data plus machine status (check conclusions, exit codes); the model
+  // fetches logs and further details itself with gh.
   const watchers = new WatcherRegistry({
     deliver: async (sessionID, events) => {
       // Events carry their watch's target label from the registry, so the
       // notification header is correct for every source (PRs, branches,
-      // CI events whose URLs would not parse).
+      // commands, CI events whose URLs would not parse).
       await client.session.promptAsync({
         path: { id: sessionID },
         body: {
@@ -168,10 +169,11 @@ export const server: Plugin = async ({ client, worktree }) => {
     canDeliver: canPromptSession,
     ghRunner: ghApiRun,
   });
-  // gh presence decides whether watch_create works; checked lazily by the
-  // tool, but log once at startup so misconfiguration is visible in debug logs.
+  // gh presence decides whether watch_create and watch_branch_create work;
+  // checked lazily by the tools, but log once at startup so misconfiguration
+  // is visible in debug logs. watch_command_create needs only bash, not gh.
   void ghAvailable().then((ok) => {
-    if (!ok) console.error("[thatch] gh CLI not found - watch tools will report unavailable");
+    if (!ok) console.error("[thatch] gh CLI not found - GitHub watch tools will report unavailable");
   });
   watchers.start();
 
@@ -379,6 +381,7 @@ export const server: Plugin = async ({ client, worktree }) => {
         return extraction.buildPayload(all, repo);
       },
       watcherRegistry: watchers,
+      projectDir: worktree,
     }),
 
     // 1. System prompt - always in context.

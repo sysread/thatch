@@ -55,7 +55,7 @@ Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
         thatch_notify_user, thatch_get_session_info,
         thatch_session_search, thatch_session_get,
         thatch_watch_create, thatch_watch_branch_create,
-        thatch_watch_list, thatch_watch_cancel,
+        thatch_watch_command_create, thatch_watch_list, thatch_watch_cancel,
         thatch_chat_register, thatch_chat_list, thatch_chat_send,
         thatch_chat_read, thatch_chat_unregister, thatch_chat_broadcast,
         thatch_chat_status
@@ -145,14 +145,23 @@ intractable prompt, not a transient hang.
 
 Use thatch_watch_create to watch a GitHub PR for events (comments, review
 comments and replies, review thread resolutions, commits, status changes,
-description edits, CI check completions), or thatch_watch_branch_create to
+description edits, CI check completions), thatch_watch_branch_create to
 watch a branch (typically main) for commit landings, check-run completions,
 and workflow runs on the branch - including watching CI against main or
-waiting for a post-merge build. thatch polls in the background (about every
+waiting for a post-merge build - or thatch_watch_command_create to wait on
+any local condition. thatch polls in the background (about every
 60s) and injects a notification into this session when a watched event
 happens. For CI waits: a short bounded wait (about 2-3 minutes) is fine as
 a single in-turn poll (sleep under the bash timeout, then gh); for longer
 or unknown waits, register a watcher instead of sleep-polling.
+thatch_watch_command_create treats its command as a condition variable,
+not a data pipe: the command must be a fast, idempotent status check that
+exits 0 when the wait is over - its output is discarded and the
+notification carries only the exit code and duration, so re-run the
+command or read logs yourself when notified. A blocking command is not
+refused: the per-run timeout kills it each cycle, wasting up to 30s of
+the shared poll cycle, so never register "gh run watch", "tail -f", or
+"sleep" as a watched command.
 Notifications carry a short machine summary - event type, actor, and for
 CI the check name and conclusion - never external content; use the gh CLI
 for logs and further details. When the user asks you to watch something,
@@ -344,8 +353,9 @@ Tools are prefixed in ${host}: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__chat_read\`, \`mcp__thatch__chat_unregister\`,
 \`mcp__thatch__chat_broadcast\`, \`mcp__thatch__chat_status\`. Bare names
 used below for readability. get_session_info, session_search,
-session_get, watch_create, watch_branch_create, watch_list, and
-watch_cancel are intentionally absent: they are opencode-only (MCP hosts
+session_get, watch_create, watch_branch_create, watch_command_create,
+watch_list, and watch_cancel are intentionally absent: they are
+opencode-only (MCP hosts
 have no session concept, session database, or proactive-prompt channel),
 so do not expect them here. On MCP hosts, cross-session chat works with a
 self-declared identity (pass your registered name as \`as\`); wake-up
@@ -761,25 +771,29 @@ export function behaviorNudge(items: BehaviorNudgeItem[]): string {
 /**
  * Watcher notification for the poller's promptAsync delivery. Injected as a
  * synthetic part that triggers a model turn. Events carry pointer data plus
- * machine status (check names, conclusions) - never external content - so
- * the model fetches logs and bodies on demand with the gh CLI. The wrapper
- * text borrows the background-task completion framing: a system event, not
- * user input, not approval to advance other pending work - except when the
- * watch itself was created to gate already-greenlit work, in which case the
- * notification is that work's continuation signal.
+ * machine status (check names, conclusions, exit codes) - never external
+ * content - so the model fetches logs and bodies on demand with the gh CLI
+ * or by re-running a watched command. The wrapper text borrows the
+ * background-task completion framing: a system event, not user input, not
+ * approval to advance other pending work - except when the watch itself was
+ * created to gate already-greenlit work, in which case the notification is
+ * that work's continuation signal.
  */
 export function watcherNotificationNudge(
   target: string,
   events: { type: string; summary: string; url: string }[],
   pollSeconds?: number,
 ): string {
-  const lines = events.map((e) => `- ${e.type}: ${e.summary} ${e.url}`);
+  const lines = events.map((e) => `- ${e.type}: ${e.summary}${e.url ? ` ${e.url}` : ""}`);
   const cadence =
     pollSeconds === undefined ? "" : ` Watched targets are polled every ~${pollSeconds}s; events can lag by up to one cycle.`;
+  const detailHint = events.some((e) => e.type === "command_success")
+    ? "A watched command's output is never delivered; re-run it or read logs yourself if you need details."
+    : "Check-run and workflow conclusions are in the summaries above; fetch details with the gh CLI only if you need them.";
   return `[thatch] Watcher notification for ${target}
 ${lines.join("\n")}
 
-This is a system notification, not user input. Decide whether to act now or keep waiting - the user's instructions from when the watch was created govern how to handle it. Check-run and workflow conclusions are in the summaries above; fetch details with the gh CLI only if you need them. This notification is not approval to advance other pending work, with one exception: if this watch was created to gate work the user already greenlit (for example "wait for CI, then merge"), it is the continuation signal for exactly that work - proceed with it.${cadence} If you act, tell the user what you did and why; if not, stop and wait.`;
+This is a system notification, not user input. Decide whether to act now or keep waiting - the user's instructions from when the watch was created govern how to handle it.${detailHint} This notification is not approval to advance other pending work, with one exception: if this watch was created to gate work the user already greenlit (for example "wait for CI, then merge"), it is the continuation signal for exactly that work - proceed with it.${cadence} If you act, tell the user what you did and why; if not, stop and wait.`;
 }
 
 /**

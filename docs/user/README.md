@@ -11,7 +11,7 @@ This README is the overview. Each feature has its own guide:
 
 - [memory.md](memory.md): persistent memory store
 - [extraction.md](extraction.md): automatic fact extraction from tool calls
-- [watchers.md](watchers.md): event-driven notifications (PR and branch watching)
+- [watchers.md](watchers.md): event-driven notifications (PR, branch, and command watching)
 - [cross-session-chat.md](cross-session-chat.md): sessions messaging each other on one machine
 - [notifications.md](notifications.md): banner and voice notifications, user config
 - [prediction-engine.md](prediction-engine.md): user decision model
@@ -179,6 +179,7 @@ search` - JSONL output designed for piping to `jq` or `grep`.
 |------|-------------|
 | `thatch_watch_create` | Watch a GitHub PR for events (comments, review comments and replies, thread resolutions, commits, status changes, description edits, CI completions). The plugin polls in the background and prompts the session when a watched event happens. |
 | `thatch_watch_branch_create` | Watch a GitHub branch (typically main) for commit landings, CI check-run completions, and workflow runs, with an optional workflow-name filter. |
+| `thatch_watch_command_create` | Wait on any local condition via a shell command that exits 0 when the wait is over. One-shot: one notification on the first exit 0, then it cancels itself. |
 | `thatch_watch_list` | List this session's active watchers. |
 | `thatch_watch_cancel` | Cancel one of this session's watchers by id. |
 

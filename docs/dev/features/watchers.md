@@ -3,10 +3,11 @@
 Watchers are the general mechanism for event-driven notifications from
 external sources: the model registers a watch on something outside the
 session, thatch polls it in the background, and the plugin prompts the
-session when a watched event happens. Two sources ship: GitHub pull
-requests (source `pr`) and GitHub branches (source `branch`, for
-watching CI and workflow runs on main). The registry, poller, and
-delivery are source-agnostic - a new source adds a fetch-and-diff
+session when a watched event happens. Three sources ship: GitHub pull
+requests (source `pr`), GitHub branches (source `branch`, for watching
+CI and workflow runs on main), and local shell commands (source
+`command`, for waiting on arbitrary conditions). The registry, poller,
+and delivery are source-agnostic - a new source adds a fetch-and-diff
 function pair and event types.
 
 User-facing behavior is documented in [docs/user/watchers.md](../../user/watchers.md).
@@ -14,14 +15,16 @@ User-facing behavior is documented in [docs/user/watchers.md](../../user/watcher
 ## What it does
 
 - `thatch_watch_create` (PRs) / `thatch_watch_branch_create` (branches) /
-  `thatch_watch_list` / `thatch_watch_cancel` tools (all opencode-only)
+  `thatch_watch_command_create` (commands) / `thatch_watch_list` /
+  `thatch_watch_cancel` tools (all opencode-only)
 - A background poller in the plugin process diffs each watcher's target
   against its last-seen state
 - Delivery prompts the session with a synthetic part - the same
   mechanism opencode uses for background task completions
 - Notifications carry pointer data plus machine status (author, URL,
-  check names and conclusions); external content is fetched on demand
-  with `gh`, never delivered
+  check names and conclusions, exit codes); external content is fetched
+  on demand with `gh` or by re-running a watched command, never
+  delivered
 
 ## The process-lifetime decision
 
@@ -107,6 +110,46 @@ when this run finishes" request from leaving a standing watch polling
 a target nobody is waiting on. `watch_list` marks one-shot watchers
 with a `[once]` tag, and the registration output states the mode.
 
+### Command watches
+
+The command source stretches the fetch/diff recipe in two ways:
+
+1. **The fetch has side effects.** `runWatchedCommand()` executes the
+   watched command via `bash -c` in the project directory each cycle.
+   This is the point - the command IS the condition - but it means
+   command watchers must not block: the tool description and system
+   prompt state the contract (fast, idempotent status check; never
+   `gh run watch` or `tail -f`), and a per-run kill timeout
+   (default 30s, `THATCH_WATCH_COMMAND_TIMEOUT_SECONDS`) bounds a
+   hung command's cost to one partial poll cycle - other watchers
+   wait out the kill rather than stalling, but a blocking command
+   still burns its timeout slice every cycle. A timed-out run means
+   "not done yet": the last-seen exit is left untouched and the watch
+   keeps polling.
+2. **The diff is a trivial exit-code check.** The command is a
+   condition variable, not a data pipe: stdout is drained (a full
+   pipe buffer would deadlock the child) but discarded, and stderr is
+   kept only for registration-time error messages. The notification
+   carries the exit code and duration; command output can be external
+   content, so it never rides a notification. This is the strictest
+   application of the notification content rule. The pipe drains are also
+   raced against a hard deadline, because a
+   command that backgrounds a long-lived child leaves a grandchild
+   holding the pipe write-ends past the kill - without the race, the
+   drains never resolve and the shared poll cycle stalls forever.
+
+`createCommand()` runs the command once at registration as baseline
+validation, like `createPr()`'s baseline fetch: exit 0 at baseline
+means the condition is already met (refused, so the caller proceeds
+now), exit 127 means the command does not exist (refused with the
+stderr tail), and a spawn failure fails registration with a real
+error. A baseline run that times out records the 124 sentinel as the
+last-seen exit - the killed process may have exited 0 while dying, and
+the watcher's first real exit 0 must fire. Registered command
+watchers carry `once: true` inherently - "run until it returns 0,
+then notify, then stop" is the whole concept. The `CommandRunner` is
+injectable like `GhRunner`, so tests never spawn processes.
+
 ### Delivery
 
 Events queue in an in-memory pending map keyed by session. Delivery
@@ -138,7 +181,10 @@ cycle or when the session next goes idle (the event hook calls
 `pr_comment`, `pr_review_comment`, `pr_review_reply`,
 `pr_review_resolved`, `pr_commit`, `pr_status`, `pr_description`,
 `pr_ci`. The tool's `events` argument selects a subset; the default is
-all eight.
+all eight. Branch watchers add `branch_commit`, `branch_ci`, and
+`branch_workflow` (the full vocabulary is `WATCHER_EVENT_TYPES` in
+src/watchers.ts, test-enforced); command watchers register the single
+`command_success` type.
 
 ## Interactions with other features
 
@@ -158,30 +204,48 @@ all eight.
 - `THATCH_WATCH_POLL_SECONDS` - poll interval (default 60)
 - `THATCH_WATCH_TTL_MINUTES` - watcher time-to-live (default 480)
 - `THATCH_WATCH_MAX_PER_SESSION` - active watchers per session
-  (default 5)
+  (default 5; all sources share the budget)
+- `THATCH_WATCH_COMMAND_TIMEOUT_SECONDS` - per-run kill timeout for
+  watched commands (default 30)
 
 ## Source files
 
-- `src/watchers.ts` - registry, poller, gh CLI runner, diff functions
-- `src/tool-defs.ts` - the three watch tool definitions
+- `src/watchers.ts` - registry, poller, gh CLI runner, command runner,
+  diff functions
+- `src/tool-defs.ts` - the watch tool definitions (see `TOOL_DEFS`)
 - `src/index.ts` - registry construction, delivery closure,
   session.status tracking, session.deleted cleanup, dispose
 - `src/prompts.ts` - `watcherNotificationNudge()`, system prompt
   Watchers section
 - `tests/watchers.test.ts` - registry, poll, and diff unit tests
-  (mocked gh, no network)
+  (mocked gh and command runners, no network)
+- `tests/tool-defs.test.ts` - watch tool execute-function tests
 - `tests/qa/auto/uc-095-watchers.ts` - end-to-end lifecycle against a
   mocked gh runner
+- `tests/qa/auto/uc-101-command-watchers.ts` - command-watch lifecycle
+  against a mocked command runner
 
 ## Adding a new source type
 
-The registry is a discriminated union over sources: `PrWatcher` and
-`BranchWatcher` implement the same lifecycle (id, session, repo,
-events, expiry, snapshot), and `poll()` dispatches to the source's
-fetch/diff pair. Adding a third source means: new event types, a
-`fetchXState`/`diffXState` pair, a new arm of the `Watcher` union, a
-`#pollOne` branch, and the tool surface for registering it. Keep the
+The registry is a discriminated union over sources: `PrWatcher`,
+`BranchWatcher`, and `CommandWatcher` implement the same lifecycle
+(id, session, events, expiry, snapshot), and `poll()` dispatches to
+the source's fetch/diff pair. Adding a new source means: new event
+types, a fetch function and diff (or a trivial inline diff like the
+command source's), a new arm of the `Watcher` union, a `#pollOne`
+branch, and the tool surface for registering it. Keep the
 notification content rule: external content enters the context on
 explicit fetch, never via notification. Machine status fields (names,
-conclusions, counts) come from the API rather than user-written text
-and belong in event summaries.
+conclusions, counts, exit codes) come from the API rather than
+user-written text and belong in event summaries.
+
+Two caveats from the command source, worth carrying to future
+sources:
+
+- If the source's fetch does anything beyond reading an API, inject a
+  runner (like `GhRunner`/`CommandRunner`) so tests never spawn real
+  work, and bound it with a timeout so a hung fetch cannot stall the
+  shared sequential poll cycle.
+- If the source has no natural URL (a local command has none), emit
+  an empty `url` in the event; `watcherNotificationNudge()` omits
+  empty URLs rather than rendering a dangling space.
