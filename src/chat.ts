@@ -694,6 +694,122 @@ export function chatTailDiff(
   return { events, state: prev };
 }
 
+/**
+ * The default number of backlog cards `thatch chat tail` renders before
+ * follow mode takes over. The message table is machine-scale but the
+ * history still grows forever, so an unbounded default would dump the
+ * entire database on every run.
+ */
+export const CHAT_TAIL_DEFAULT_LIMIT = 20;
+
+/**
+ * Parses a tail time-bound value into epoch milliseconds, interpreted in
+ * the terminal's local timezone (the same clock the When headers print).
+ * Accepted: "YYYY-MM-DD" (midnight) or "YYYY-MM-DD HH:MM", with either a
+ * space or a T between the date and the time. The component round-trip
+ * rejects impossible calendar values like 2026-09-31 and 25:99, which
+ * JavaScript's Date would otherwise silently normalize.
+ */
+export function parseChatTimeBound(value: string, flag: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?$/.exec(value.trim());
+  if (!m) {
+    throw new Error(`${flag} expects "YYYY-MM-DD" or "YYYY-MM-DD HH:MM", got "${value}"`);
+  }
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const h = Number(m[4] ?? 0);
+  const mi = Number(m[5] ?? 0);
+  const date = new Date(y, mo - 1, d, h, mi);
+  // Date normalizes out-of-range components (month 13, hour 25); the
+  // round-trip is the check that the value was real.
+  if (!roundTrip(date, y, mo, d, h, mi)) {
+    throw new Error(`${flag} is not a real date or time: "${value}"`);
+  }
+  return date.getTime();
+}
+
+function roundTrip(date: Date, y: number, mo: number, d: number, h: number, mi: number): boolean {
+  return (
+    date.getFullYear() === y &&
+    date.getMonth() === mo - 1 &&
+    date.getDate() === d &&
+    date.getHours() === h &&
+    date.getMinutes() === mi
+  );
+}
+
+/**
+ * Everything the tail can narrow a feed by, all ANDed together. `matches`
+ * test the message body; `fromSubstr`/`toSubstr` are case-insensitive
+ * substrings of the rendered participant names (so a departed sender can
+ * only match as "unknown (...)", the string the reader actually sees).
+ * One deliberate asymmetry: broadcast rows keep the real recipient in
+ * `to`, so `--to <realname>` matches fan-out rows even though their cards
+ * say "broadcast", and `--to broadcast` matches nothing. `sinceMs`/
+ * `untilMs` bound created_at in a since-inclusive, until-exclusive
+ * window. An empty field is no constraint.
+ *
+ * Name inputs are not stable across polls: they are re-resolved from the
+ * live directory on every feed snapshot, so an unregister or rename
+ * flips which rows match. chatTailBacklog's full-feed state seeding is
+ * what keeps such flips from resurfacing old rows as sent events; reads
+ * of rows whose name stopped matching simply go quiet.
+ */
+export interface ChatTailFilter {
+  matches: RegExp[];
+  fromSubstr: string[];
+  toSubstr: string[];
+  sinceMs: number | null;
+  untilMs: number | null;
+}
+
+/** Filters a feed snapshot down to the rows the tail should consider. */
+export function filterChatTailRows(rows: Array<ChatTailRow>, filter: ChatTailFilter): Array<ChatTailRow> {
+  const froms = filter.fromSubstr.map((s) => s.toLowerCase());
+  const tos = filter.toSubstr.map((s) => s.toLowerCase());
+  return rows.filter((r) => {
+    const t = Date.parse(r.created_at);
+    if (filter.sinceMs !== null && t < filter.sinceMs) return false;
+    if (filter.untilMs !== null && t >= filter.untilMs) return false;
+    if (!filter.matches.every((re) => re.test(r.body))) return false;
+    if (froms.some((s) => !(r.from ?? "").toLowerCase().includes(s))) return false;
+    if (tos.some((s) => !(r.to ?? "").toLowerCase().includes(s))) return false;
+    return true;
+  });
+}
+
+/**
+ * Prepares the tail's first render. The diff state seeds from EVERY row in
+ * the feed - filtered or not, rendered or not - for two reasons. First,
+ * the limit hides cards, not history: a state seeded only from the
+ * rendered slice would re-emit the elided history as new sent events on
+ * the first follow poll. Second, the name filters test JOIN-resolved
+ * participant names that can flip mid-follow (a peer unregisters and its
+ * history starts rendering as "unknown (... departed)", or it re-registers
+ * under a new name); seeding everything means an old row can never resurface
+ * as a sent event no matter how its rendered name changes. The last
+ * `limit` filtered rows (null = all) shape into sent events via
+ * chatTailDiff, so card rendering keeps a single source. `elided` counts
+ * matching rows the limit hid, for the CLI's summary line.
+ *
+ * The caller must re-apply the same filter to every follow poll's feed
+ * BEFORE the diff (filterChatTailRows, then chatTailDiff with the state
+ * returned here). Skipping the poll filter resurrects non-matching
+ * history; mutating the state between polls corrupts the read diff.
+ */
+export function chatTailBacklog(
+  rows: Array<ChatTailRow>,
+  filter: ChatTailFilter,
+  limit: number | null,
+): { events: ChatTailEvent[]; state: Map<number, string | null>; elided: number } {
+  const state = new Map(rows.map((r) => [r.id, r.read_at]));
+  const filtered = filterChatTailRows(rows, filter);
+  const shown = limit === null ? filtered : filtered.slice(-limit);
+  const events = chatTailDiff(new Map(), shown).events;
+  return { events, state, elided: filtered.length - shown.length };
+}
+
 /** Renders one tail event in the CLI's line format. */
 export function formatChatTailEvent(event: ChatTailEvent): string {
   if (event.kind === "sent") {

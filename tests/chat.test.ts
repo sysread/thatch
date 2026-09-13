@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, formatChatTailCard, CHAT_TAIL_SEPARATOR, renderChatParticipant, type ChatTailRow } from "../src/chat";
+import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, formatChatTailCard, CHAT_TAIL_SEPARATOR, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, type ChatTailRow, type ChatTailFilter } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
 import { TOOL_DEFS } from "../src/tool-defs";
@@ -508,18 +508,25 @@ describe("name pool invariants", () => {
   });
 });
 
+/** Shared ChatTailRow factory for the tail test blocks: a direct message
+ *  from alice to bob, with every field overridable. */
+const tailRow = (over: Partial<ChatTailRow> & { id: number }): ChatTailRow => ({
+  from: "alice",
+  to: "bob",
+  fromTopic: null,
+  toTopic: null,
+  viaBroadcast: false,
+  body: "hello",
+  created_at: "2026-09-12T10:00:00Z",
+  read_at: null,
+  ...over,
+});
+
+/** The no-op filter: every constraint absent. */
+const tailNoFilter = (): ChatTailFilter => ({ matches: [], fromSubstr: [], toSubstr: [], sinceMs: null, untilMs: null });
+
 describe("chat tail diff", () => {
-  const row = (over: Partial<ChatTailRow> & { id: number }): ChatTailRow => ({
-    from: "alice",
-    to: "bob",
-    fromTopic: null,
-    toTopic: null,
-    viaBroadcast: false,
-    body: "hello",
-    created_at: "2026-09-12T10:00:00Z",
-    read_at: null,
-    ...over,
-  });
+  const row = tailRow;
 
   test("new rows emit sent events; broadcast rows mark the recipient", () => {
     const { events, state } = chatTailDiff(new Map(), [
@@ -766,5 +773,163 @@ describe("ChatPoller", () => {
     expect(poller.running).toBe(false);
     poller.dispose();
     expect(poller.running).toBe(false);
+  });
+});
+
+describe("chat tail time bounds", () => {
+  test("date-only parses as local midnight; HH:MM parses in local time", () => {
+    const midnight = new Date(parseChatTimeBound("2026-09-13", "--since"));
+    expect([midnight.getFullYear(), midnight.getMonth(), midnight.getDate(), midnight.getHours(), midnight.getMinutes()]).toEqual([2026, 8, 13, 0, 0]);
+    const withTime = new Date(parseChatTimeBound("2026-09-13 14:30", "--until"));
+    expect([withTime.getFullYear(), withTime.getMonth(), withTime.getDate(), withTime.getHours(), withTime.getMinutes()]).toEqual([2026, 8, 13, 14, 30]);
+    // A T separator is accepted alongside the space form.
+    const tForm = new Date(parseChatTimeBound("2026-09-13T09:05", "--since"));
+    expect([tForm.getHours(), tForm.getMinutes()]).toEqual([9, 5]);
+  });
+
+  test("malformed and impossible values are rejected", () => {
+    for (const bad of ["", "not-a-date", "2026-9-13", "2026-13-01", "2026-09-31", "2026-02-29", "2026-09-13 25:99", "2026-09-13T10:70", "2026-09-13 10:00:00"]) {
+      expect(() => parseChatTimeBound(bad, "--since")).toThrow();
+    }
+  });
+});
+
+describe("chat tail row filter", () => {
+  const row = tailRow;
+  const noFilter = tailNoFilter;
+
+  test("match regexes AND together and test the body only", () => {
+    const filter = { ...noFilter(), matches: [/rebase/i, /payments/] };
+    // Both patterns must hit, regardless of case.
+    expect(filterChatTailRows([row({ id: 1, body: "Rebase the payments module" })], filter)).toHaveLength(1);
+    // One match short of AND leaves the row out - even when the missing
+    // pattern's word appears in a participant name instead of the body.
+    expect(filterChatTailRows([row({ id: 2, body: "rebasing the module", from: "payments-watcher" })], filter)).toHaveLength(0);
+  });
+
+  test("from/to substrings match rendered names case-insensitively", () => {
+    const filter = { ...noFilter(), fromSubstr: ["AL"], toSubstr: ["bo"] };
+    expect(filterChatTailRows([row({ id: 1, from: "Al Go Rithm", to: "Bob" })], filter)).toHaveLength(1);
+    expect(filterChatTailRows([row({ id: 2, from: "Marlowe", to: "Bob" })], filter)).toHaveLength(0);
+    expect(filterChatTailRows([row({ id: 3, from: "Al Go Rithm", to: "Carol" })], filter)).toHaveLength(0);
+  });
+
+  test("since/until form a half-open window on created_at", () => {
+    // Boundary rows are built from the same local clock the parser uses,
+    // so the expected in/out split is fixed per row in any timezone: id 1
+    // is one second before --since (out), 2 lands exactly on --since
+    // (inclusive), 3 inside, 4 exactly on --until (exclusive), 5 after.
+    const sinceMs = parseChatTimeBound("2026-09-12 09:30", "--since");
+    const untilMs = parseChatTimeBound("2026-09-12 10:00", "--until");
+    const filter = { ...noFilter(), sinceMs, untilMs };
+    const rows = [
+      row({ id: 1, created_at: new Date(sinceMs - 1000).toISOString() }),
+      row({ id: 2, created_at: new Date(sinceMs).toISOString() }),
+      row({ id: 3, created_at: new Date(sinceMs + 60_000).toISOString() }),
+      row({ id: 4, created_at: new Date(untilMs).toISOString() }),
+      row({ id: 5, created_at: new Date(untilMs + 60_000).toISOString() }),
+    ];
+    expect(filterChatTailRows(rows, filter).map((r) => r.id)).toEqual([2, 3]);
+  });
+
+  test("absent bounds keep every row that passes the other filters", () => {
+    expect(filterChatTailRows([row({ id: 1 })], noFilter())).toHaveLength(1);
+  });
+
+  test("broadcast and departed participants match their rendered strings", () => {
+    const filter = { ...noFilter(), toSubstr: ["broadcast"] };
+    // The row keeps the real recipient; only the rendered event says
+    // "broadcast", so --to broadcast matches nothing here...
+    expect(filterChatTailRows([row({ id: 1, viaBroadcast: true, to: "beta" })], filter)).toHaveLength(0);
+    // ...while a departed sender matches its unknown-departed rendering,
+    // because messageFeed already renders names through
+    // renderChatParticipant before the filter sees the row.
+    const departed = { ...noFilter(), fromSubstr: ["departed"] };
+    expect(filterChatTailRows([row({ id: 2, from: "unknown (ses_mortal1, departed)" })], departed)).toHaveLength(1);
+  });
+});
+
+describe("chat tail backlog", () => {
+  const row = tailRow;
+  const noFilter = tailNoFilter;
+  const feed = () => [
+    row({ id: 1, body: "one" }),
+    row({ id: 2, body: "two" }),
+    row({ id: 3, body: "three" }),
+    row({ id: 4, body: "four" }),
+    row({ id: 5, body: "five" }),
+  ];
+
+  test("limit renders the last N rows and counts the elided rest", () => {
+    const { events, state, elided } = chatTailBacklog(feed(), noFilter(), 2);
+    expect(events.map((e) => (e.kind === "sent" ? e.body : null))).toEqual(["four", "five"]);
+    expect(elided).toBe(3);
+    // The diff state covers every filtered row, not just the rendered ones.
+    expect([...state.keys()]).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test("a null limit keeps everything and elides nothing", () => {
+    const { events, elided } = chatTailBacklog(feed(), noFilter(), null);
+    expect(events).toHaveLength(5);
+    expect(elided).toBe(0);
+  });
+
+  test("filters shrink the feed before the limit applies", () => {
+    const filter = { ...noFilter(), matches: [/t/] };
+    // "two" and "three" are the only bodies containing "t"; limit 1 keeps
+    // the LAST matching row, and the elided count is relative to the
+    // filtered feed, not the raw one.
+    const { events, elided } = chatTailBacklog(feed(), filter, 1);
+    expect(events.map((e) => (e.kind === "sent" ? e.body : null))).toEqual(["three"]);
+    expect(elided).toBe(1);
+  });
+
+  test("state seeds from every feed row, matching or not", () => {
+    // A non-matching row is still in the diff state: its filter outcome
+    // can flip mid-follow (a rename or unregister changes rendered
+    // names), and it must never resurface as a sent event.
+    const { state } = chatTailBacklog(feed(), { ...noFilter(), matches: [/t/] }, null);
+    expect([...state.keys()]).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test("a rendered-name flip in follow mode resurfaces no sent events", () => {
+    // A peer's unregister re-renders its whole history as "unknown
+    // (... departed)". Backlog time: the peer is alive and its rows do
+    // not match --from unknown, so nothing renders. Poll time: the peer
+    // is gone, the same rows now match the filter - and none may re-emit
+    // as sent, because the backlog state already knows every id.
+    const backlogRows = [
+      tailRow({ id: 1, from: "Brute", body: "old one" }),
+      tailRow({ id: 2, from: "Brute", body: "old two" }),
+    ];
+    const { state } = chatTailBacklog(backlogRows, { ...tailNoFilter(), fromSubstr: ["unknown"] }, null);
+    expect([...state.keys()]).toEqual([1, 2]);
+    const flippedPoll = [
+      tailRow({ id: 1, from: "unknown (ses_brute12, departed)", body: "old one" }),
+      tailRow({ id: 2, from: "unknown (ses_brute12, departed)", body: "old two" }),
+    ];
+    const poll = filterChatTailRows(flippedPoll, { ...tailNoFilter(), fromSubstr: ["unknown"] });
+    expect(poll.map((r) => r.id)).toEqual([1, 2]);
+    expect(chatTailDiff(state, poll).events).toEqual([]);
+  });
+
+  test("follow diffs over the seeded state re-emit no sent events", () => {
+    const rows = feed();
+    const { state } = chatTailBacklog(rows, noFilter(), 2);
+    // Re-polling the same feed after every inbox drains must not re-emit
+    // the elided history as sent - the limit hid cards, not rows - but
+    // read transitions on those rows are news and do fire.
+    const events = chatTailDiff(state, rows.map((r) => ({ ...r, read_at: "2026-09-12T11:00:00Z" }))).events;
+    expect(events.map((e) => e.kind)).toEqual(["read", "read", "read", "read", "read"]);
+  });
+
+  test("a new matching row in follow mode emits, a non-matching one does not", () => {
+    const { state } = chatTailBacklog(feed(), { ...noFilter(), matches: [/hit/] }, null);
+    const poll = filterChatTailRows(
+      [row({ id: 9, body: "no match" }), row({ id: 10, body: "direct hit" })],
+      { matches: [/hit/], fromSubstr: [], toSubstr: [], sinceMs: null, untilMs: null },
+    );
+    const events = chatTailDiff(state, poll).events;
+    expect(events.map((e) => (e.kind === "sent" ? e.body : null))).toEqual(["direct hit"]);
   });
 });

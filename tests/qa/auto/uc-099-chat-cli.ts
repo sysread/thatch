@@ -9,9 +9,12 @@ import { ThatchDB } from "../../../src/db";
  * Automatable: `thatch chat list` and `thatch chat tail --once` are pure
  * CLI reads over a controlled DB. Seeds registered sessions with topics
  * (fresh and stale), a direct message, a broadcast, and a departed sender,
- * then verifies the roster and the tail's sent-line rendering, including
- * the broadcast marker and the departed-sender fallback. The follow mode
- * (no --once) is a live loop and is covered by the user doc workflow.
+ * then verifies the roster and the tail's card rendering, including
+ * the broadcast marker and the departed-sender fallback. A second seed
+ * batch (numbered fillers) exercises the tail's --limit elision note,
+ * ANDed --match body filters, --from name matching, and the --since/
+ * --until window. The follow mode (no --once) is a live loop and is
+ * covered by the user doc workflow.
  */
 
 const useCase: UseCase = {
@@ -23,13 +26,15 @@ const useCase: UseCase = {
   steps: [
     "1. Seed a DB: three registered sessions (alpha with a topic, beta, ghost aged stale), a direct message, a broadcast, and a message from a sender that then unregisters.",
     "2. Run `thatch chat list` and verify the roster renders name, human age, project, and topic.",
-    "3. Run `thatch chat tail --once` and verify sent lines render [timestamp] from -> to, with broadcast rows marked.",
+    "3. Run `thatch chat tail --once` and verify the cards render From/To/When headers, with broadcast rows marked.",
     "4. Verify a departed sender renders as unknown in the tail.",
+    "5. Seed 25 numbered filler messages, then run filtered tails: verify --limit card counts and the stderr elision note, ANDed --match, --from name matching, and the --since/--until window.",
   ].join("\n"),
   expected: [
     "- The roster shows every registered session with a human-readable age, its project, and its topic when set.",
-    "- Tail lines have the shape [timestamp] from -> to: body; via_broadcast rows render 'broadcast' as the recipient.",
+    "- Tail cards render From/To/When headers with full bodies; via_broadcast rows render 'broadcast' as the recipient.",
     "- A sender whose directory row is gone renders as 'unknown (id, departed)'.",
+    "- --limit caps the backlog with an elision note on stderr; --match ANDs; --from/--to match names; --since/--until bound the window.",
   ].join("\n"),
 
   async run(ctx: QaContext) {
@@ -102,6 +107,79 @@ const useCase: UseCase = {
     // The departed sender renders through the unknown fallback.
     if (!tailText.includes("unknown (")) {
       console.log(`  FAIL: departed sender did not degrade to unknown:\n${tailText}`);
+      return "FAIL";
+    }
+
+    // --limit/--match/--from/--since/--until: seed enough rows that the
+    // default limit would elide, then check each flag's effect. All runs
+    // are one-shot (--once); a card is counted by its When line.
+    const cardCount = (r: { stdout: Buffer }) =>
+      r.stdout.toString().replace(/\x1b\[[0-9;]*m/g, "").split("\n").filter((l) => l.startsWith(" When")).length;
+
+    // Traffic for the filter checks: 25 numbered filler rows (28 total).
+    const more = new ThatchDB(ctx.env.THATCH_DB_PATH);
+    try {
+      for (let i = 1; i <= 25; i++) more.sendChatMessage("ses_alpha", "ses_beta", `uc099 filler ${i}`);
+    } finally {
+      more.close();
+    }
+
+    const limited = await run(["chat", "tail", "--once", "--limit", "3"]);
+    if (limited.exitCode !== 0) {
+      console.log(`  FAIL: --limit tail exited ${limited.exitCode}`);
+      return "FAIL";
+    }
+    if (limited.stderr.toString().includes("showing last 3 of 28 messages") === false) {
+      console.log(`  FAIL: missing elision note on stderr:\n${limited.stderr.toString()}`);
+      return "FAIL";
+    }
+    if (cardCount(limited) !== 3) {
+      console.log("  FAIL: --limit 3 did not render exactly 3 cards");
+      return "FAIL";
+    }
+
+    // The shipped default: a flagless --once shows exactly the default
+    // limit with the same elision note.
+    const defaulted = await run(["chat", "tail", "--once"]);
+    if (defaulted.exitCode !== 0 || cardCount(defaulted) !== 20) {
+      console.log(`  FAIL: flagless --once should show 20 of 28 cards, got ${cardCount(defaulted)}`);
+      return "FAIL";
+    }
+    if (!defaulted.stderr.toString().includes("showing last 20 of 28 messages")) {
+      console.log(`  FAIL: default elision note missing:\n${defaulted.stderr.toString()}`);
+      return "FAIL";
+    }
+
+    // Repeatable --match ANDs: both patterns together isolate filler 12.
+    const anded = await run(["chat", "tail", "--once", "--match", "filler", "--match", "12$"]);
+    if (anded.exitCode !== 0 || cardCount(anded) !== 1) {
+      console.log(`  FAIL: ANDed --match should show exactly filler 12:\n${anded.stdout.toString()}`);
+      return "FAIL";
+    }
+
+    // --from matches rendered names case-insensitively; the departed
+    // sender only matches through its unknown-departed rendering.
+    const departed = await run(["chat", "tail", "--once", "--from", "unknown"]);
+    if (departed.exitCode !== 0 || cardCount(departed) !== 1) {
+      console.log("  FAIL: --from unknown should show exactly the departed sender's message");
+      return "FAIL";
+    }
+
+    // The time window is half-open and bounds the backlog: an --until in
+    // the past shows nothing, and --since + --until can slice the window.
+    const empty = await run(["chat", "tail", "--once", "--until", "2000-01-01"]);
+    if (empty.exitCode !== 0 || cardCount(empty) !== 0) {
+      console.log("  FAIL: --until in the past should render no cards");
+      return "FAIL";
+    }
+    const today = await run(["chat", "tail", "--once", "--since", "1970-01-01", "--until", "2999-01-01", "--limit", "all"]);
+    if (today.exitCode !== 0 || cardCount(today) !== 28) {
+      console.log("  FAIL: a window covering the seed should render all 28 cards");
+      return "FAIL";
+    }
+    // Nothing elided means no note: --limit all must keep stderr quiet.
+    if (today.stderr.toString().includes("showing last")) {
+      console.log(`  FAIL: --limit all should not print an elision note:\n${today.stderr.toString()}`);
       return "FAIL";
     }
     // Read events never appear in a --once snapshot by design (they fire

@@ -47,7 +47,11 @@ Read-only access to the chat directory your opencode sessions share
 ```bash
 thatch chat list               # who is registered: name, age, project, topic
 thatch chat tail               # follow sent and read events, live
-thatch chat tail --once        # print the messages sent so far and exit
+thatch chat tail --once        # print the last 20 messages and exit
+thatch chat tail --once --limit 50   # a longer backlog (or --limit all)
+thatch chat tail --match "rebase" --match "payments"   # body must match both
+thatch chat tail --from al --to bob        # substring match on names
+thatch chat tail --since 2026-09-12 --until "2026-09-13 09:00"   # a window
 ```
 
 `chat list` shows every registered session with how long since its last
@@ -62,22 +66,22 @@ session's registered topic appears in muted italics - so the tail tells
 you not just who is talking but what they are working on:
 
 ```text
- From  Al Go Rithm <cross-session messaging between opencode sessions>
- To    Brute the Dream Farrier <diagnosing watcher underuse>
- When  2026-09-12 14:02 America/Denver
+ From   Al Go Rithm <cross-session messaging between opencode sessions>
+ To     Brute the Dream Farrier <diagnosing watcher underuse>
+ When   2026-09-12 14:02 America/Denver
 
 CI is green on main
 ____________________________________________________________
 
- To  broadcast
- When  2026-09-12 21:07 America/Denver
+ To     broadcast
+ When   2026-09-12 21:07 America/Denver
 
 rebasing payments, hold off
 ____________________________________________________________
 
- From  Kurn the Typechecker <release QA>
- read  Marlowe the Cherry Picker <payments refactor>
- When  2026-09-12 21:08 America/Denver
+ From   Kurn the Typechecker <release QA>
+ read Marlowe the Cherry Picker <payments refactor>
+ When   2026-09-12 21:08 America/Denver
 
 direct ping
 ```
@@ -87,6 +91,31 @@ Follow mode runs until Ctrl-C. Read events appear only in follow mode
 timestamps are in your local timezone. The chat itself flows through the
 agents (the CLI never sends, reads, or registers on a session's behalf;
 that happens from opencode sessions via the `thatch_chat_*` tools).
+
+The backlog shows the last 20 messages before follow mode takes over.
+When messages are hidden, tail prints a one-line note on stderr saying
+how many there were; `--limit N` raises or lowers the backlog and
+`--limit all` shows everything. All the filters apply to live events
+too, so a filtered tail keeps watching the same way:
+
+- `--match PATTERN` filters message bodies. Repeat it to AND patterns
+  together: every one must match the message body.
+- `--from NAME` and `--to NAME` match participant names (case doesn't
+  matter). A departed sender can only be found as the `unknown`
+  rendering the tail shows. Broadcast cards say `broadcast` in the To
+  slot, but the row underneath keeps the real recipient: `--to <name>`
+  finds the fan-out rows that reached them, while `--to broadcast`
+  matches nothing.
+- `--since DT` and `--until DT` bound the window; a message counts if
+  it was sent at or after `--since` and before `--until`. The date
+  format is `YYYY-MM-DD` with an optional `HH:MM` in your local
+  timezone.
+
+A `--until` already in the past exits after the backlog (a closed
+window has nothing left to follow); one in the future follows until
+the window closes. Note that the limit hides sent cards, not their
+reads: a hidden message that gets read during follow mode still emits
+its read card.
 
 ## Priming a new project
 

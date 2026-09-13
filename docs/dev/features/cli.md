@@ -22,7 +22,7 @@ The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection, M
 | `setup --claude [--cursor] [--global]` | none | `--claude`, `--cursor`, `--global` | none | Install config + instructions + hooks + skills |
 | `session list/get/transcript/search` | per subcommand | `-s/--session`, `--id`, `--after`, `--before`, `--regex`, `--limit` | none | Read-only archaeology on the opencode session database (JSONL output) |
 | `chat list` | none | none | none | Registered chat sessions: name, human-readable age, project, topic |
-| `chat tail [--once]` | none | `--once` | none | Follow cross-session chat: sent and read events (`--once` prints the backlog and exits) |
+| `chat tail` | none | `--once`, `--limit N\|all`, `--match RE` (repeatable), `--from NAME`, `--to NAME`, `--since DT`, `--until DT` | none | Follow cross-session chat: sent and read events. Backlog defaults to the last 20 messages; filters apply to follow mode too. |
 | (unknown) | none | none | none | Print usage, exit 1 |
 
 ## Global behavior
@@ -48,14 +48,25 @@ Read-only window on the cross-session chat directory ([cross-session-chat.md](cr
 
 - `chat list` renders the roster: display name, human-readable age since the
   last heartbeat, project, and topic when set.
-- `chat tail [--once]` follows the message stream. Sent lines have the shape
-  `[timestamp] from -> to: body` (broadcast rows render `broadcast` via the
-  `via_broadcast` marker); in follow mode, an inbox drain emits a read line
-  (`[timestamp] ${reader} read a message from ${sender}: preview` — the
-  reader is the recipient draining its inbox). The diff logic is
-  `chatTailDiff()`/`formatChatTailEvent()` in `src/chat.ts`, unit-tested
-  there; `--once` prints one snapshot and exits, because a snapshot has no
-  previous state to diff read events against.
+- `chat tail` follows the message stream as styled cards: label chips,
+  colored names, dimmed timestamps, topic annotations after names, and a
+  drawn rule between cards. The card renderer is `formatChatTailCard()`
+  and the event shaping is `chatTailDiff()` in `src/chat.ts`, unit-tested
+  there; the single-line `formatChatTailEvent()` remains for tests and
+  compact contexts. `--once` prints one snapshot and exits, because a
+  snapshot has no previous state to diff read events against.
+- The backlog renders only the last `CHAT_TAIL_DEFAULT_LIMIT` (20) messages;
+  `chatTailBacklog()` in `src/chat.ts` filters the feed, seeds the diff
+  state from every feed row (so the limit hides cards, not history, and a
+  mid-follow rename or unregister cannot resurface old rows as sent
+  events), and reports the elided count for
+  the CLI's stderr note. `filterChatTailRows()` ANDs body regexes
+  (`--match`, repeatable), rendered-name substrings (`--from`/`--to`,
+  case-insensitive), and a half-open `--since`/`--until` window on
+  `created_at`; the same filter applies to follow polls, so non-matching
+  messages stay invisible (their read events too). A `--until` in the past
+  exits after the backlog; one in the future follows until the window
+  closes. `parseChatTimeBound()` accepts `YYYY-MM-DD [HH:MM]` local time.
 
 ## Environment variables
 

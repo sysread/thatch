@@ -183,16 +183,21 @@ injection-hygiene layers.
 ### CLI access
 
 The user watches the conversation without an agent: `thatch chat list`
-renders the roster with human-readable heartbeat ages, and
-`thatch chat tail [--once]` follows the message stream. The tail diffs
-`ChatStore.messageFeed()` snapshots via `chatTailDiff()` (unit-tested in
-`tests/chat.test.ts`): sent lines on first view, then new sends and newly-
-read messages per poll. `chat_messages.via_broadcast` marks fan-out rows so
-the tail renders one `-> broadcast` line per recipient instead of what
-would otherwise look like identical direct sends. The CLI takes no chat
-write actions (the wake machinery owns those paths); the only writes it
-can trigger are the schema migrations that run whenever any thatch
-process opens the database.
+renders the roster with human-readable heartbeat ages, and `thatch chat
+tail` follows the message stream as cards. The backlog renders only the
+last `CHAT_TAIL_DEFAULT_LIMIT` (20) messages via `chatTailBacklog()`;
+`filterChatTailRows()` narrows every feed snapshot (backlog and follow
+polls alike) by body regexes, participant-name substrings, and a
+half-open time window. The diff itself is `chatTailDiff()` (unit-tested
+in `tests/chat.test.ts`): sent cards on first view, then new sends and
+newly-read messages per poll, with the diff state seeded from the full
+feed so neither the limit nor a mid-follow rename/unregister can
+resurface old rows as sent events. `chat_messages.via_broadcast` marks
+fan-out rows so the tail renders one `-> broadcast` card per recipient
+instead of what would otherwise look like identical direct sends. The
+CLI takes no chat write actions (the wake machinery owns those paths);
+the only writes it can trigger are the schema migrations that run
+whenever any thatch process opens the database.
 
 ## Interactions with other features
 

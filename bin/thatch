@@ -10,7 +10,7 @@ import { hygieneReport } from "../src/hygiene";
 import { claudeSessionStartReminder } from "../src/prompts";
 import { setupClaudeCode, setupCursor } from "../src/setup";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
-import { chatTailDiff, formatChatTailCard, CHAT_TAIL_SEPARATOR, isStale, CHAT_STALE_MINUTES } from "../src/chat";
+import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailCard, CHAT_TAIL_SEPARATOR, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, isStale, CHAT_STALE_MINUTES, type ChatTailFilter } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
 
 const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
@@ -47,8 +47,17 @@ function usage(): never {
   thatch session search <query> [--session <id>] [--regex] [--limit N]
                                    JSONL of matching parts across sessions (decoded content)
   thatch chat list                 Registered chat sessions: name, age, project, topic
-  thatch chat tail [--once]        Follow cross-session chat: sent and read events
-                                   (--once prints current state and exits)
+  thatch chat tail [--once] [--limit N|all] [--match RE]
+                   [--from NAME] [--to NAME] [--since DT] [--until DT]
+                                   Follow cross-session chat: sent and read
+                                   events. The backlog shows the last
+                                   ${CHAT_TAIL_DEFAULT_LIMIT} messages
+                                   (--limit N or --limit all to override).
+                                   --match filters message bodies
+                                   (repeatable, ANDed); --from/--to filter
+                                   participant names; --since/--until bound
+                                   the window ("YYYY-MM-DD [HH:MM]" local
+                                   time). Filters apply to follow mode too.
 
 Stores default to the repo detected from git remote. Use "global" for the
 global store. Use "all" with search to search project + global together.`);
@@ -128,15 +137,40 @@ function parseTimeBound(value: string, flag: string): number {
   return parsed;
 }
 
-/** Reads a flag's value (-flag value or --flag=value forms). */
+/** Reads a flag's value (-flag value or --flag=value forms). A flag given
+ *  with no value is a typo, not a default - it dies loudly so `--until`
+ *  at the end of a command line cannot silently disable the bound. */
 function flagValue(flags: string[], ...names: string[]): string | undefined {
   for (let i = 0; i < flags.length; i++) {
     for (const name of names) {
-      if (flags[i] === name) return flags[i + 1];
+      if (flags[i] === name) {
+        if (flags[i + 1] === undefined) {
+          console.error(`error: ${name} expects a value`);
+          process.exit(1);
+        }
+        return flags[i + 1];
+      }
       if (flags[i]?.startsWith(`${name}=`)) return flags[i]!.slice(name.length + 1);
     }
   }
   return undefined;
+}
+
+/** Collects every occurrence of a repeatable flag, dying on a dangling one. */
+function flagValues(flags: string[], ...names: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < flags.length; i++) {
+    for (const name of names) {
+      if (flags[i] === name) {
+        if (flags[i + 1] === undefined) {
+          console.error(`error: ${name} expects a value`);
+          process.exit(1);
+        }
+        out.push(flags[i + 1]);
+      } else if (flags[i]?.startsWith(`${name}=`)) out.push(flags[i]!.slice(name.length + 1));
+    }
+  }
+  return out;
 }
 
 function openSessionDb(): SessionDB {
@@ -297,27 +331,103 @@ async function chatCommand(rest: string[]): Promise<void> {
 
     case "tail": {
       const onceOnly = restArgs.includes("--once");
+      // Parse and validate everything up front: a bad regex or date must
+      // fail before any cards print, not mid-follow.
+      const matches = flagValues(restArgs, "--match").map((pattern) => {
+        try {
+          return new RegExp(pattern);
+        } catch {
+          console.error(`error: --match is not a valid regular expression: "${pattern}"`);
+          process.exit(1);
+        }
+      });
+      const limitArg = flagValue(restArgs, "--limit");
+      let limit: number | null = CHAT_TAIL_DEFAULT_LIMIT;
+      if (limitArg !== undefined) {
+        if (limitArg === "all") limit = null;
+        else if (!/^\d+$/.test(limitArg)) {
+          console.error(`error: --limit expects a positive integer or "all", got "${limitArg}"`);
+          process.exit(1);
+        } else limit = Number(limitArg);
+        if (limit !== null && limit < 1) {
+          console.error(`error: --limit expects a positive integer or "all", got "${limitArg}"`);
+          process.exit(1);
+        }
+      }
+      let sinceMs: number | null = null;
+      let untilMs: number | null = null;
+      try {
+        const since = flagValue(restArgs, "--since");
+        const until = flagValue(restArgs, "--until");
+        if (since !== undefined) sinceMs = parseChatTimeBound(since, "--since");
+        if (until !== undefined) untilMs = parseChatTimeBound(until, "--until");
+      } catch (err) {
+        console.error(`error: ${(err as Error).message}`);
+        process.exit(1);
+      }
+      if (sinceMs !== null && untilMs !== null && sinceMs >= untilMs) {
+        console.error("error: --since is not before --until; the window is empty");
+        process.exit(1);
+      }
+      const fromName = flagValue(restArgs, "--from");
+      const toName = flagValue(restArgs, "--to");
+      const filter: ChatTailFilter = {
+        matches,
+        fromSubstr: fromName !== undefined ? [fromName] : [],
+        toSubstr: toName !== undefined ? [toName] : [],
+        sinceMs,
+        untilMs,
+      };
+
       // Diff state: one entry per seen message id holding its read_at, so
       // each poll emits only new messages and newly-read rows. The diff
-      // logic lives in src/chat.ts (chatTailDiff), unit-tested there.
-      const state = new Map<number, string | null>();
+      // and backlog logic lives in src/chat.ts (chatTailDiff,
+      // chatTailBacklog), unit-tested there. The backlog seeds the state
+      // from every feed row, so the limit hides cards, not history.
+      let state: Map<number, string | null>;
+      let firstFollowEvent = true;
 
-      // Follow mode holds the handle open until Ctrl-C; the finally below
-      // closes it on every exit path, including the SIGINT handler's.
+      // Follow mode holds the handle open until Ctrl-C. The finally below
+      // closes it on every exit path except the SIGINT handler's, which
+      // is why the handler closes it itself: process.exit does not unwind
+      // finally blocks (closing twice is harmless).
       try {
-        // First pass: render the backlog as cards, then follow unless --once.
-        const backlog = chatTailDiff(state, db.chatMessageFeed()).events;
-        console.log(backlog.map(formatChatTailCard).join(`\n\n${CHAT_TAIL_SEPARATOR}\n\n`));
-        if (onceOnly) break;
+        // First pass: render the backlog as cards, then follow unless
+        // --once or the --until window has already closed (a closed
+        // window has no future events to follow). The backlog fetch gets
+        // the same friendly failure treatment as follow polls: a locked
+        // or missing database should say so, not die with a stack trace.
+        let backlog;
+        try {
+          backlog = chatTailBacklog(db.chatMessageFeed(), filter, limit);
+        } catch (err) {
+          console.error(`[thatch chat tail] feed query failed: ${err}`);
+          console.error("The database may be locked or missing; exiting.");
+          return;
+        }
+        state = backlog.state;
+        if (backlog.elided > 0) {
+          // The elision note goes to stderr so stdout stays a clean card
+          // stream for pipes.
+          console.error(
+            `[thatch chat tail] showing last ${backlog.events.length} of ${backlog.elided + backlog.events.length} messages (--limit N, --limit all)`,
+          );
+        }
+        console.log(backlog.events.map(formatChatTailCard).join(`\n\n${CHAT_TAIL_SEPARATOR}\n\n`));
+        if (onceOnly || (filter.untilMs !== null && filter.untilMs <= Date.now())) break;
 
-        process.on("SIGINT", () => process.exit(0));
-        let firstFollowEvent = true;
+        process.on("SIGINT", () => {
+          db.close();
+          process.exit(0);
+        });
         for (;;) {
           await Bun.sleep(2000);
           try {
-            for (const event of chatTailDiff(state, db.chatMessageFeed()).events) {
+            // Follow polls re-filter the live feed: matching messages
+            // surface as they arrive, non-matching ones stay invisible.
+            for (const event of chatTailDiff(state, filterChatTailRows(db.chatMessageFeed(), filter)).events) {
               // Separate follow-mode cards from whatever came before.
-              if (firstFollowEvent && backlog.length > 0) console.log(`\n${CHAT_TAIL_SEPARATOR}\n`);
+              if (firstFollowEvent && backlog.events.length > 0) console.log(`\n${CHAT_TAIL_SEPARATOR}\n`);
               firstFollowEvent = false;
               console.log(formatChatTailCard(event));
             }
@@ -328,6 +438,11 @@ async function chatCommand(rest: string[]): Promise<void> {
             console.error("The database may be locked or missing; exiting.");
             return;
           }
+          // The window check runs after the poll, so a message created
+          // inside the window but landed during the final sleep is still
+          // displayed; anything inserted after this poll has a created_at
+          // past the bound and is filtered by the window anyway.
+          if (filter.untilMs !== null && Date.now() >= filter.untilMs) break;
         }
       } finally {
         db.close();
