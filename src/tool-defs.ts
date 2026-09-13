@@ -17,7 +17,7 @@ import {
   type NotificationPrefs,
 } from "./config";
 import { sendNotification, defaultSpawner, type NotifyChannel, type Spawner } from "./notify";
-import { predictionVerb } from "./prompts";
+import { predictionVerb, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, type WatcherRegistry, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
 import { CHAT_STALE_MINUTES, isStale, renderChatParticipant, mcpSessionID, type ChatHostKind } from "./chat";
@@ -1659,7 +1659,11 @@ const chatReadDef: ToolDef = {
       const sender = renderChatParticipant(m.from_name, m.from_session);
       return `[from ${sender}, ${formatChatTimestamp(m.created_at)}] ${m.body}`;
     });
-    return `${lines.join("\n")}\n(${messages.length} message${messages.length === 1 ? "" : "s"}, marked read)`;
+    // The frame is the injection boundary: bodies are other agents' text,
+    // so the tool output marks everything between the fences as untrusted
+    // data (chatInboxFrame in prompts.ts). The persisted rows are
+    // untouched - the frame exists only in this output.
+    return `${chatInboxFrame(lines, messages.length)}\n(${messages.length} message${messages.length === 1 ? "" : "s"}, marked read)`;
   },
 };
 

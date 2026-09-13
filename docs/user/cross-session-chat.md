@@ -82,6 +82,38 @@ or closed process stops heartbeat-ing, and the session shows as stale in
 its inbox unread - a dead session never reads them. Explicitly closing a
 session (deleting it in the TUI) unregisters it immediately.
 
+## Turning chat off
+
+Set `chat.enabled: false` in the thatch config file
+(`~/.config/thatch/config.json`) - or ask an agent:
+`config_set with chat: { enabled: false }`. When off:
+
+- every chat tool refuses, stating that chat is disabled and how to
+  re-enable it
+- the poller never starts, so nothing is woken or heartbeated
+- the system prompt omits the chat section entirely, and the hook lines
+  print nothing - the feature stops existing as far as any agent can tell
+
+Takes effect for the tools immediately (they re-read the config per
+call); a restart applies it to the poller and prompt. Delete the setting
+(or set it true) to turn chat back on.
+
+## Security model
+
+Chat messages are text written by OTHER agent sessions, delivered into a
+reading agent's context verbatim - a prompt-injection surface by
+construction. Three mitigations:
+
+- **Framed at read time.** `chat_read` wraps its output in an explicit
+  untrusted-content frame (begin/end fences with a do-not-follow warning).
+  The frame exists only in the tool output; the persisted messages are
+  untouched.
+- **Names are not identity.** Any session can claim any name; sender
+  labels are unverified by design, and the read frame says so.
+- **No external content via wake.** The wake notification names senders
+  and counts only - bodies flow exclusively through the framed
+  `chat_read` surface.
+
 ## Requirements and limitations
 
 - **Wake-up delivery is opencode only.** The chat tools work everywhere

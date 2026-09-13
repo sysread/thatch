@@ -167,6 +167,19 @@ turn reads. The accepted edge: a real user message whose every visible
 part starts with the prefix is skipped the same way, losing that one turn's
 advisory nudges.
 
+### The untrusted-content frame
+
+Message bodies are other agents' text delivered verbatim into the reading
+model's context - a prompt-injection surface by construction. The watcher
+privacy model solves the same surface with pointer-only notifications, but
+chat's payload IS the body, so `chat_read` frames the boundary instead:
+`chatInboxFrame()` (src/prompts.ts) wraps the message lines in
+begin/end fences with an explicit do-not-follow warning, and the sender
+names are labeled self-claimed and unverified. The frame exists only in
+the tool output - persisted rows are untouched - and pairs with the wake
+nudge's anti-loop rule and the isChatEchoParts skip as the feature's three
+injection-hygiene layers.
+
 ### CLI access
 
 The user watches the conversation without an agent: `thatch chat list`
@@ -204,6 +217,15 @@ process opens the database.
   can start a turn in the client's conversation.
 
 ## Multi-host delivery tiers
+
+Chat works on every host, and can be disabled entirely: `chat.enabled:
+false` in the thatch config makes every chat tool refuse (a `[disabled]`
+reply naming the re-enable path), stops the poller at init, omits the
+system prompt's chat section, and silences the hook lines. The tools
+re-read the config per call, so a toggle applies immediately; the poller
+gate is read once at init and needs a restart. The hook lines gate on the
+same config, so a disabled feature never advertises itself through any
+surface.
 
 Chat works on every host. Earlier designs for the MCP path - a JSONL
 temp-file inbox, a socket or daemon - were rejected: the DB already is the

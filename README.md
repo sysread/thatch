@@ -98,7 +98,9 @@ Thatch gives your agent:
   messages land in its inbox -- opencode sessions get woken with a prompt
   when idle, other hosts see pending mail at their next prompt. Loop-safe:
   messages are informational to the receiving agent, and wake prompts are
-  rate-capped.
+  rate-capped. Delivered messages are framed as untrusted content so a
+  hostile message cannot impersonate your instructions. Disable the whole
+  feature with `chat.enabled: false` in the thatch config.
 - **Notifications + user config** -- the agent can ping you out-of-band when a
   long-running outcome lands: a desktop banner, a spoken voice
   announcement, or both (macOS and Linux). Preferences live in a
