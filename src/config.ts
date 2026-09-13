@@ -16,15 +16,21 @@ export const notificationPrefsSchema = z.strictObject({
   sound: z.string().optional(),
 });
 
+export const chatPrefsSchema = z.strictObject({
+  enabled: z.boolean().optional(),
+});
+
 export const configSchema = z.strictObject({
   notifications: notificationPrefsSchema.optional(),
+  chat: chatPrefsSchema.optional(),
 });
 
 export type NotificationPrefs = z.infer<typeof notificationPrefsSchema>;
+export type ChatPrefs = z.infer<typeof chatPrefsSchema>;
 export type Config = z.infer<typeof configSchema>;
 
 /** Sections in presentation order. config_get / config_set iterate this. */
-export const CONFIG_SECTIONS = ["notifications"] as const;
+export const CONFIG_SECTIONS = ["notifications", "chat"] as const;
 export type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 
 /**
@@ -88,6 +94,21 @@ export function mergeNotificationPrefs(
   patch: NotificationPrefs,
 ): NotificationPrefs {
   return { ...current, ...patch };
+}
+
+/** Field-level merge for one section: omitted fields keep their values. */
+export function mergeChatPrefs(current: ChatPrefs | undefined, patch: ChatPrefs): ChatPrefs {
+  return { ...current, ...patch };
+}
+
+/**
+ * Whether cross-session chat is on. Unset means on - chat is the default,
+ * and the toggle exists for users who want the feature entirely dark: every
+ * chat tool refuses, wake delivery never starts, and the system prompt
+ * omits the chat section.
+ */
+export function chatEnabled(config: Config): boolean {
+  return config.chat?.enabled !== false;
 }
 
 /**

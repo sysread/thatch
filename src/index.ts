@@ -24,6 +24,7 @@ import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskV
 import { WatcherRegistry, ghApiRun, ghAvailable } from "./watchers";
 import { watcherNotificationNudge, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
 import { ChatPoller } from "./chat";
+import { chatEnabled, loadConfig } from "./config";
 import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
@@ -59,6 +60,12 @@ export const server: Plugin = async ({ client, worktree }) => {
   const configHome = process.env.XDG_CONFIG_HOME ?? join(home, ".config");
   const dbPath = process.env.THATCH_DB_PATH ?? join(configHome, "thatch", "thatch.db");
   const modelName = process.env.THATCH_MODEL ?? "Xenova/bge-small-en-v1.5";
+
+  // Whether cross-session chat is on (chat.enabled, default on). Read once
+  // at init: it gates the chat poller and the prompt's chat section. The
+  // chat tools re-read the file per call, so a toggle takes effect there
+  // without a restart.
+  const chatOn = chatEnabled(loadConfig(dbPath).config);
 
   const db = new ThatchDB(dbPath);
   const model = new BgeEmbeddingModel(modelName);
@@ -187,7 +194,9 @@ export const server: Plugin = async ({ client, worktree }) => {
     canDeliver: (sessionID) =>
       !compacting.has(sessionID) && sessionStatus.get(sessionID) === "idle",
   });
-  chatPoller.start();
+  // With chat disabled the tools refuse, so the poller would only heartbeat
+  // sessions and burn wake budget against a feature the user turned off.
+  if (chatOn) chatPoller.start();
 
   // Sessions currently being compacted. chat.message nudges are skipped while
   // a session is in this set - the agent can't call tools during summary
@@ -260,7 +269,7 @@ export const server: Plugin = async ({ client, worktree }) => {
     console.error(`[thatch] skill install failed: ${err}`);
   }
 
-  const sys = systemPrompt(repo);
+  const sys = systemPrompt(repo, chatOn);
   const compact = compactionContext(repo);
 
   // Direct extraction: create a child session linked to the parent and prompt

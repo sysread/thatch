@@ -3,8 +3,10 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  chatEnabled,
   configFilePath,
   loadConfig,
+  mergeChatPrefs,
   saveConfig,
   mergeNotificationPrefs,
   notificationDefaults,
@@ -109,5 +111,37 @@ describe("notificationDefaults", () => {
     if (process.platform !== "darwin") return;
     expect(notificationDefaults().voice).toBe("Zarvox");
     expect(notificationDefaults().sound).toBe("Submarine");
+  });
+});
+
+describe("chat config", () => {
+  test("unset chat means enabled", () => {
+    expect(chatEnabled({})).toBe(true);
+    expect(chatEnabled({ chat: {} })).toBe(true);
+    expect(chatEnabled({ chat: { enabled: true } })).toBe(true);
+  });
+
+  test("enabled: false turns the feature off", () => {
+    const dbPath = join(dbDir, "thatch.db");
+    saveConfig({ chat: { enabled: false } }, dbPath);
+    const loaded = loadConfig(dbPath);
+    expect(loaded.config.chat).toEqual({ enabled: false });
+    expect(chatEnabled(loaded.config)).toBe(false);
+  });
+
+  test("unknown chat keys fail validation", () => {
+    const dbPath = join(dbDir, "thatch.db");
+    saveConfig({}, dbPath);
+    const path = configFilePath(dbPath);
+    writeFileSync(path, JSON.stringify({ chat: { robot: "uprising" } }));
+    const loaded = loadConfig(dbPath);
+    expect(loaded.config).toEqual({});
+    expect(loaded.warning).toContain("invalid");
+  });
+
+  test("mergeChatPrefs is a field-level merge", () => {
+    expect(mergeChatPrefs(undefined, { enabled: false })).toEqual({ enabled: false });
+    expect(mergeChatPrefs({ enabled: false }, {})).toEqual({ enabled: false });
+    expect(mergeChatPrefs({ enabled: false }, { enabled: true })).toEqual({ enabled: true });
   });
 });

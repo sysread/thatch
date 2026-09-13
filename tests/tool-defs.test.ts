@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { ThatchDB } from "../src/db";
+import { saveConfig } from "../src/config";
 import { MockEmbeddingModel } from "./mocks/embeddings";
 import { TOOL_DEFS, type CoreContext } from "../src/tool-defs";
 import { systemPrompt, claudeInstructions } from "../src/prompts";
@@ -818,5 +819,63 @@ describe("chat delivery model in tool output", () => {
     await findChatTool("chat_register").execute({ name: "Status Mcp" }, ctx);
     const mcp = await findChatTool("chat_status").execute({ as: "Status Mcp" }, ctx);
     expect(mcp).toContain("at your next prompt");
+  });
+});
+
+describe("chat config toggle", () => {
+  const findToggleTool = (name: string) => TOOL_DEFS.find((t) => t.name === name)!;
+  let toggleDir: string;
+  let prevDbPath: string | undefined;
+
+  beforeEach(() => {
+    toggleDir = mkdtempSync(join(tmpdir(), "thatch-chat-toggle-"));
+    prevDbPath = process.env.THATCH_DB_PATH;
+    process.env.THATCH_DB_PATH = join(toggleDir, "thatch.db");
+  });
+
+  afterEach(() => {
+    if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+    else process.env.THATCH_DB_PATH = prevDbPath;
+    rmSync(toggleDir, { recursive: true, force: true });
+  });
+
+  test("chat tools refuse when chat.enabled is false", async () => {
+    saveConfig({ chat: { enabled: false } }, join(toggleDir, "thatch.db"));
+    const result = await findToggleTool("chat_register").execute(
+      { name: "Reluctant Guest" },
+      ctx,
+      { sessionID: "ses_toggle_off", agent: "build" },
+    );
+    expect(result).toContain("[disabled]");
+    expect(result).toContain("chat.enabled: false");
+  });
+
+  test("chat tools work by default (config unset)", async () => {
+    const result = await findToggleTool("chat_register").execute(
+      { name: "Happy Guest" },
+      ctx,
+      { sessionID: "ses_toggle_on", agent: "build" },
+    );
+    expect(result).toContain("[registered] Happy Guest");
+  });
+
+  test("the identity guard also refuses (chat_status)", async () => {
+    await findToggleTool("chat_register").execute(
+      { name: "Status Guest" },
+      ctx,
+      { sessionID: "ses_toggle_status", agent: "build" },
+    );
+    saveConfig({ chat: { enabled: false } }, join(toggleDir, "thatch.db"));
+    const result = await findToggleTool("chat_status").execute({}, ctx, { sessionID: "ses_toggle_status", agent: "build" });
+    expect(result).toContain("[disabled]");
+  });
+
+  test("config_set manages the chat section and config_get reads it back", async () => {
+    const saved = await findToggleTool("config_set").execute({ chat: { enabled: false } }, ctx);
+    expect(saved).toContain("[saved]");
+    expect(saved).toContain("enabled: false");
+    const read = await findToggleTool("config_get").execute({ section: "chat" }, ctx);
+    expect(read).toContain("chat:");
+    expect(read).toContain("enabled: false");
   });
 });

@@ -3,11 +3,15 @@ import type { ThatchDB, DedupCandidate, MemoryRow } from "./db";
 import type { EmbeddingModel } from "./embeddings";
 import {
   CONFIG_SECTIONS,
+  chatEnabled,
+  chatPrefsSchema,
   loadConfig,
+  mergeChatPrefs,
   mergeNotificationPrefs,
   notificationDefaults,
   notificationPrefsSchema,
   saveConfig,
+  type ChatPrefs,
   type Config,
   type ConfigSection,
   type NotificationPrefs,
@@ -891,6 +895,15 @@ function renderNotificationSection(prefs: NotificationPrefs | undefined): string
   return lines.join("\n");
 }
 
+/** Renders the chat section. Its only field defaults to on. */
+function renderChatSection(prefs: ChatPrefs | undefined): string {
+  const current = prefs?.enabled;
+  return [
+    "chat:",
+    `  enabled: ${current ?? "<unset>"} (default: on)`,
+  ].join("\n");
+}
+
 /** Drops keys explicitly set to undefined so a merge never overwrites. */
 function stripUndefined(obj: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
@@ -904,7 +917,7 @@ const configGetDef: ToolDef = {
     "The config file (~/.config/thatch/config.json, beside thatch.db) is " +
     "also hand-editable. Call this before config_set.",
   args: {
-    section: z.enum(["notifications"]).optional().describe(
+    section: z.enum(["notifications", "chat"]).optional().describe(
       "Restrict output to one section. Omit to read all sections.",
     ),
   },
@@ -918,6 +931,9 @@ const configGetDef: ToolDef = {
     for (const name of sections) {
       if (name === "notifications") {
         lines.push(renderNotificationSection(loaded.config.notifications));
+      }
+      if (name === "chat") {
+        lines.push(renderChatSection(loaded.config.chat));
       }
     }
     lines.push("", `file: ${loaded.path}`);
@@ -950,24 +966,45 @@ const configSetDef: ToolDef = {
       "Notification preferences to update. Fields you omit keep their " +
       "current values.",
     ),
+    chat: z.strictObject({
+      enabled: z.boolean().optional().describe(
+        "Cross-session chat on/off. Unset or true is the default; false " +
+        "makes every chat tool refuse and stops wake delivery.",
+      ),
+    }).optional().describe(
+      "Chat preferences to update. Fields you omit keep their current " +
+      "values.",
+    ),
   },
   async execute(args) {
     const loaded = loadConfig();
     const config: Config = { ...loaded.config };
-    const patch = args.notifications as Record<string, unknown> | undefined;
-    if (!patch || Object.keys(stripUndefined(patch)).length === 0) {
+    const notifPatch = args.notifications as Record<string, unknown> | undefined;
+    const chatPatch = args.chat as Record<string, unknown> | undefined;
+    const notifClean = notifPatch ? stripUndefined(notifPatch) : {};
+    const chatClean = chatPatch ? stripUndefined(chatPatch) : {};
+    if (Object.keys(notifClean).length === 0 && Object.keys(chatClean).length === 0) {
       return (
         "Nothing to update: pass a section with fields to change.\n" +
-        renderNotificationSection(config.notifications)
+        renderNotificationSection(config.notifications) + "\n" +
+        renderChatSection(config.chat)
       );
     }
-    config.notifications = notificationPrefsSchema.parse(
-      mergeNotificationPrefs(config.notifications, stripUndefined(patch)),
-    );
+    if (Object.keys(notifClean).length > 0) {
+      config.notifications = notificationPrefsSchema.parse(
+        mergeNotificationPrefs(config.notifications, notifClean),
+      );
+    }
+    if (Object.keys(chatClean).length > 0) {
+      config.chat = chatPrefsSchema.parse(
+        mergeChatPrefs(config.chat, chatClean),
+      );
+    }
     const path = saveConfig(config);
     return (
       `[saved] ${path}\n` +
-      renderNotificationSection(config.notifications)
+      (Object.keys(notifClean).length > 0 ? renderNotificationSection(config.notifications) + "\n" : "") +
+      (Object.keys(chatClean).length > 0 ? renderChatSection(config.chat) : "")
     );
   },
 };
@@ -1377,6 +1414,18 @@ const watchCancelDef: ToolDef = {
  */
 
 /**
+ * Refusal text when the user disabled cross-session chat by config. Every
+ * chat tool returns this so the model can report the toggle to the user
+ * instead of concluding the feature is broken.
+ */
+function chatDisabledReply(): string {
+  return (
+    "[disabled] Cross-session chat is off (chat.enabled: false in the thatch config). " +
+    "Use thatch config_set { chat: { enabled: true } } to re-enable if the user asks."
+  );
+}
+
+/**
  * Resolves the chat identity for a tool call. opencode supplies the host
  * session; MCP hosts (host === undefined) declare theirs with the `as`
  * argument, which must name a registered session. Returns either a usable
@@ -1387,6 +1436,9 @@ async function resolveChatIdentity(
   host: HostToolContext | undefined,
   as: unknown,
 ): Promise<{ ok: true; sessionID: string; kind: ChatHostKind } | { ok: false; error: string }> {
+  if (!chatEnabled(loadConfig().config)) {
+    return { ok: false, error: chatDisabledReply() };
+  }
   if (host) return { ok: true, sessionID: host.sessionID, kind: "opencode" };
   if (typeof as !== "string" || !as.trim()) {
     return {
@@ -1462,6 +1514,7 @@ const chatRegisterDef: ToolDef = {
     as: mcpIdentityArg(),
   },
   async execute(args, ctx, host) {
+    if (!chatEnabled(loadConfig().config)) return chatDisabledReply();
     const custom = typeof args.name === "string" ? args.name : null;
     const topic = typeof args.topic === "string" ? args.topic : null;
     const kind: ChatHostKind = host ? "opencode" : "mcp";
