@@ -418,3 +418,61 @@ export function printCleanupNotice(): void {
     console.log(`Remove with: rm -rf ${QA_ROOT}`);
   }
 }
+
+// --- Serve-mode plumbing (multi-session use cases) ---------------------------
+
+import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
+
+export interface ServeHandle {
+  /** Base URL the serve process listens on. */
+  url: string;
+  /** SDK client for driving sessions over HTTP. */
+  client: OpencodeClient;
+  /** Kills the serve process. Call in a finally block. */
+  stop: () => void;
+}
+
+/**
+ * Start a long-lived `opencode serve` on the fixture and return an SDK
+ * client for it. Unlike `opencode run` one-shots - which die at turn end,
+ * taking the plugin's chat poller with them - a serve process hosts
+ * sessions across many turns, so it is the only way to observe wake
+ * delivery between two real sessions.
+ *
+ * The port is picked up front and readiness is polled over HTTP rather
+ * than parsed from stdout: the startup line can lag plugin warmup well
+ * past any reasonable stream-read deadline, and a pipe read under bun
+ * test is not guaranteed to surface it. Any successful HTTP response
+ * (even a 404) proves the server is listening.
+ */
+export async function startServe(ctx: QaContext): Promise<ServeHandle> {
+  const port = 20_000 + Math.floor(Math.random() * 20_000);
+  const url = `http://127.0.0.1:${port}`;
+  // serve takes no project flag: it boots project-free and loads the
+  // instance per request via the x-opencode-directory header, which the
+  // SDK client below sends from the `directory` option.
+  const proc = Bun.spawn(
+    ["opencode", "serve", "--hostname", "127.0.0.1", "--port", String(port)],
+    { env: ctx.env, stdout: "pipe", stderr: "pipe" },
+  );
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    if (proc.exitCode !== null) {
+      const err = await new Response(proc.stderr).text();
+      throw new Error(`startServe: opencode serve exited early: ${err.slice(0, 500)}`);
+    }
+    try {
+      await fetch(`${url}/health`);
+      break; // any response means the server is listening
+    } catch {
+      // not up yet
+    }
+    if (Date.now() > deadline) {
+      proc.kill();
+      throw new Error(`startServe: serve did not become reachable at ${url} within 60s`);
+    }
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  const client = createOpencodeClient({ baseUrl: url, directory: ctx.dir });
+  return { url, client, stop: () => { try { proc.kill(); } catch { /* already dead */ } } };
+}

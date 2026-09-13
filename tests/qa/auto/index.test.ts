@@ -81,3 +81,4 @@ import "./uc-095-watchers";
 import "./uc-096-notify-user";
 import "./uc-097-chat";
 import "./uc-099-chat-cli";
+import "./uc-100-two-session-chat";

@@ -114,7 +114,11 @@ export const server: Plugin = async ({ client, worktree }) => {
     if (sessionStatus.get(sessionID) !== "idle") return false;
     try {
       const { data } = await client.session.status();
-      return data?.[sessionID]?.type === "idle";
+      // The server's status map only carries ACTIVE sessions - it deletes
+      // the entry when a session goes idle (session/status.ts), so absent
+      // means idle. Fail closed on busy/retry, pass on idle-or-absent.
+      const live = data?.[sessionID];
+      return !live || live.type === "idle";
     } catch (err) {
       // Unreachable server: do not deliver (the mail stays pending).
       console.error(`[thatch] status check failed for ${sessionID}: ${err}`);
