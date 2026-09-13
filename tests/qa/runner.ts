@@ -148,7 +148,12 @@ async function doEnsureMaster(): Promise<void> {
     );
     writeFileSync(
       join(masterDir, ".opencode", "plugins", "thatch.ts"),
-      'export { server } from "./src/index";\n',
+      // Absolute path: relative imports in a plugin file resolve from the
+      // plugin file's own directory (.opencode/plugins/), not the project
+      // root, so "./src/index" never loads - the plugin silently fails to
+      // import and every in-session thatch tool/poller is missing. Same
+      // pattern as the real global config's plugin file.
+      `export { server } from ${JSON.stringify(join(masterDir, "src", "index"))};\n`,
     );
     return Promise.resolve();
   });
