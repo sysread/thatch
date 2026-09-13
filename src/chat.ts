@@ -716,26 +716,40 @@ function localWhen(timestamp: string): string {
  * recipient. The separator is between cards, so the caller joins cards
  * with it and never gets a trailing rule.
  */
+// ANSI styling for the tail cards: bg color for the field labels, a
+// coordinated fg color for the names, dim for the timestamps, and a
+// drawn rule for the separator. Bare ESC sequences rather than a color
+// library - the tail is a terminal surface, and the codes are trivial.
+const ANSI = {
+  labelBg: (s: string) => `\x1b[44m\x1b[97m ${s} \x1b[0m`, // bright white on blue
+  nameFg: (s: string) => `\x1b[96m${s}\x1b[0m`, // bright cyan
+  dim: (s: string) => `\x1b[2m${s}\x1b[0m`, // dim (timestamps, "a message from")
+  rule: (s: string) => `\x1b[2m${s}\x1b[0m`, // dim (the drawn separator)
+};
+
 export function formatChatTailCard(event: ChatTailEvent): string {
+  // Underscore rule spanning a fixed 60 columns - the drawn separator
+  // Jeff asked for (an actual line, not dashes).
   const lines: string[] = [];
+  const when = ANSI.dim(localWhen(event.timestamp));
   if (event.kind === "sent") {
-    lines.push(`From: ${event.from}`);
-    lines.push(`  To: ${event.to}`);
-    lines.push(`When: ${localWhen(event.timestamp)}`);
+    lines.push(`${ANSI.labelBg("From")} ${ANSI.nameFg(event.from)}`);
+    lines.push(`      ${ANSI.labelBg("To")} ${ANSI.nameFg(event.to)}`);
+    lines.push(`${ANSI.labelBg("When")} ${when}`);
     lines.push("");
     lines.push(event.body);
   } else {
     const clipped = event.body.length > 60 ? event.body.slice(0, 60) + "..." : event.body;
-    lines.push(`From: ${event.reader}`);
-    lines.push(`  Read: a message from ${event.from}`);
-    lines.push(`When: ${localWhen(event.timestamp)}`);
+    lines.push(`${ANSI.labelBg("From")} ${ANSI.nameFg(event.reader)}`);
+    lines.push(`      ${ANSI.dim("read")} ${ANSI.nameFg(event.from)}`);
+    lines.push(`${ANSI.labelBg("When")} ${when}`);
     lines.push("");
     lines.push(clipped);
   }
   return lines.join("\n");
 }
 
-export const CHAT_TAIL_SEPARATOR = "-----";
+export const CHAT_TAIL_SEPARATOR = "_".repeat(60);
 
 // ---------------------------------------------------------------------------
 // Poller

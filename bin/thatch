@@ -302,7 +302,7 @@ async function chatCommand(rest: string[]): Promise<void> {
       try {
         // First pass: render the backlog as cards, then follow unless --once.
         const backlog = chatTailDiff(state, db.chatMessageFeed()).events;
-        console.log(backlog.map(formatChatTailCard).join(`\n${CHAT_TAIL_SEPARATOR}\n`));
+        console.log(backlog.map(formatChatTailCard).join(`\n\n${CHAT_TAIL_SEPARATOR}\n\n`));
         if (onceOnly) break;
 
         process.on("SIGINT", () => process.exit(0));
@@ -312,7 +312,7 @@ async function chatCommand(rest: string[]): Promise<void> {
           try {
             for (const event of chatTailDiff(state, db.chatMessageFeed()).events) {
               // Separate follow-mode cards from whatever came before.
-              if (firstFollowEvent && backlog.length > 0) console.log(CHAT_TAIL_SEPARATOR);
+              if (firstFollowEvent && backlog.length > 0) console.log(`\n${CHAT_TAIL_SEPARATOR}\n`);
               firstFollowEvent = false;
               console.log(formatChatTailCard(event));
             }

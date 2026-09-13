@@ -538,21 +538,23 @@ describe("chat tail diff", () => {
     expect(formatChatTailEvent(read)).toBe("[T] bob read a message from a: " + "x".repeat(60) + "...");
   });
 
-  test("cards render header block, full body, local timezone, and separator constant", () => {
+  test("cards render styled header block, full body, local timezone, and drawn separator", () => {
     const sent = { kind: "sent" as const, timestamp: "2026-09-12T19:46:00Z", from: "Al Go Rithm", to: "Brute the Dream Farrier", body: "the machine age begins" };
     const card = formatChatTailCard(sent);
-    expect(card.split("\n")[0]).toBe("From: Al Go Rithm");
-    expect(card.split("\n")[1]).toBe("  To: Brute the Dream Farrier");
-    expect(card.split("\n")[2]).toMatch(/^When: \d{4}-\d{2}-\d{2} \d{2}:\d{2} /);
+    // Labels are bg-styled with padding spaces, names are fg-styled: the
+    // plain text survives stripping ANSI codes (with the label's padding).
+    const plain = card.replace(/\x1b\[[0-9;]*m/g, "");
+    expect(plain.split("\n")[0]).toBe(" From  Al Go Rithm");
+    expect(plain.split("\n")[1]).toBe("       To  Brute the Dream Farrier");
+    expect(plain.split("\n")[2]).toMatch(/^ When  \d{4}-\d{2}-\d{2} \d{2}:\d{2} /);
+    expect(card).toContain("\x1b[44m\x1b[97m From \x1b[0m");
+    expect(card).toContain("\x1b[96mAl Go Rithm\x1b[0m");
     expect(card.split("\n")[4]).toBe("the machine age begins");
-    // Full body, not clipped - the card format is the human reading view.
-    expect(card).toContain("the machine age begins");
-    expect(CHAT_TAIL_SEPARATOR).toBe("-----");
+    expect(CHAT_TAIL_SEPARATOR).toBe("_".repeat(60));
     // Read cards put the reader in the From slot.
     const read = { kind: "read" as const, timestamp: "T", reader: "bob", from: "alice", body: "hi" };
     const readCard = formatChatTailCard(read);
-    expect(readCard.split("\n")[0]).toBe("From: bob");
-    expect(readCard.split("\n")[1]).toBe("  Read: a message from alice");
+    expect(readCard.replace(/\x1b\[[0-9;]*m/g, "").split("\n")[1]).toBe("      read alice");
   });
 });
 

@@ -55,34 +55,36 @@ heartbeat (a large age means the session's process is probably gone), its
 project, and the topic it registered with - the fastest way to answer
 "which session should I talk to about X?"
 
-`chat tail` prints the conversation as chat cards:
+`chat tail` prints the conversation as styled chat cards (labels on a
+colored background, names in color, timestamps dimmed; a drawn rule
+separates cards, with blank lines on either side):
 
 ```text
-From: Kurn the Typechecker
-  To: Marlowe the Cherry Picker
-When: 2026-09-12 14:02 America/Denver
+ From  Al Go Rithm
+       To  Brute the Dream Farrier
+ When  2026-09-12 14:02 America/Denver
 
 CI is green on main
------
-From: Marlowe the Cherry Picker
-  To: broadcast
-When: 2026-09-12 21:07 America/Denver
+____________________________________________________________
+
+       To  broadcast
+ When  2026-09-12 21:07 America/Denver
 
 rebasing payments, hold off
------
-From: Kurn the Typechecker
-  Read: a message from Marlowe the Cherry Picker
-When: 2026-09-12 21:08 America/Denver
+____________________________________________________________
+
+ From  Kurn the Typechecker
+      read  Marlowe the Cherry Picker
+ When  2026-09-12 21:08 America/Denver
 
 direct ping
 ```
 
 Follow mode runs until Ctrl-C. Read events appear only in follow mode
 (they fire when an inbox is drained after the tail started). When
-timestamps are in your local timezone. The chat
-itself flows through the agents (the CLI never sends, reads, or
-registers on a session's behalf; that happens from opencode sessions
-via the `thatch_chat_*` tools).
+timestamps are in your local timezone. The chat itself flows through the
+agents (the CLI never sends, reads, or registers on a session's behalf;
+that happens from opencode sessions via the `thatch_chat_*` tools).
 
 ## Priming a new project
 
