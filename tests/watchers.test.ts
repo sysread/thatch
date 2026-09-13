@@ -421,6 +421,10 @@ describe("WatcherRegistry", () => {
 
   test("failed delivery stays pending and retries", async () => {
     let fail = true;
+    // The production retry path logs each failed delivery; silence it so the
+    // expected failure does not leak into the test output.
+    const errorLog = console.error;
+    console.error = () => {};
     const reg = new WatcherRegistry({
       deliver: async (sessionID, events) => {
         if (fail) throw new Error("busy");
@@ -430,17 +434,21 @@ describe("WatcherRegistry", () => {
       ghRunner: quietGh(),
       pollIntervalMs: 60_000,
     });
-    await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
-    const prWatcher = reg.listForSession("s1")[0];
-    if (prWatcher.source !== "pr") throw new Error("expected a pr watcher");
-    prWatcher.state.headSha = "old";
-    await reg.poll();
-    expect(reg.pendingCount("s1")).toBe(1);
+    try {
+      await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
+      const prWatcher = reg.listForSession("s1")[0];
+      if (prWatcher.source !== "pr") throw new Error("expected a pr watcher");
+      prWatcher.state.headSha = "old";
+      await reg.poll();
+      expect(reg.pendingCount("s1")).toBe(1);
 
-    fail = false;
-    await reg.deliverPending();
-    expect(delivered).toHaveLength(1);
-    expect(reg.pendingCount("s1")).toBe(0);
+      fail = false;
+      await reg.deliverPending();
+      expect(delivered).toHaveLength(1);
+      expect(reg.pendingCount("s1")).toBe(0);
+    } finally {
+      console.error = errorLog;
+    }
   });
 
   test("expired watchers are dropped silently", async () => {
@@ -968,6 +976,9 @@ describe("runWatchedCommand", () => {
 describe("poll resilience", () => {
   test("a throwing canDeliver gate fails closed and leaves the mail pending", async () => {
     const delivered: Array<{ sessionID: string; events: WatcherEvent[] }> = [];
+    // The fail-closed path logs the gate error; silence it for clean output.
+    const errorLog = console.error;
+    console.error = () => {};
     const reg = new WatcherRegistry({
       deliver: async (sessionID, events) => {
         delivered.push({ sessionID, events });
@@ -978,15 +989,19 @@ describe("poll resilience", () => {
       ghRunner: quietGh(),
       pollIntervalMs: 60_000,
     });
-    await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
-    const w = reg.listForSession("s1")[0];
-    if (w.source !== "pr") throw new Error("expected a pr watcher");
-    w.state.headSha = "old";
-    // Must not throw out of poll - a throw here would be an unhandled
-    // rejection in the host process and would wedge the #polling guard.
-    await reg.poll();
-    expect(reg.pendingCount("s1")).toBe(1);
-    expect(delivered).toHaveLength(0);
+    try {
+      await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
+      const w = reg.listForSession("s1")[0];
+      if (w.source !== "pr") throw new Error("expected a pr watcher");
+      w.state.headSha = "old";
+      // Must not throw out of poll - a throw here would be an unhandled
+      // rejection in the host process and would wedge the #polling guard.
+      await reg.poll();
+      expect(reg.pendingCount("s1")).toBe(1);
+      expect(delivered).toHaveLength(0);
+    } finally {
+      console.error = errorLog;
+    }
     reg.dispose();
   });
 
