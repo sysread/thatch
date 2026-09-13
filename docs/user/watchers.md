@@ -82,6 +82,10 @@ Watchers are in-memory and process-scoped:
 - Ending the opencode process (or restarting it) drops all watchers.
 - A watcher expires after 8 hours by default.
 - Each session can hold up to 5 active watchers.
+- A one-shot watch cancels itself after its first event - a single
+  "tell me when this run finishes" request leaves nothing polling
+  afterwards. Standing watches (the default) keep going until they
+  are cancelled, expire, or the process ends.
 
 If opencode restarts while a watch is active, re-register it - the
 session's conversation survives, so the policy you stated is still

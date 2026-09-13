@@ -544,10 +544,14 @@ describe("chat tail diff", () => {
     // Labels are bg-styled with padding spaces, names are fg-styled: the
     // plain text survives stripping ANSI codes (with the label's padding).
     const plain = card.replace(/\x1b\[[0-9;]*m/g, "");
-    expect(plain.split("\n")[0]).toBe(" From  Al Go Rithm");
-    expect(plain.split("\n")[1]).toBe("       To  Brute the Dream Farrier");
-    expect(plain.split("\n")[2]).toMatch(/^ When  \d{4}-\d{2}-\d{2} \d{2}:\d{2} /);
-    expect(card).toContain("\x1b[44m\x1b[97m From \x1b[0m");
+    // Content column: 6-space indent + chip (space + 5-wide label + space)
+    // = content starts at 0-indexed column 7, aligned on every line.
+    expect(plain.split("\n")[0]).toBe("       From   Al Go Rithm");
+    expect(plain.split("\n")[1]).toBe("       To     Brute the Dream Farrier");
+    // The tz abbreviation is environment-dependent (UTC under bun test,
+    // the local zone in a real terminal), so assert only date and time.
+    expect(plain.split("\n")[2]).toMatch(/^ {7}When {3}2026-09-12 19:46 /);
+    expect(card).toContain("\x1b[44m\x1b[97m From  \x1b[0m");
     expect(card).toContain("\x1b[96mAl Go Rithm\x1b[0m");
     expect(card.split("\n")[4]).toBe("the machine age begins");
     expect(CHAT_TAIL_SEPARATOR).toBe("_".repeat(60));

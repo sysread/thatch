@@ -60,22 +60,22 @@ colored background, names in color, timestamps dimmed; a drawn rule
 separates cards, with blank lines on either side):
 
 ```text
- From  Al Go Rithm
-       To  Brute the Dream Farrier
- When  2026-09-12 14:02 America/Denver
+        From  Al Go Rithm
+        To  Brute the Dream Farrier
+        When  2026-09-12 14:02 America/Denver
 
 CI is green on main
 ____________________________________________________________
 
-       To  broadcast
- When  2026-09-12 21:07 America/Denver
+        To  broadcast
+        When  2026-09-12 21:07 America/Denver
 
 rebasing payments, hold off
 ____________________________________________________________
 
- From  Kurn the Typechecker
-      read  Marlowe the Cherry Picker
- When  2026-09-12 21:08 America/Denver
+        From  Kurn the Typechecker
+       read  Marlowe the Cherry Picker
+        When  2026-09-12 21:08 America/Denver
 
 direct ping
 ```

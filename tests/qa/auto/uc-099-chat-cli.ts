@@ -83,15 +83,16 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const tailText = tail.stdout.toString();
-    // Direct-send card: header block with resolved names, local-timezone
-    // When line, full body.
-    if (!/From: alpha\n  To: beta\nWhen: \d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+\n\ndirect ping/.test(tailText)) {
-      console.log(`  FAIL: tail missing the direct-send card:\n${tailText}`);
+    // Direct-send card: styled header block (chip + value), local-timezone
+    // When line, full body. Assertions strip ANSI and check content column.
+    const plainCard = tailText.replace(/\x1b\[[0-9;]*m/g, "");
+    if (!/^ {7}From {3}alpha\n {7}To {5}beta\n {7}When {3}\d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+\n\ndirect ping/m.test(plainCard)) {
+      console.log(`  FAIL: tail missing the direct-send card:\n${plainCard}`);
       return "FAIL";
     }
     // Broadcast cards are marked, one per recipient (beta only: the stale
     // ghost is skipped and never receives one).
-    const broadcastLines = tailText.split("\n").filter((l) => l === "  To: broadcast");
+    const broadcastLines = plainCard.split("\n").filter((l) => /^ {7}To {5}broadcast$/.test(l));
     if (broadcastLines.length !== 1) {
       console.log(`  FAIL: expected 1 broadcast line (beta; ghost skipped), got ${broadcastLines.length}:\n${tailText}`);
       return "FAIL";

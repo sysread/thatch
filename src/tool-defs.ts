@@ -1187,6 +1187,11 @@ const watchCreateDef: ToolDef = {
     events: z.array(z.enum(PR_EVENT_TYPES as [PrWatcherEventType, ...PrWatcherEventType[]])).optional().describe(
       "Which event types to watch. Omit for all PR event types.",
     ),
+    once: z.boolean().optional().describe(
+      "Fire only once: after the first matching event happens, the watcher " +
+      "cancels itself. Use for one-shot waits like 'tell me when this run " +
+      "finishes'. Default false - a standing watch.",
+    ),
   },
   opencodeOnly: true,
   async execute(args, ctx, host) {
@@ -1198,13 +1203,14 @@ const watchCreateDef: ToolDef = {
     }
     const repo = (args.repo as string | undefined) ?? ctx.defaultStore;
     const events = (args.events as PrWatcherEventType[] | undefined) ?? [...PR_EVENT_TYPES];
-    const result = await ctx.watchers.createPr(host.sessionID, repo, args.pr as number, events);
+    const result = await ctx.watchers.createPr(host.sessionID, repo, args.pr as number, events, { once: args.once === true });
     if (!result.ok) return `Watcher not created: ${result.error}`;
     const w = result.watcher;
     return (
       `[watching] ${w.repo}#${w.pr}\n` +
       `id: ${w.id}\n` +
       `events: ${w.events.join(", ")}\n` +
+      (w.once ? `mode: one-shot - auto-cancels after the first event\n` : "") +
       `head: ${w.state.headSha.slice(0, 7)} (${w.state.state}${w.state.merged ? ", merged" : ""})\n\n` +
       `The baseline is captured now - only changes from this point notify, ` +
       `and the first poll lands within ~${ctx.watchers.pollSeconds}s. ` +
@@ -1240,7 +1246,7 @@ const watchListDef: ToolDef = {
     return watchers
       .map((w) => {
         const target = w.source === "pr" ? `${w.repo}#${w.pr}` : `${w.repo}@${w.branch}`;
-        return `${w.id}: ${target} [${w.source}] events=[${w.events.join(",")}] expires in ${minutesLeft(w)}m head=${w.state.headSha.slice(0, 7)}`;
+        return `${w.id}: ${target} [${w.source}]${w.once ? " [once]" : ""} events=[${w.events.join(",")}] expires in ${minutesLeft(w)}m head=${w.state.headSha.slice(0, 7)}`;
       })
       .join("\n");
   },
@@ -1282,6 +1288,11 @@ const watchBranchCreateDef: ToolDef = {
     workflows: z.array(z.string()).optional().describe(
       "Only notify for workflow runs whose name contains one of these substrings (case-insensitive). Omit for all workflows.",
     ),
+    once: z.boolean().optional().describe(
+      "Fire only once: after the first matching event happens, the watcher " +
+      "cancels itself. Use for one-shot waits like 'tell me when this run " +
+      "finishes'. Default false - a standing watch.",
+    ),
   },
   opencodeOnly: true,
   async execute(args, ctx, host) {
@@ -1299,6 +1310,7 @@ const watchBranchCreateDef: ToolDef = {
       args.branch as string,
       events,
       (args.workflows as string[] | undefined) ?? [],
+      { once: args.once === true },
     );
     if (!result.ok) return `Watcher not created: ${result.error}`;
     const w = result.watcher;
@@ -1307,6 +1319,7 @@ const watchBranchCreateDef: ToolDef = {
       `id: ${w.id}\n` +
       `events: ${w.events.join(", ")}\n` +
       (w.workflows.length > 0 ? `workflow filter: ${w.workflows.join(", ")}\n` : "") +
+      (w.once ? `mode: one-shot - auto-cancels after the first event\n` : "") +
       `head: ${w.state.headSha.slice(0, 7)}\n\n` +
       `The baseline is captured now - only changes from this point notify, ` +
       `and the first poll lands within ~${ctx.watchers.pollSeconds}s. ` +

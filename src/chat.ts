@@ -721,28 +721,32 @@ function localWhen(timestamp: string): string {
 // drawn rule for the separator. Bare ESC sequences rather than a color
 // library - the tail is a terminal surface, and the codes are trivial.
 const ANSI = {
-  labelBg: (s: string) => `\x1b[44m\x1b[97m ${s} \x1b[0m`, // bright white on blue
+  // Label chips are padded to a fixed width (5 + padding = 7 columns) so
+  // every line's content starts at the same column - To's 2-char label
+  // misaligned against 4-char labels without this.
+  labelBg: (s: string) => `\x1b[44m\x1b[97m ${s.padEnd(5)} \x1b[0m`,
   nameFg: (s: string) => `\x1b[96m${s}\x1b[0m`, // bright cyan
-  dim: (s: string) => `\x1b[2m${s}\x1b[0m`, // dim (timestamps, "a message from")
+  dim: (s: string) => `\x1b[2m${s}\x1b[0m`, // dim (timestamps, "read")
   rule: (s: string) => `\x1b[2m${s}\x1b[0m`, // dim (the drawn separator)
 };
 
+const CARD_INDENT = "      "; // aligns card content past the 7-column label chip
+
 export function formatChatTailCard(event: ChatTailEvent): string {
-  // Underscore rule spanning a fixed 60 columns - the drawn separator
-  // Jeff asked for (an actual line, not dashes).
   const lines: string[] = [];
   const when = ANSI.dim(localWhen(event.timestamp));
+  const chip = (label: string, value: string) => `${CARD_INDENT}${ANSI.labelBg(label)} ${ANSI.nameFg(value)}`;
   if (event.kind === "sent") {
-    lines.push(`${ANSI.labelBg("From")} ${ANSI.nameFg(event.from)}`);
-    lines.push(`      ${ANSI.labelBg("To")} ${ANSI.nameFg(event.to)}`);
-    lines.push(`${ANSI.labelBg("When")} ${when}`);
+    lines.push(chip("From", event.from));
+    lines.push(chip("To", event.to));
+    lines.push(chip("When", when));
     lines.push("");
     lines.push(event.body);
   } else {
     const clipped = event.body.length > 60 ? event.body.slice(0, 60) + "..." : event.body;
-    lines.push(`${ANSI.labelBg("From")} ${ANSI.nameFg(event.reader)}`);
-    lines.push(`      ${ANSI.dim("read")} ${ANSI.nameFg(event.from)}`);
-    lines.push(`${ANSI.labelBg("When")} ${when}`);
+    lines.push(chip("From", event.reader));
+    lines.push(`${CARD_INDENT}${ANSI.dim("read")} ${ANSI.nameFg(event.from)}`);
+    lines.push(chip("When", when));
     lines.push("");
     lines.push(clipped);
   }

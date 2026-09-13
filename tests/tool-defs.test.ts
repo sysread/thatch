@@ -677,6 +677,15 @@ describe("watch tools", () => {
     expect(result).toContain("events: pr_commit");
   });
 
+  test("watch_create reports one-shot mode in the registration and the list", async () => {
+    const registry = registryWith();
+    const watchCtx = { ...ctx, watchers: registry };
+    const result = await findTool("watch_create").execute({ pr: 7, once: true }, watchCtx, host);
+    expect(result).toContain("one-shot - auto-cancels after the first event");
+    const listed = await findTool("watch_list").execute({}, watchCtx, host);
+    expect(listed).toContain("[once]");
+  });
+
   test("watch_list shows session watchers; other sessions are invisible", async () => {
     const registry = registryWith();
     const watchCtx = { ...ctx, watchers: registry };

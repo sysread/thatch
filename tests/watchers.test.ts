@@ -658,6 +658,64 @@ describe("branch watchers in the registry", () => {
     expect(delivered[0].events.map((e) => e.type)).toEqual(["branch_commit"]);
     reg.dispose();
   });
+
+  test("a one-shot watcher auto-cancels after its first event, and the event still delivers", async () => {
+    let headMoved = false;
+    const reg = new WatcherRegistry({
+      deliver: async (s, e) => {
+        delivered.push({ sessionID: s, events: e });
+      },
+      canDeliver: () => canDeliver,
+      ghRunner: mockGh([
+        [/\/branches\/main$/, () => ({ commit: { sha: headMoved ? "dddd7777" : "aaaa1111" } })],
+        [/\/actions\/runs\?/, { workflow_runs: [] }],
+        ...quietRoutes(),
+      ]),
+      pollIntervalMs: 60_000,
+    });
+    const result = await reg.createBranch("s1", "acme/widgets", "main", ["branch_commit"], [], { once: true });
+    expect(result.ok).toBe(true);
+
+    // No event yet - the watcher survives.
+    await reg.poll();
+    expect(reg.listForSession("s1")).toHaveLength(1);
+
+    // First event: the watcher self-cancels at detection, but the event
+    // still queues and delivers through the normal pending path.
+    headMoved = true;
+    await reg.poll();
+    expect(reg.listForSession("s1")).toHaveLength(0);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].events.map((e) => e.type)).toEqual(["branch_commit"]);
+
+    // No second event even if the target moves again.
+    headMoved = false;
+    await reg.poll();
+    expect(delivered).toHaveLength(1);
+    reg.dispose();
+  });
+
+  test("standing watchers are not cancelled by firing", async () => {
+    let headMoved = false;
+    const reg = new WatcherRegistry({
+      deliver: async (s, e) => {
+        delivered.push({ sessionID: s, events: e });
+      },
+      canDeliver: () => canDeliver,
+      ghRunner: mockGh([
+        [/\/branches\/main$/, () => ({ commit: { sha: headMoved ? "dddd7777" : "aaaa1111" } })],
+        [/\/actions\/runs\?/, { workflow_runs: [] }],
+        ...quietRoutes(),
+      ]),
+      pollIntervalMs: 60_000,
+    });
+    await reg.createBranch("s1", "acme/widgets", "main", ["branch_commit"]);
+    headMoved = true;
+    await reg.poll();
+    expect(reg.listForSession("s1")).toHaveLength(1);
+    expect(delivered).toHaveLength(1);
+    reg.dispose();
+  });
 });
 
 test("branch diffs cap at 10 events like PR diffs", () => {

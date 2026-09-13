@@ -96,6 +96,17 @@ Event detection:
 A diff emits at most 10 events per watcher per cycle, so comment
 floods collapse into one batch.
 
+### One-shot watches
+
+`watch_create` and `watch_branch_create` accept `once: true`. The
+watcher cancels itself when its first matching event is detected, not
+when it is delivered - the event still queues and delivers through the
+normal pending path, so a session busy at fire time does not lose the
+notification. Cancellation at detection time is what keeps a "tell me
+when this run finishes" request from leaving a standing watch polling
+a target nobody is waiting on. `watch_list` marks one-shot watchers
+with a `[once]` tag, and the registration output states the mode.
+
 ### Delivery
 
 Events queue in an in-memory pending map keyed by session. Delivery

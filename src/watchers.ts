@@ -146,6 +146,8 @@ export interface PrWatcher {
   repo: string;
   pr: number;
   events: PrWatcherEventType[];
+  /** One-shot: cancelled automatically after the first matching event. */
+  once: boolean;
   /** Epoch ms. When now > expiresAt the watcher is silently dropped. */
   expiresAt: number;
   createdAt: number;
@@ -162,6 +164,9 @@ export interface BranchWatcher {
   events: BranchWatcherEventType[];
   /** Substring filters on workflow run names; empty means all workflows. */
   workflows: string[];
+  /** One-shot: cancelled automatically after the first matching event. */
+  once: boolean;
+  /** Epoch ms. When now > expiresAt the watcher is silently dropped. */
   expiresAt: number;
   createdAt: number;
   state: BranchState;
@@ -619,6 +624,7 @@ export class WatcherRegistry {
     repo: string,
     pr: number,
     events: PrWatcherEventType[],
+    opts: { once?: boolean } = {},
   ): Promise<{ ok: true; watcher: PrWatcher } | { ok: false; error: string }> {
     const limit = this.#checkLimit(sessionID);
     if (limit) return { ok: false, error: limit };
@@ -641,6 +647,7 @@ export class WatcherRegistry {
       repo,
       pr,
       events,
+      once: opts.once === true,
       expiresAt: Date.now() + this.#opts.ttlMinutes * 60_000,
       createdAt: Date.now(),
       state,
@@ -660,6 +667,7 @@ export class WatcherRegistry {
     branch: string,
     events: BranchWatcherEventType[],
     workflows: string[] = [],
+    opts: { once?: boolean } = {},
   ): Promise<{ ok: true; watcher: BranchWatcher } | { ok: false; error: string }> {
     const limit = this.#checkLimit(sessionID);
     if (limit) return { ok: false, error: limit };
@@ -683,6 +691,7 @@ export class WatcherRegistry {
       branch,
       events,
       workflows,
+      once: opts.once === true,
       expiresAt: Date.now() + this.#opts.ttlMinutes * 60_000,
       createdAt: Date.now(),
       state,
@@ -747,6 +756,12 @@ export class WatcherRegistry {
             const queue = this.#pending.get(watcher.sessionID) ?? [];
             queue.push(...events);
             this.#pending.set(watcher.sessionID, queue);
+            // One-shot watchers end at first detection, not first delivery:
+            // the queued events deliver through the normal pending path even
+            // if the session is busy. Cancellation at detection time keeps
+            // "wait for this run to finish" from leaving a standing watch
+            // polling a target nobody is waiting on anymore.
+            if (watcher.once) this.#watchers.delete(id);
           }
         } catch (err) {
           console.error(`[thatch] watcher ${id} poll failed: ${err}`);
