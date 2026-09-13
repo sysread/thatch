@@ -90,7 +90,10 @@ echo
 
 echo "▸ pushing..."
 git push
-git push --tags
+# Push only this release's tag. `git push --tags` would also push every
+# other local tag, and a history rewrite (filter-repo) recreates old tags
+# on new SHAs - which the remote correctly refuses to move.
+git push origin "v$next"
 echo "  ✓ pushed"
 echo
 
