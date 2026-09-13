@@ -101,8 +101,9 @@ export const server: Plugin = async ({ client, worktree }) => {
   //
   // Delivery prompts the session with a synthetic part - the same mechanism
   // opencode uses for background task completions - so a watched event
-  // triggers a model turn even when the user is away. Events only carry
-  // pointer data; the model fetches details itself with gh.
+  // triggers a model turn even when the user is away. Events carry pointer
+  // data plus machine status (check conclusions); the model fetches logs and
+  // further details itself with gh.
   const watchers = new WatcherRegistry({
     deliver: async (sessionID, events) => {
       // Events carry their watch's target label from the registry, so the
@@ -111,7 +112,7 @@ export const server: Plugin = async ({ client, worktree }) => {
       await client.session.promptAsync({
         path: { id: sessionID },
         body: {
-          parts: [{ type: "text", text: watcherNotificationNudge(events[0]?.target ?? "watched target", events), synthetic: true }],
+          parts: [{ type: "text", text: watcherNotificationNudge(events[0]?.target ?? "watched target", events, watchers.pollSeconds), synthetic: true }],
         },
       });
       // Toast: the notification part is TUI-hidden, so without this the

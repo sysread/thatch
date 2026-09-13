@@ -19,8 +19,9 @@ User-facing behavior is documented in [docs/user/watchers.md](../../user/watcher
   against its last-seen state
 - Delivery prompts the session with a synthetic part - the same
   mechanism opencode uses for background task completions
-- Notifications carry pointer data only (author, URL, counts); the
-  model fetches content on demand with `gh`
+- Notifications carry pointer data plus machine status (author, URL,
+  check names and conclusions); external content is fetched on demand
+  with `gh`, never delivered
 
 ## The process-lifetime decision
 
@@ -72,6 +73,12 @@ attempt delivery. Poll errors are per-watcher; one bad PR never
 blocks the others. The diff is a pure function, so it is unit-tested
 without any network access.
 
+The interval is surfaced to the model through the registry's
+`pollSeconds` getter: watch-creation output states when the first
+poll lands, and notifications carry a cadence line, so a model
+choosing between a watcher and an in-turn poll compares real numbers
+even when `THATCH_WATCH_POLL_SECONDS` overrides the default.
+
 Event detection:
 
 - comments by id monotonicity (fetch is sorted descending)
@@ -101,9 +108,15 @@ on the session with a synthetic text part built by
 `watcherNotificationNudge()`. This triggers a full model turn - the
 model reads the notification and decides whether to act. The
 notification text borrows the background-task-completion framing
-(system event, not user input, not approval to advance other work),
-following the same load-bearing wording discipline as the extraction
-nudge.
+(system event, not user input, not approval to advance other work)
+with one carve-out: a watch registered to gate work the user already
+greenlit (for example "wait for CI, then merge") makes the
+notification the continuation signal for exactly that work. The
+carve-out lives in the nudge itself, not only the system prompt,
+because the nudge is what the model reads at the act-or-wait decision
+point. The wrapper also states that check-run and workflow
+conclusions are already in the event summaries, so gh fetches are
+needed only for logs and bodies.
 
 Failed or gated deliveries stay pending and retry on the next poll
 cycle or when the session next goes idle (the event hook calls
@@ -157,5 +170,7 @@ events, expiry, snapshot), and `poll()` dispatches to the source's
 fetch/diff pair. Adding a third source means: new event types, a
 `fetchXState`/`diffXState` pair, a new arm of the `Watcher` union, a
 `#pollOne` branch, and the tool surface for registering it. Keep the
-pointer-only notification rule: external content enters the context on
-explicit fetch, never via notification.
+notification content rule: external content enters the context on
+explicit fetch, never via notification. Machine status fields (names,
+conclusions, counts) come from the API rather than user-written text
+and belong in event summaries.

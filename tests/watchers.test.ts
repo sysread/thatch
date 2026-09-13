@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { watcherNotificationNudge } from "../src/prompts";
 import {
   WatcherRegistry,
   diffPrState,
@@ -311,6 +312,19 @@ describe("WatcherRegistry", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("gh: not authenticated");
+  });
+
+  test("pollSeconds surfaces the poll cadence for tool output and notifications", () => {
+    const reg = makeRegistry();
+    expect(reg.pollSeconds).toBe(60);
+    const custom = new WatcherRegistry({
+      deliver: async () => {},
+      canDeliver: () => true,
+      ghRunner: quietGh(),
+      pollIntervalMs: 90_000,
+    });
+    expect(custom.pollSeconds).toBe(90);
+    custom.dispose();
   });
 
   test("create enforces the per-session watcher limit", async () => {
@@ -657,4 +671,29 @@ test("branch diffs cap at 10 events like PR diffs", () => {
     ),
   });
   expect(diffBranchState(before, after, TGT, "acme/widgets")).toHaveLength(10);
+});
+
+// ---------------------------------------------------------------------------
+// watcherNotificationNudge
+// ---------------------------------------------------------------------------
+
+describe("watcherNotificationNudge", () => {
+  const events = [
+    { type: "pr_ci", summary: 'check "CI" completed (success)', url: "https://example.com/ci" },
+    { type: "pr_comment", summary: "comment by alice", url: "https://example.com/c" },
+  ];
+
+  test("renders event summaries and the greenlit-work continuation exception", () => {
+    const text = watcherNotificationNudge("acme/widgets#7", events);
+    expect(text).toContain('- pr_ci: check "CI" completed (success) https://example.com/ci');
+    expect(text).toContain("- pr_comment: comment by alice https://example.com/c");
+    expect(text).toContain("not approval to advance other pending work");
+    expect(text).toContain("gate work the user already greenlit");
+    expect(text).toContain("conclusions are in the summaries above");
+  });
+
+  test("cadence line appears only when pollSeconds is passed", () => {
+    expect(watcherNotificationNudge("acme/widgets#7", events, 60)).toContain("polled every ~60s");
+    expect(watcherNotificationNudge("acme/widgets#7", events)).not.toContain("polled every");
+  });
 });

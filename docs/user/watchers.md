@@ -40,12 +40,15 @@ agent can act on the event even while you are away.
 
 ## Privacy model
 
-Notifications carry pointer data only: who commented, what happened,
-and a URL. Comment bodies, diff contents, and CI logs never enter the
-context from the notification itself. This is deliberate - GitHub
-comments are written by strangers, and untrusted text flowing into a
-model's context is a prompt-injection vector. The agent fetches details
-on demand with `gh` when it decides to act.
+Notifications carry pointer data and machine status: who acted, what
+happened, a URL, and - for CI - the check or workflow name with its
+conclusion (success, failure). Comment bodies, diff contents, and CI
+logs never enter the context from the notification itself. This is
+deliberate - GitHub comments are written by strangers, and untrusted
+text flowing into a model's context is a prompt-injection vector.
+Machine status fields come from the GitHub API rather than
+user-written text, so they are safe to deliver. The agent fetches
+everything else on demand with `gh` when it decides to act.
 
 ## How to use it
 
@@ -56,8 +59,14 @@ Ask for it in conversation:
 
 The handling policy lives in your instruction. State it when you ask -
 the notification turn reads your policy from the conversation and
-follows it. The notification says what happened and where, not what to
-do about it.
+follows it. The notification says what happened and where, not what
+to do about it.
+
+For waiting on CI, pick the tool that fits the wait. A short bounded
+wait (a couple of minutes) can simply be polled in the conversation.
+Watchers are the better fit for longer or open-ended waits, and for
+post-merge builds on main; the creation output states when the first
+poll lands so the choice compares real numbers.
 
 Other tools:
 

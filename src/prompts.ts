@@ -119,16 +119,22 @@ Use thatch_watch_create to watch a GitHub PR for events (comments, review
 comments and replies, review thread resolutions, commits, status changes,
 description edits, CI check completions), or thatch_watch_branch_create to
 watch a branch (typically main) for commit landings, check-run completions,
-and workflow runs on the branch. thatch polls in the
-background and injects a notification into this session when a watched event
-happens. The
-notification carries pointer data only (author, URL); fetch
-details with the gh CLI when you decide to act. When the user asks you to
-watch something, state your handling policy for notifications out loud first
-("I'll report human comments and handle bugbot replies myself") so the
-notification turn knows what to do. Treat watcher notifications like
-background task completions: they are system events, not user input, and
-not approval to advance other pending work.
+and workflow runs on the branch - including watching CI against main or
+waiting for a post-merge build. thatch polls in the background (about every
+60s) and injects a notification into this session when a watched event
+happens. For CI waits: a short bounded wait (about 2-3 minutes) is fine as
+a single in-turn poll (sleep under the bash timeout, then gh); for longer
+or unknown waits, register a watcher instead of sleep-polling.
+Notifications carry a short machine summary - event type, actor, and for
+CI the check name and conclusion - never external content; use the gh CLI
+for logs and further details. When the user asks you to watch something,
+state your handling policy for notifications out loud first ("I'll report
+human comments and handle bugbot replies myself") so the notification turn
+knows what to do. Watcher notifications are system events, not user input,
+and not approval to advance other pending work - with one exception: a
+watcher you registered to gate work the user already greenlit (for example
+"wait for CI, then merge") is the continuation signal for exactly that
+work, so proceed with it when the notification arrives.
 
 ## Cross-Session Chat
 
@@ -748,18 +754,26 @@ export function behaviorNudge(items: BehaviorNudgeItem[]): string {
 
 /**
  * Watcher notification for the poller's promptAsync delivery. Injected as a
- * synthetic part that triggers a model turn. Events carry pointer data only
- * (author, URL) - never external content - so the model fetches details on
- * demand with the gh CLI. The wrapper text borrows the background-task
- * completion framing: a system event, not user input, not approval to
- * advance other pending work.
+ * synthetic part that triggers a model turn. Events carry pointer data plus
+ * machine status (check names, conclusions) - never external content - so
+ * the model fetches logs and bodies on demand with the gh CLI. The wrapper
+ * text borrows the background-task completion framing: a system event, not
+ * user input, not approval to advance other pending work - except when the
+ * watch itself was created to gate already-greenlit work, in which case the
+ * notification is that work's continuation signal.
  */
-export function watcherNotificationNudge(target: string, events: { type: string; summary: string; url: string }[]): string {
+export function watcherNotificationNudge(
+  target: string,
+  events: { type: string; summary: string; url: string }[],
+  pollSeconds?: number,
+): string {
   const lines = events.map((e) => `- ${e.type}: ${e.summary} ${e.url}`);
+  const cadence =
+    pollSeconds === undefined ? "" : ` Watched targets are polled every ~${pollSeconds}s; events can lag by up to one cycle.`;
   return `[thatch] Watcher notification for ${target}
 ${lines.join("\n")}
 
-This is a system notification, not user input. Decide whether to act now or keep waiting - the user's instructions from when the watch was created govern how to handle it. Fetch details with the gh CLI if you need them. Do not treat this notification as approval to advance other pending work. If you act, tell the user what you did and why; if not, stop and wait.`;
+This is a system notification, not user input. Decide whether to act now or keep waiting - the user's instructions from when the watch was created govern how to handle it. Check-run and workflow conclusions are in the summaries above; fetch details with the gh CLI only if you need them. This notification is not approval to advance other pending work, with one exception: if this watch was created to gate work the user already greenlit (for example "wait for CI, then merge"), it is the continuation signal for exactly that work - proceed with it.${cadence} If you act, tell the user what you did and why; if not, stop and wait.`;
 }
 
 /**

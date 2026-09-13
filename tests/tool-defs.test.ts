@@ -638,6 +638,7 @@ describe("watch tools", () => {
     expect(result).toContain("[watching] test-owner/test-repo#7");
     expect(result).toContain("id: watch_");
     expect(result).toContain("cafe123");
+    expect(result).toContain("first poll lands within ~60s");
     expect(registry.listForSession(host.sessionID)).toHaveLength(1);
   });
 
@@ -739,6 +740,7 @@ describe("watch_branch_create", () => {
     expect(result).toContain("[watching] test-owner/test-repo@main");
     expect(result).toContain("decafba");
     expect(result).toContain("branch_workflow");
+    expect(result).toContain("first poll lands within ~60s");
     expect(registry.listForSession(host.sessionID)).toHaveLength(1);
   });
 

@@ -1166,14 +1166,17 @@ const watchCreateDef: ToolDef = {
   name: "watch_create",
   description:
     "Watch a GitHub PR for events and get notified in this session when they " +
-    "happen. Events: new top-level comments, new inline review comments, " +
-    "replies to review comments, review thread resolutions, new commits " +
-    "(head SHA change), PR status changes, title/description edits, and " +
-    "completed CI check runs. The watcher polls in the background and " +
-    "injects a notification prompt; notifications carry pointers only " +
-    "(author, URL) - fetch details yourself with the gh CLI when you decide " +
-    "to act. Watches live until cancelled, the session ends, or opencode " +
-    "restarts. Requires the gh CLI.",
+    "happen: new top-level comments, inline review comments and replies, " +
+    "review thread resolutions, new commits (head SHA change), PR status " +
+    "changes, title/description edits, and completed CI check runs. For CI " +
+    "waits: a short bounded wait (about 2-3 minutes) is fine as a single " +
+    "in-turn gh poll; for longer or unknown waits, use this watcher instead " +
+    "of sleep-polling. The watcher polls about every 60s by default - the " +
+    "first check lands within ~60s of creation. Notifications carry a short " +
+    "machine summary (event type, actor, and for CI the check name and " +
+    "conclusion); use the gh CLI only for logs and further details. Watches " +
+    "live until cancelled, the session ends, or opencode restarts. Requires " +
+    "the gh CLI.",
   args: {
     pr: z.number().int().positive().describe(
       "The PR number to watch.",
@@ -1203,10 +1206,12 @@ const watchCreateDef: ToolDef = {
       `id: ${w.id}\n` +
       `events: ${w.events.join(", ")}\n` +
       `head: ${w.state.headSha.slice(0, 7)} (${w.state.state}${w.state.merged ? ", merged" : ""})\n\n` +
-      `The baseline is captured now - only changes from this point notify. ` +
+      `The baseline is captured now - only changes from this point notify, ` +
+      `and the first poll lands within ~${ctx.watchers.pollSeconds}s. ` +
       `You will receive a system notification in this session when a watched event happens. ` +
-      `State any handling policy for those notifications now (e.g. what to act on, what just to report), ` +
-      `since the notification itself carries only pointers.`
+      `State any handling policy for those notifications now (e.g. what to act on, what just to report) - ` +
+      `the notification carries a short machine summary (for CI: check name and conclusion), ` +
+      `and you fetch details with the gh CLI only when you decide to act.`
     );
   },
 };
@@ -1254,10 +1259,15 @@ const watchBranchCreateDef: ToolDef = {
     "when things happen on it: branch_commit when new commits land (e.g. a " +
     "PR merged), branch_ci when a check run on the head completes, and " +
     "branch_workflow when a GitHub Actions workflow run starts or finishes " +
-    "on the branch. Optionally filter to workflow names (substring match). " +
-    "The watcher polls in the background and injects a notification prompt; " +
-    "notifications carry pointers only - fetch details with the gh CLI when " +
-    "you decide to act. Watches live until cancelled, the session ends, or " +
+    "on the branch. This is how you watch CI against main or wait for a " +
+    "post-merge build. For CI waits: a short bounded wait (about 2-3 " +
+    "minutes) is fine as a single in-turn gh poll; for longer or unknown " +
+    "waits, use this watcher instead of sleep-polling. Optionally filter to " +
+    "workflow names (substring match). The watcher polls about every 60s by " +
+    "default - the first check lands within ~60s of creation. Notifications " +
+    "carry a short machine summary (event type, and for CI and workflow " +
+    "runs the name and conclusion); use the gh CLI only for logs and " +
+    "further details. Watches live until cancelled, the session ends, or " +
     "opencode restarts. Requires the gh CLI.",
   args: {
     branch: z.string().describe(
@@ -1298,10 +1308,12 @@ const watchBranchCreateDef: ToolDef = {
       `events: ${w.events.join(", ")}\n` +
       (w.workflows.length > 0 ? `workflow filter: ${w.workflows.join(", ")}\n` : "") +
       `head: ${w.state.headSha.slice(0, 7)}\n\n` +
-      `The baseline is captured now - only changes from this point notify. ` +
+      `The baseline is captured now - only changes from this point notify, ` +
+      `and the first poll lands within ~${ctx.watchers.pollSeconds}s. ` +
       `You will receive a system notification in this session when a watched event happens. ` +
-      `State any handling policy for those notifications now (e.g. what to act on, what just to report), ` +
-      `since the notification itself carries only pointers.`
+      `State any handling policy for those notifications now (e.g. what to act on, what just to report) - ` +
+      `the notification carries a short machine summary (for CI: check name and conclusion), ` +
+      `and you fetch details with the gh CLI only when you decide to act.`
     );
   },
 };

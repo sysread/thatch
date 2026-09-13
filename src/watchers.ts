@@ -62,12 +62,15 @@ export const BRANCH_EVENT_TYPES: BranchWatcherEventType[] = [
 /** Every event type across all sources - for diagnostics and tests. */
 export const WATCHER_EVENT_TYPES: WatcherEventType[] = [...PR_EVENT_TYPES, ...BRANCH_EVENT_TYPES];
 
-/** A single detected change, ready for delivery. Pointer data only. */
+/**
+ * A single detected change, ready for delivery. Pointer data plus machine
+ * status (check names, conclusions, counts) - never external content.
+ */
 export interface WatcherEvent {
   type: WatcherEventType;
   /** Which watch produced this event, e.g. "acme/widgets#7" or "acme/widgets@main". */
   target: string;
-  /** Human-readable, content-free summary: who/what/where, never body text. */
+  /** Short summary: who/what/where plus machine status (CI conclusions) - never body text or other external content. */
   summary: string;
   url: string;
 }
@@ -585,6 +588,15 @@ export class WatcherRegistry {
   /** True while the background poller timer is armed. */
   get running(): boolean {
     return this.#timer !== null;
+  }
+
+  /**
+   * Poll cadence in seconds, surfaced in tool output and notifications so
+   * watcher-vs-poll choices compare real numbers even when the interval is
+   * overridden via THATCH_WATCH_POLL_SECONDS.
+   */
+  get pollSeconds(): number {
+    return Math.round(this.#opts.pollIntervalMs / 1000);
   }
 
   /** Stops polling and drops all state. Called from the plugin's dispose. */
