@@ -726,17 +726,17 @@ function localWhen(timestamp: string): string {
  * recipient. The separator is between cards, so the caller joins cards
  * with it and never gets a trailing rule.
  */
-// ANSI styling for the tail cards: bg color for the field labels, a
-// coordinated fg color for the names, dim for the timestamps, and a
-// drawn rule for the separator. Bare ESC sequences rather than a color
-// library - the tail is a terminal surface, and the codes are trivial.
+// ANSI styling for the tail cards: black-on-green field-label chips, green
+// values, dim for the timestamps and the "read" marker, and a drawn rule
+// for the separator. Bare ESC sequences rather than a color library - the
+// tail is a terminal surface, and the codes are trivial.
 const ANSI = {
   // Label chips are padded to a fixed width (5 + padding = 7 columns) so
   // every line's content starts at the same column - To's 2-char label
   // misaligned against 4-char labels without this.
-  labelBg: (s: string) => `\x1b[44m\x1b[97m ${s.padEnd(5)} \x1b[0m`,
-  nameFg: (s: string) => `\x1b[96m${s}\x1b[0m`, // bright cyan
-  dim: (s: string) => `\x1b[2m${s}\x1b[0m`, // dim (timestamps, "read")
+  labelBg: (s: string) => `\x1b[30;42m ${s.padEnd(5)} \x1b[0m`,
+  valueFg: (s: string) => `\x1b[32m${s}\x1b[0m`, // green (field values)
+  dim: (s: string) => `\x1b[2m${s}\x1b[0m`, // dim ("read" marker)
   rule: (s: string) => `\x1b[2m${s}\x1b[0m`, // dim (the drawn separator)
   // Session-of-origin annotation: italic + bright-black (muted gray).
   originLabel: (s: string) => `\x1b[3;90m<${s}>\x1b[0m`,
@@ -753,7 +753,7 @@ export function formatChatTailCard(event: ChatTailEvent): string {
   // is null by construction).
   const origin = (topic: string | null) => (topic ? ` ${ANSI.originLabel(topic)}` : "");
   const chip = (label: string, value: string, topic: string | null) =>
-    `${CARD_INDENT}${ANSI.labelBg(label)} ${ANSI.nameFg(value)}${origin(topic)}`;
+    `${CARD_INDENT}${ANSI.labelBg(label)} ${ANSI.valueFg(value)}${origin(topic)}`;
   if (event.kind === "sent") {
     lines.push(chip("From", event.from, event.fromTopic));
     lines.push(chip("To", event.to, event.toTopic));
@@ -763,7 +763,7 @@ export function formatChatTailCard(event: ChatTailEvent): string {
   } else {
     const clipped = event.body.length > 60 ? event.body.slice(0, 60) + "..." : event.body;
     lines.push(chip("From", event.reader, event.toTopic));
-    lines.push(`${CARD_INDENT}${ANSI.dim("read")} ${ANSI.nameFg(event.from)}${origin(event.fromTopic)}`);
+    lines.push(`${CARD_INDENT}${ANSI.dim("read")} ${ANSI.valueFg(event.from)}${origin(event.fromTopic)}`);
     lines.push(chip("When", when, null));
     lines.push("");
     lines.push(clipped);

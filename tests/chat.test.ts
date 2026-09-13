@@ -587,8 +587,8 @@ describe("chat tail diff", () => {
     // The tz abbreviation is environment-dependent (UTC under bun test,
     // the local zone in a real terminal), so assert only date and time.
     expect(plain.split("\n")[2]).toMatch(/^ When {3}2026-09-12 19:46 /);
-    expect(card).toContain("\x1b[44m\x1b[97m From  \x1b[0m");
-    expect(card).toContain("\x1b[96mAl Go Rithm\x1b[0m");
+    expect(card).toContain("\x1b[30;42m From  \x1b[0m");
+    expect(card).toContain("\x1b[32mAl Go Rithm\x1b[0m");
     expect(card.split("\n")[4]).toBe("the machine age begins");
     expect(CHAT_TAIL_SEPARATOR).toBe("_".repeat(60));
     // Read cards put the reader in the From slot.
