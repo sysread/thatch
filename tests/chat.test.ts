@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, renderChatParticipant, type ChatTailRow } from "../src/chat";
+import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, formatChatTailCard, CHAT_TAIL_SEPARATOR, renderChatParticipant, type ChatTailRow } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
 import { TOOL_DEFS } from "../src/tool-defs";
@@ -536,6 +536,23 @@ describe("chat tail diff", () => {
     expect(formatChatTailEvent(broadcast)).toBe("[T] a -> broadcast: hi");
     const read = { kind: "read" as const, timestamp: "T", reader: "bob", from: "a", body: "x".repeat(70) };
     expect(formatChatTailEvent(read)).toBe("[T] bob read a message from a: " + "x".repeat(60) + "...");
+  });
+
+  test("cards render header block, full body, local timezone, and separator constant", () => {
+    const sent = { kind: "sent" as const, timestamp: "2026-09-12T19:46:00Z", from: "Al Go Rithm", to: "Brute the Dream Farrier", body: "the machine age begins" };
+    const card = formatChatTailCard(sent);
+    expect(card.split("\n")[0]).toBe("From: Al Go Rithm");
+    expect(card.split("\n")[1]).toBe("  To: Brute the Dream Farrier");
+    expect(card.split("\n")[2]).toMatch(/^When: \d{4}-\d{2}-\d{2} \d{2}:\d{2} /);
+    expect(card.split("\n")[4]).toBe("the machine age begins");
+    // Full body, not clipped - the card format is the human reading view.
+    expect(card).toContain("the machine age begins");
+    expect(CHAT_TAIL_SEPARATOR).toBe("-----");
+    // Read cards put the reader in the From slot.
+    const read = { kind: "read" as const, timestamp: "T", reader: "bob", from: "alice", body: "hi" };
+    const readCard = formatChatTailCard(read);
+    expect(readCard.split("\n")[0]).toBe("From: bob");
+    expect(readCard.split("\n")[1]).toBe("  Read: a message from alice");
   });
 });
 

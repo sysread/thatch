@@ -83,14 +83,15 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const tailText = tail.stdout.toString();
-    // Direct send line with the resolved recipient name.
-    if (!/\[\d{4}-\d{2}-\d{2}T[\d:]+Z\] alpha -> beta: direct ping/.test(tailText)) {
-      console.log(`  FAIL: tail missing the direct-send line:\n${tailText}`);
+    // Direct-send card: header block with resolved names, local-timezone
+    // When line, full body.
+    if (!/From: alpha\n  To: beta\nWhen: \d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+\n\ndirect ping/.test(tailText)) {
+      console.log(`  FAIL: tail missing the direct-send card:\n${tailText}`);
       return "FAIL";
     }
-    // Broadcast rows are marked, one per recipient (beta only: the stale
+    // Broadcast cards are marked, one per recipient (beta only: the stale
     // ghost is skipped and never receives one).
-    const broadcastLines = tailText.split("\n").filter((l) => l.includes("-> broadcast:"));
+    const broadcastLines = tailText.split("\n").filter((l) => l === "  To: broadcast");
     if (broadcastLines.length !== 1) {
       console.log(`  FAIL: expected 1 broadcast line (beta; ghost skipped), got ${broadcastLines.length}:\n${tailText}`);
       return "FAIL";

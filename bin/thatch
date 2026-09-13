@@ -10,7 +10,7 @@ import { hygieneReport } from "../src/hygiene";
 import { claudeSessionStartReminder } from "../src/prompts";
 import { setupClaudeCode, setupCursor } from "../src/setup";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
-import { chatTailDiff, formatChatTailEvent, isStale, CHAT_STALE_MINUTES } from "../src/chat";
+import { chatTailDiff, formatChatTailCard, CHAT_TAIL_SEPARATOR, isStale, CHAT_STALE_MINUTES } from "../src/chat";
 
 const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 const dbPath = process.env.THATCH_DB_PATH ?? join(configHome, "thatch", "thatch.db");
@@ -300,19 +300,21 @@ async function chatCommand(rest: string[]): Promise<void> {
       // Follow mode holds the handle open until Ctrl-C; the finally below
       // closes it on every exit path, including the SIGINT handler's.
       try {
-        // First pass: print the backlog (every existing row as its sent
-        // line), then follow unless --once.
-        for (const event of chatTailDiff(state, db.chatMessageFeed()).events) {
-          if (event.kind === "sent") console.log(formatChatTailEvent(event));
-        }
+        // First pass: render the backlog as cards, then follow unless --once.
+        const backlog = chatTailDiff(state, db.chatMessageFeed()).events;
+        console.log(backlog.map(formatChatTailCard).join(`\n${CHAT_TAIL_SEPARATOR}\n`));
         if (onceOnly) break;
 
         process.on("SIGINT", () => process.exit(0));
+        let firstFollowEvent = true;
         for (;;) {
           await Bun.sleep(2000);
           try {
             for (const event of chatTailDiff(state, db.chatMessageFeed()).events) {
-              console.log(formatChatTailEvent(event));
+              // Separate follow-mode cards from whatever came before.
+              if (firstFollowEvent && backlog.length > 0) console.log(CHAT_TAIL_SEPARATOR);
+              firstFollowEvent = false;
+              console.log(formatChatTailCard(event));
             }
           } catch (err) {
             // The surface's whole job is watching a shared, mutable file;

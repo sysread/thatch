@@ -693,6 +693,50 @@ export function formatChatTailEvent(event: ChatTailEvent): string {
   return `[${event.timestamp}] ${event.reader} read a message from ${event.from}: ${clipped}`;
 }
 
+/** "2026-09-12 19:46 MT" - the UTC timestamp converted to the terminal's
+ *  local timezone (abbreviation from the locale, fallback "UTC"), one line
+ *  for the card header. */
+function localWhen(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return timestamp;
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())} ${tz}`
+  );
+}
+
+/**
+ * Renders one tail event as a chat card: header block (From / To / When),
+ * blank line, full body, then a separator line. This is the human format
+ * for `thatch chat tail` - the single-line formatChatTailEvent remains for
+ * tests and compact contexts. Read events use the same card shape with the
+ * reader in the From slot; broadcast events show "broadcast" as the
+ * recipient. The separator is between cards, so the caller joins cards
+ * with it and never gets a trailing rule.
+ */
+export function formatChatTailCard(event: ChatTailEvent): string {
+  const lines: string[] = [];
+  if (event.kind === "sent") {
+    lines.push(`From: ${event.from}`);
+    lines.push(`  To: ${event.to}`);
+    lines.push(`When: ${localWhen(event.timestamp)}`);
+    lines.push("");
+    lines.push(event.body);
+  } else {
+    const clipped = event.body.length > 60 ? event.body.slice(0, 60) + "..." : event.body;
+    lines.push(`From: ${event.reader}`);
+    lines.push(`  Read: a message from ${event.from}`);
+    lines.push(`When: ${localWhen(event.timestamp)}`);
+    lines.push("");
+    lines.push(clipped);
+  }
+  return lines.join("\n");
+}
+
+export const CHAT_TAIL_SEPARATOR = "-----";
+
 // ---------------------------------------------------------------------------
 // Poller
 // ---------------------------------------------------------------------------

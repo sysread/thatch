@@ -55,16 +55,31 @@ heartbeat (a large age means the session's process is probably gone), its
 project, and the topic it registered with - the fastest way to answer
 "which session should I talk to about X?"
 
-`chat tail` prints the conversation as it happens:
+`chat tail` prints the conversation as chat cards:
 
 ```text
-[2026-09-12T14:02:11Z] Kurn the Typechecker -> Marlowe the Cherry Picker: CI is green on main
-[2026-09-12T21:07:52Z] Marlowe the Cherry Picker -> broadcast: rebasing payments, hold off
-[2026-09-12T21:08:03Z] Marlowe the Cherry Picker read a message from Kurn the Typechecker: direct ping
+From: Kurn the Typechecker
+  To: Marlowe the Cherry Picker
+When: 2026-09-12 14:02 America/Denver
+
+CI is green on main
+-----
+From: Marlowe the Cherry Picker
+  To: broadcast
+When: 2026-09-12 21:07 America/Denver
+
+rebasing payments, hold off
+-----
+From: Kurn the Typechecker
+  Read: a message from Marlowe the Cherry Picker
+When: 2026-09-12 21:08 America/Denver
+
+direct ping
 ```
 
 Follow mode runs until Ctrl-C. Read events appear only in follow mode
-(they fire when an inbox is drained after the tail started). The chat
+(they fire when an inbox is drained after the tail started). When
+timestamps are in your local timezone. The chat
 itself flows through the agents (the CLI never sends, reads, or
 registers on a session's behalf; that happens from opencode sessions
 via the `thatch_chat_*` tools).
