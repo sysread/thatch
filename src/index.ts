@@ -102,6 +102,26 @@ export const server: Plugin = async ({ client, worktree }) => {
   // process may deliver chat mail to - the map's keys).
   const sessionStatus = new Map<string, string>();
 
+  // The proactive-prompt gate, shared by both delivery registries (watchers
+  // and chat). Two layers, in cost order: the compacting set and the
+  // event-fed sessionStatus map answer cheaply, and a final check verifies
+  // against the server's live status - the map is only as fresh as the
+  // event stream, and a stale "idle" turns a wake into mid-turn context
+  // injection (observed live: a session read mail mid-burst, contradicted
+  // its own in-flight plan, and looped).
+  const canPromptSession = async (sessionID: string): Promise<boolean> => {
+    if (compacting.has(sessionID)) return false;
+    if (sessionStatus.get(sessionID) !== "idle") return false;
+    try {
+      const { data } = await client.session.status();
+      return data?.[sessionID]?.type === "idle";
+    } catch (err) {
+      // Unreachable server: do not deliver (the mail stays pending).
+      console.error(`[thatch] status check failed for ${sessionID}: ${err}`);
+      return false;
+    }
+  };
+
   // In-memory watcher registry for proactive event notifications (GitHub PR
   // watching today). Deliberately process-scoped: no SQLite, no cross-restart
   // state. See src/watchers.ts for the rationale.
@@ -141,8 +161,7 @@ export const server: Plugin = async ({ client, worktree }) => {
         // TUI may not be connected. Best-effort.
       }
     },
-    canDeliver: (sessionID) =>
-      !compacting.has(sessionID) && sessionStatus.get(sessionID) === "idle",
+    canDeliver: canPromptSession,
     ghRunner: ghApiRun,
   });
   // gh presence decides whether watch_create works; checked lazily by the
@@ -152,14 +171,13 @@ export const server: Plugin = async ({ client, worktree }) => {
   });
   watchers.start();
 
-  // Cross-session chat delivery. The inbox is shared SQLite state (any
-  // process reads/writes it), but this poller only ever delivers to sessions
-  // hosted by THIS process - the recipient's host is the single deliverer,
-  // so there is no cross-process double-delivery race. Wake prompts use the
-  // same synthetic-part mechanism as watcher notifications; the toast
-  // covers the TUI-hidden part so the user sees why the model woke up.
-  // canDeliver closes over `compacting` (declared below): the closure reads
-  // it at call time, after full initialization, same as the watcher gate.
+  // The proactive-prompt gate, shared by both delivery registries
+  // (watchers and chat). Two layers, in cost order: the compacting set and
+  // the event-fed sessionStatus map answer cheaply, and a final check
+  // verifies against the server's live status - the map is only as fresh
+  // as the event stream, and a stale "idle" turns a wake into mid-turn
+  // context injection (observed live: a session read mail mid-burst,
+  // contradicted its own in-flight plan, and looped).
   const chatPoller = new ChatPoller({
     store: db,
     hostedSessions: () => {
@@ -191,8 +209,7 @@ export const server: Plugin = async ({ client, worktree }) => {
         // TUI may not be connected. Best-effort.
       }
     },
-    canDeliver: (sessionID) =>
-      !compacting.has(sessionID) && sessionStatus.get(sessionID) === "idle",
+    canDeliver: canPromptSession,
   });
   // With chat disabled the tools refuse, so the poller would only heartbeat
   // sessions and burn wake budget against a feature the user turned off.

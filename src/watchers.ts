@@ -187,10 +187,13 @@ export interface WatcherRegistryOptions {
   /**
    * Gate for delivery. The plugin passes a predicate that returns true only
    * when the session can accept a proactive prompt right now (idle, not
-   * compacting). Undeliverable events stay pending and retry on later cycles
-   * or when the session next goes idle.
+   * compacting). May be async - the plugin's gate verifies against the
+   * server's live session status, because the event-fed map can be stale
+   * and a wake injected into a running turn is mid-turn context injection.
+   * Undeliverable events stay pending and retry on later cycles or when
+   * the session next goes idle.
    */
-  canDeliver: (sessionID: string) => boolean;
+  canDeliver: (sessionID: string) => boolean | Promise<boolean>;
   ghRunner: GhRunner;
   pollIntervalMs?: number;
   ttlMinutes?: number;
@@ -807,7 +810,7 @@ export class WatcherRegistry {
     try {
       for (const [sessionID, events] of this.#pending) {
         if (events.length === 0) continue;
-        if (!this.#opts.canDeliver(sessionID)) continue;
+        if (!(await this.#opts.canDeliver(sessionID))) continue;
         try {
           await this.#opts.deliver(sessionID, events);
           this.#pending.delete(sessionID);

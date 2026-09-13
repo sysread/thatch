@@ -799,9 +799,12 @@ export interface ChatPollerOptions {
   /** Delivers a wake prompt for a recipient. Injected so tests never spawn. */
   deliver: (sessionID: string, senders: string[], count: number) => Promise<void>;
   /** Gate for delivery: true only when the session can accept a proactive
-   *  prompt right now (idle, not compacting). Undeliverable messages stay
-   *  pending and retry on later cycles. */
-  canDeliver: (sessionID: string) => boolean;
+   *  prompt right now (idle, not compacting). May be async - the plugin's
+   *  gate verifies against the server's live status, because the event-fed
+   *  map can be stale and a wake injected into a running turn is mid-turn
+   *  context injection. Undeliverable messages stay pending and retry on
+   *  later cycles. */
+  canDeliver: (sessionID: string) => boolean | Promise<boolean>;
   /** Poll interval. Default 30s - frequent enough that wake prompts feel
    *  prompt, cheap enough that the shared DB sees only a couple of light
    *  statements per cycle per process. */
@@ -913,7 +916,7 @@ export class ChatPoller {
       }
 
       for (const [recipient, messages] of byRecipient) {
-        if (!this.#opts.canDeliver(recipient)) continue;
+        if (!(await this.#opts.canDeliver(recipient))) continue;
         if (this.#nudgeBudget(recipient) <= 0) continue;
         try {
           // "unknown (id, departed)" matches chat_read's rendering of a
