@@ -775,3 +775,39 @@ describe("watch_branch_create", () => {
     expect(result).toContain("unavailable");
   });
 });
+
+describe("chat delivery model in tool output", () => {
+  const findChatTool = (name: string) => TOOL_DEFS.find((t) => t.name === name)!;
+
+  test("chat_register tells opencode sessions they are woken automatically", async () => {
+    const result = await findChatTool("chat_register").execute(
+      { name: "Wake Caller" },
+      ctx,
+      { sessionID: "ses_wake_oc", agent: "build" },
+    );
+    expect(result).toContain("[registered] Wake Caller");
+    expect(result).toContain("woken automatically");
+    expect(result).not.toContain("opencode-only");
+  });
+
+  test("chat_register tells MCP-host sessions mail arrives at prompt time", async () => {
+    const result = await findChatTool("chat_register").execute({ name: "Prompt Reader" }, ctx);
+    expect(result).toContain("[registered] Prompt Reader");
+    expect(result).toContain("at your next prompt");
+    expect(result).not.toContain("woken automatically");
+  });
+
+  test("chat_status states the delivery model per host", async () => {
+    await findChatTool("chat_register").execute(
+      { name: "Status Caller" },
+      ctx,
+      { sessionID: "ses_status_oc", agent: "build" },
+    );
+    const oc = await findChatTool("chat_status").execute({}, ctx, { sessionID: "ses_status_oc", agent: "build" });
+    expect(oc).toContain("woken automatically");
+
+    await findChatTool("chat_register").execute({ name: "Status Mcp" }, ctx);
+    const mcp = await findChatTool("chat_status").execute({ as: "Status Mcp" }, ctx);
+    expect(mcp).toContain("at your next prompt");
+  });
+});

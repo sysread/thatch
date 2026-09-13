@@ -1402,10 +1402,18 @@ function mcpIdentityArg() {
   );
 }
 
-/** The degraded-delivery notice appended to MCP-path registration output:
- *  wake prompts are an opencode capability, so other hosts poll. */
+/**
+ * The delivery-model notes appended to registration output, one per host
+ * kind. Without these a session has no way to learn how mail reaches it,
+ * and defaults to sleep-polling its inbox. The wake prompt is an opencode
+ * capability; other hosts learn about pending mail at their next prompt.
+ */
+function wakeDeliveryNote(): string {
+  return "\nDelivery: you are woken automatically in this session when a message arrives - no need to poll (a busy session gets the wake when its turn ends).\n";
+}
+
 function degradedDeliveryNote(): string {
-  return "\nNote: wake-up delivery is opencode-only; on this host your inbox is checked at prompt time (chat_status, or the flush-tools hook line).\n";
+  return "\nDelivery: wake-up is opencode-only; on this host pending mail is reported at your next prompt (chat_read, chat_status, or the flush-tools hook line).\n";
 }
 
 /**
@@ -1425,7 +1433,9 @@ const chatRegisterDef: ToolDef = {
     "sessions see in chat_list when deciding who to talk to. Pass an empty " +
     "topic to clear it; omit it to keep the current one. Safe to call " +
     "again - the same name is a no-op, a new name renames you, and a new " +
-    "topic updates it. Only top-level sessions should register; never " +
+    "topic updates it. Delivery: opencode sessions are woken automatically " +
+    "when mail arrives; on other hosts pending mail is reported at your " +
+    "next prompt. Only top-level sessions should register; never " +
     "register a sub-agent session.",
   args: {
     name: z.string().optional().describe(
@@ -1456,7 +1466,7 @@ const chatRegisterDef: ToolDef = {
         // The store returns the sanitized topic it kept, so the
         // confirmation shows the roster value, not the raw input.
         (result.topic ? `topic: ${result.topic}\n` : "") +
-        (host ? "" : degradedDeliveryNote()) +
+        (host ? wakeDeliveryNote() : degradedDeliveryNote()) +
         `\n` +
         `Other sessions can now message you by name with chat_send; use ` +
         `chat_list to see who else is available.`
@@ -1480,7 +1490,7 @@ const chatRegisterDef: ToolDef = {
       `session_id: ${drawSessionID}\n` +
       `project: ${ctx.defaultStore}\n` +
       (assigned.topic ? `topic: ${assigned.topic}\n` : "") +
-      (host ? "" : degradedDeliveryNote()) +
+      (host ? wakeDeliveryNote() : degradedDeliveryNote()) +
       `\n` +
       `${origin} Other sessions can now message you by name with chat_send, ` +
       `or reach everyone at once with chat_broadcast; use chat_list to see ` +
@@ -1675,7 +1685,10 @@ const chatStatusDef: ToolDef = {
     }
     return (
       `[chat] registered as ${status.name}: ${status.pending} unread of ${status.total} total` +
-      (status.pending > 0 ? " - call chat_read to read them." : ".")
+      (status.pending > 0 ? " - call chat_read to read them." : ".") +
+      (host
+        ? " You are woken automatically when a message arrives - no need to poll."
+        : " Pending mail is reported at your next prompt; chat_read drains it.")
     );
   },
 };
