@@ -30,8 +30,8 @@ afterEach(() => {
 });
 
 describe("TOOL_DEFS", () => {
-  test("exports all 34 tools", () => {
-    expect(TOOL_DEFS.length).toBe(34);
+  test("exports all 35 tools", () => {
+    expect(TOOL_DEFS.length).toBe(35);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -68,6 +68,7 @@ describe("TOOL_DEFS", () => {
       "chat_read",
       "chat_unregister",
       "chat_broadcast",
+      "chat_status",
     ]);
   });
 
@@ -81,12 +82,6 @@ describe("TOOL_DEFS", () => {
       "watch_branch_create",
       "watch_list",
       "watch_cancel",
-      "chat_register",
-      "chat_list",
-      "chat_send",
-      "chat_read",
-      "chat_unregister",
-      "chat_broadcast",
     ]);
   });
 

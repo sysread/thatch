@@ -14,7 +14,8 @@ User-facing behavior is documented in
 
 - `thatch_chat_register` / `thatch_chat_list` / `thatch_chat_send` /
   `thatch_chat_read` / `thatch_chat_unregister` / `thatch_chat_broadcast`
-  tools (all opencode-only, identity from the host session)
+  tools (shared across hosts; opencode injects identity, MCP hosts
+  self-declare with the as argument)
 - A shared SQLite directory and inbox in thatch.db, writable by any opencode
   process on the machine
 - A per-process poller that heartbeats hosted sessions and delivers wake
@@ -195,8 +196,36 @@ process opens the database.
   are `thatch_*` tools and excluded from buffering like all thatch tools;
   non-thatch tool calls made during a chat notification turn are buffered
   and extracted like any other turn's.
-- Multi-host ([multi-host.md](multi-host.md)): opencode-only. MCP hosts have
-  no session identity, no poller, and no prompt channel.
+- Multi-host ([multi-host.md](multi-host.md)): the chat tools are shared -
+  MCP hosts register with a self-declared identity (the `as` argument;
+  the stored session ID is synthetic, `mcp_<hash of name>`), and pending
+  mail surfaces at prompt time through the flush-tools hook line and
+  `chat_status`. Wake-up delivery remains opencode-only: no MCP server
+  can start a turn in the client's conversation.
+
+## Multi-host delivery tiers
+
+Chat works on every host. Earlier designs for the MCP path - a JSONL
+temp-file inbox, a socket or daemon - were rejected: the DB already is the
+inbox, and MCP hosts cannot hold connections across turns, so both
+degenerate to the turn-granularity polling the tools already provide. The
+wake analog is the existing hook channel.
+
+| Host        | Send/receive | New-mail signal              | Echo bubbles |
+|-------------|--------------|------------------------------|--------------|
+| opencode    | yes          | promptAsync wake (idle-gated)| yes          |
+| claude code | yes          | flush-tools hook line        | no           |
+| cursor      | yes          | flush-tools hook line        | no           |
+
+MCP identity is the registered name: `chat_register` without a host
+session stores a synthetic `mcp_<sha256(name)[0:12]>` session ID, so the
+identity is stable across the ephemeral sessions those harnesses run.
+`chat_status` is the quiet check (registered flag + pending/total); the
+flush-tools hook line names the addressee sessions and prints nothing
+when the project has no pending chat - absence is silent by construction.
+Staleness semantics differ by kind: an opencode row's stale age means the
+process is gone (broadcast skips it), while an mcp row's age only means
+"between turns" (broadcast always delivers).
 
 ## Defaults
 

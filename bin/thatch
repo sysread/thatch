@@ -63,12 +63,38 @@ async function defaultStore(): Promise<string> {
 }
 
 /**
+ * Builds the chat-mail hook line for the given project: one line when
+ * unread mail is waiting for registered sessions, naming the addressee
+ * sessions. Empty string when the project has no chat state or no pending
+ * mail - a session that never registered never sees a chat line at all,
+ * and the line is about the addressee, not about the reader, so there is
+ * nothing for an unregistered model to hallucinate.
+ */
+async function chatHookLine(): Promise<string> {
+  let repo: string | null = null;
+  try {
+    repo = await detectRepo();
+  } catch {
+    return "";
+  }
+  const pending = db.chatPendingByProject(repo);
+  if (pending.length === 0) return "";
+  const parts = pending.map((p) => `${p.name} (${p.pending})`);
+  return `[thatch] chat: unread message(s) for ${parts.join(", ")} - the addressee should call chat_read`;
+}
+
+/**
  * Emits the nudge output, prepending a version warning if present. The
  * warning goes first so the LLM sees it before the nudge text. Used by
  * flush-tools to surface version skew and update-available notices on
- * every UserPromptSubmit, regardless of which tier fired.
+ * every UserPromptSubmit, regardless of which tier fired. The chat hook
+ * line, when present, is appended last (the mail check is the last thing
+ * the model reads before the nudge body).
  */
-function emit(output: string, versionWarning: string | null, isJson: boolean): void {
+function emit(output: string, versionWarning: string | null, isJson: boolean, chatLine = ""): void {
+  if (chatLine) {
+    output = `${output}\n\n${chatLine}`;
+  }
   if (versionWarning) {
     output = `[thatch] ${versionWarning}\n\n${output}`;
   }
@@ -417,7 +443,10 @@ switch (command) {
     } catch (err) {
       console.error(`[thatch] hygiene report failed: ${err}`);
     }
-    const reminder = claudeSessionStartReminder(repo, hygiene);
+    // Chat mail check: same gating as flush-tools - a line only when
+    // pending mail exists for registered sessions in this project.
+    const chatLine = await chatHookLine();
+    const reminder = claudeSessionStartReminder(repo, hygiene) + (chatLine ? `\n\n${chatLine}` : "");
     if (isJson) {
       console.log(JSON.stringify({ additional_context: reminder }));
     } else {
@@ -657,6 +686,9 @@ switch (command) {
       // flush-tools fires on every prompt, including conversational turns
       // with no tool calls.
       const versionWarning = detectSkew(dbPath) ?? readNpmCacheForUpdate(dbPath);
+      // Chat mail check: one line when pending mail exists for registered
+      // sessions in this project, empty string otherwise (see chatHookLine).
+      const chatLine = await chatHookLine();
 
       // Tier 1: extraction nudge. Peek (don't drain) - the queue persists
       // until the agent calls memory_remember, which triggers consumeQueue.
@@ -668,7 +700,7 @@ switch (command) {
         const missed = sessionID ? getMissedCount(sessionID) : 0;
         if (sessionID) incrementMissedCount(sessionID);
         const output = extractionNudge(interactions.length, missed, "mcp__thatch__memory_remember", sessionID ?? "");
-        emit(output, versionWarning, isJson);
+        emit(output, versionWarning, isJson, chatLine);
         break;
       }
 
@@ -702,14 +734,14 @@ switch (command) {
 
         if (parts.length > 0) {
           const output = parts.join("\n\n");
-          emit(output, versionWarning, isJson);
+          emit(output, versionWarning, isJson, chatLine);
           break;
         }
       }
 
       // Tier 3: static write nudge.
       const output = claudeWriteNudge();
-      emit(output, versionWarning, isJson);
+      emit(output, versionWarning, isJson, chatLine);
     } catch (err) {
       console.error(`[thatch flush-tools] failed: ${err}`);
       try {

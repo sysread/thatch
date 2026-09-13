@@ -35,7 +35,7 @@ const useCase: UseCase = {
     "9. Unregister; confirm message history survives and wake prompts stop for the unregistered recipient.",
   ].join("\n"),
   expected: [
-    "- chat_register, chat_list, chat_send, chat_read, chat_unregister, and chat_broadcast are marked opencodeOnly.",
+    "- chat_register, chat_list, chat_send, chat_read, chat_unregister, chat_broadcast, and chat_status are shared tools (no opencodeOnly flag): MCP hosts register with a self-declared identity, and wake-up delivery is the only opencode-only part.",
     "- A name can only be claimed by one session, case-insensitively; lookups and message addressing follow the same rule.",
     "- Pool assignment (register without a name) draws an unused pool name, never repeats a draw, and skips names claimed by custom registrations.",
     "- Send requires both endpoints registered and distinct, and returns the resolved recipient.",
@@ -47,14 +47,16 @@ const useCase: UseCase = {
   ].join("\n"),
 
   async run() {
-    // Step 1: chat tools are opencode-only with bare names.
+    // Step 1: chat tools are shared (bare names, no opencodeOnly flag) -
+    // MCP hosts register with a self-declared identity. The opencodeOnly
+    // set is exactly the session and watch tools.
     const chatTools = TOOL_DEFS.filter((t) => t.name.startsWith("chat_"));
-    if (chatTools.length !== 6) {
-      console.log(`  FAIL: expected 6 chat tools, got ${chatTools.length}`);
+    if (chatTools.length !== 7) {
+      console.log(`  FAIL: expected 7 chat tools, got ${chatTools.length}`);
       return "FAIL";
     }
-    if (!chatTools.every((t) => t.opencodeOnly)) {
-      console.log("  FAIL: chat tools must be opencodeOnly (identity comes from the host session)");
+    if (chatTools.some((t) => t.opencodeOnly)) {
+      console.log("  FAIL: chat tools must be shared (they work on MCP hosts with an `as` identity)");
       return "FAIL";
     }
 
@@ -70,20 +72,20 @@ const useCase: UseCase = {
 
     try {
       // Step 2: registration and name collisions.
-      if (!db.registerChatSession("ses_alpha", "alpha", "acme/widgets", null).ok) {
+      if (!db.registerChatSession("ses_alpha", "alpha", "acme/widgets", null, "opencode").ok) {
         console.log("  FAIL: alpha registration failed");
         return "FAIL";
       }
-      if (!db.registerChatSession("ses_beta", "beta", "acme/widgets", null).ok) {
+      if (!db.registerChatSession("ses_beta", "beta", "acme/widgets", null, "opencode").ok) {
         console.log("  FAIL: beta registration failed");
         return "FAIL";
       }
-      if (db.registerChatSession("ses_gamma", "alpha", "p", null).ok) {
+      if (db.registerChatSession("ses_gamma", "alpha", "p", null, "opencode").ok) {
         console.log("  FAIL: name collision was accepted");
         return "FAIL";
       }
       // Case variants collide too: uniqueness is case-insensitive.
-      if (db.registerChatSession("ses_gamma", "ALPHA", "p", null).ok) {
+      if (db.registerChatSession("ses_gamma", "ALPHA", "p", null, "opencode").ok) {
         console.log("  FAIL: case-variant name collision was accepted");
         return "FAIL";
       }
@@ -98,12 +100,12 @@ const useCase: UseCase = {
       }
 
       // Step 3: pool assignment. Draws come from the pool, are unused, and differ.
-      const drawA = db.assignChatName("ses_pool_a", "p", null);
+      const drawA = db.assignChatName("ses_pool_a", "p", null, "opencode");
       if (!drawA.ok || !CHAT_NAME_POOL.includes(drawA.name)) {
         console.log(`  FAIL: pool draw invalid: ${JSON.stringify(drawA)}`);
         return "FAIL";
       }
-      const drawB = db.assignChatName("ses_pool_b", "p", null);
+      const drawB = db.assignChatName("ses_pool_b", "p", null, "opencode");
       if (!drawB.ok || drawB.name === drawA.name) {
         console.log("  FAIL: two pool draws collided or the second failed");
         return "FAIL";
@@ -115,13 +117,13 @@ const useCase: UseCase = {
       // Claim a name neither draw picked, or the claim legitimately
       // collides and the use case would flake (~2% of runs).
       const claimed = CHAT_NAME_POOL.find((n) => n !== drawA.name && n !== drawB.name)!;
-      if (!db.registerChatSession("ses_pool_c", claimed, "p", null).ok) {
+      if (!db.registerChatSession("ses_pool_c", claimed, "p", null, "opencode").ok) {
         console.log("  FAIL: custom claim of a free pool name was rejected");
         return "FAIL";
       }
       let draws = 0;
       for (;;) {
-        const draw = db.assignChatName(`ses_drain_${draws}`, "p", null);
+        const draw = db.assignChatName(`ses_drain_${draws}`, "p", null, "opencode");
         if (!draw.ok) break;
         draws++;
         if (draw.name === claimed) {

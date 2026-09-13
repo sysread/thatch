@@ -109,6 +109,7 @@ describe("plugin entry", () => {
       "thatch_chat_read",
       "thatch_chat_register",
       "thatch_chat_send",
+      "thatch_chat_status",
       "thatch_chat_unregister",
       "thatch_config_get",
       "thatch_config_set",

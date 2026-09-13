@@ -4,7 +4,7 @@ import {
   PredictionEngine,
 } from "./prediction";
 import { BehaviorEngine } from "./behavior";
-import { ChatStore } from "./chat";
+import { ChatStore, type ChatHostKind } from "./chat";
 import { PREDICTION_K, PREDICTION_P0, PREDICTION_W_SOFT } from "./scoring-engine";
 
 export { cosineSimilarity } from "./vector-math";
@@ -236,6 +236,7 @@ export class ThatchDB {
         name          TEXT NOT NULL UNIQUE COLLATE NOCASE,
         topic         TEXT,
         project       TEXT,
+        host_kind     TEXT NOT NULL DEFAULT ('opencode'),
         registered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
         last_seen     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
       )
@@ -264,7 +265,17 @@ export class ThatchDB {
     this.#migrateColumns();
     this.#migrateChatNameCollation();
     this.#migrateChatTopic();
+    this.#migrateChatHostKind();
     this.#migrateChatBroadcastFlag();
+  }
+
+  // chat_sessions tables created before the host_kind column lack it; the
+  // ALTER adds it, and existing rows read as opencode (which they were).
+  #migrateChatHostKind(): void {
+    const cols = (this.#db.query("PRAGMA table_info(chat_sessions)").all() as any[]).map((r) => r.name);
+    if (cols.length > 0 && !cols.includes("host_kind")) {
+      this.#db.run("ALTER TABLE chat_sessions ADD COLUMN host_kind TEXT NOT NULL DEFAULT 'opencode'");
+    }
   }
 
   // chat_messages tables created before the via_broadcast column lack it;
@@ -813,16 +824,24 @@ export class ThatchDB {
   // Cross-session chat: delegates to ChatStore
   // ---------------------------------------------------------------------------
 
-  registerChatSession(sessionID: string, name: string, project: string | null, topic: string | null) {
-    return this.#chat.register(sessionID, name, project, topic);
+  registerChatSession(sessionID: string, name: string, project: string | null, topic: string | null, kind: ChatHostKind) {
+    return this.#chat.register(sessionID, name, project, topic, kind);
   }
 
-  assignChatName(sessionID: string, project: string | null, topic: string | null) {
-    return this.#chat.assign(sessionID, project, topic);
+  assignChatName(sessionID: string, project: string | null, topic: string | null, kind: ChatHostKind) {
+    return this.#chat.assign(sessionID, project, topic, kind);
   }
 
   broadcastChatMessage(fromSession: string, body: string) {
     return this.#chat.broadcast(fromSession, body);
+  }
+
+  chatMessageStatus(sessionID: string) {
+    return this.#chat.status(sessionID);
+  }
+
+  chatPendingByProject(project: string) {
+    return this.#chat.pendingByProject(project);
   }
 
   chatMessageFeed() {

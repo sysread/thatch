@@ -40,9 +40,9 @@ const useCase: UseCase = {
     // through its own env).
     const seeded = new ThatchDB(ctx.env.THATCH_DB_PATH);
     try {
-      const a = seeded.registerChatSession("ses_alpha", "alpha", "acme/widgets", "watching CI");
-      const b = seeded.registerChatSession("ses_beta", "beta", "acme/widgets", null);
-      const g = seeded.registerChatSession("ses_ghost", "ghost", "acme/widgets", null);
+      const a = seeded.registerChatSession("ses_alpha", "alpha", "acme/widgets", "watching CI", "opencode");
+      const b = seeded.registerChatSession("ses_beta", "beta", "acme/widgets", null, "opencode");
+      const g = seeded.registerChatSession("ses_ghost", "ghost", "acme/widgets", null, "opencode");
       if (!a.ok || !b.ok || !g.ok) {
         console.log("  FAIL: seeding failed");
         return "FAIL";
@@ -56,7 +56,7 @@ const useCase: UseCase = {
       // (beta drains its inbox) so the tail shows a read line too.
       seeded.sendChatMessage("ses_alpha", "ses_beta", "direct ping");
       seeded.broadcastChatMessage("ses_alpha", "the machine age begins");
-      seeded.registerChatSession("ses_mortal", "mortal", "acme/widgets", null);
+      seeded.registerChatSession("ses_mortal", "mortal", "acme/widgets", null, "opencode");
       seeded.sendChatMessage("ses_mortal", "ses_beta", "my last words");
       seeded.unregisterChatSession("ses_mortal");
       seeded.readChatMessages("ses_beta");

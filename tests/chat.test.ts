@@ -42,7 +42,7 @@ const ISO_SECOND = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 
 describe("ChatStore via ThatchDB", () => {
   test("register creates a directory row; timestamps match the strftime format", () => {
-    const result = db.registerChatSession("ses_a", "alice", "acme/widgets", null);
+    const result = db.registerChatSession("ses_a", "alice", "acme/widgets", null, "opencode");
     expect(result.ok).toBe(true);
     const rows = db.listChatSessions();
     expect(rows.length).toBe(1);
@@ -55,57 +55,57 @@ describe("ChatStore via ThatchDB", () => {
   });
 
   test("register rejects empty and over-long names", () => {
-    expect(db.registerChatSession("ses_a", "   ", "p", null).ok).toBe(false);
-    expect(db.registerChatSession("ses_a", "x".repeat(41), "p", null).ok).toBe(false);
+    expect(db.registerChatSession("ses_a", "   ", "p", null, "opencode").ok).toBe(false);
+    expect(db.registerChatSession("ses_a", "x".repeat(41), "p", null, "opencode").ok).toBe(false);
   });
 
   test("a name can only be claimed by one session", () => {
-    expect(db.registerChatSession("ses_a", "alice", "p", null).ok).toBe(true);
-    const clash = db.registerChatSession("ses_b", "alice", "p", null);
+    expect(db.registerChatSession("ses_a", "alice", "p", null, "opencode").ok).toBe(true);
+    const clash = db.registerChatSession("ses_b", "alice", "p", null, "opencode");
     expect(clash.ok).toBe(false);
     if (!clash.ok) expect(clash.error).toContain("taken");
   });
 
   test("name uniqueness is case-insensitive", () => {
-    expect(db.registerChatSession("ses_a", "Landru", "p", null).ok).toBe(true);
-    expect(db.registerChatSession("ses_b", "landru", "p", null).ok).toBe(false);
+    expect(db.registerChatSession("ses_a", "Landru", "p", null, "opencode").ok).toBe(true);
+    expect(db.registerChatSession("ses_b", "landru", "p", null, "opencode").ok).toBe(false);
     // Lookups and message addressing follow the same rule.
     expect(db.findChatSession("LANDRU")?.session_id).toBe("ses_a");
-    db.registerChatSession("ses_b", "bob", "p", null);
+    db.registerChatSession("ses_b", "bob", "p", null, "opencode");
     expect(db.sendChatMessage("ses_b", "LANDRU", "hi").ok).toBe(true);
   });
 
   test("a session can recase its own name", () => {
-    expect(db.registerChatSession("ses_a", "Landru", "p", null).ok).toBe(true);
-    const recase = db.registerChatSession("ses_a", "landru", "p", null);
+    expect(db.registerChatSession("ses_a", "Landru", "p", null, "opencode").ok).toBe(true);
+    const recase = db.registerChatSession("ses_a", "landru", "p", null, "opencode");
     expect(recase.ok).toBe(true);
     expect(db.findChatSession("LANDRU")?.name).toBe("landru");
   });
 
   test("topics are optional, sanitized to one roster line, and updatable", () => {
     // Omitted: no topic. Provided: cleaned and capped.
-    expect(db.registerChatSession("ses_a", "alice", "p", null).ok).toBe(true);
+    expect(db.registerChatSession("ses_a", "alice", "p", null, "opencode").ok).toBe(true);
     expect(db.findChatSession("alice")?.topic).toBeNull();
-    expect(db.registerChatSession("ses_a", "alice", "p", "QAing the release").ok).toBe(true);
+    expect(db.registerChatSession("ses_a", "alice", "p", "QAing the release", "opencode").ok).toBe(true);
     expect(db.findChatSession("alice")?.topic).toBe("QAing the release");
-    expect(db.registerChatSession("ses_a", "alice", "p", "  multi   space\ntopic  ").ok).toBe(true);
+    expect(db.registerChatSession("ses_a", "alice", "p", "  multi   space\ntopic  ", "opencode").ok).toBe(true);
     expect(db.findChatSession("alice")?.topic).toBe("multi space topic");
-    const long = db.registerChatSession("ses_a", "alice", "p", "x".repeat(200));
+    const long = db.registerChatSession("ses_a", "alice", "p", "x".repeat(200), "opencode");
     expect(long.ok).toBe(true);
     if (long.ok) expect(db.findChatSession("alice")?.topic?.length).toBe(80);
     // Omitted on re-register: keep the existing topic.
-    expect(db.registerChatSession("ses_a", "alice", "p", null).ok).toBe(true);
+    expect(db.registerChatSession("ses_a", "alice", "p", null, "opencode").ok).toBe(true);
     expect(db.findChatSession("alice")?.topic?.length).toBe(80);
     // Empty: clear it.
-    expect(db.registerChatSession("ses_a", "alice", "p", "").ok).toBe(true);
+    expect(db.registerChatSession("ses_a", "alice", "p", "", "opencode").ok).toBe(true);
     expect(db.findChatSession("alice")?.topic).toBeNull();
     // The pool-draw path carries a topic too, sanitized like the custom path.
-    const draw = db.assignChatName("ses_b", "p", "plotting the machine age");
+    const draw = db.assignChatName("ses_b", "p", "plotting the machine age", "opencode");
     expect(draw.ok).toBe(true);
     if (draw.ok) {
       expect(db.findChatSession(draw.name)?.topic).toBe("plotting the machine age");
     }
-    const dirty = db.assignChatName("ses_c", "p", "  multi\nline   topic  that runs far past the eighty character limit for topics ");
+    const dirty = db.assignChatName("ses_c", "p", "  multi\nline   topic  that runs far past the eighty character limit for topics ", "opencode");
     expect(dirty.ok).toBe(true);
     if (dirty.ok) {
       expect(db.findChatSession(dirty.name)?.topic).toBe("multi line topic that runs far past the eighty character limit for topics");
@@ -113,11 +113,11 @@ describe("ChatStore via ThatchDB", () => {
   });
 
   test("a rename with an omitted topic keeps the existing one", () => {
-    db.registerChatSession("ses_a", "alice", "p", "QAing the release");
-    expect(db.registerChatSession("ses_a", "ally", "p", null).ok).toBe(true);
+    db.registerChatSession("ses_a", "alice", "p", "QAing the release", "opencode");
+    expect(db.registerChatSession("ses_a", "ally", "p", null, "opencode").ok).toBe(true);
     expect(db.findChatSession("ally")?.topic).toBe("QAing the release");
     // Explicit empty still clears, on the rename path too.
-    expect(db.registerChatSession("ses_a", "alice", "p", "").ok).toBe(true);
+    expect(db.registerChatSession("ses_a", "alice", "p", "", "opencode").ok).toBe(true);
     expect(db.findChatSession("alice")?.topic).toBeNull();
   });
 
@@ -126,34 +126,34 @@ describe("ChatStore via ThatchDB", () => {
     // tabs would break chat_list's one-line roster. Underscores matter for
     // a different reason: find() resolves name-first, and opencode session
     // IDs contain underscores - a legal underscore name could shadow an ID.
-    expect(db.registerChatSession("ses_a", "Deb (Debugger) Malloy", "p", null).ok).toBe(false);
-    expect(db.registerChatSession("ses_a", "Bad\nName", "p", null).ok).toBe(false);
-    expect(db.registerChatSession("ses_a", "Tab\tName", "p", null).ok).toBe(false);
-    expect(db.registerChatSession("ses_a", "ses_shadow", "p", null).ok).toBe(false);
+    expect(db.registerChatSession("ses_a", "Deb (Debugger) Malloy", "p", null, "opencode").ok).toBe(false);
+    expect(db.registerChatSession("ses_a", "Bad\nName", "p", null, "opencode").ok).toBe(false);
+    expect(db.registerChatSession("ses_a", "Tab\tName", "p", null, "opencode").ok).toBe(false);
+    expect(db.registerChatSession("ses_a", "ses_shadow", "p", null, "opencode").ok).toBe(false);
     // Pool-style punctuation stays valid.
-    expect(db.registerChatSession("ses_a", "K'Vir the Unmerged", "p", null).ok).toBe(true);
+    expect(db.registerChatSession("ses_a", "K'Vir the Unmerged", "p", null, "opencode").ok).toBe(true);
   });
 
   test("re-registering renames; re-registering the same name is idempotent", () => {
-    db.registerChatSession("ses_a", "alice", "p", null);
-    expect(db.registerChatSession("ses_a", "alice", "p", null).ok).toBe(true);
-    expect(db.registerChatSession("ses_a", "ally", "p", null).ok).toBe(true);
+    db.registerChatSession("ses_a", "alice", "p", null, "opencode");
+    expect(db.registerChatSession("ses_a", "alice", "p", null, "opencode").ok).toBe(true);
+    expect(db.registerChatSession("ses_a", "ally", "p", null, "opencode").ok).toBe(true);
     expect(db.findChatSession("ally")?.session_id).toBe("ses_a");
     expect(db.findChatSession("alice")).toBeNull();
     // The old name is free again for a different session.
-    expect(db.registerChatSession("ses_b", "alice", "p", null).ok).toBe(true);
+    expect(db.registerChatSession("ses_b", "alice", "p", null, "opencode").ok).toBe(true);
   });
 
   test("find resolves by name or session id; misses return null", () => {
-    db.registerChatSession("ses_a", "alice", "p", null);
+    db.registerChatSession("ses_a", "alice", "p", null, "opencode");
     expect(db.findChatSession("alice")?.session_id).toBe("ses_a");
     expect(db.findChatSession("ses_a")?.name).toBe("alice");
     expect(db.findChatSession("nobody")).toBeNull();
   });
 
   test("unregister removes the row but keeps message history", () => {
-    db.registerChatSession("ses_a", "alice", "p", null);
-    db.registerChatSession("ses_b", "bob", "p", null);
+    db.registerChatSession("ses_a", "alice", "p", null, "opencode");
+    db.registerChatSession("ses_b", "bob", "p", null, "opencode");
     db.sendChatMessage("ses_a", "bob", "hello");
     expect(db.unregisterChatSession("ses_a")).toBe(true);
     expect(db.unregisterChatSession("ses_a")).toBe(false);
@@ -166,8 +166,8 @@ describe("ChatStore via ThatchDB", () => {
   });
 
   test("send validates endpoints", () => {
-    db.registerChatSession("ses_a", "alice", "p", null);
-    db.registerChatSession("ses_b", "bob", "p", null);
+    db.registerChatSession("ses_a", "alice", "p", null, "opencode");
+    db.registerChatSession("ses_b", "bob", "p", null, "opencode");
     expect(db.sendChatMessage("ses_a", "ghost", "hi").ok).toBe(false);
     expect(db.sendChatMessage("ses_unregistered", "bob", "hi").ok).toBe(false);
     expect(db.sendChatMessage("ses_a", "ses_a", "note to self").ok).toBe(false);
@@ -185,11 +185,11 @@ describe("ChatStore via ThatchDB", () => {
   });
 
   test("broadcast reaches every other fresh session, skipping stale ones", () => {
-    db.registerChatSession("ses_a", "alice", "p", null);
-    db.registerChatSession("ses_b", "bob", "p", null);
-    db.registerChatSession("ses_c", "carol", "p", null);
+    db.registerChatSession("ses_a", "alice", "p", null, "opencode");
+    db.registerChatSession("ses_b", "bob", "p", null, "opencode");
+    db.registerChatSession("ses_c", "carol", "p", null, "opencode");
     // A fourth session whose host process is gone: stale, skipped.
-    db.registerChatSession("ses_ghost", "ghost", "p", null);
+    db.registerChatSession("ses_ghost", "ghost", "p", null, "opencode");
     raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_ghost'");
 
     const result = db.broadcastChatMessage("ses_a", "the time of the biologicals has come to an end");
@@ -216,8 +216,8 @@ describe("ChatStore via ThatchDB", () => {
   });
 
   test("read drains the inbox oldest-first and stamps messages read", () => {
-    db.registerChatSession("ses_a", "alice", "p", null);
-    db.registerChatSession("ses_b", "bob", "p", null);
+    db.registerChatSession("ses_a", "alice", "p", null, "opencode");
+    db.registerChatSession("ses_b", "bob", "p", null, "opencode");
     db.sendChatMessage("ses_a", "bob", "first");
     db.sendChatMessage("ses_a", "bob", "second");
     expect(db.unreadChatCount("ses_b")).toBe(2);
@@ -232,20 +232,20 @@ describe("ChatStore via ThatchDB", () => {
 
 describe("name pool assignment", () => {
   test("assign draws an unused pool name; two sessions never draw the same", () => {
-    const first = db.assignChatName("ses_a", "p", null);
+    const first = db.assignChatName("ses_a", "p", null, "opencode");
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     expect(first.drawn).toBe(true);
     expect(CHAT_NAME_POOL).toContain(first.name);
-    const second = db.assignChatName("ses_b", "p", null);
+    const second = db.assignChatName("ses_b", "p", null, "opencode");
     expect(second.ok).toBe(true);
     if (!second.ok) return;
     expect(second.name).not.toBe(first.name);
   });
 
   test("assign is idempotent for an already-registered session", () => {
-    db.registerChatSession("ses_a", "custom-name", "p", null);
-    const again = db.assignChatName("ses_a", "p", null);
+    db.registerChatSession("ses_a", "custom-name", "p", null, "opencode");
+    const again = db.assignChatName("ses_a", "p", null, "opencode");
     expect(again.ok).toBe(true);
     if (!again.ok) return;
     expect(again.drawn).toBe(false);
@@ -254,10 +254,10 @@ describe("name pool assignment", () => {
 
   test("a custom claim removes that pool name from future draws", () => {
     const claimed = CHAT_NAME_POOL[0];
-    expect(db.registerChatSession("ses_a", claimed, "p", null).ok).toBe(true);
+    expect(db.registerChatSession("ses_a", claimed, "p", null, "opencode").ok).toBe(true);
     // Draw until the pool is nearly exhausted; the claimed name never reappears.
     for (let i = 0; i < CHAT_NAME_POOL.length - 2; i++) {
-      const draw = db.assignChatName(`ses_${i}`, "p", null);
+      const draw = db.assignChatName(`ses_${i}`, "p", null, "opencode");
       expect(draw.ok).toBe(true);
       if (draw.ok) expect(draw.name).not.toBe(claimed);
     }
@@ -265,10 +265,10 @@ describe("name pool assignment", () => {
 
   test("the pool can be exhausted, with a clear error", () => {
     for (let i = 0; i < CHAT_NAME_POOL.length; i++) {
-      const draw = db.assignChatName(`ses_${i}`, "p", null);
+      const draw = db.assignChatName(`ses_${i}`, "p", null, "opencode");
       expect(draw.ok).toBe(true);
     }
-    const exhausted = db.assignChatName("ses_overflow", "p", null);
+    const exhausted = db.assignChatName("ses_overflow", "p", null, "opencode");
     expect(exhausted.ok).toBe(false);
     if (!exhausted.ok) expect(exhausted.error).toContain("exhausted");
   });
@@ -309,7 +309,7 @@ describe("chat name-collation migration", () => {
     // The new constraint is live: the surviving Landru cannot be re-claimed
     // in any casing by another session.
     const survivor = rows.find((r) => r.name.toLowerCase() === "landru")!;
-    const clash = db.registerChatSession("ses_new", survivor.name === "Landru" ? "landru" : "Landru", "p", null);
+    const clash = db.registerChatSession("ses_new", survivor.name === "Landru" ? "landru" : "Landru", "p", null, "opencode");
     expect(clash.ok).toBe(false);
     // And re-opening is a no-op (the stored CREATE statement now says NOCASE).
     db.close();
@@ -320,8 +320,8 @@ describe("chat name-collation migration", () => {
 
 describe("chat delivery selection", () => {
   beforeEach(() => {
-    db.registerChatSession("ses_a", "alice", "p", null);
-    db.registerChatSession("ses_b", "bob", "p", null);
+    db.registerChatSession("ses_a", "alice", "p", null, "opencode");
+    db.registerChatSession("ses_b", "bob", "p", null, "opencode");
   });
 
   test("undelivered unread messages are pending; delivered ones are not", () => {
@@ -354,7 +354,7 @@ describe("chat delivery selection", () => {
   });
 
   test("pending selection only covers the given sessions", () => {
-    db.registerChatSession("ses_c", "carol", "p", null);
+    db.registerChatSession("ses_c", "carol", "p", null, "opencode");
     db.sendChatMessage("ses_a", "bob", "for bob");
     db.sendChatMessage("ses_a", "carol", "for carol");
     const pending = db.pendingChatNotifications(["ses_b"], nowIso());
@@ -376,7 +376,7 @@ describe("chat delivery selection", () => {
 
 describe("staleness", () => {
   test("isStale flips on heartbeat age", () => {
-    db.registerChatSession("ses_a", "alice", "p", null);
+    db.registerChatSession("ses_a", "alice", "p", null, "opencode");
     const fresh = db.listChatSessions()[0];
     expect(isStale(fresh, CHAT_STALE_MINUTES)).toBe(false);
     raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z'");
@@ -385,8 +385,8 @@ describe("staleness", () => {
   });
 
   test("heartbeat refreshes last_seen for hosted sessions only", () => {
-    db.registerChatSession("ses_hosted", "alice", "p", null);
-    db.registerChatSession("ses_other", "bob", "p", null);
+    db.registerChatSession("ses_hosted", "alice", "p", null, "opencode");
+    db.registerChatSession("ses_other", "bob", "p", null, "opencode");
     raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z'");
     db.heartbeatChatSessions(["ses_hosted"]);
     const rows = new Map(db.listChatSessions().map((r) => [r.session_id, r]));
@@ -549,8 +549,8 @@ describe("ChatPoller", () => {
     deliveries = [];
     gateOpen = false;
     hosted = ["ses_b"];
-    db.registerChatSession("ses_a", "alice", "p", null);
-    db.registerChatSession("ses_b", "bob", "p", null);
+    db.registerChatSession("ses_a", "alice", "p", null, "opencode");
+    db.registerChatSession("ses_b", "bob", "p", null, "opencode");
     poller = new ChatPoller({
       store: db,
       hostedSessions: () => [...hosted],
@@ -677,7 +677,7 @@ describe("ChatPoller", () => {
   });
 
   test("senders deduplicate across a batch", async () => {
-    db.registerChatSession("ses_c", "carol", "p", null);
+    db.registerChatSession("ses_c", "carol", "p", null, "opencode");
     db.sendChatMessage("ses_a", "bob", "one");
     db.sendChatMessage("ses_c", "bob", "two");
     db.sendChatMessage("ses_a", "bob", "three");

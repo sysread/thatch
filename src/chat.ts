@@ -51,6 +51,10 @@ export interface ChatSessionRow {
   name: string;
   topic: string | null;
   project: string | null;
+  /** Which harness hosts this session: "opencode" (poller-driven) or "mcp"
+   *  (turn-driven). Determines how staleness is interpreted and whether
+   *  wake delivery is possible. */
+  host_kind: ChatHostKind;
   registered_at: string;
   last_seen: string;
 }
@@ -74,6 +78,23 @@ export interface ChatInboxItem {
 }
 
 export type ChatResult = { ok: true; topic: string | null } | { ok: false; error: string };
+
+/**
+ * Derives the synthetic session ID for an MCP-host chat registration: a
+ * pure function of the claimed name, so identity survives the ephemeral
+ * sessions those hosts run (a later conversation claiming the same name
+ * finds the same row). The underscore keeps the ID outside NAME_CHARSET,
+ * preserving the name-cannot-shadow-ID invariant that find() relies on.
+ */
+export function mcpSessionID(name: string): string {
+  const hash = Bun.SHA256.hash(name.toLowerCase(), "hex").slice(0, 12);
+  return `mcp_${hash}`;
+}
+
+/** Which kind of harness hosts a chat session: opencode rows are
+ *  poller-driven (liveness = process alive), mcp rows are turn-driven
+ *  (liveness = a turn ran recently; mail is read at the next prompt). */
+export type ChatHostKind = "opencode" | "mcp";
 
 // Display names appear inside wake prompts and chat_list output, so they are
 // capped tight. Bodies are capped so a runaway sender cannot turn a nudge
@@ -120,6 +141,7 @@ export class ChatStore {
     sessionID: string,
     project: string | null,
     topic: string | null,
+    kind: ChatHostKind,
   ): { ok: true; name: string; drawn: boolean; topic: string | null } | { ok: false; error: string } {
     const existing = this.#find(sessionID);
     if (existing) {
@@ -140,7 +162,7 @@ export class ChatStore {
       }
       const name = free[Math.floor(Math.random() * free.length)];
       const cleanTopic = this.#cleanTopic(topic);
-      const claimed = this.#insertSession(sessionID, name, project, cleanTopic);
+      const claimed = this.#insertSession(sessionID, name, project, cleanTopic, kind);
       if (claimed.ok) return { ok: true, name, drawn: true, topic: cleanTopic };
     }
     return { ok: false, error: "Could not claim a pool name after several attempts - pass a custom name." };
@@ -154,7 +176,7 @@ export class ChatStore {
    * are the same name), so lookups and claims agree no matter what casing the
    * model or user types. Both paths stamp last_seen.
    */
-  register(sessionID: string, rawName: string, project: string | null, topic: string | null): ChatResult {
+  register(sessionID: string, rawName: string, project: string | null, topic: string | null, kind: ChatHostKind): ChatResult {
     const name = rawName.trim();
     const invalid = this.#invalidName(name);
     if (invalid) return { ok: false, error: invalid };
@@ -196,7 +218,7 @@ export class ChatStore {
     if (this.#findByName(name)) {
       return this.#nameTaken(name);
     }
-    const inserted = this.#insertSession(sessionID, name, project, cleanTopic);
+    const inserted = this.#insertSession(sessionID, name, project, cleanTopic, kind);
     if (inserted.ok) return { ok: true, topic: cleanTopic };
     return inserted;
   }
@@ -212,7 +234,7 @@ export class ChatStore {
 
   list(): ChatSessionRow[] {
     return (this.#db
-      .query("SELECT session_id, name, topic, project, registered_at, last_seen FROM chat_sessions ORDER BY name")
+      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen FROM chat_sessions ORDER BY name")
       .all() as any[]).map(rowFromSession);
   }
 
@@ -285,7 +307,10 @@ export class ChatStore {
     this.#db.transaction(() => {
       for (const row of this.list()) {
         if (row.session_id === fromSession) continue;
-        if (isStale(row, CHAT_STALE_MINUTES)) {
+        // Staleness means "host process gone" only for opencode rows; an
+        // mcp row between turns reads its mail at the next prompt, so it
+        // always receives.
+        if (row.host_kind === "opencode" && isStale(row, CHAT_STALE_MINUTES)) {
           skipped.push(row.name);
           continue;
         }
@@ -337,6 +362,53 @@ export class ChatStore {
       .query("SELECT COUNT(*) AS n FROM chat_messages WHERE to_session = ? AND read_at IS NULL")
       .get(sessionID) as any;
     return row.n;
+  }
+
+  /**
+   * The caller's mailbox summary for chat_status: whether a directory row
+   * exists, and pending/total counts. Touches last_seen on use, which is
+   * what keeps an active MCP session's roster row fresh between prompt-time
+   * checks. An unregistered caller gets registered: false - the explicit,
+   * quiet answer that replaces any nudge.
+   */
+  status(sessionID: string): { registered: true; name: string; pending: number; total: number } | { registered: false } {
+    const row = this.#find(sessionID);
+    if (!row) return { registered: false };
+    this.#touch(sessionID);
+    const counts = this.#db
+      .query(
+        `SELECT COUNT(*) AS total, SUM(CASE WHEN read_at IS NULL THEN 1 ELSE 0 END) AS pending
+         FROM chat_messages WHERE to_session = ?`,
+      )
+      .get(sessionID) as any;
+    return {
+      registered: true,
+      name: row.name,
+      pending: counts.pending ?? 0,
+      total: counts.total ?? 0,
+    };
+  }
+
+  /**
+   * Pending-mail summary for the hook channel (flush-tools / reminder):
+   * every registered session in the project with unread mail, with its
+   * display name and unread count. The hook prints this only when
+   * non-empty, and names the addressee - a session that never registered
+   * never sees a chat line at all.
+   */
+  pendingByProject(project: string): Array<{ name: string; pending: number }> {
+    return (
+      this.#db
+        .query(
+          `SELECT cs.name AS name, COUNT(*) AS pending
+           FROM chat_messages m
+           JOIN chat_sessions cs ON cs.session_id = m.to_session
+           WHERE m.read_at IS NULL AND cs.project = ?
+           GROUP BY cs.name
+           ORDER BY cs.name`,
+        )
+        .all(project) as any[]
+    ).map((r) => ({ name: r.name, pending: r.pending }));
   }
 
   /** Refreshes last_seen for the given sessions. Sessions that never
@@ -432,14 +504,14 @@ export class ChatStore {
 
   #find(sessionID: string): ChatSessionRow | null {
     const row = this.#db
-      .query("SELECT session_id, name, topic, project, registered_at, last_seen FROM chat_sessions WHERE session_id = ?")
+      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen FROM chat_sessions WHERE session_id = ?")
       .get(sessionID) as any;
     return row ? rowFromSession(row) : null;
   }
 
   #findByName(name: string): ChatSessionRow | null {
     const row = this.#db
-      .query("SELECT session_id, name, topic, project, registered_at, last_seen FROM chat_sessions WHERE name = ? COLLATE NOCASE")
+      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen FROM chat_sessions WHERE name = ? COLLATE NOCASE")
       .get(name) as any;
     return row ? rowFromSession(row) : null;
   }
@@ -483,11 +555,11 @@ export class ChatStore {
    * { ok, error } contract as a raw SQLite error. Same pattern as
    * remember()'s slug-collision handling in db.ts.
    */
-  #insertSession(sessionID: string, name: string, project: string | null, topic: string | null): ChatResult {
+  #insertSession(sessionID: string, name: string, project: string | null, topic: string | null, kind: ChatHostKind): ChatResult {
     try {
       this.#db.run(
-        "INSERT INTO chat_sessions (session_id, name, topic, project, registered_at, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
-        [sessionID, name, topic, project, nowIso(), nowIso()],
+        "INSERT INTO chat_sessions (session_id, name, topic, project, host_kind, registered_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [sessionID, name, topic, project, kind, nowIso(), nowIso()],
       );
       return { ok: true, topic };
     } catch (err) {
@@ -532,6 +604,7 @@ function rowFromSession(r: any): ChatSessionRow {
     // An empty-string topic (explicit clear) reads back as no topic, so the
     // API never leaks the sentinel.
     topic: r.topic || null,
+    host_kind: r.host_kind === "mcp" ? "mcp" : "opencode",
     project: r.project,
     registered_at: r.registered_at,
     last_seen: r.last_seen,

@@ -16,7 +16,7 @@ import { sendNotification, defaultSpawner, type NotifyChannel, type Spawner } fr
 import { predictionVerb } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, type WatcherRegistry, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
-import { CHAT_STALE_MINUTES, isStale, renderChatParticipant } from "./chat";
+import { CHAT_STALE_MINUTES, isStale, renderChatParticipant, mcpSessionID, type ChatHostKind } from "./chat";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
 // creation time. Matches the thatch_find_duplicates threshold (0.85).
@@ -1331,13 +1331,17 @@ const watchCancelDef: ToolDef = {
 };
 
 /**
- * Cross-session chat: opt-in messaging between live opencode sessions on one
- * machine, routed through the shared thatch.db. The chat tools are
- * opencode-only because identity comes from the host session - the model
- * cannot know its own session ID, and MCP hosts have no sessions. The
- * registry and inbox are shared SQLite state, so a sender in one opencode
- * process can reach a recipient in another; delivery is local to the
- * recipient's host process (see src/chat.ts).
+ * Cross-session chat: opt-in messaging between registered sessions on one
+ * machine, routed through the shared thatch.db. The tools work on every
+ * host: opencode supplies a host-injected session identity, while MCP
+ * hosts declare theirs with the `as` argument (the registered display
+ * name; the stored session ID is synthetic, derived from the name). The
+ * chat tools are therefore NOT opencode-only - but wake-up delivery is,
+ * which the register tool's output states on the MCP path. The registry
+ * and inbox are shared SQLite state, so a sender in any harness can reach
+ * a recipient in any other; delivery is local to the recipient's host
+ * process (see src/chat.ts), and MCP sessions read their inbox at prompt
+ * time via chat_status or the flush-tools hook line.
  *
  * The success-output strings these tools emit are parse targets for
  * chatEchoText in src/prompts.ts, which builds the transcript echo: the
@@ -1348,6 +1352,51 @@ const watchCancelDef: ToolDef = {
  */
 
 /**
+ * Resolves the chat identity for a tool call. opencode supplies the host
+ * session; MCP hosts (host === undefined) declare theirs with the `as`
+ * argument, which must name a registered session. Returns either a usable
+ * identity or the failure text the tool should return.
+ */
+async function resolveChatIdentity(
+  ctx: CoreContext,
+  host: HostToolContext | undefined,
+  as: unknown,
+): Promise<{ ok: true; sessionID: string; kind: ChatHostKind } | { ok: false; error: string }> {
+  if (host) return { ok: true, sessionID: host.sessionID, kind: "opencode" };
+  if (typeof as !== "string" || !as.trim()) {
+    return {
+      ok: false,
+      error:
+        "Chat needs an identity: pass `as` with your registered display name (MCP hosts have no session context).",
+    };
+  }
+  const row = ctx.db.findChatSession(as.trim());
+  if (!row) {
+    return {
+      ok: false,
+      error: `No registered session named "${as.trim()}" - call chat_register first (or chat_status to check).`,
+    };
+  }
+  return { ok: true, sessionID: row.session_id, kind: row.host_kind };
+}
+
+/** The zod arg shared by chat tools whose MCP mode needs the caller's
+ *  registered name: MCP hosts have no session context, so identity is
+ *  self-declared (the documented trust posture). opencode ignores it. */
+function mcpIdentityArg() {
+  return z.string().optional().describe(
+    "Your registered display name. Only needed on hosts without session " +
+    "context (Claude Code, Cursor); opencode supplies your identity itself.",
+  );
+}
+
+/** The degraded-delivery notice appended to MCP-path registration output:
+ *  wake prompts are an opencode capability, so other hosts poll. */
+function degradedDeliveryNote(): string {
+  return "\nNote: wake-up delivery is opencode-only; on this host your inbox is checked at prompt time (chat_status, or the flush-tools hook line).\n";
+}
+
+/**
  * Joins the chat directory. Without a name, draws one at random from the
  * built-in name pool (whimsical, geek-flavored, guaranteed unused) - the
  * recommended path, since it cannot collide. With a name, claims it
@@ -1356,16 +1405,16 @@ const watchCancelDef: ToolDef = {
 const chatRegisterDef: ToolDef = {
   name: "chat_register",
   description:
-    "Join the cross-session chat directory so other opencode sessions on " +
-    "this machine can message you and you can message them. Omit the name " +
-    "to be assigned one from the built-in pool (recommended - cannot " +
-    "collide); pass a name to claim it instead, case-insensitively unique. " +
-    "Include a topic: it is what other sessions see in chat_list when " +
-    "deciding who to talk to. Pass an empty topic to clear it; omit it to " +
-    "keep the current one. Safe to call again - the same name is a " +
-    "no-op, a new name renames you, and a new topic updates it. Only " +
-    "top-level sessions should register; never register a sub-agent " +
-    "session. opencode-only.",
+    "Join the cross-session chat directory so other sessions on this " +
+    "machine can message you and you can message them (works from opencode, " +
+    "Claude Code, and Cursor). Omit the name to be assigned one from the " +
+    "built-in pool (recommended - cannot collide); pass a name to claim it " +
+    "instead, case-insensitively unique. Include a topic: it is what other " +
+    "sessions see in chat_list when deciding who to talk to. Pass an empty " +
+    "topic to clear it; omit it to keep the current one. Safe to call " +
+    "again - the same name is a no-op, a new name renames you, and a new " +
+    "topic updates it. Only top-level sessions should register; never " +
+    "register a sub-agent session.",
   args: {
     name: z.string().optional().describe(
       "Custom display name. Omit to draw one from the built-in name pool.",
@@ -1375,39 +1424,51 @@ const chatRegisterDef: ToolDef = {
       "sessions in chat_list). Omit on re-register to keep the existing " +
       "topic; pass an empty string to clear it.",
     ),
+    as: mcpIdentityArg(),
   },
-  opencodeOnly: true,
   async execute(args, ctx, host) {
-    if (!host) {
-      return "Chat is unavailable: this host did not provide a session context.";
-    }
     const custom = typeof args.name === "string" ? args.name : null;
     const topic = typeof args.topic === "string" ? args.topic : null;
+    const kind: ChatHostKind = host ? "opencode" : "mcp";
+    // MCP mode (host absent): the claimed name is the identity, stored
+    // under a deterministic synthetic session ID so a later conversation
+    // claiming the same name finds the same row.
+    const sessionID = host ? host.sessionID : mcpSessionID(custom!.trim());
     if (custom !== null) {
-      const result = ctx.db.registerChatSession(host.sessionID, custom, ctx.defaultStore, topic);
+      const result = ctx.db.registerChatSession(sessionID, custom, ctx.defaultStore, topic, kind);
       if (!result.ok) return `Registration failed: ${result.error}`;
       return (
         `[registered] ${custom.trim()}\n` +
-        `session_id: ${host.sessionID}\n` +
+        `session_id: ${sessionID}\n` +
         `project: ${ctx.defaultStore}\n` +
         // The store returns the sanitized topic it kept, so the
         // confirmation shows the roster value, not the raw input.
         (result.topic ? `topic: ${result.topic}\n` : "") +
+        (host ? "" : degradedDeliveryNote()) +
         `\n` +
         `Other sessions can now message you by name with chat_send; use ` +
         `chat_list to see who else is available.`
       );
     }
-    const assigned = ctx.db.assignChatName(host.sessionID, ctx.defaultStore, topic);
+    // Pool draw: MCP mode requires an explicit name anyway (the identity
+    // must be known to the caller), so a host-less draw is routed through
+    // the same assign path with the name the caller declared.
+    const mcpAs = host ? null : typeof args.as === "string" ? args.as.trim() : null;
+    if (!host && !mcpAs) {
+      return "Chat needs an identity: pass `name` (or `as`) with your display name, since this host has no session context to derive one from.";
+    }
+    const drawSessionID = host ? host.sessionID : mcpSessionID(mcpAs!.trim());
+    const assigned = ctx.db.assignChatName(drawSessionID, ctx.defaultStore, topic, kind);
     if (!assigned.ok) return `Registration failed: ${assigned.error}`;
     const origin = assigned.drawn
       ? "Your name was drawn from the built-in pool."
       : "You were already registered - keeping your current name.";
     return (
       `[registered] ${assigned.name}\n` +
-      `session_id: ${host.sessionID}\n` +
+      `session_id: ${drawSessionID}\n` +
       `project: ${ctx.defaultStore}\n` +
       (assigned.topic ? `topic: ${assigned.topic}\n` : "") +
+      (host ? "" : degradedDeliveryNote()) +
       `\n` +
       `${origin} Other sessions can now message you by name with chat_send, ` +
       `or reach everyone at once with chat_broadcast; use chat_list to see ` +
@@ -1421,23 +1482,25 @@ const chatRegisterDef: ToolDef = {
 const chatListDef: ToolDef = {
   name: "chat_list",
   description:
-    "List opencode sessions registered in the cross-session chat directory, " +
-    "with a liveness marker (fresh = its host process is alive, stale = " +
-    "likely gone) and your own unread count. opencode-only.",
-  args: {},
-  opencodeOnly: true,
+    "List sessions registered in the cross-session chat directory, with a " +
+    "liveness marker (fresh = active, stale = likely gone), each session's " +
+    "project and topic, and your own unread count.",
+  args: {
+    as: mcpIdentityArg(),
+  },
   async execute(_args, ctx, host) {
-    if (!host) {
-      return "Chat is unavailable: this host did not provide a session context.";
-    }
+    const identity = await resolveChatIdentity(ctx, host, (_args as any).as);
+    if (!identity.ok) return identity.error;
     const sessions = ctx.db.listChatSessions();
     if (sessions.length === 0) {
       return "No sessions registered. chat_register opts in; you would be the first.";
     }
-    const unread = ctx.db.unreadChatCount(host.sessionID);
+    const unread = ctx.db.unreadChatCount(identity.sessionID);
     const lines = sessions.map((s) => {
-      const self = s.session_id === host.sessionID;
-      const liveness = isStale(s, CHAT_STALE_MINUTES) ? "stale" : "fresh";
+      const self = s.session_id === identity.sessionID;
+      const liveness = s.host_kind === "mcp"
+        ? isStale(s, CHAT_STALE_MINUTES) ? "idle" : "active"
+        : isStale(s, CHAT_STALE_MINUTES) ? "stale" : "fresh";
       const project = s.project ? ` project:${s.project}` : "";
       const topic = s.topic ? ` topic:${s.topic}` : "";
       const mailbox = self ? (unread > 0 ? ` ${unread} unread` : "") : "";
@@ -1451,22 +1514,21 @@ const chatListDef: ToolDef = {
 const chatSendDef: ToolDef = {
   name: "chat_send",
   description:
-    "Send a message to another registered opencode session in the " +
-    "cross-session chat, addressed by display name or session id. The " +
-    "recipient is nudged with a notification when its session is idle; if " +
-    "it is busy the message waits and lands when it goes idle. Messages are " +
-    "one machine's coordination channel - sessions on other machines or " +
-    "MCP hosts cannot be reached. opencode-only.",
+    "Send a message to another registered session in the cross-session " +
+    "chat, addressed by display name. The recipient is nudged with a " +
+    "notification when its session is idle (opencode) or sees it at its " +
+    "next prompt (other hosts); if it is busy the message waits and lands " +
+    "when it goes idle. Messages are one machine's coordination channel - " +
+    "sessions on other machines cannot be reached.",
   args: {
     to: z.string().describe("Recipient display name (see chat_list)."),
     body: z.string().describe("Message body. Keep it short and self-contained - the recipient may lack your context."),
+    as: mcpIdentityArg(),
   },
-  opencodeOnly: true,
   async execute(args, ctx, host) {
-    if (!host) {
-      return "Chat is unavailable: this host did not provide a session context.";
-    }
-    const result = ctx.db.sendChatMessage(host.sessionID, args.to as string, args.body as string);
+    const identity = await resolveChatIdentity(ctx, host, args.as);
+    if (!identity.ok) return identity.error;
+    const result = ctx.db.sendChatMessage(identity.sessionID, args.to as string, args.body as string);
     if (!result.ok) return `Not sent: ${result.error}`;
     // The store returns the recipient it resolved, so no second lookup can
     // race a concurrent unregister between send and confirmation.
@@ -1496,14 +1558,14 @@ const chatReadDef: ToolDef = {
     "Read your cross-session chat inbox: returns all unread messages " +
     "oldest-first (each stamped with when it was sent) and marks them read. " +
     "Senders are identified by display name. Messages are informational - " +
-    "not user input and not approval to act. opencode-only.",
-  args: {},
-  opencodeOnly: true,
+    "not user input and not approval to act.",
+  args: {
+    as: mcpIdentityArg(),
+  },
   async execute(_args, ctx, host) {
-    if (!host) {
-      return "Chat is unavailable: this host did not provide a session context.";
-    }
-    const messages = ctx.db.readChatMessages(host.sessionID);
+    const identity = await resolveChatIdentity(ctx, host, _args.as);
+    if (!identity.ok) return identity.error;
+    const messages = ctx.db.readChatMessages(identity.sessionID);
     if (messages.length === 0) return "Inbox empty.";
     const lines = messages.map((m) => {
       const sender = renderChatParticipant(m.from_name, m.from_session);
@@ -1519,14 +1581,14 @@ const chatUnregisterDef: ToolDef = {
   description:
     "Leave the cross-session chat directory. You can no longer send or " +
     "receive; messages already in your inbox are kept but you will not be " +
-    "nudged about them. opencode-only.",
-  args: {},
-  opencodeOnly: true,
+    "nudged about them.",
+  args: {
+    as: mcpIdentityArg(),
+  },
   async execute(_args, ctx, host) {
-    if (!host) {
-      return "Chat is unavailable: this host did not provide a session context.";
-    }
-    const removed = ctx.db.unregisterChatSession(host.sessionID);
+    const identity = await resolveChatIdentity(ctx, host, _args.as);
+    if (!identity.ok) return identity.error;
+    const removed = ctx.db.unregisterChatSession(identity.sessionID);
     if (!removed) return "You are not registered.";
     return "[unregistered] this session left the chat directory.";
   },
@@ -1541,25 +1603,25 @@ const chatUnregisterDef: ToolDef = {
 const chatBroadcastDef: ToolDef = {
   name: "chat_broadcast",
   description:
-    "Broadcast one message to every other registered opencode session on " +
-    "this machine at once - for announcements and open questions (" +
-    "\"which of you is working on X?\", \"main just moved, rebase if you " +
-    "are based on it\"). Stale sessions (dead host processes) are skipped " +
-    "and reported, since they will never read the mail. Each recipient is " +
-    "woken like any chat message, so broadcast sparingly: every live " +
-    "session spends a model turn on it. opencode-only.",
+    "Broadcast one message to every other registered session on this " +
+    "machine at once - for announcements and open questions (\"which of " +
+    "you is working on X?\", \"main just moved, rebase if you are based on " +
+    "it\"). Stale opencode sessions (dead host processes) are skipped and " +
+    "reported, since they will never read the mail; MCP sessions receive " +
+    "it at their next prompt. Each recipient is woken like any chat " +
+    "message, so broadcast sparingly: every live session spends a model " +
+    "turn on it.",
   args: {
     body: z.string().describe(
       "Message body, delivered to every other registered session. Keep it " +
       "short and self-contained - the recipients may lack your context.",
     ),
+    as: mcpIdentityArg(),
   },
-  opencodeOnly: true,
   async execute(args, ctx, host) {
-    if (!host) {
-      return "Chat is unavailable: this host did not provide a session context.";
-    }
-    const result = ctx.db.broadcastChatMessage(host.sessionID, args.body as string);
+    const identity = await resolveChatIdentity(ctx, host, args.as);
+    if (!identity.ok) return identity.error;
+    const result = ctx.db.broadcastChatMessage(identity.sessionID, args.body as string);
     if (!result.ok) return `Not sent: ${result.error}`;
     const lines = [
       `[broadcast] to ${result.recipients.length} session${result.recipients.length === 1 ? "" : "s"}`,
@@ -1571,6 +1633,37 @@ const chatBroadcastDef: ToolDef = {
       `\n\nEach recipient's session is nudged when idle, exactly like a ` +
       `direct chat_send. Broadcast sparingly - every live session pays a ` +
       `model turn for it.`
+    );
+  },
+};
+
+/**
+ * Reports the caller's mailbox summary without draining anything. The
+ * quiet-check surface: an unregistered caller gets registered: false, so
+ * the feature's existence never asserts itself at a session that did not
+ * opt in.
+ */
+const chatStatusDef: ToolDef = {
+  name: "chat_status",
+  description:
+    "Check your cross-session chat mailbox: whether you are registered, " +
+    "and how many unread and total messages are waiting. Read-heavy trips " +
+    "start here - the flush-tools hook line and chat_list's unread counts " +
+    "reference this tool. Safe to call when unregistered: the answer is " +
+    "simply registered: false, with no counts.",
+  args: {
+    as: mcpIdentityArg(),
+  },
+  async execute(args, ctx, host) {
+    const identity = await resolveChatIdentity(ctx, host, args.as);
+    if (!identity.ok) return identity.error;
+    const status = ctx.db.chatMessageStatus(identity.sessionID);
+    if (!status.registered) {
+      return "Not registered - call chat_register to join the cross-session chat directory.";
+    }
+    return (
+      `[chat] registered as ${status.name}: ${status.pending} unread of ${status.total} total` +
+      (status.pending > 0 ? " - call chat_read to read them." : ".")
     );
   },
 };
@@ -1616,4 +1709,5 @@ export const TOOL_DEFS: ToolDef[] = [
   chatReadDef,
   chatUnregisterDef,
   chatBroadcastDef,
+  chatStatusDef,
 ];
