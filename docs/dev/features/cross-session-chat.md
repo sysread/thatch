@@ -59,23 +59,39 @@ outlives a process, so liveness needs a signal beyond process lifetime.
 
 Sessions are auto-registered by the plugin: the first `session.status`
 idle event for a top-level session inserts its directory row (unless
-`chat.autoRegister: false`). Names are assigned, never claimed:
-`<slug>-<counter>` where the slug is the session title lowercased and
-hyphenated (pool-draw slug when the title is still opencode's placeholder)
-and the counter comes from a per-base counter row
-(`chat_name_counters`, src/db.ts) that only ever increments - drawn
-atomically via INSERT ... ON CONFLICT ... RETURNING. A name is therefore
+`chat.autoRegister: false`), and a startup sweep registers the project's
+recent sessions before any turn runs (below). Names are assigned, never
+claimed: a pool draw (`CHAT_NAME_POOL`, src/chat-names.ts) plus a
+per-base counter row (`chat_name_counters`, src/db.ts) that only ever
+increments - drawn atomically via INSERT ... ON CONFLICT ... RETURNING.
+Pool names are deliberately short: they appear in every wake prompt and
+roster line, and the session's DESCRRIPTIVE identity lives in the topic
+column instead (the live session title, refreshed on every idle by
+`refreshAutoTopic` - auto rows only; legacy rows keep their old model-set
+topics; placeholder titles never become topics or names). A name is
 minted exactly once per machine: pruning an auto-registered row (host
 silent for CHAT_AUTO_TTL_DAYS = 7 days, swept hourly by the poller) can
-never reissue its name, which is what makes the prune safe. The session's
-live title rides the topic column, refreshed on every idle by
-`refreshAutoTopic` - auto rows only; legacy rows keep their old model-set topics.
+never reissue its name, which is what makes the prune safe.
 Registration also captures the checkout kind (`worktree` column):
 `detectWorktreeKind` (src/git.ts) classifies the session's serving
 directory once at registration - a `.git` file means a linked git
 worktree, a `.git` directory means the project root, no `.git` reads as
 undetected. The roster shows it as a `loc:` token so sessions coordinating
 on a shared tree can tell who sits where.
+
+### Startup sweep
+
+A harness restart fires no events for sessions that are merely loaded
+(resume fires nothing either - session IDs persist across restarts), so
+the idle-only path leaves the roster empty until each session's next
+turn. At plugin init the sweep registers the project's top-level sessions
+whose last activity is inside 48h (`client.session.list`), backdating
+each row's `last_seen` to the session's own `time.updated`: a swept
+session has not reported in, so it shows as stale and ages into the 7-day
+prune instead of posing as fresh. Swept sessions join the poller's hosted
+set (and begin heartbeating) only when they emit status events.
+`chat.autoRegister: false` disables the sweep along with idle
+registration.
 
 `chat_register` (no arguments) is the explicit path: idempotent ensure for
 opencode (identity is the host session ID, which the model cannot know or
@@ -147,13 +163,18 @@ behavior drastically on a parameter value is two functions.
 ### Polling, heartbeat, staleness
 
 A `setInterval` loop (default 30s) runs one cycle per process: heartbeat the
-hosted sessions' `last_seen`, then deliver. A crashed process fires no
-`session.deleted`, so `chat_list` marks sessions whose `last_seen` is older
-than the staleness threshold (default 10 minutes) as stale rather than
-hiding them - the operator decides what to do with ghosts. Each roster row
-also renders a human-readable `last seen <age>` (shared `humanAge` helper,
-src/chat.ts, same wording the CLI roster's AGE column uses). `session.deleted`
-is the graceful-exit fast path that unregisters immediately.
+hosted sessions' `last_seen` (stamping the host PID as it goes), then deliver.
+A crashed process fires no `session.deleted`, so its rows would linger -
+liveness is therefore a PROCESS check, not just a timestamp: each row
+carries the host PID, and `chatLiveness` (src/chat.ts) marks an opencode
+row stale the moment that PID no longer exists (signal-0 probe), even
+while the heartbeat age would still look fresh. Rows without a PID
+(legacy, MCP) fall back to the heartbeat age alone (default 10 minutes).
+`chat_list` groups the result into Active and Stale sections - the stale
+section's explainer says what stale means - and `chat_send` states the
+recipient's liveness at send time, so a sender mailing a ghost learns it
+immediately instead of waiting on a wake that will never fire.
+`session.deleted` is the graceful-exit fast path that unregisters immediately.
 
 ### Delivery, re-nudge, and the rate cap
 

@@ -25,13 +25,13 @@ const useCase: UseCase = {
   ].join("\n"),
   steps: [
     "1. Seed a DB: three registered sessions (alpha with a topic, beta, ghost aged stale), a direct message, a broadcast, and a message from a sender that then unregisters.",
-    "2. Run `thatch chat list` and verify the roster renders an aligned header row plus name, human age, status, project, and topic columns.",
+    "2. Run `thatch chat list` and verify the roster renders two sections - Active and Stale (with a not-reported-in explainer) - each an aligned header row plus name, human age, status, project, and topic columns.",
     "3. Run `thatch chat tail --once` and verify the cards render From/To/When headers, with broadcast rows marked.",
     "4. Verify a departed sender renders as unknown in the tail.",
     "5. Seed 25 numbered filler messages, then run filtered tails: verify --limit card counts and the stderr elision note, ANDed --match, --from name matching, and the --since/--until window.",
   ].join("\n"),
   expected: [
-    "- The roster shows every registered session with a human-readable age, its project, and its topic when set.",
+    "- The roster shows every registered session with a human-readable age, its project, and its topic when set, grouped into Active and Stale sections by liveness.",
     "- Tail cards render From/To/When headers with full bodies; via_broadcast rows render 'broadcast' as the recipient.",
     "- A sender whose directory row is gone renders as 'unknown (id, departed)'.",
     "- --limit caps the backlog with an elision note on stderr; --match ANDs; --from/--to match names; --since/--until bound the window.",
@@ -75,9 +75,14 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const listText = list.stdout.toString();
-    // The roster renders an aligned header row; session rows follow with
-    // name, age, status, project, and topic. Piped output carries no ANSI.
-    for (const needle of ["NAME", "AGE", "STATUS", "PROJECT", "TOPIC", "alpha-00001", "beta-00001", "watching CI", "acme/widgets", "ago"]) {
+    // The roster renders two sections - Active and Stale - each an aligned
+    // header row plus session rows with name, age, status, project, and
+    // topic. Piped output carries no ANSI.
+    for (const needle of [
+      "# Active Sessions", "# Stale Sessions", "harnesses may no longer be running",
+      "NAME", "AGE", "STATUS", "PROJECT", "TOPIC",
+      "alpha-00001", "beta-00001", "watching CI", "acme/widgets", "ago",
+    ]) {
       if (!listText.includes(needle)) {
         console.log(`  FAIL: chat list output missing "${needle}":\n${listText}`);
         return "FAIL";

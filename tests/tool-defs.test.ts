@@ -892,6 +892,49 @@ describe("chat delivery model in tool output", () => {
     }
   });
 
+  test("chat_list splits stale sessions into their own section", async () => {
+    await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_split_oc", agent: "build" });
+    // A second session, backdated past the staleness window.
+    await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_split_ghost", agent: "build" });
+    db.backdateChatSession("ses_split_ghost", new Date(Date.now() - 3600_000).toISOString());
+    const list = await findChatTool("chat_list").execute({}, ctx, { sessionID: "ses_split_oc", agent: "build" });
+    expect(list).toContain("# Active Sessions");
+    expect(list).toContain("# Stale Sessions");
+    expect(list).toContain("harnesses may no longer be running");
+    const staleSection = list.slice(list.indexOf("# Stale Sessions"));
+    expect(staleSection).toContain("ses_split_gh");
+    expect(staleSection).not.toContain("ses_split_oc");
+  });
+
+  test("chat_send states the recipient's liveness at send time", async () => {
+    await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_snd_to", agent: "build" });
+    await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_snd_from", agent: "build" });
+    // send resolves recipients by name OR session id - id keeps this test
+    // free of name lookups.
+    const fresh = await findChatTool("chat_send").execute(
+      { to: "ses_snd_to", body: "ping" },
+      ctx,
+      { sessionID: "ses_snd_from", agent: "build" },
+    );
+    expect(fresh).toContain("fresh");
+    expect(fresh).toContain("will be woken");
+    db.backdateChatSession("ses_snd_to", new Date(Date.now() - 3600_000).toISOString());
+    const stale = await findChatTool("chat_send").execute(
+      { to: "ses_snd_to", body: "ping again" },
+      ctx,
+      { sessionID: "ses_snd_from", agent: "build" },
+    );
+    expect(stale).toContain("STALE");
+    expect(stale).toContain("no wake will fire");
+  });
+
+  test("session_search guards a missing query with a usage line", async () => {
+    // A caller that cross-wired another server's search schema (different
+    // param name) lands here - usage line, not a raw dereference crash.
+    const result = await TOOL_DEFS.find((t) => t.name === "session_search")!.execute({} as any, ctx);
+    expect(result).toContain("Usage: session_search");
+  });
+
   test("chat_status states the delivery model per host", async () => {
     await findChatTool("chat_register").execute(
       {},

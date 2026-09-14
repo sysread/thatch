@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, formatChatTailCard, CHAT_TAIL_SEPARATOR, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, selectChatBodyRenderer, cleanRenderedBody, slugifyTitle, isDefaultSessionTitle, humanAge, type ChatTailRow, type ChatTailFilter } from "../src/chat";
+import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, formatChatTailCard, CHAT_TAIL_SEPARATOR, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, selectChatBodyRenderer, cleanRenderedBody, slugifyTitle, isDefaultSessionTitle, humanAge, chatLiveness, splitChatRoster, type ChatSessionRow, type ChatTailRow, type ChatTailFilter } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
 import { TOOL_DEFS } from "../src/tool-defs";
@@ -312,12 +312,67 @@ describe("roster age and checkout kind", () => {
     expect(humanAge("not-a-date", now)).toBe("unknown age");
   });
 
-  test("registration records the checkout kind; default rows read as unknown", () => {
+  test("registration records the checkout kind and host pid; default rows read as unknown", () => {
     reg("ses_a", "alpha");
-    db.registerChatSession("ses_w", "p", null, "opencode", "bravo", "worktree");
+    db.registerChatSession("ses_w", "p", null, "opencode", "bravo", "worktree", 4242);
     const rows = db.listChatSessions();
     expect(rows.find((r) => r.session_id === "ses_a")!.worktree).toBeNull();
+    expect(rows.find((r) => r.session_id === "ses_a")!.host_pid).toBeNull();
     expect(rows.find((r) => r.session_id === "ses_w")!.worktree).toBe("worktree");
+    expect(rows.find((r) => r.session_id === "ses_w")!.host_pid).toBe(4242);
+  });
+
+  test("register reports created vs existing", () => {
+    const first = db.registerChatSession("ses_c1", "p", null, "opencode", "gamma");
+    if (!first.ok) throw new Error(first.error);
+    expect(first.created).toBe(true);
+    const second = db.registerChatSession("ses_c1", "p", null, "opencode", "gamma");
+    if (!second.ok) throw new Error(second.error);
+    expect(second.created).toBe(false);
+  });
+
+  test("heartbeat stamps the host pid", () => {
+    reg("ses_hb", "delta");
+    db.heartbeatChatSessions(["ses_hb"]);
+    expect(db.listChatSessions().find((r) => r.session_id === "ses_hb")!.host_pid).toBe(process.pid);
+  });
+});
+
+describe("chatLiveness and roster split", () => {
+  const NOW = Date.parse("2026-09-14T12:00:00Z");
+  const row = (over: Partial<ChatSessionRow>) =>
+    ({
+      session_id: "ses_x", name: "x-00001", topic: null, project: "p",
+      host_kind: "opencode", registered_at: "2026-09-14T11:00:00Z",
+      last_seen: "2026-09-14T11:59:00Z", worktree: null, host_pid: null,
+      ...over,
+    }) as ChatSessionRow;
+
+  test("fresh timestamp with a dead pid is stale (instant death detection)", () => {
+    expect(chatLiveness(row({ host_pid: 111 }), { now: NOW, pidAlive: () => false })).toBe("stale");
+    expect(chatLiveness(row({ host_pid: 111 }), { now: NOW, pidAlive: () => true })).toBe("fresh");
+  });
+
+  test("a stale heartbeat is stale even when a pid happens to be alive (pid reuse)", () => {
+    expect(chatLiveness(row({ host_pid: 111, last_seen: "2026-09-12T12:00:00Z" }), { now: NOW, pidAlive: () => true })).toBe("stale");
+  });
+
+  test("legacy rows without a pid fall back to the heartbeat age", () => {
+    expect(chatLiveness(row({ host_pid: null }), { now: NOW, pidAlive: () => false })).toBe("fresh");
+  });
+
+  test("mcp rows are turn-driven: idle is the normal between-prompts state", () => {
+    expect(chatLiveness(row({ host_kind: "mcp", host_pid: 111 }), { now: NOW, pidAlive: () => false })).toBe("active");
+    expect(chatLiveness(row({ host_kind: "mcp", last_seen: "2026-09-12T12:00:00Z" }), { now: NOW })).toBe("idle");
+  });
+
+  test("splitChatRoster separates stale opencode rows; mcp rows are always active", () => {
+    const fresh = row({ session_id: "ses_f", name: "f-00001", host_pid: 111 });
+    const dead = row({ session_id: "ses_d", name: "d-00001", host_pid: 222 });
+    const mcp = row({ session_id: "ses_m", name: "m-00001", host_kind: "mcp" });
+    const { active, stale } = splitChatRoster([fresh, dead, mcp], { now: NOW, pidAlive: (p) => p === 111 });
+    expect(active.map((r) => r.session_id)).toEqual(["ses_f", "ses_m"]);
+    expect(stale.map((r) => r.session_id)).toEqual(["ses_d"]);
   });
 });
 

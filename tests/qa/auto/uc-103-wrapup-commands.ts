@@ -79,6 +79,8 @@ const useCase: UseCase = {
         get: async () => ({ data: { title: "QA wrap-up session" } }),
         status: async () => ({ data: {} }),
         messages: async () => ({ data: messages }),
+        // The startup sweep lists sessions; this fixture registers none.
+        list: async () => ({ data: [] }),
       },
       tui: {
         showToast: async (opts: any) => {
@@ -187,9 +189,14 @@ const useCase: UseCase = {
         console.log("  FAIL: blocked wrap-up must not trigger a TUI action");
         return "FAIL";
       }
-      const lastToast = recorded.toast[recorded.toast.length - 1];
-      if (!lastToast || lastToast.body.variant !== "warning" || !lastToast.body.message.includes("/thatch/compact")) {
-        console.log(`  FAIL: blocked wrap-up should show a warning toast naming the command, got ${JSON.stringify(lastToast)}`);
+      // A blocked wrap-up's warning toast - find it by variant + command
+      // name, not by position: a first-idle registration toast may land
+      // after it (the blocked path falls through to auto-register).
+      const warn = recorded.toast.find(
+        (t) => t.body.variant === "warning" && t.body.message.includes("/thatch/compact"),
+      );
+      if (!warn) {
+        console.log(`  FAIL: blocked wrap-up should show a warning toast naming the command, got ${JSON.stringify(recorded.toast)}`);
         return "FAIL";
       }
 

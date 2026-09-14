@@ -24,7 +24,7 @@ import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
 import { WatcherRegistry, ghApiRun, ghAvailable } from "./watchers";
 import { watcherNotificationNudge, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
-import { ChatPoller, isDefaultSessionTitle, slugifyTitle } from "./chat";
+import { ChatPoller, isDefaultSessionTitle } from "./chat";
 import { chatEnabled, chatAutoRegister, loadConfig } from "./config";
 import pkg from "../package.json";
 
@@ -230,6 +230,39 @@ export const server: Plugin = async ({ client, worktree }) => {
   // With chat disabled the tools refuse, so the poller would only heartbeat
   // sessions and burn wake budget against a feature the user turned off.
   if (chatOn) chatPoller.start();
+
+  // Startup sweep: a harness restart fires no events for sessions that are
+  // merely loaded (resume fires nothing either - session IDs persist across
+  // restarts), so without this the roster stays empty until each session's
+  // next idle and senders keep mailing ghosts. Sweep the project's recent
+  // top-level sessions into the directory instead. The registrations are
+  // backdated to the session's own last activity: a swept session has not
+  // reported in, so it must show as stale (and age into the 7-day prune)
+  // rather than looking fresh. Swept sessions are not in the poller's
+  // hosted set until they emit status events, so nothing heartbeats them
+  // meanwhile. Registration still assigns pool names - a swept session's
+  // real title rides the topic column like everyone else's.
+  if (chatOn && chatAutoRegister(loadConfig(dbPath).config)) {
+    void (async () => {
+      try {
+        const { data } = await client.session.list();
+        const cutoff = Date.now() - 48 * 3_600_000;
+        for (const s of data ?? []) {
+          if ((s as any).parentID) continue; // top-level sessions only
+          const updated = s.time?.updated ?? 0;
+          if (updated < cutoff) continue;
+          const title = s.title ?? "";
+          // Same placeholder guard as the idle path: a recent session may
+          // still carry opencode's pre-autotitle title.
+          const topic = title && !isDefaultSessionTitle(title) ? title : null;
+          const res = db.registerChatSession(s.id, repo, topic, "opencode", null, detectWorktreeKind(worktree), process.pid);
+          if (res.ok && res.created) db.backdateChatSession(s.id, new Date(updated).toISOString());
+        }
+      } catch (err) {
+        console.error(`[thatch] chat startup sweep failed: ${err}`);
+      }
+    })();
+  }
 
   // Sessions currently being compacted. chat.message nudges are skipped while
   // a session is in this set - the agent can't call tools during summary
@@ -966,20 +999,34 @@ export const server: Plugin = async ({ client, worktree }) => {
         // Auto-registration: every top-level opencode session joins the
         // chat directory on its first idle event (unless the user turned
         // auto-registration off). The name is assigned, never chosen - a
-        // slug of the session title plus a never-reused counter - and the
-        // live title rides the topic column, refreshed on every idle so the
-        // roster tracks what the session is actually working on. Titles are
-        // usually placeholders at first idle and real within a turn or two,
-        // so both name and topic converge fast. Fire-and-forget: a failed
-        // registration or title fetch must never block event delivery.
+        // pool draw plus a never-reused counter, kept short because it
+        // appears in wake prompts and rosters. The live session title rides
+        // the topic column instead (refreshed on every idle), so the name
+        // and the description stay separate identities. Fire-and-forget: a
+        // failed registration or title fetch must never block event
+        // delivery.
         if (chatOn && chatAutoRegister(loadConfig(dbPath).config) && sessionID && !db.hasChatLeaveTombstone(sessionID)) {
           void (async () => {
             try {
               const { data } = await client.session.get({ path: { id: sessionID } });
               const title = data?.title ?? "";
-              const base = title && !isDefaultSessionTitle(title) ? slugifyTitle(title) : null;
-              db.registerChatSession(sessionID, repo, base ? title : null, "opencode", base, detectWorktreeKind(worktree));
-              if (base) db.refreshChatTopic(sessionID, title);
+              // Placeholder titles never become topics (the real one
+              // converges on a later idle via refreshChatTopic).
+              const topic = title && !isDefaultSessionTitle(title) ? title : null;
+              const res = db.registerChatSession(sessionID, repo, topic, "opencode", null, detectWorktreeKind(worktree), process.pid);
+              // The topic converges as the auto-titler lands a real title:
+              // registration is once-per-session, so later idles must
+              // refresh it explicitly.
+              if (res.ok && topic) db.refreshChatTopic(sessionID, topic);
+              if (res.ok && res.created) {
+                // First registration is the one moment the user should
+                // notice: a quiet toast, not a conversation message.
+                try {
+                  await client.tui.showToast({ body: { message: `registered in chat as ${res.name}`, variant: "info", duration: 4000 } });
+                } catch {
+                  // Headless or disconnected TUI - registration stands.
+                }
+              }
             } catch (err) {
               console.error(`[thatch] chat auto-register failed for ${sessionID}: ${err}`);
             }

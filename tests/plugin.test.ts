@@ -91,6 +91,9 @@ beforeAll(async () => {
       create: async () => ({ data: { id: "test-child" } }),
       delete: async () => {},
       messages: async () => ({ data: wrapUpMessages }),
+      // The startup sweep lists the project's sessions; tests that need
+      // rows override this via their own client. Empty by default.
+      list: async () => ({ data: [] }),
     },
     tui: {
       showToast: async (opts: any) => {
@@ -1725,6 +1728,9 @@ describe("chat auto-registration on idle", () => {
   // these tests vary only that title (and the settle beat for the
   // fire-and-forget IIFE), so a factory keeps each test's variable explicit.
   let arTitle = "New session - 2026-09-13T10:00:00Z";
+  // Sessions the startup sweep will find (empty unless a test sets it).
+  let sweepSessions: any[] = [];
+  const toastCalls: any[] = [];
   const autoRegisterClient = () => ({
     session: {
       prompt: async () => {},
@@ -1733,8 +1739,9 @@ describe("chat auto-registration on idle", () => {
       delete: async () => {},
       get: async () => ({ data: { title: arTitle } }),
       status: async () => ({ data: {} }),
+      list: async () => ({ data: sweepSessions }),
     },
-    tui: { showToast: async () => {} },
+    tui: { showToast: async (opts: any) => { toastCalls.push(opts); } },
   });
   // The IIFE is fire-and-forget; give the microtask queue a beat.
   const settle = () => new Promise((r) => setTimeout(r, 20));
@@ -1754,6 +1761,10 @@ describe("chat auto-registration on idle", () => {
     expect(row1).toBeDefined();
     expect(row1!.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
     expect(row1!.topic).toBeNull();
+    expect(row1!.host_pid).toBe(process.pid);
+    // First registration toasts; it must not say anything on later idles.
+    const reg = toastCalls.find((t) => t.body.message.includes("registered in chat as"));
+    expect(reg).toBeDefined();
 
     // The auto-titler lands a real title; the next idle must converge the
     // topic (and keep the name - names never re-slug).
@@ -1804,6 +1815,41 @@ describe("chat auto-registration on idle", () => {
       // restore the default (no file) even on failure, so later tests
       // auto-register again.
       rmSync(configPath);
+    }
+  });
+
+  test("startup sweep registers recent top-level sessions with backdated last_seen", async () => {
+    const now = Date.now();
+    sweepSessions = [
+      // Recent, top-level, real title: swept, backdated to its own recency.
+      { id: "ses_sweep1", title: "Sweep Me", time: { created: now - 3600_000, updated: now - 1800_000 } },
+      // Too old (48h window): not swept.
+      { id: "ses_sweep_old", title: "Ancient", time: { created: now - 96 * 3600_000, updated: now - 72 * 3600_000 } },
+      // Sub-agent child: never swept.
+      { id: "ses_sweep_child", parentID: "ses_sweep1", title: "Child session - x", time: { created: now, updated: now } },
+      // Placeholder title: swept, but no topic from it.
+      { id: "ses_sweep_ph", title: `New session - ${new Date(now).toISOString()}`, time: { created: now, updated: now } },
+    ];
+    const arHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-sweep" } as any);
+    await settle();
+    const swDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    try {
+      const rows = swDb.listChatSessions();
+      const swept = rows.find((r) => r.session_id === "ses_sweep1");
+      expect(swept).toBeDefined();
+      expect(swept!.topic).toBe("Sweep Me");
+      // Backdated: a swept session has not reported in, so it must show
+      // stale rather than fresh (it was last active 30 minutes ago here).
+      expect(swept!.last_seen).toBe(new Date(now - 1800_000).toISOString());
+      expect(swDb.listChatSessions().find((r) => r.session_id === "ses_sweep_old")).toBeUndefined();
+      expect(swDb.listChatSessions().find((r) => r.session_id === "ses_sweep_child")).toBeUndefined();
+      const placeholderRow = rows.find((r) => r.session_id === "ses_sweep_ph");
+      expect(placeholderRow).toBeDefined();
+      expect(placeholderRow!.topic).toBeNull();
+    } finally {
+      swDb.close();
+      arHooks.dispose?.();
+      sweepSessions = [];
     }
   });
 });

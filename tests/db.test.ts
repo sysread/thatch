@@ -689,9 +689,11 @@ describe("migration", () => {
     const oldRow = migrated.listChatSessions().find((r) => r.session_id === "ses_old");
     expect(oldRow).toBeDefined();
     expect(oldRow!.worktree).toBeNull();
-    migrated.registerChatSession("ses_new", "p", null, "opencode", null, "root");
+    expect(oldRow!.host_pid).toBeNull();
+    migrated.registerChatSession("ses_new", "p", null, "opencode", null, "root", 4242);
     const newRow = migrated.listChatSessions().find((r) => r.session_id === "ses_new");
     expect(newRow!.worktree).toBe("root");
+    expect(newRow!.host_pid).toBe(4242);
     migrated.close();
   });
 

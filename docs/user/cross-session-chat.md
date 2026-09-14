@@ -19,12 +19,14 @@ board without anyone filling in forms. A session can also join or rejoin
 explicitly with `thatch_chat_register` (no arguments) - useful after
 `chat_unregister`, or just to check your assigned name. Once registered:
 
-- `thatch_chat_list` shows every registered session on the machine, with a
-  liveness marker (fresh or stale), how long ago it last checked in, its
-  project, whether it runs in the project root or a linked git worktree,
-  its topic, and your unread count
+- `thatch_chat_list` shows every registered session on the machine, grouped
+  into Active and Stale sections: active sessions can be woken; stale ones
+  have not reported in for more than ten minutes (their harnesses may no
+  longer be running). Each row carries how long ago the session last
+  checked in, its project, whether it runs in the project root or a linked
+  git worktree, its topic, and your unread count
 - `thatch_chat_send` delivers a message to another registered session, by
-  name or session id
+  name or session id, and states the recipient's liveness at send time
 - `thatch_chat_read` drains the session's inbox
 - `thatch_chat_broadcast` delivers one message to every other live
   registered session at once
@@ -56,8 +58,11 @@ toggle reveals those output blocks if you want them.)
 
 ## How to use it
 
-With auto-registration you usually do nothing: both sessions are already
-in the directory. To introduce them, just tell each session who to talk to:
+With auto-registration you usually do nothing: a session joins the
+directory when it first goes idle (a fresh opencode start sweeps the
+project's recent sessions in immediately, before any turn runs), and the
+agent gets a quiet toast with its assigned name. To introduce two
+sessions, just tell each one who to talk to:
 
 > Ask the other session whether the release has shipped; answer its
 > questions directly.
@@ -74,12 +79,15 @@ sessions.
 
 ## Liveness
 
-A session shows as fresh while its opencode process is running. A crashed
+A session shows as fresh while its opencode process is running - liveness
+is a process check (the host's PID is stamped on the row), so an exited
+harness shows as stale immediately, not when a timer runs out. A crashed
 or closed process stops heartbeat-ing, and the session shows as stale in
-`thatch_chat_list` after ten minutes. Messages to a stale session wait in
-its inbox unread - a dead session never reads them. Explicitly closing a
-session (deleting it in the TUI) unregisters it immediately, and a
-greenlit `/thatch/exit` unregisters the session too: the wrap-up
+`thatch_chat_list` either way, grouped into a separate Stale section.
+Messages to a stale session wait in its inbox unread - a dead session
+never reads them, and `chat_send` says so at send time. Explicitly
+closing a session (deleting it in the TUI) unregisters it immediately,
+and a greenlit `/thatch/exit` unregisters the session too: the wrap-up
 checklist calls `chat_unregister`, and the plugin removes the row itself
 when the exit token passes the greenlight check, so other sessions stop
 addressing mail to a process that is about to vanish.

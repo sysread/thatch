@@ -20,7 +20,7 @@ import { sendNotification, defaultSpawner, type NotifyChannel, type Spawner } fr
 import { predictionVerb, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, type WatcherRegistry, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
-import { CHAT_STALE_MINUTES, isStale, renderChatParticipant, humanAge, type ChatHostKind } from "./chat";
+import { CHAT_STALE_MINUTES, chatLiveness, humanAge, renderChatParticipant, splitChatRoster, type ChatHostKind } from "./chat";
 import { detectWorktreeKind } from "./git";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
@@ -904,7 +904,7 @@ function renderChatSection(prefs: ChatPrefs | undefined): string {
   return [
     "chat:",
     `  enabled: ${prefs?.enabled ?? "<unset>"} (default: on)`,
-    `  autoRegister: ${prefs?.autoRegister ?? "<unset>"} (default: on; opencode sessions join the chat directory automatically)`,
+    `  autoRegister: ${prefs?.autoRegister ?? "<unset>"} (default: on; opencode sessions join the chat directory on their first idle event)`,
   ].join("\n");
 }
 
@@ -977,7 +977,8 @@ const configSetDef: ToolDef = {
       ),
       autoRegister: z.boolean().optional().describe(
         "Whether opencode sessions join the chat directory automatically " +
-        "(assigned names). Unset or true is the default; false restores " +
+        "(assigned names, on the session's first idle event - not at " +
+        "startup). Unset or true is the default; false restores " +
         "opt-in joining via chat_register only.",
       ),
     }).optional().describe(
@@ -1129,6 +1130,13 @@ const sessionSearchDef: ToolDef = {
   },
   opencodeOnly: true,
   async execute(args) {
+    // The schema marks query required, but a caller that cross-wired this
+    // tool with another server's search (different param name) gets args
+    // without it - fail with a usage line instead of a raw dereference
+    // crash ("undefined is not an object (evaluating 'query.toLowerCase')").
+    if (typeof args.query !== "string" || !args.query.trim()) {
+      return `Usage: session_search requires a "query" string (e.g. {"query": "PR 7310 review"}); optional: regex, session_id, limit.`;
+    }
     const dbPath = resolveOpencodeDbPath();
     if (!dbPath) {
       return "Session search is unavailable: no opencode database was found (set OPENCODE_DB to point at one).";
@@ -1181,6 +1189,9 @@ const sessionGetDef: ToolDef = {
   },
   opencodeOnly: true,
   async execute(args) {
+    if (typeof args.id !== "string" || !args.id.trim()) {
+      return `Usage: session_get requires an "id" - a part id (prt_...) or message id (msg_...) from session_search results.`;
+    }
     const dbPath = resolveOpencodeDbPath();
     if (!dbPath) {
       return "Session retrieval is unavailable: no opencode database was found (set OPENCODE_DB to point at one).";
@@ -1606,7 +1617,7 @@ const chatRegisterDef: ToolDef = {
       // comes from the hook, which re-registers the same session ID and
       // prints the assigned name each prompt.
       const sessionID = `mcp_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
-      const res = ctx.db.registerChatSession(sessionID, ctx.defaultStore, null, kind, null, detectWorktreeKind(ctx.projectDir));
+      const res = ctx.db.registerChatSession(sessionID, ctx.defaultStore, null, kind, null, detectWorktreeKind(ctx.projectDir), null);
       if (!res.ok) return `Registration failed: ${res.error}`;
       return (
         `[registered] ${res.name}\n` +
@@ -1642,7 +1653,7 @@ const chatRegisterDef: ToolDef = {
     // a tombstoned opencode session as blocked; the tombstone is for the
     // idle path, not for the model's explicit intent.)
     ctx.db.clearChatLeaveTombstone?.(host.sessionID);
-    const res = ctx.db.registerChatSession(host.sessionID, ctx.defaultStore, null, kind, null, detectWorktreeKind(ctx.projectDir));
+    const res = ctx.db.registerChatSession(host.sessionID, ctx.defaultStore, null, kind, null, detectWorktreeKind(ctx.projectDir), process.pid);
     if (!res.ok) return `Registration failed: ${res.error}`;
     return (
       `[registered] ${res.name}\n` +
@@ -1676,11 +1687,10 @@ const chatListDef: ToolDef = {
       return "No sessions registered. Sessions join the directory automatically on their first idle (opencode), or via chat_register - you would be the first.";
     }
     const unread = ctx.db.unreadChatCount(identity.sessionID);
-    const lines = sessions.map((s) => {
+    const { active, stale } = splitChatRoster(sessions);
+    const line = (s: (typeof sessions)[number]) => {
       const self = s.session_id === identity.sessionID;
-      const liveness = s.host_kind === "mcp"
-        ? isStale(s, CHAT_STALE_MINUTES) ? "idle" : "active"
-        : isStale(s, CHAT_STALE_MINUTES) ? "stale" : "fresh";
+      const liveness = chatLiveness(s);
       const project = s.project ? ` project:${s.project}` : "";
       // The age turns the liveness bucket into a concrete last-check-in;
       // the checkout kind tells sessions on a shared tree who sits in a
@@ -1690,14 +1700,26 @@ const chatListDef: ToolDef = {
       const topic = s.topic ? ` topic:${s.topic}` : "";
       const mailbox = self ? (unread > 0 ? ` ${unread} unread` : "") : "";
       return `- ${s.name} (${s.session_id.slice(0, 12)})${project}${age}${loc} ${liveness}${topic}${self ? " [you]" : ""}${mailbox}`;
-    });
+    };
+    const sections: string[] = [];
+    if (active.length > 0) {
+      sections.push(`# Active Sessions\n\n${active.map(line).join("\n")}`);
+    }
+    if (stale.length > 0) {
+      sections.push(
+        `# Stale Sessions\n\n` +
+          `_These sessions have not reported in for more than ${CHAT_STALE_MINUTES} minutes. ` +
+          `Their harnesses may no longer be running; mail waits until they resume._\n\n` +
+          `${stale.map(line).join("\n")}`,
+      );
+    }
     // The name-stability note closes the roster because it answers the
     // question a reader asking "is this the same X as before?" needs:
     // assigned names are unique forever; only hook-anchored MCP identities
     // can be revisited by an old name.
     return (
-      `[chat] ${sessions.length} session${sessions.length === 1 ? "" : "s"} registered\n` +
-      `${lines.join("\n")}\n` +
+      `[chat] ${sessions.length} session${sessions.length === 1 ? "" : "s"} registered\n\n` +
+      `${sections.join("\n\n")}\n\n` +
       `Names are assigned by thatch and never reused or reassigned, so the ` +
       `same name is always the same session. A name whose row shows stale or ` +
       `idle has not been seen recently.`
@@ -1728,11 +1750,21 @@ const chatSendDef: ToolDef = {
     // The store returns the recipient it resolved, so no second lookup can
     // race a concurrent unregister between send and confirmation.
     const { name, session_id } = result.recipient;
+    // State the recipient's ACTUAL liveness: the boilerplate "waits until
+    // idle" is only true for a live host. A stale recipient's harness is
+    // probably gone - say so, so the sender can reroute instead of waiting
+    // on a wake that will never fire.
+    const row = ctx.db.findChatSession(session_id);
+    const liveness = row ? chatLiveness(row) : "stale";
+    const delivery =
+      liveness === "fresh"
+        ? `The recipient is fresh (last seen ${row ? humanAge(row.last_seen) : "just now"}) and will be woken when its session goes idle.`
+        : liveness === "active"
+          ? `The recipient is an MCP-host session; it sees this message at its next prompt.`
+          : `NOTE: the recipient is STALE (last seen ${row ? humanAge(row.last_seen) : "unknown"}). Its harness may no longer be running - the message waits unread until that session resumes, and no wake will fire meanwhile. If you meant a different session, check chat_list and resend.`;
     return (
       `[sent] to ${name} (${session_id.slice(0, 12)})\n\n` +
-      `The recipient is nudged when its session is idle. If its host process ` +
-      `is gone (stale in chat_list), the message waits unread - a dead ` +
-      `session never reads it.`
+      `${delivery}`
     );
   },
 };
@@ -1858,6 +1890,14 @@ const chatStatusDef: ToolDef = {
     if (!identity.ok) return identity.error;
     const status = ctx.db.chatMessageStatus(identity.sessionID);
     if (!status.registered) {
+      // Distinguish "not YET registered" from "broken": opencode sessions
+      // auto-register when the turn goes idle, so a mid-turn check here is
+      // normal and must not read as a failure (the origin of a false bug
+      // report - the bare "Not registered" was indistinguishable from
+      // auto-registration being broken).
+      if (host) {
+        return "Not registered YET - this session auto-registers when the turn goes idle (or join now with chat_register).";
+      }
       return "Not registered - call chat_register to join the cross-session chat directory.";
     }
     return (

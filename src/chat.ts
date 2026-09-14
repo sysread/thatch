@@ -65,6 +65,12 @@ export interface ChatSessionRow {
   registered_at: string;
   last_seen: string;
   worktree: ChatWorktreeKind;
+  /** Process ID of the host opencode process that owns this session, when
+   *  known. Chat is a single-machine channel, so a live-check on this pid
+   *  is authoritative: a dead pid marks the session stale immediately,
+   *  instead of waiting out the heartbeat window. Legacy rows (and MCP
+   *  hosts) read as null and fall back to timestamp staleness. */
+  host_pid: number | null;
 }
 
 /** One message selected for wake-up delivery, with the sender's display name
@@ -176,6 +182,55 @@ export function humanAge(iso: string, now = Date.now()): string {
   return `${Math.floor(minutes / (24 * 60))}d ago`;
 }
 
+/** The liveness verdict for one roster row:
+ *  - "fresh"/"stale" for opencode rows (poller-driven heartbeat + pid check)
+ *  - "active"/"idle" for MCP rows (turn-driven; idle between prompts is the
+ *    NORMAL state, so an idle MCP row is reachable, not dead)
+ *  The pid check is what makes staleness honest: a host process that
+ *  exited stops heartbeating, but its row's last_seen stays frozen for up
+ *  to the stale window - a stamped pid that no longer exists marks the
+ *  session stale immediately. `pidAlive` is injectable for tests; the
+ *  default does a signal-0 probe (EPERM still means the process exists). */
+export type PidAlive = (pid: number) => boolean;
+
+function defaultPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: any) {
+    return err?.code === "EPERM";
+  }
+}
+
+export function chatLiveness(
+  row: ChatSessionRow,
+  opts?: { now?: number; pidAlive?: PidAlive },
+): "fresh" | "stale" | "active" | "idle" {
+  const now = opts?.now ?? Date.now();
+  const pidAlive = opts?.pidAlive ?? defaultPidAlive;
+  const tsStale = isStale(row, CHAT_STALE_MINUTES, now);
+  if (row.host_kind === "mcp") return tsStale ? "idle" : "active";
+  if (!tsStale && row.host_pid != null && !pidAlive(row.host_pid)) return "stale";
+  return tsStale ? "stale" : "fresh";
+}
+
+/** Splits the roster for the two-section display: Active (wake-able or
+ *  reachable - fresh opencode rows and every MCP row, which read mail at
+ *  their next prompt) and Stale (opencode rows whose harness has stopped
+ *  reporting; mail to them waits until they resume). */
+export function splitChatRoster(
+  rows: ChatSessionRow[],
+  opts?: { now?: number; pidAlive?: PidAlive },
+): { active: ChatSessionRow[]; stale: ChatSessionRow[] } {
+  const active: ChatSessionRow[] = [];
+  const stale: ChatSessionRow[] = [];
+  for (const row of rows) {
+    const liveness = chatLiveness(row, opts);
+    (liveness === "stale" ? stale : active).push(row);
+  }
+  return { active, stale };
+}
+
 /**
  * SQLite CRUD for the chat tables. Constructed by ThatchDB with the shared
  * Database handle; the tables are created by ThatchDB's schema init.
@@ -209,7 +264,8 @@ export class ChatStore {
     kind: ChatHostKind,
     nameBase: string | null = null,
     worktree: ChatWorktreeKind = null,
-  ): { ok: true; name: string; topic: string | null } | { ok: false; error: string } {
+    hostPid: number | null = null,
+  ): { ok: true; name: string; topic: string | null; created: boolean } | { ok: false; error: string } {
     const existing = this.#find(sessionID);
     if (existing) {
       this.#touch(sessionID);
@@ -222,7 +278,7 @@ export class ChatStore {
       // session.deleted suppresses exactly that session.
       const gate = this.#tombstoneGate(sessionID, kind);
       if (gate) return gate;
-      return { ok: true, name: existing.name, topic: existing.topic };
+      return { ok: true, name: existing.name, topic: existing.topic, created: false };
     }
     const gate = this.#tombstoneGate(sessionID, kind);
     if (gate) return gate;
@@ -238,13 +294,13 @@ export class ChatStore {
     for (let attempt = 0; attempt < 10; attempt++) {
       const next = this.#bumpCounter(base);
       const name = `${base}-${String(next).padStart(5, "0")}`;
-      const claimed = this.#insertSession(sessionID, name, project, cleanTopic, kind, worktree);
-      if (claimed.ok) return { ok: true, name, topic: cleanTopic };
+      const claimed = this.#insertSession(sessionID, name, project, cleanTopic, kind, worktree, hostPid);
+      if (claimed.ok) return { ok: true, name, topic: cleanTopic, created: true };
       if (claimed.reason === "already-registered") {
         // A concurrent registration of the same session ID won the race;
         // report its row rather than erroring.
         const winner = this.#find(sessionID);
-        if (winner) return { ok: true, name: winner.name, topic: winner.topic };
+        if (winner) return { ok: true, name: winner.name, topic: winner.topic, created: false };
       }
     }
     return { ok: false, error: "Could not assign a unique name after several attempts." };
@@ -357,7 +413,7 @@ export class ChatStore {
 
   list(): ChatSessionRow[] {
     return (this.#db
-      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree FROM chat_sessions ORDER BY name")
+      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree, host_pid FROM chat_sessions ORDER BY name")
       .all() as any[]).map(rowFromSession);
   }
 
@@ -534,16 +590,26 @@ export class ChatStore {
     ).map((r) => ({ name: r.name, pending: r.pending }));
   }
 
-  /** Refreshes last_seen for the given sessions. Sessions that never
-   *  registered are absent from chat_sessions, so the UPDATE is a no-op for
-   *  them - no filtering needed on the caller's side. */
+  /** Refreshes last_seen (and stamps this process as the host) for the
+   *  given sessions. Sessions that never registered are absent from
+   *  chat_sessions, so the UPDATE is a no-op for them - no filtering needed
+   *  on the caller's side. */
   heartbeat(sessionIDs: string[]): void {
     if (sessionIDs.length === 0) return;
     const marks = sessionIDs.map(() => "?").join(",");
-    this.#db.run(`UPDATE chat_sessions SET last_seen = ? WHERE session_id IN (${marks})`, [
+    this.#db.run(`UPDATE chat_sessions SET last_seen = ?, host_pid = ? WHERE session_id IN (${marks})`, [
       nowIso(),
+      process.pid,
       ...sessionIDs,
     ]);
+  }
+
+  /** Backdates a session's last_seen to the session's own last activity
+   *  (used by the startup sweep: a swept session that has been idle for
+   *  days must not look like it just reported in, or the roster would show
+   *  a graveyard of live-looking rows). */
+  backdate(sessionID: string, iso: string): void {
+    this.#db.run("UPDATE chat_sessions SET last_seen = ? WHERE session_id = ?", [iso, sessionID]);
   }
 
   /**
@@ -631,14 +697,14 @@ export class ChatStore {
 
   #find(sessionID: string): ChatSessionRow | null {
     const row = this.#db
-      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree FROM chat_sessions WHERE session_id = ?")
+      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree, host_pid FROM chat_sessions WHERE session_id = ?")
       .get(sessionID) as any;
     return row ? rowFromSession(row) : null;
   }
 
   #findByName(name: string): ChatSessionRow | null {
     const row = this.#db
-      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree FROM chat_sessions WHERE name = ? COLLATE NOCASE")
+      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree, host_pid FROM chat_sessions WHERE name = ? COLLATE NOCASE")
       .get(name) as any;
     return row ? rowFromSession(row) : null;
   }
@@ -717,11 +783,12 @@ export class ChatStore {
     topic: string | null,
     kind: ChatHostKind,
     worktree: ChatWorktreeKind,
+    hostPid: number | null,
   ): { ok: true; topic: string | null } | { ok: false; reason: "name-taken" | "already-registered" } {
     try {
       this.#db.run(
-        "INSERT INTO chat_sessions (session_id, name, topic, project, host_kind, registered_at, last_seen, auto, worktree) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
-        [sessionID, name, topic, project, kind, nowIso(), nowIso(), worktree ?? ""],
+        "INSERT INTO chat_sessions (session_id, name, topic, project, host_kind, registered_at, last_seen, auto, worktree, host_pid) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+        [sessionID, name, topic, project, kind, nowIso(), nowIso(), worktree ?? "", hostPid],
       );
       return { ok: true, topic };
     } catch (err) {
@@ -752,6 +819,7 @@ function rowFromSession(r: any): ChatSessionRow {
     // Pre-migration rows carry the empty-string default; read back as
     // undetected so the roster omits the token instead of printing a blank.
     worktree: r.worktree === "root" || r.worktree === "worktree" ? r.worktree : null,
+    host_pid: typeof r.host_pid === "number" ? r.host_pid : null,
   };
 }
 
