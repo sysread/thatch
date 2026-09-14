@@ -72,7 +72,10 @@ describe("ChatStore via ThatchDB", () => {
     // The name is <slug-of-a-pool-name>-<counter>: lowercase, hyphenated.
     const base = result.name.replace(/-\d{5}$/, "");
     expect(result.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
-    expect(CHAT_NAME_POOL.some((n) => n.toLowerCase().replace(/\s+/g, "-") === base)).toBe(true);
+    // Membership must go through the production slugifier: pool names with
+    // apostrophes (K'Vir, K'Leth, B'Etor) slug lossily, and a hand-rolled
+    // lowercase-and-hyphenate check disagrees on exactly those draws.
+    expect(CHAT_NAME_POOL.map((n) => slugifyTitle(n))).toContain(base);
   });
 
   test("the same base handed to two sessions yields distinct counters", () => {
