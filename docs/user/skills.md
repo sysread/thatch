@@ -68,6 +68,7 @@ Skills are split into shared (all hosts) and opencode-only:
 | `thatch-pr-description` | Drafts PR descriptions with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis for scanning. |
 | `thatch-ticket-description` | Drafts ticket or issue descriptions (Linear or Jira) with clear sections and bold/italic emphasis for scanning. |
 | `thatch-split-overlarge-pr` | Splits already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main. |
+| `thatch-clear-writing` | Prose rules for every human-facing text the dedicated writing skills do not cover: PR and ticket comments, documentation, plans, reports, and chat replies. Clarity over compression. |
 
 ### Workflow skills
 

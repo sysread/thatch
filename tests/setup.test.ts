@@ -202,7 +202,7 @@ describe("setupClaudeCode (project-local)", () => {
     // Shared skills only — opencode-only skills (thatch-code-review) are not
     // installed for Claude Code because they require sub-agent support.
     expect(result.skills.dir).toBe(join(projectDir, ".claude", "skills"));
-    expect(result.skills.added.length).toBe(26);
+    expect(result.skills.added.length).toBe(27);
     expect(result.skills.updated).toEqual([]);
     expect(result.skills.unchanged).toEqual([]);
     expect(result.skills.removed).toEqual([]);
@@ -335,7 +335,7 @@ describe("CLAUDE_CONFIG_DIR override", () => {
       expect(result.settings).toBe(join(customDir, "settings.json"));
       // skills are installed under the custom dir
       expect(result.skills.dir).toBe(join(customDir, "skills"));
-      expect(result.skills.added.length).toBe(26);
+      expect(result.skills.added.length).toBe(27);
       for (const skill of result.skills.added) {
         expect(skill.path.startsWith(customDir + "/")).toBe(true);
       }
@@ -365,7 +365,7 @@ describe("CLAUDE_CONFIG_DIR override", () => {
       expect(existsSync(join(projectDir, ".claude", "settings.json"))).toBe(true);
 
       expect(result.skills.dir).toBe(join(projectDir, ".claude", "skills"));
-      expect(result.skills.added.length).toBe(26);
+      expect(result.skills.added.length).toBe(27);
       for (const skill of result.skills.added) {
         expect(skill.path.startsWith(projectDir + "/")).toBe(true);
       }
@@ -671,7 +671,7 @@ describe("setupCursor (project-local)", () => {
     const result = setupCursor("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
     expect(result.skills.dir).toBe(join(projectDir, ".cursor", "skills"));
-    expect(result.skills.added.length).toBe(26);
+    expect(result.skills.added.length).toBe(27);
     expect(result.skills.updated).toEqual([]);
     expect(result.skills.unchanged).toEqual([]);
     expect(result.skills.removed).toEqual([]);
@@ -735,7 +735,7 @@ describe("setupCursor (global)", () => {
     const result = setupCursor("/usr/local/bin/thatch", true, projectDir, fakeHome);
 
     expect(result.skills.dir).toBe(join(fakeHome, ".cursor", "skills"));
-    expect(result.skills.added.length).toBe(26);
+    expect(result.skills.added.length).toBe(27);
     for (const skill of result.skills.added) {
       expect(skill.path.startsWith(join(fakeHome, ".cursor", "skills"))).toBe(true);
     }
@@ -824,6 +824,13 @@ describe("systemPrompt content", () => {
   test("does not use deprecated instructional-design wording for writing skills", () => {
     const text = systemPrompt("test/repo") + claudeInstructions() + cursorInstructions();
     expect(text).not.toContain("instructional-design scaffolding");
+  });
+
+  test("includes clear-writing guidance in every host prompt", () => {
+    for (const text of [systemPrompt("test/repo"), claudeInstructions(), cursorInstructions()]) {
+      expect(text).toContain("thatch-clear-writing");
+      expect(text).toContain("clarity-over-compression prose rules");
+    }
   });
 });
 

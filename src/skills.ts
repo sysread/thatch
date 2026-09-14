@@ -76,6 +76,7 @@ function loadSharedSkills(): SkillDef[] {
     "thatch-review-response",
     "thatch-memory-verify",
     "thatch-knowledge-export",
+    "thatch-clear-writing",
   ];
   return names.map((name) => ({ name, content: loadSkillFile(name) }));
 }

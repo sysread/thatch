@@ -61,6 +61,7 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-response` | Author-side review response: triage findings, fix bugs one by one, reply on each thread, post a top-level summary comment. |
 | `thatch-memory-verify` | Fact-check a single memory against the current codebase and correct stale claims. Uses git archaeology to preserve historical context when changes were intentional. |
 | `thatch-knowledge-export` | Compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories via `thatch-memory-verify`. |
+| `thatch-clear-writing` | Prose rules for any human-facing text not covered by a dedicated writing skill: PR and ticket comments, documentation, plans, reports, and chat replies. Clarity over compression; dedicated skills win when loaded. |
 
 **opencode-only** — the coordinator needs sub-agent support:
 

@@ -104,6 +104,16 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 - \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory has an old \`updated_at\` date or when preparing a knowledge export.
 - \`thatch-knowledge-export\` - compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories, and generates a clean export.
+- \`thatch-clear-writing\` - prose rules for any human-facing text not covered by a dedicated writing skill: PR and ticket comments, documentation, plans, reports, and chat replies. Load before drafting any of those.
+
+## Clear writing
+
+Chat replies are terse. Everything else a human reads - comments you post on
+the user's behalf, documentation, plans, reports, and your own explanations to
+the user - follows clarity-over-compression prose rules. Load the
+\`thatch-clear-writing\` skill before drafting any of it. Terse means fewer
+claims, never denser ones.
+
 ## When to Write
 
 **One signal is enough.** Do not wait for confirmation.
@@ -405,6 +415,16 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 - \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory has an old \`updated_at\` date or when preparing a knowledge export.
 - \`thatch-knowledge-export\` - compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories, and generates a clean export.
+- \`thatch-clear-writing\` - prose rules for any human-facing text not covered by a dedicated writing skill: PR and ticket comments, documentation, plans, reports, and chat replies. Load before drafting any of those.
+
+## Clear writing
+
+Chat replies are terse. Everything else a human reads - comments you post on
+the user's behalf, documentation, plans, reports, and your own explanations to
+the user - follows clarity-over-compression prose rules. Load the
+\`thatch-clear-writing\` skill before drafting any of it. Terse means fewer
+claims, never denser ones.
+
 ## When to Write
 
 **One signal is enough.** Do not wait for confirmation.
