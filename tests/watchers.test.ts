@@ -932,12 +932,20 @@ describe("runWatchedCommand", () => {
   });
 
   test("kills a hanging command at the timeout and reports timedOut", async () => {
-    const result = await runWatchedCommand("sleep 20", "/tmp", 500);
-    expect(result.timedOut).toBe(true);
-    // 137 = SIGKILL from the watchdog. Consumers only read the timedOut
-    // flag; the raw code is informational.
-    expect(result.exitCode).toBe(137);
-    expect(result.durationMs).toBeLessThan(10_000);
+    // The production runner logs each timeout kill; silence it so the
+    // expected kill does not leak into the test output.
+    const errorLog = console.error;
+    console.error = () => {};
+    try {
+      const result = await runWatchedCommand("sleep 20", "/tmp", 500);
+      expect(result.timedOut).toBe(true);
+      // 137 = SIGKILL from the watchdog. Consumers only read the timedOut
+      // flag; the raw code is informational.
+      expect(result.exitCode).toBe(137);
+      expect(result.durationMs).toBeLessThan(10_000);
+    } finally {
+      console.error = errorLog;
+    }
   });
 
   test("survives a grandchild holding the pipe open past the kill", async () => {

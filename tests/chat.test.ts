@@ -690,6 +690,10 @@ describe("ChatPoller", () => {
   });
 
   test("delivery failure leaves messages pending", async () => {
+    // The production delivery path logs each failed delivery; silence it so
+    // the expected failure does not leak into the test output.
+    const errorLog = console.error;
+    console.error = () => {};
     const failing = new ChatPoller({
       store: db,
       hostedSessions: () => hosted,
@@ -699,9 +703,13 @@ describe("ChatPoller", () => {
       canDeliver: () => true,
       pollIntervalMs: 60_000,
     });
-    db.sendChatMessage("ses_a", "bob-00001", "hello");
-    await failing.deliverPending();
-    expect(db.pendingChatNotifications(["ses_b"], cutoffAgo(15)).length).toBe(1);
+    try {
+      db.sendChatMessage("ses_a", "bob-00001", "hello");
+      await failing.deliverPending();
+      expect(db.pendingChatNotifications(["ses_b"], cutoffAgo(15)).length).toBe(1);
+    } finally {
+      console.error = errorLog;
+    }
     failing.dispose();
   });
 
@@ -756,13 +764,21 @@ describe("ChatPoller", () => {
       pollIntervalMs: 60_000,
       maxNudgesPerHour: 1,
     });
-    db.sendChatMessage("ses_a", "bob-00001", "counted even if the stamp fails");
-    await stampThrows.deliverPending();
-    expect(deliveries.length).toBe(1);
-    // The mail stays pending (the stamp failed), but the budget is spent:
-    // a later cycle must not re-deliver, stamp failure or not.
-    await stampThrows.deliverPending();
-    expect(deliveries.length).toBe(1);
+    // The production delivery path logs the failed stamp; silence it so the
+    // expected failure does not leak into the test output.
+    const errorLog = console.error;
+    console.error = () => {};
+    try {
+      db.sendChatMessage("ses_a", "bob-00001", "counted even if the stamp fails");
+      await stampThrows.deliverPending();
+      expect(deliveries.length).toBe(1);
+      // The mail stays pending (the stamp failed), but the budget is spent:
+      // a later cycle must not re-deliver, stamp failure or not.
+      await stampThrows.deliverPending();
+      expect(deliveries.length).toBe(1);
+    } finally {
+      console.error = errorLog;
+    }
     stampThrows.dispose();
   });
 
