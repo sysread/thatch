@@ -46,15 +46,24 @@ Inherits stdio, exits with the child's exit code. Errors and exits 1 if none fou
 
 Read-only window on the cross-session chat directory ([cross-session-chat.md](cross-session-chat.md)):
 
-- `chat list` renders the roster: display name, human-readable age since the
-  last heartbeat, project, and topic when set.
+- `chat list` renders the roster as aligned columns under a header row
+  (NAME/AGE/STATUS/PROJECT/TOPIC), colorized only when stdout is a TTY
+  (`formatChatRoster()` in `bin/thatch`; pipes and QA runners get plain
+  text). Status reuses the `isStale()` staleness convention.
 - `chat tail` follows the message stream as styled cards: label chips,
   colored names, dimmed timestamps, topic annotations after names, and a
-  drawn rule between cards. The card renderer is `formatChatTailCard()`
-  and the event shaping is `chatTailDiff()` in `src/chat.ts`, unit-tested
-  there; the single-line `formatChatTailEvent()` remains for tests and
-  compact contexts. `--once` prints one snapshot and exits, because a
-  snapshot has no previous state to diff read events against.
+  drawn rule between cards. On a TTY, sent bodies render as markdown via
+  an external renderer (`glow`, then `gum format`; plain fallback):
+  selection (`selectChatBodyRenderer()`) and body cleanup
+  (`cleanRenderedBody()`) live in `src/chat.ts`, unit-tested there;
+  `bin/thatch` owns the TTY/NO_COLOR gate, the once-per-process cache,
+  and the spawn. The card renderer is
+  `formatChatTailCard()` (optional `renderBody` hook; the read-event
+  clip is never rendered) and the event shaping is `chatTailDiff()` in
+  `src/chat.ts`, unit-tested there; the single-line `formatChatTailEvent()`
+  remains for tests and compact contexts. `--once` prints one snapshot
+  and exits, because a snapshot has no previous state to diff read
+  events against.
 - The backlog renders only the last `CHAT_TAIL_DEFAULT_LIMIT` (20) messages;
   `chatTailBacklog()` in `src/chat.ts` filters the feed, seeds the diff
   state from every feed row (so the limit hides cards, not history, and a

@@ -25,7 +25,7 @@ const useCase: UseCase = {
   ].join("\n"),
   steps: [
     "1. Seed a DB: three registered sessions (alpha with a topic, beta, ghost aged stale), a direct message, a broadcast, and a message from a sender that then unregisters.",
-    "2. Run `thatch chat list` and verify the roster renders name, human age, project, and topic.",
+    "2. Run `thatch chat list` and verify the roster renders an aligned header row plus name, human age, status, project, and topic columns.",
     "3. Run `thatch chat tail --once` and verify the cards render From/To/When headers, with broadcast rows marked.",
     "4. Verify a departed sender renders as unknown in the tail.",
     "5. Seed 25 numbered filler messages, then run filtered tails: verify --limit card counts and the stderr elision note, ANDed --match, --from name matching, and the --since/--until window.",
@@ -75,7 +75,9 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const listText = list.stdout.toString();
-    for (const needle of ["alpha-00001", "beta-00001", "watching CI", "project:acme/widgets", "ago"]) {
+    // The roster renders an aligned header row; session rows follow with
+    // name, age, status, project, and topic. Piped output carries no ANSI.
+    for (const needle of ["NAME", "AGE", "STATUS", "PROJECT", "TOPIC", "alpha-00001", "beta-00001", "watching CI", "acme/widgets", "ago"]) {
       if (!listText.includes(needle)) {
         console.log(`  FAIL: chat list output missing "${needle}":\n${listText}`);
         return "FAIL";

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, formatChatTailCard, CHAT_TAIL_SEPARATOR, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, slugifyTitle, isDefaultSessionTitle, type ChatTailRow, type ChatTailFilter } from "../src/chat";
+import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, formatChatTailCard, CHAT_TAIL_SEPARATOR, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, selectChatBodyRenderer, cleanRenderedBody, slugifyTitle, isDefaultSessionTitle, type ChatTailRow, type ChatTailFilter } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
 import { TOOL_DEFS } from "../src/tool-defs";
@@ -636,6 +636,44 @@ describe("chat tail diff", () => {
     const read = { kind: "read" as const, timestamp: "T", reader: "bob", from: "alice", fromTopic: null, toTopic: null, body: "hi" };
     const readCard = formatChatTailCard(read);
     expect(readCard.replace(/\x1b\[[0-9;]*m/g, "").split("\n")[1]).toBe("read alice");
+  });
+});
+
+describe("chat body markdown rendering", () => {
+  test("renderer selection prefers glow, falls back to gum, then null", () => {
+    expect(selectChatBodyRenderer("/opt/homebrew/bin/glow", "/opt/homebrew/bin/gum")).toEqual([
+      "/opt/homebrew/bin/glow",
+      "-",
+      "-w",
+      "0",
+      "-s",
+      "dark",
+    ]);
+    expect(selectChatBodyRenderer(null, "/opt/homebrew/bin/gum")).toEqual(["/opt/homebrew/bin/gum", "format", "-t", "markdown"]);
+    expect(selectChatBodyRenderer(null, null)).toBeNull();
+  });
+
+  test("plain bodies round-trip through the renderer's padded output", () => {
+    // Renderers pad every line with a 2-space document margin and surround
+    // the document with blank lines; cleanup must undo both so a plain
+    // body prints exactly as sent.
+    expect(cleanRenderedBody("\n  direct ping\n\n")).toBe("direct ping");
+    expect(cleanRenderedBody("\n  line one\n  line two\n\n")).toBe("line one\nline two");
+  });
+
+  test("cleanup strips the common indent only, preserving deeper structure", () => {
+    // A code block sits deeper than the document margin and keeps its
+    // extra indent.
+    expect(cleanRenderedBody("\n  intro\n\n      deeper\n\n")).toBe("intro\n\n    deeper");
+    // Already-flush output has nothing to strip.
+    expect(cleanRenderedBody("as-is")).toBe("as-is");
+  });
+
+  test("cleanup strips surrounding blank lines without eating the first line's indent", () => {
+    // trim() would also eat the first line's own leading whitespace and
+    // leave it flush while later lines keep theirs - the bug this pins.
+    expect(cleanRenderedBody("\n  first\n  second\n\n")).toBe("first\nsecond");
+    expect(cleanRenderedBody("")).toBe("");
   });
 });
 

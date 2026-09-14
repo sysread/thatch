@@ -974,7 +974,12 @@ const ANSI = {
 
 const CARD_INDENT = ""; // cards sit flush with the separator (no extra indent)
 
-export function formatChatTailCard(event: ChatTailEvent): string {
+/**
+ * Renders one tail event as a card. renderBody lets the CLI re-render the
+ * sent body (markdown-to-ANSI via an external renderer); the read-event
+ * clip is never rendered - a 60-char truncated fragment is not a document.
+ */
+export function formatChatTailCard(event: ChatTailEvent, renderBody: (body: string) => string = (b) => b): string {
   const lines: string[] = [];
   const when = ANSI.dim(localWhen(event.timestamp));
   // The session-of-origin annotation: the participant's registered topic,
@@ -989,7 +994,7 @@ export function formatChatTailCard(event: ChatTailEvent): string {
     lines.push(chip("To", event.to, event.toTopic));
     lines.push(chip("When", when, null));
     lines.push("");
-    lines.push(event.body);
+    lines.push(renderBody(event.body));
   } else {
     const clipped = event.body.length > 60 ? event.body.slice(0, 60) + "..." : event.body;
     lines.push(chip("From", event.reader, event.toTopic));
@@ -1002,6 +1007,45 @@ export function formatChatTailCard(event: ChatTailEvent): string {
 }
 
 export const CHAT_TAIL_SEPARATOR = "_".repeat(60);
+
+/**
+ * Chooses the markdown-to-ANSI renderer for chat tail bodies, in preference
+ * order: glow first, then gum format. Returns the spawn argv (the body
+ * arrives on stdin), or null when neither tool is installed. Pure so tests
+ * can pin the order; the caller owns PATH detection and the spawn itself.
+ *
+ * -w 0: no wrapping - bodies overflow like they do unrendered, and
+ * wrapping inside cards would rag the layout. -s dark: glow picks its
+ * style from ITS stdout, which is always a pipe here, so the style is
+ * forced; notty would keep literal "#" and "**" markers, which is not
+ * rendering.
+ */
+export function selectChatBodyRenderer(glowPath: string | null, gumPath: string | null): string[] | null {
+  if (glowPath) return [glowPath, "-", "-w", "0", "-s", "dark"];
+  if (gumPath) return [gumPath, "format", "-t", "markdown"];
+  return null;
+}
+
+/**
+ * Normalizes a rendered markdown body: external renderers pad documents
+ * with a uniform leading margin and surrounding blank lines, which would
+ * shift the card layout and change plain-text bodies. Stripping the
+ * common indent plus the blank lines makes a plain body round-trip
+ * unchanged through its renderer.
+ */
+export function cleanRenderedBody(out: string): string {
+  // Blank-line strip, not trim(): trim() would also eat the first body
+  // line's own leading whitespace and leave it flush while later lines
+  // stay indented.
+  const lines = out.replace(/^\n+/, "").replace(/\n+$/, "").split("\n");
+  let indent = Infinity;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    indent = Math.min(indent, line.length - line.trimStart().length);
+  }
+  if (!Number.isFinite(indent) || indent === 0) return lines.join("\n");
+  return lines.map((line) => line.slice(indent)).join("\n");
+}
 
 // ---------------------------------------------------------------------------
 // Poller

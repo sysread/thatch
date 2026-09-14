@@ -208,8 +208,11 @@ injection-hygiene layers.
 ### CLI access
 
 The user watches the conversation without an agent: `thatch chat list`
-renders the roster with human-readable heartbeat ages, and `thatch chat
-tail` follows the message stream as cards. The backlog renders only the
+renders the roster as aligned columns under a header row (TTY-gated
+color; `formatChatRoster()` in `bin/thatch`), and `thatch chat tail`
+follows the message stream as cards, with sent bodies rendered as
+markdown on a TTY via `glow`/`gum` (plain fallback, never in pipes).
+The backlog renders only the
 last `CHAT_TAIL_DEFAULT_LIMIT` (20) messages via `chatTailBacklog()`;
 `filterChatTailRows()` narrows every feed snapshot (backlog and follow
 polls alike) by body regexes, participant-name substrings, and a

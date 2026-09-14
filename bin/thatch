@@ -10,7 +10,7 @@ import { hygieneReport } from "../src/hygiene";
 import { claudeSessionStartReminder } from "../src/prompts";
 import { setupClaudeCode, setupCursor } from "../src/setup";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
-import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailCard, CHAT_TAIL_SEPARATOR, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, isStale, CHAT_STALE_MINUTES, mcpSessionID, type ChatTailFilter } from "../src/chat";
+import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailCard, CHAT_TAIL_SEPARATOR, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, isStale, CHAT_STALE_MINUTES, mcpSessionID, selectChatBodyRenderer, cleanRenderedBody, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
 
 const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
@@ -335,6 +335,86 @@ function humanAge(iso: string, now = Date.now()): string {
   return `${Math.floor(minutes / (24 * 60))}d ago`;
 }
 
+/** Column headers for the `chat list` roster, in display order. */
+const CHAT_ROSTER_HEADER = ["NAME", "AGE", "STATUS", "PROJECT", "TOPIC"];
+
+/**
+ * Renders the `chat list` roster as aligned columns under a header row.
+ * Columns size to the widest cell so names, ages, and projects line up
+ * across sessions. Color is applied only when stdout is an interactive
+ * terminal (and NO_COLOR is unset), so piped output - grep, redirect,
+ * QA runners - stays clean plain text. Palette matches the chat tail
+ * cards: green values, dim age, red STALE, muted italic topic.
+ */
+function formatChatRoster(sessions: ChatSessionRow[]): string {
+  const colored = process.stdout.isTTY === true && !process.env.NO_COLOR;
+  const paint = (code: string, s: string) => (colored ? `\x1b[${code}m${s}\x1b[0m` : s);
+  const rows = sessions.map((s) => ({
+    name: s.name,
+    age: humanAge(s.last_seen),
+    stale: isStale(s, CHAT_STALE_MINUTES),
+    project: s.project ?? "unknown",
+    topic: s.topic ?? "",
+  }));
+  const cells = (r: (typeof rows)[number]) => [r.name, r.age, r.stale ? "STALE" : "fresh", r.project, r.topic];
+  // Widths come from the PLAIN cell text; color is applied after padding so
+  // zero-width escape codes never skew the alignment.
+  const widths = CHAT_ROSTER_HEADER.map((h, i) => Math.max(h.length, ...rows.map((r) => cells(r)[i].length)));
+  const align = (line: string[]) => line.map((c, i) => (i < line.length - 1 ? c.padEnd(widths[i]) : c));
+  const header = align(CHAT_ROSTER_HEADER).map((h) => paint("1", h)).join("  ");
+  const body = rows.map((r) => {
+    const [name, age, status, project, topic] = align(cells(r));
+    return [
+      paint("32", name),
+      paint("2", age),
+      paint(r.stale ? "31" : "32", status),
+      project,
+      topic ? paint("3;90", topic) : "",
+    ].join("  ").trimEnd();
+  });
+  return [header, ...body].join("\n");
+}
+
+/**
+ * Markdown-to-ANSI renderer for chat tail bodies: prefers glow, then
+ * `gum format`, and degrades to the plain body when neither is installed.
+ * Detection runs once and only for interactive terminals - pipes (grep,
+ * QA runners) always get the raw body, and NO_COLOR opts out entirely.
+ * The renderer never fails open: a crashed or missing binary returns the
+ * body unchanged.
+ */
+let renderChatBody: (body: string) => string | null | undefined;
+
+/**
+ * Markdown-to-ANSI renderer for chat tail bodies: renderer selection
+ * (glow, then gum format) and body cleanup live in src/chat.ts
+ * (selectChatBodyRenderer, cleanRenderedBody, unit-tested there); this
+ * wrapper owns the TTY gate, the once-per-process cache, and the spawn.
+ * Detection runs only for interactive terminals - pipes (grep, QA
+ * runners) always get the raw body, and NO_COLOR opts out entirely.
+ * The renderer never fails open: a crashed or missing binary returns the
+ * body unchanged.
+ */
+function markdownBodyRenderer(): (body: string) => string {
+  if (renderChatBody !== undefined) return renderChatBody;
+  if (process.stdout.isTTY !== true || process.env.NO_COLOR) {
+    renderChatBody = (body) => body;
+    return renderChatBody;
+  }
+  const argv = selectChatBodyRenderer(Bun.which("glow"), Bun.which("gum"));
+  if (!argv) {
+    renderChatBody = (body) => body;
+    return renderChatBody;
+  }
+  // spawnSync stdin needs a Response (the `input` option is a no-op in
+  // Bun 1.3.14).
+  renderChatBody = (body) => {
+    const run = Bun.spawnSync(argv, { stdin: new Response(body), stdout: "pipe", stderr: "pipe" });
+    return run.exitCode === 0 ? cleanRenderedBody(run.stdout.toString()) : body;
+  };
+  return renderChatBody;
+}
+
 async function chatCommand(rest: string[]): Promise<void> {
   const [sub, ...restArgs] = rest;
 
@@ -345,19 +425,7 @@ async function chatCommand(rest: string[]): Promise<void> {
         console.log("No sessions registered. Sessions join the directory automatically on their first idle (opencode), or via chat_register.");
         break;
       }
-      for (const s of sessions) {
-        // Same staleness convention as the chat_list tool: an age past the
-        // threshold means the session's host process is probably gone.
-        const liveness = isStale(s, CHAT_STALE_MINUTES) ? "STALE" : "fresh";
-        const parts = [
-          s.name,
-          `(${humanAge(s.last_seen)})`,
-          liveness,
-          `project:${s.project ?? "unknown"}`,
-        ];
-        if (s.topic) parts.push(s.topic);
-        console.log(parts.join("  "));
-      }
+      console.log(formatChatRoster(sessions));
       break;
     }
 
@@ -445,7 +513,7 @@ async function chatCommand(rest: string[]): Promise<void> {
             `[thatch chat tail] showing last ${backlog.events.length} of ${backlog.elided + backlog.events.length} messages (--limit N, --limit all)`,
           );
         }
-        console.log(backlog.events.map(formatChatTailCard).join(`\n\n${CHAT_TAIL_SEPARATOR}\n\n`));
+        console.log(backlog.events.map((e) => formatChatTailCard(e, markdownBodyRenderer())).join(`\n\n${CHAT_TAIL_SEPARATOR}\n\n`));
         if (onceOnly || (filter.untilMs !== null && filter.untilMs <= Date.now())) break;
 
         process.on("SIGINT", () => {
@@ -461,7 +529,7 @@ async function chatCommand(rest: string[]): Promise<void> {
               // Separate follow-mode cards from whatever came before.
               if (firstFollowEvent && backlog.events.length > 0) console.log(`\n${CHAT_TAIL_SEPARATOR}\n`);
               firstFollowEvent = false;
-              console.log(formatChatTailCard(event));
+              console.log(formatChatTailCard(event, markdownBodyRenderer()));
             }
           } catch (err) {
             // The surface's whole job is watching a shared, mutable file;

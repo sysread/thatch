@@ -54,16 +54,22 @@ thatch chat tail --from al --to bob        # substring match on names
 thatch chat tail --since 2026-09-12 --until "2026-09-13 09:00"   # a window
 ```
 
-`chat list` shows every registered session with how long since its last
-heartbeat (a large age means the session's process is probably gone), its
-project, and the topic it registered with - the fastest way to answer
-"which session should I talk to about X?"
+`chat list` shows every registered session as aligned columns under a
+header row: how long since its last heartbeat (a large age means the
+session's process is probably gone), its status (`fresh` or `STALE`),
+its project, and the topic it registered with - the fastest way to
+answer "which session should I talk to about X?" Color is added only
+when the output is a terminal; a pipe prints plain aligned text.
 
 `chat tail` prints the conversation as styled chat cards (labels on a
 colored background, names in color, timestamps dimmed; a drawn rule
 separates cards, with blank lines on either side). After each name, the
 session's registered topic appears in muted italics - so the tail tells
-you not just who is talking but what they are working on:
+you not just who is talking but what they are working on. In a
+terminal, message bodies render as markdown: if `glow` (or `gum`) is
+installed, bodies with headings, lists, code blocks, and emphasis are
+styled; plain-text bodies print exactly as sent. Piped output - and a
+system without either tool - always gets the raw body.
 
 ```text
  From   Al Go Rithm <cross-session messaging between opencode sessions>
