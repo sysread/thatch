@@ -31,6 +31,8 @@ Do not start new work beyond this checklist. If every item is handled and nothin
 const COMPACT_TEMPLATE = `---
 description: Flush thatch persistence, check for loose ends, then compact if clear
 ---
+$ARGUMENTS
+
 Pre-compaction wrap-up. Work through this checklist before responding:
 
 ${sharedChecklist}
@@ -42,9 +44,14 @@ If anything is outstanding, list the items concisely so the user can address the
 const EXIT_TEMPLATE = `---
 description: Flush thatch persistence, check for loose ends, then exit opencode if clear
 ---
+$ARGUMENTS
+
 Pre-exit wrap-up. Work through this checklist before responding:
 
 ${sharedChecklist}
+3. Leave the chat directory. Call thatch_chat_unregister for this session - the session is exiting, so other sessions must stop addressing mail to it.
+
+Do not start new work beyond this checklist. If every item is handled and nothing needs the user's attention first, end your final response with exactly this token as the very last line, with no formatting around it:
 
 ${EXIT_READY_TOKEN}
 

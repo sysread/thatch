@@ -666,6 +666,35 @@ describe("hygiene", () => {
 // ---------------------------------------------------------------------------
 
 describe("migration", () => {
+  test("opening a pre-worktree chat_sessions table adds the column", () => {
+    const oldPath = join(dbDir, "old-chat.db");
+    const legacy = new Database(oldPath, { create: true });
+    // The chat_sessions schema as it existed before checkout-kind tracking.
+    legacy.run(`
+      CREATE TABLE chat_sessions (
+        session_id    TEXT PRIMARY KEY,
+        name          TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        topic         TEXT,
+        project       TEXT,
+        host_kind     TEXT NOT NULL DEFAULT ('opencode'),
+        registered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        last_seen     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        auto          INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    legacy.run("INSERT INTO chat_sessions (session_id, name) VALUES ('ses_old', 'old-00001')");
+    legacy.close();
+
+    const migrated = new ThatchDB(oldPath);
+    const oldRow = migrated.listChatSessions().find((r) => r.session_id === "ses_old");
+    expect(oldRow).toBeDefined();
+    expect(oldRow!.worktree).toBeNull();
+    migrated.registerChatSession("ses_new", "p", null, "opencode", null, "root");
+    const newRow = migrated.listChatSessions().find((r) => r.session_id === "ses_new");
+    expect(newRow!.worktree).toBe("root");
+    migrated.close();
+  });
+
   test("opening a pre-telemetry database adds the new columns", () => {
     const oldPath = join(dbDir, "old.db");
     const raw = new Database(oldPath, { create: true });

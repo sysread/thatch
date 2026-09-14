@@ -821,6 +821,19 @@ describe("systemPrompt content", () => {
     expect(text).toContain("behavior_codify");
   });
 
+  test("includes chat coordination encouragement", () => {
+    const text = systemPrompt("test/repo");
+    expect(text).toContain("## Cross-Session Chat");
+    expect(text).toContain("Coordination is wanted");
+    expect(text).toContain("scope split");
+  });
+
+  test("omits the entire chat section when chat is disabled", () => {
+    const text = systemPrompt("test/repo", false);
+    expect(text).not.toContain("## Cross-Session Chat");
+    expect(text).not.toContain("Coordination is wanted");
+  });
+
   test("does not use deprecated instructional-design wording for writing skills", () => {
     const text = systemPrompt("test/repo") + claudeInstructions() + cursorInstructions();
     expect(text).not.toContain("instructional-design scaffolding");

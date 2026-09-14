@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -874,6 +874,22 @@ describe("chat delivery model in tool output", () => {
     expect(result).toMatch(/\[registered\] \S+-\d{5}/);
     expect(result).toContain("at your next prompt");
     expect(result).not.toContain("woken automatically");
+  });
+
+  test("chat_list renders last check-in age and checkout kind", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-loc-"));
+    try {
+      // A .git DIRECTORY is the project-root checkout shape; a worktree
+      // checkout would carry a .git file instead.
+      mkdirSync(join(dir, ".git"));
+      const locCtx = { ...ctx, projectDir: dir };
+      await findChatTool("chat_register").execute({}, locCtx, { sessionID: "ses_loc", agent: "build" });
+      const list = await findChatTool("chat_list").execute({}, locCtx, { sessionID: "ses_loc", agent: "build" });
+      expect(list).toMatch(/last seen \d+[smhd] ago/);
+      expect(list).toContain("loc:root");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("chat_status states the delivery model per host", async () => {

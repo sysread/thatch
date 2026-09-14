@@ -10,7 +10,7 @@ import { hygieneReport } from "../src/hygiene";
 import { claudeSessionStartReminder } from "../src/prompts";
 import { setupClaudeCode, setupCursor } from "../src/setup";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
-import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailCard, CHAT_TAIL_SEPARATOR, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, isStale, CHAT_STALE_MINUTES, mcpSessionID, selectChatBodyRenderer, cleanRenderedBody, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
+import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailCard, CHAT_TAIL_SEPARATOR, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, isStale, CHAT_STALE_MINUTES, humanAge, mcpSessionID, selectChatBodyRenderer, cleanRenderedBody, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
 
 const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
@@ -323,17 +323,6 @@ async function sessionCommand(rest: string[]): Promise<void> {
 // ---------------------------------------------------------------------------
 // chat subcommand group - read-only window on the cross-session chat
 // ---------------------------------------------------------------------------
-
-/** "2m ago", "3h ago", "5d ago" - human-readable age for the chat roster. */
-function humanAge(iso: string, now = Date.now()): string {
-  const seconds = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));
-  if (Number.isNaN(seconds)) return "unknown age";
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}h ago`;
-  return `${Math.floor(minutes / (24 * 60))}d ago`;
-}
 
 /** Column headers for the `chat list` roster, in display order. */
 const CHAT_ROSTER_HEADER = ["NAME", "AGE", "STATUS", "PROJECT", "TOPIC"];

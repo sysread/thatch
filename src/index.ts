@@ -2,7 +2,7 @@ import { join } from "node:path";
 import type { Plugin } from "@opencode-ai/plugin";
 import { ThatchDB } from "./db";
 import { BgeEmbeddingModel } from "./embeddings";
-import { detectRepo } from "./git";
+import { detectRepo, detectWorktreeKind } from "./git";
 import { createTools } from "./tools";
 import {
   systemPrompt,
@@ -913,6 +913,19 @@ export const server: Plugin = async ({ client, worktree }) => {
             console.error(`[thatch] wrap-up message fetch failed: ${err}`);
           }
           if (ready) {
+            // An exit-greenlit session is leaving the process: leave the
+            // chat directory too, so other sessions stop addressing mail to
+            // a roster entry whose host is about to vanish. The unregister
+            // tombstone also stops any straggler auto-register from
+            // resurrecting the row during shutdown. Compact keeps the
+            // session alive, so only the exit path does this.
+            if (wrapUp.kind === "exit") {
+              try {
+                db.unregisterChatSession(sessionID);
+              } catch (err) {
+                console.error(`[thatch] chat unregister on exit failed: ${err}`);
+              }
+            }
             try {
               if (wrapUp.kind === "compact") {
                 // executeCommand only accepts legacy alias names;
@@ -965,7 +978,7 @@ export const server: Plugin = async ({ client, worktree }) => {
               const { data } = await client.session.get({ path: { id: sessionID } });
               const title = data?.title ?? "";
               const base = title && !isDefaultSessionTitle(title) ? slugifyTitle(title) : null;
-              db.registerChatSession(sessionID, repo, base ? title : null, "opencode", base);
+              db.registerChatSession(sessionID, repo, base ? title : null, "opencode", base, detectWorktreeKind(worktree));
               if (base) db.refreshChatTopic(sessionID, title);
             } catch (err) {
               console.error(`[thatch] chat auto-register failed for ${sessionID}: ${err}`);

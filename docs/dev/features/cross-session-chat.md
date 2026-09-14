@@ -70,6 +70,12 @@ silent for CHAT_AUTO_TTL_DAYS = 7 days, swept hourly by the poller) can
 never reissue its name, which is what makes the prune safe. The session's
 live title rides the topic column, refreshed on every idle by
 `refreshAutoTopic` - auto rows only; legacy rows keep their old model-set topics.
+Registration also captures the checkout kind (`worktree` column):
+`detectWorktreeKind` (src/git.ts) classifies the session's serving
+directory once at registration - a `.git` file means a linked git
+worktree, a `.git` directory means the project root, no `.git` reads as
+undetected. The roster shows it as a `loc:` token so sessions coordinating
+on a shared tree can tell who sits where.
 
 `chat_register` (no arguments) is the explicit path: idempotent ensure for
 opencode (identity is the host session ID, which the model cannot know or
@@ -82,7 +88,11 @@ mechanical barrier, a documented trust posture.
 
 ### Leave tombstones
 
-Every exit path - `chat_unregister` and `session.deleted` alike - writes a
+Every exit path - `chat_unregister`, `session.deleted`, and a greenlit
+`/thatch/exit` (the plugin unregisters the exiting session before
+publishing `app.exit`, so the roster stops advertising a host that is
+about to vanish; the exit template's checklist step asks the model to do
+the same earlier) - writes a
 `chat_leave_tombstones` row in the same transaction that deletes the
 directory row. The tombstone is what makes a leave stick: both
 registration paths consult it (the plugin's idle auto-registerer is
@@ -140,7 +150,9 @@ A `setInterval` loop (default 30s) runs one cycle per process: heartbeat the
 hosted sessions' `last_seen`, then deliver. A crashed process fires no
 `session.deleted`, so `chat_list` marks sessions whose `last_seen` is older
 than the staleness threshold (default 10 minutes) as stale rather than
-hiding them - the operator decides what to do with ghosts. `session.deleted`
+hiding them - the operator decides what to do with ghosts. Each roster row
+also renders a human-readable `last seen <age>` (shared `humanAge` helper,
+src/chat.ts, same wording the CLI roster's AGE column uses). `session.deleted`
 is the graceful-exit fast path that unregisters immediately.
 
 ### Delivery, re-nudge, and the rate cap

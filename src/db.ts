@@ -4,13 +4,13 @@ import {
   PredictionEngine,
 } from "./prediction";
 import { BehaviorEngine } from "./behavior";
-import { ChatStore, type ChatHostKind } from "./chat";
+import { ChatStore, type ChatHostKind, type ChatWorktreeKind } from "./chat";
 import { PREDICTION_K, PREDICTION_P0, PREDICTION_W_SOFT } from "./scoring-engine";
 
 export { cosineSimilarity } from "./vector-math";
 export type { PredictionNudgeItem, MatcherRow, PredictionRow, ScoredPrediction } from "./prediction";
 export type { BehaviorNudgeItem, BehaviorRow, ScoredBehavior } from "./behavior";
-export type { ChatSessionRow, ChatInboxItem, ChatNotificationRow } from "./chat";
+export type { ChatSessionRow, ChatInboxItem, ChatNotificationRow, ChatWorktreeKind } from "./chat";
 
 export interface MemoryRow {
   slug: string;
@@ -239,7 +239,8 @@ export class ThatchDB {
         host_kind     TEXT NOT NULL DEFAULT ('opencode'),
         registered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
         last_seen     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-        auto          INTEGER NOT NULL DEFAULT 0
+        auto          INTEGER NOT NULL DEFAULT 0,
+        worktree      TEXT NOT NULL DEFAULT ('')
       )
     `);
 
@@ -289,6 +290,7 @@ export class ThatchDB {
     this.#migrateChatHostKind();
     this.#migrateChatBroadcastFlag();
     this.#migrateChatAuto();
+    this.#migrateChatWorktree();
   }
 
   // chat_sessions tables created before the auto column lack it; the ALTER
@@ -307,6 +309,16 @@ export class ThatchDB {
     const cols = (this.#db.query("PRAGMA table_info(chat_sessions)").all() as any[]).map((r) => r.name);
     if (cols.length > 0 && !cols.includes("host_kind")) {
       this.#db.run("ALTER TABLE chat_sessions ADD COLUMN host_kind TEXT NOT NULL DEFAULT 'opencode'");
+    }
+  }
+
+  // chat_sessions tables created before the worktree column lack it; the
+  // ALTER adds it, and existing rows read as undetected (rendered as no
+  // loc token in chat_list) - they registered before the capture existed.
+  #migrateChatWorktree(): void {
+    const cols = (this.#db.query("PRAGMA table_info(chat_sessions)").all() as any[]).map((r) => r.name);
+    if (cols.length > 0 && !cols.includes("worktree")) {
+      this.#db.run("ALTER TABLE chat_sessions ADD COLUMN worktree TEXT NOT NULL DEFAULT ''");
     }
   }
 
@@ -856,8 +868,8 @@ export class ThatchDB {
   // Cross-session chat: delegates to ChatStore
   // ---------------------------------------------------------------------------
 
-  registerChatSession(sessionID: string, project: string | null, topic: string | null, kind: ChatHostKind, nameBase: string | null = null) {
-    return this.#chat.register(sessionID, project, topic, kind, nameBase);
+  registerChatSession(sessionID: string, project: string | null, topic: string | null, kind: ChatHostKind, nameBase: string | null = null, worktree: ChatWorktreeKind = null) {
+    return this.#chat.register(sessionID, project, topic, kind, nameBase, worktree);
   }
 
   refreshChatTopic(sessionID: string, title: string) {

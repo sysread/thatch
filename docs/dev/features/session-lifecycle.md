@@ -63,13 +63,13 @@ When a parent session (no parentID) goes idle:
 
 ### Wrap-up commands (`/thatch/compact`, `/thatch/exit`)
 
-User-invoked slash commands, shipped as command markdown synced by the plugin (see `src/commands.ts`). The template instructs the model to flush pending fact extraction (`thatch_get_extraction_payload` + `thatch_extraction_done`), finish promised memory writes, and surface unaddressed todos -- then end its response with a greenlight token (`THATCH_COMPACT_READY` / `THATCH_EXIT_READY`) only when safe to proceed.
+User-invoked slash commands, shipped as command markdown synced by the plugin (see `src/commands.ts`). The template instructs the model to flush pending fact extraction (`thatch_get_extraction_payload` + `thatch_extraction_done`), finish promised memory writes, and surface unaddressed todos -- then end its response with a greenlight token (`THATCH_COMPACT_READY` / `THATCH_EXIT_READY`) only when safe to proceed. Text typed after the command is forwarded into the prompt: the templates substitute opencode's `$ARGUMENTS` ahead of the checklist, so `/thatch/exit nice work` reads as "nice work" followed by the wrap-up instructions.
 
 1. `command.execute.before` arms the session in `pendingWrapUp` when the command runs
 2. On the session's next idle, the plugin fetches the session's messages via the SDK client and checks the final assistant message's trailing text for the token (trimmed, exact match)
 3. Token present: trigger the TUI action and return early -- compaction is starting (the checklist drained the buffer) or the process is exiting
    - compact: `client.tui.executeCommand({ body: { command: "session_compact" } })`. The execute-command route only accepts legacy alias names; `session_compact` maps to the TUI's `session.compact` action, the same thing the built-in `/compact` runs
-   - exit: `client.tui.publish({ body: { type: "tui.command.execute", properties: { command: "app.exit" } } })`. No exit alias exists, so the TUI keymap command is published directly
+   - exit: unregister the session from the chat directory first (a greenlit exit's host is about to vanish; other sessions must stop addressing mail to it), then `client.tui.publish({ body: { type: "tui.command.execute", properties: { command: "app.exit" } } })`. No exit alias exists, so the TUI keymap command is published directly. The exit template's checklist also asks the model to call `thatch_chat_unregister` as its last persistence step; the plugin-side unregister is the deterministic backstop. Compaction deliberately does NOT unregister - the session continues
 4. Token absent: warning toast pointing at the blockers in the response, then fall through -- the model may have buffered tool interactions that still need extraction
 
 ### Command file install

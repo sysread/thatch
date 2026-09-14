@@ -1,4 +1,26 @@
 import { $ } from "bun";
+import { statSync } from "node:fs";
+import { join } from "node:path";
+
+/**
+ * Classifies the checkout the given directory serves: "worktree" for a
+ * linked git worktree (its .git is a FILE pointing at the main repo's
+ * gitdir), "root" for the project's main checkout (.git is a DIRECTORY),
+ * and null when undetectable (no .git at all, or no directory given).
+ * Synchronous and cheap: callers capture this once at chat registration,
+ * so the roster can show which sessions share the main tree.
+ */
+export function detectWorktreeKind(dir?: string | null): "root" | "worktree" | null {
+  if (!dir) return null;
+  try {
+    const st = statSync(join(dir, ".git"));
+    if (st.isFile()) return "worktree";
+    if (st.isDirectory()) return "root";
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Extracts an `owner/repo` slug from a git remote URL. Handles the common

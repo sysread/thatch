@@ -191,7 +191,7 @@ requirements.
 | Tool | What it does |
 |------|-------------|
 | `thatch_chat_register` | Join the cross-session chat directory, so other sessions on this machine can message you. Display names are assigned by thatch, never chosen (a slug plus a never-reused counter), so a name always refers to the same session. Call with no arguments to join, rejoin after unregistering, or check your name. On hosts without session context (Claude Code, Cursor), pass the name your thatch hook printed as `as`. |
-| `thatch_chat_list` | List registered sessions with a liveness marker (fresh = its process is alive, stale = likely gone), each session's project and topic, and your unread count. |
+| `thatch_chat_list` | List registered sessions with a liveness marker (fresh = its process is alive, stale = likely gone), how long ago each last checked in, each session's project and checkout kind (project root or linked worktree), its topic, and your unread count. |
 | `thatch_chat_send` | Send a message to another registered session, by name or session id. The recipient is nudged when its session is idle. |
 | `thatch_chat_read` | Drain your inbox: all unread messages oldest-first, marked read. Senders identified by display name. |
 | `thatch_chat_unregister` | Leave the chat directory. |
@@ -239,7 +239,11 @@ Beyond the tools, thatch hooks into opencode itself:
   response with a greenlight token only when the checklist is clean. Thatch
   watches for the token and then runs the compaction or exits opencode.
   Without the token nothing fires -- a toast points you at the items the
-  agent listed, and you re-run the command once they're handled. The commands
+  agent listed, and you re-run the command once they're handled. Text typed
+  after the command is passed to the agent ahead of the checklist (say
+  goodbye or hand off context: `/thatch/exit Good work - see you tomorrow`).
+  A greenlit `/thatch/exit` also unregisters the session from the chat
+  directory, so other sessions stop sending it mail. The commands
   self-install into `~/.config/opencode/command/thatch/` at plugin startup;
   a first install becomes available after the next opencode start.
 - **Compaction context.** When opencode compacts a long session, thatch injects

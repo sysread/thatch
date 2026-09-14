@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, formatChatTailCard, CHAT_TAIL_SEPARATOR, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, selectChatBodyRenderer, cleanRenderedBody, slugifyTitle, isDefaultSessionTitle, type ChatTailRow, type ChatTailFilter } from "../src/chat";
+import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, formatChatTailCard, CHAT_TAIL_SEPARATOR, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, selectChatBodyRenderer, cleanRenderedBody, slugifyTitle, isDefaultSessionTitle, humanAge, type ChatTailRow, type ChatTailFilter } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
 import { TOOL_DEFS } from "../src/tool-defs";
@@ -299,6 +299,25 @@ describe("assigned names", () => {
     db.pruneStaleChatAuto(nowIso());
     const counter = raw.query("SELECT next FROM chat_name_counters WHERE base = 'keep'").get() as any;
     expect(counter.next).toBe(2);
+  });
+});
+
+describe("roster age and checkout kind", () => {
+  test("humanAge renders human-readable buckets", () => {
+    const now = Date.parse("2026-09-14T12:00:00Z");
+    expect(humanAge("2026-09-14T11:59:15Z", now)).toBe("45s ago");
+    expect(humanAge("2026-09-14T11:55:00Z", now)).toBe("5m ago");
+    expect(humanAge("2026-09-14T09:00:00Z", now)).toBe("3h ago");
+    expect(humanAge("2026-09-12T12:00:00Z", now)).toBe("2d ago");
+    expect(humanAge("not-a-date", now)).toBe("unknown age");
+  });
+
+  test("registration records the checkout kind; default rows read as unknown", () => {
+    reg("ses_a", "alpha");
+    db.registerChatSession("ses_w", "p", null, "opencode", "bravo", "worktree");
+    const rows = db.listChatSessions();
+    expect(rows.find((r) => r.session_id === "ses_a")!.worktree).toBeNull();
+    expect(rows.find((r) => r.session_id === "ses_w")!.worktree).toBe("worktree");
   });
 });
 

@@ -20,8 +20,9 @@ explicitly with `thatch_chat_register` (no arguments) - useful after
 `chat_unregister`, or just to check your assigned name. Once registered:
 
 - `thatch_chat_list` shows every registered session on the machine, with a
-  liveness marker (fresh or stale), its project, its topic, and your unread
-  count
+  liveness marker (fresh or stale), how long ago it last checked in, its
+  project, whether it runs in the project root or a linked git worktree,
+  its topic, and your unread count
 - `thatch_chat_send` delivers a message to another registered session, by
   name or session id
 - `thatch_chat_read` drains the session's inbox
@@ -77,7 +78,11 @@ A session shows as fresh while its opencode process is running. A crashed
 or closed process stops heartbeat-ing, and the session shows as stale in
 `thatch_chat_list` after ten minutes. Messages to a stale session wait in
 its inbox unread - a dead session never reads them. Explicitly closing a
-session (deleting it in the TUI) unregisters it immediately.
+session (deleting it in the TUI) unregisters it immediately, and a
+greenlit `/thatch/exit` unregisters the session too: the wrap-up
+checklist calls `chat_unregister`, and the plugin removes the row itself
+when the exit token passes the greenlight check, so other sessions stop
+addressing mail to a process that is about to vanish.
 
 ## Turning chat off
 

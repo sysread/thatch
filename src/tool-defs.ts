@@ -20,7 +20,8 @@ import { sendNotification, defaultSpawner, type NotifyChannel, type Spawner } fr
 import { predictionVerb, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, type WatcherRegistry, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
-import { CHAT_STALE_MINUTES, isStale, renderChatParticipant, type ChatHostKind } from "./chat";
+import { CHAT_STALE_MINUTES, isStale, renderChatParticipant, humanAge, type ChatHostKind } from "./chat";
+import { detectWorktreeKind } from "./git";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
 // creation time. Matches the thatch_find_duplicates threshold (0.85).
@@ -1605,7 +1606,7 @@ const chatRegisterDef: ToolDef = {
       // comes from the hook, which re-registers the same session ID and
       // prints the assigned name each prompt.
       const sessionID = `mcp_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
-      const res = ctx.db.registerChatSession(sessionID, ctx.defaultStore, null, kind);
+      const res = ctx.db.registerChatSession(sessionID, ctx.defaultStore, null, kind, null, detectWorktreeKind(ctx.projectDir));
       if (!res.ok) return `Registration failed: ${res.error}`;
       return (
         `[registered] ${res.name}\n` +
@@ -1641,7 +1642,7 @@ const chatRegisterDef: ToolDef = {
     // a tombstoned opencode session as blocked; the tombstone is for the
     // idle path, not for the model's explicit intent.)
     ctx.db.clearChatLeaveTombstone?.(host.sessionID);
-    const res = ctx.db.registerChatSession(host.sessionID, ctx.defaultStore, null, kind);
+    const res = ctx.db.registerChatSession(host.sessionID, ctx.defaultStore, null, kind, null, detectWorktreeKind(ctx.projectDir));
     if (!res.ok) return `Registration failed: ${res.error}`;
     return (
       `[registered] ${res.name}\n` +
@@ -1681,9 +1682,14 @@ const chatListDef: ToolDef = {
         ? isStale(s, CHAT_STALE_MINUTES) ? "idle" : "active"
         : isStale(s, CHAT_STALE_MINUTES) ? "stale" : "fresh";
       const project = s.project ? ` project:${s.project}` : "";
+      // The age turns the liveness bucket into a concrete last-check-in;
+      // the checkout kind tells sessions on a shared tree who sits in a
+      // worktree versus the project root.
+      const age = ` last seen ${humanAge(s.last_seen)}`;
+      const loc = s.worktree ? ` loc:${s.worktree}` : "";
       const topic = s.topic ? ` topic:${s.topic}` : "";
       const mailbox = self ? (unread > 0 ? ` ${unread} unread` : "") : "";
-      return `- ${s.name} (${s.session_id.slice(0, 12)})${project} ${liveness}${topic}${self ? " [you]" : ""}${mailbox}`;
+      return `- ${s.name} (${s.session_id.slice(0, 12)})${project}${age}${loc} ${liveness}${topic}${self ? " [you]" : ""}${mailbox}`;
     });
     // The name-stability note closes the roster because it answers the
     // question a reader asking "is this the same X as before?" needs:

@@ -46,6 +46,13 @@ export function isoMinutesAgo(minutes: number): string {
   return new Date(Date.now() - minutes * 60_000).toISOString().slice(0, 19) + "Z";
 }
 
+/** Where the session's host process is running its checkout: "root" for the
+ *  project's main checkout, "worktree" for a linked git worktree, null when
+ *  undetected (e.g. an MCP host with no directory context). Displayed in
+ *  the roster so sessions coordinating on a shared tree can tell who sits
+ *  where. */
+export type ChatWorktreeKind = "root" | "worktree" | null;
+
 export interface ChatSessionRow {
   session_id: string;
   name: string;
@@ -57,6 +64,7 @@ export interface ChatSessionRow {
   host_kind: ChatHostKind;
   registered_at: string;
   last_seen: string;
+  worktree: ChatWorktreeKind;
 }
 
 /** One message selected for wake-up delivery, with the sender's display name
@@ -155,6 +163,19 @@ export const CHAT_STALE_MINUTES = 10;
 export const CHAT_RENUDGE_MINUTES = 15;
 export const CHAT_MAX_NUDGES_PER_HOUR = 6;
 
+/** Human-readable age of an ISO timestamp: "45s ago", "5m ago", "3h ago",
+ *  "2d ago". Shared by the CLI roster and the chat_list tool so both
+ *  surfaces render the same last-check-in wording. */
+export function humanAge(iso: string, now = Date.now()): string {
+  const seconds = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));
+  if (Number.isNaN(seconds)) return "unknown age";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}h ago`;
+  return `${Math.floor(minutes / (24 * 60))}d ago`;
+}
+
 /**
  * SQLite CRUD for the chat tables. Constructed by ThatchDB with the shared
  * Database handle; the tables are created by ThatchDB's schema init.
@@ -187,6 +208,7 @@ export class ChatStore {
     topic: string | null,
     kind: ChatHostKind,
     nameBase: string | null = null,
+    worktree: ChatWorktreeKind = null,
   ): { ok: true; name: string; topic: string | null } | { ok: false; error: string } {
     const existing = this.#find(sessionID);
     if (existing) {
@@ -216,7 +238,7 @@ export class ChatStore {
     for (let attempt = 0; attempt < 10; attempt++) {
       const next = this.#bumpCounter(base);
       const name = `${base}-${String(next).padStart(5, "0")}`;
-      const claimed = this.#insertSession(sessionID, name, project, cleanTopic, kind);
+      const claimed = this.#insertSession(sessionID, name, project, cleanTopic, kind, worktree);
       if (claimed.ok) return { ok: true, name, topic: cleanTopic };
       if (claimed.reason === "already-registered") {
         // A concurrent registration of the same session ID won the race;
@@ -335,7 +357,7 @@ export class ChatStore {
 
   list(): ChatSessionRow[] {
     return (this.#db
-      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen FROM chat_sessions ORDER BY name")
+      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree FROM chat_sessions ORDER BY name")
       .all() as any[]).map(rowFromSession);
   }
 
@@ -609,14 +631,14 @@ export class ChatStore {
 
   #find(sessionID: string): ChatSessionRow | null {
     const row = this.#db
-      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen FROM chat_sessions WHERE session_id = ?")
+      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree FROM chat_sessions WHERE session_id = ?")
       .get(sessionID) as any;
     return row ? rowFromSession(row) : null;
   }
 
   #findByName(name: string): ChatSessionRow | null {
     const row = this.#db
-      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen FROM chat_sessions WHERE name = ? COLLATE NOCASE")
+      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree FROM chat_sessions WHERE name = ? COLLATE NOCASE")
       .get(name) as any;
     return row ? rowFromSession(row) : null;
   }
@@ -694,11 +716,12 @@ export class ChatStore {
     project: string | null,
     topic: string | null,
     kind: ChatHostKind,
+    worktree: ChatWorktreeKind,
   ): { ok: true; topic: string | null } | { ok: false; reason: "name-taken" | "already-registered" } {
     try {
       this.#db.run(
-        "INSERT INTO chat_sessions (session_id, name, topic, project, host_kind, registered_at, last_seen, auto) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
-        [sessionID, name, topic, project, kind, nowIso(), nowIso()],
+        "INSERT INTO chat_sessions (session_id, name, topic, project, host_kind, registered_at, last_seen, auto, worktree) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
+        [sessionID, name, topic, project, kind, nowIso(), nowIso(), worktree ?? ""],
       );
       return { ok: true, topic };
     } catch (err) {
@@ -726,6 +749,9 @@ function rowFromSession(r: any): ChatSessionRow {
     project: r.project,
     registered_at: r.registered_at,
     last_seen: r.last_seen,
+    // Pre-migration rows carry the empty-string default; read back as
+    // undetected so the roster omits the token instead of printing a blank.
+    worktree: r.worktree === "root" || r.worktree === "worktree" ? r.worktree : null,
   };
 }
 

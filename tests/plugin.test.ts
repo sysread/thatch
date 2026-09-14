@@ -1931,7 +1931,29 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
     expect(tuiExecuteCommandCalls.length).toBe(before);
   });
 
+  test("exit greenlight unregisters the session from the chat directory", async () => {
+    const before = new ThatchDB(process.env.THATCH_DB_PATH!);
+    before.registerChatSession("ses_wrapeu", "p", null, "opencode", "gammawrap");
+    before.close();
+    await runWrapUp("thatch/exit", "ses_wrapeu", "All clear.\nTHATCH_EXIT_READY");
+    const after = new ThatchDB(process.env.THATCH_DB_PATH!);
+    expect(after.listChatSessions().find((r) => r.session_id === "ses_wrapeu")).toBeUndefined();
+    after.close();
+  });
+
+  test("compact greenlight does not unregister the session", async () => {
+    const before = new ThatchDB(process.env.THATCH_DB_PATH!);
+    before.registerChatSession("ses_wrapnu", "p", null, "opencode", "deltawrap");
+    before.close();
+    await runWrapUp("thatch/compact", "ses_wrapnu", "All clear.\nTHATCH_COMPACT_READY");
+    const after = new ThatchDB(process.env.THATCH_DB_PATH!);
+    // Compaction continues the session, so the directory row must survive.
+    expect(after.listChatSessions().find((r) => r.session_id === "ses_wrapnu")).toBeDefined();
+    after.close();
+  });
+
   test("session.deleted clears a pending wrap-up", async () => {
+    const before = tuiExecuteCommandCalls.length;
     await hooks["command.execute.before"]!(
       { command: "thatch/compact", sessionID: "ses_wrapd", arguments: "" },
       { parts: [] },
@@ -1947,8 +1969,8 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
       type: "session.status",
       properties: { sessionID: "ses_wrapd", status: { type: "idle" } } } as any,
     });
-    // No compact trigger beyond the first greenlight test's single call.
-    expect(tuiExecuteCommandCalls).toHaveLength(1);
+    // The cleared wrap-up must not have fired a compact trigger of its own.
+    expect(tuiExecuteCommandCalls.length).toBe(before);
   });
 });
 
@@ -1985,5 +2007,19 @@ describe("installOpencodeCommands", () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  test("command bodies substitute user text at the top, before the checklist", async () => {
+    // opencode replaces $ARGUMENTS with the text typed after the command
+    // (/thatch/exit thanks! -> "thanks!\n\n<checklist>"); with no argument
+    // the substitution is empty, so the placeholder must sit on its own line
+    // ahead of the body, never mid-sentence.
+    const { opencodeCommandDefs } = await import("../src/commands");
+    for (const def of opencodeCommandDefs()) {
+      const body = def.content.slice(def.content.indexOf("---", 3) + 3);
+      expect(body.trimStart()).toMatch(/^\$ARGUMENTS\n\n/);
+    }
+    const exit = opencodeCommandDefs().find((d) => d.name === "exit")!;
+    expect(exit.content).toContain("chat_unregister");
   });
 });
