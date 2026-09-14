@@ -48,6 +48,7 @@ After all changes are complete, verify in this order:
    - Simple fixes: fix immediately.
    - Complex fixes: plan as a separate milestone.
 4. **Run tests, linters, and formatters.** Address any issues they surface. If the project has a quality gate (make check, npm run check, mise run check), run it.
+5. **Repo finish gate.** If the current repo defines its own definition-of-done skill (in the thatch repo: `thatch-dev-done`), load it and work its checklist before claiming the task complete. The generic verification above does not cover repo-specific duties: QA use cases, doc tiers, count touch points, commit conventions.
 
 ## Blockers vs intermediate states
 

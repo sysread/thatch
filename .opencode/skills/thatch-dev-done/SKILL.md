@@ -1,13 +1,14 @@
 ---
 name: thatch-dev-done
-description: Definition-of-done checklist for coding tasks in the thatch repo. Use when you believe a coding task is complete, before committing or claiming done. Covers the quality gate, QA use case coverage and maintenance, unit tests, and the two-tier docs.
+description: Definition-of-done checklist for coding tasks in the thatch repo. Use when starting a coding task in this repo, so the checklist shapes the work, and again when you believe the task is complete, before committing or claiming done. Covers the quality gate, QA use case coverage and maintenance, unit tests, and the two-tier docs.
 ---
 
 # Thatch dev definition of done
 
-You believe the coding task is finished. Before you say so or commit, work
-this checklist. Every item here exists because skipping it let something
-drift silently.
+Load this checklist twice: when the task starts, and at the finish line.
+Most items are cheap to satisfy while you work and expensive to retrofit.
+Before you say the task is done or commit, work the whole checklist. Every
+item here exists because skipping it let something drift silently.
 
 ## The gate
 
