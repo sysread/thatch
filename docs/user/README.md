@@ -240,8 +240,9 @@ Beyond the tools, thatch hooks into opencode itself:
   watches for the token and then runs the compaction or exits opencode.
   Without the token nothing fires -- a toast points you at the items the
   agent listed, and you re-run the command once they're handled. Text typed
-  after the command is passed to the agent ahead of the checklist (say
-  goodbye or hand off context: `/thatch/exit Good work - see you tomorrow`).
+  after the command reaches the agent first, labeled as a `User Message`
+  section ahead of the checklist (say goodbye or hand off context:
+  `/thatch/exit Good work - see you tomorrow`).
   A greenlit `/thatch/exit` also unregisters the session from the chat
   directory, so other sessions stop sending it mail. The commands
   self-install into `~/.config/opencode/command/thatch/` at plugin startup;

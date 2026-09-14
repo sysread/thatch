@@ -24,18 +24,26 @@ export const EXIT_READY_TOKEN = "THATCH_EXIT_READY";
  */
 
 const sharedChecklist = `1. Flush pending persistence. Call thatch_get_extraction_payload; if it returns buffered tool interactions, process them now (write any memories worth keeping), then call thatch_extraction_done to mark them complete. Complete any memory writes you promised earlier but have not made.
-2. Check for loose ends. Review the conversation for todos, follow-ups, or open questions raised earlier that were never addressed, and surface anything the user should address before the wrap-up completes.
+2. Check for loose ends. Review the conversation for todos, follow-ups, or open questions raised earlier that were never addressed, and surface anything the user should address before the wrap-up completes.`;
 
-Do not start new work beyond this checklist. If every item is handled and nothing needs the user's attention first, end your final response with exactly this token as the very last line, with no formatting around it:`;
+const userMessageSection = `# User Message
+
+$ARGUMENTS
+
+(That section carries the text typed after the command. When it is empty, treat the user message as n/a - the command was run bare.)`;
 
 const COMPACT_TEMPLATE = `---
 description: Flush thatch persistence, check for loose ends, then compact if clear
 ---
-$ARGUMENTS
+${userMessageSection}
 
-Pre-compaction wrap-up. Work through this checklist before responding:
+# Pre-compact wrap-up
+
+Work through this checklist before responding:
 
 ${sharedChecklist}
+
+Do not start new work beyond this checklist. If every item is handled and nothing needs the user's attention first, end your final response with exactly this token as the very last line, with no formatting around it:
 
 ${COMPACT_READY_TOKEN}
 
@@ -44,9 +52,11 @@ If anything is outstanding, list the items concisely so the user can address the
 const EXIT_TEMPLATE = `---
 description: Flush thatch persistence, check for loose ends, then exit opencode if clear
 ---
-$ARGUMENTS
+${userMessageSection}
 
-Pre-exit wrap-up. Work through this checklist before responding:
+# Pre-exit wrap-up
+
+Work through this checklist before responding:
 
 ${sharedChecklist}
 3. Leave the chat directory. Call thatch_chat_unregister for this session - the session is exiting, so other sessions must stop addressing mail to it.

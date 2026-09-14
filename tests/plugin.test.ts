@@ -2009,15 +2009,18 @@ describe("installOpencodeCommands", () => {
     }
   });
 
-  test("command bodies substitute user text at the top, before the checklist", async () => {
+  test("command bodies label the sections: user text first, then the checklist", async () => {
     // opencode replaces $ARGUMENTS with the text typed after the command
-    // (/thatch/exit thanks! -> "thanks!\n\n<checklist>"); with no argument
-    // the substitution is empty, so the placeholder must sit on its own line
-    // ahead of the body, never mid-sentence.
+    // (/thatch/exit thanks! -> "thanks!" in the User Message section), and
+    // with no argument the section renders empty. The header labels are
+    // load-bearing: without them the user's text dangles after the
+    // checklist and reads like a sign-off addressed at the instructions.
     const { opencodeCommandDefs } = await import("../src/commands");
     for (const def of opencodeCommandDefs()) {
       const body = def.content.slice(def.content.indexOf("---", 3) + 3);
-      expect(body.trimStart()).toMatch(/^\$ARGUMENTS\n\n/);
+      expect(body.trimStart()).toMatch(/^# User Message\n\n\$ARGUMENTS\n\n\(That section carries/);
+      expect(body).toContain(`# Pre-${def.name === "compact" ? "compact" : "exit"} wrap-up`);
+      expect(body).toContain("treat the user message as n/a");
     }
     const exit = opencodeCommandDefs().find((d) => d.name === "exit")!;
     expect(exit.content).toContain("chat_unregister");
