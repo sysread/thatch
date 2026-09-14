@@ -106,6 +106,13 @@ Thatch gives your agent:
   hostile message cannot impersonate your instructions. Disable the whole
   feature with `chat.enabled: false` in the thatch config (or just the
   auto-joining with `chat.autoRegister: false`).
+- **Wrap-up commands** (opencode only) -- `/thatch/compact` and `/thatch/exit`
+  run a pre-flight checklist before a compaction or an exit: the agent flushes
+  pending fact extraction, finishes promised memory writes, and surfaces
+  todos or follow-ups it never addressed. It ends its response with a
+  greenlight token only when the checklist is clean; thatch then triggers the
+  compaction or quits opencode. With items outstanding, the agent lists them
+  and nothing fires -- you decide when to retry.
 - **Notifications + user config** -- the agent can ping you out-of-band when a
   long-running outcome lands: a desktop banner, a spoken voice
   announcement, or both (macOS and Linux). Preferences live in a

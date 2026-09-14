@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll, mock } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,6 +50,13 @@ let dbDir: string;
 // assert on delivery. Captured at call time (synchronously inside the mock)
 // so assertions work immediately after a hook invocation.
 const promptAsyncCalls: any[] = [];
+// Records TUI actions the wrap-up command resolution triggers.
+const tuiExecuteCommandCalls: any[] = [];
+const tuiPublishCalls: any[] = [];
+const tuiToastCalls: any[] = [];
+// The message list the mock session.messages returns; wrap-up tests point
+// this at canned assistant responses to simulate the greenlight check.
+let wrapUpMessages: any[] = [];
 
 beforeAll(async () => {
   dbDir = mkdtempSync(join(tmpdir(), "thatch-plugin-test-"));
@@ -68,9 +75,20 @@ beforeAll(async () => {
       },
       create: async () => ({ data: { id: "test-child" } }),
       delete: async () => {},
+      messages: async () => ({ data: wrapUpMessages }),
     },
     tui: {
-      showToast: async () => {},
+      showToast: async (opts: any) => {
+        tuiToastCalls.push(opts);
+      },
+      executeCommand: async (opts: any) => {
+        tuiExecuteCommandCalls.push(opts);
+        return { data: true };
+      },
+      publish: async (opts: any) => {
+        tuiPublishCalls.push(opts);
+        return { data: true };
+      },
     },
   };
   hooks = await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree" } as any);
@@ -1818,5 +1836,138 @@ describe("session.deleted tombstones auto-registration", () => {
     expect(dlDb.listChatSessions().find((r) => r.session_id === "ses_dl1")).toBeUndefined();
     dlDb.close();
     dlHooks.dispose?.();
+  });
+});
+
+describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
+  // Drives the full flow: the command marks the session, the model's
+  // response lands as the last assistant message, and the idle event
+  // resolves the pending wrap-up.
+  const runWrapUp = async (command: string, sessionID: string, lastAssistantText: string) => {
+    wrapUpMessages = [
+      { info: { id: "msg_u1", role: "user" }, parts: [{ type: "text", text: "do the thing" }] },
+      {
+        info: { id: "msg_u2", role: "assistant" },
+        parts: [{ type: "text", text: lastAssistantText }],
+      },
+    ];
+    await hooks["command.execute.before"]!({ command, sessionID, arguments: "" }, { parts: [] });
+    await hooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID, status: { type: "idle" } } } as any,
+    });
+  };
+
+  test("compact greenlight triggers the TUI compact action", async () => {
+    const before = tuiExecuteCommandCalls.length;
+    await runWrapUp("thatch/compact", "ses_wrapc", "All clear.\nTHATCH_COMPACT_READY");
+    expect(tuiExecuteCommandCalls.slice(before)).toEqual([
+      { body: { command: "session_compact" } },
+    ]);
+    expect(tuiPublishCalls).toHaveLength(0);
+  });
+
+  test("exit greenlight publishes the app.exit TUI command", async () => {
+    const before = tuiPublishCalls.length;
+    await runWrapUp("thatch/exit", "ses_wrape", "Nothing pending.\nTHATCH_EXIT_READY");
+    expect(tuiPublishCalls.slice(before)).toEqual([
+      { body: { type: "tui.command.execute", properties: { command: "app.exit" } } },
+    ]);
+    expect(tuiExecuteCommandCalls).toHaveLength(1); // only the compact test's
+  });
+
+  test("missing token blocks with a warning toast and triggers nothing", async () => {
+    const before = { cmd: tuiExecuteCommandCalls.length, pub: tuiPublishCalls.length, toast: tuiToastCalls.length };
+    await runWrapUp("thatch/compact", "ses_wrapb", "Outstanding: fix the failing test first.");
+    expect(tuiExecuteCommandCalls.length).toBe(before.cmd);
+    expect(tuiPublishCalls.length).toBe(before.pub);
+    expect(tuiToastCalls.length).toBe(before.toast + 1);
+    expect(tuiToastCalls[tuiToastCalls.length - 1].body.variant).toBe("warning");
+    expect(tuiToastCalls[tuiToastCalls.length - 1].body.message).toContain("/thatch/compact");
+  });
+
+  test("token must be trailing - mid-text mentions do not greenlight", async () => {
+    const before = tuiExecuteCommandCalls.length;
+    await runWrapUp(
+      "thatch/compact",
+      "ses_wrapm",
+      "As instructed, the token is THATCH_COMPACT_READY. But one todo is still open, so I have not appended it as my last line.",
+    );
+    expect(tuiExecuteCommandCalls.length).toBe(before);
+  });
+
+  test("message fetch failure blocks instead of triggering", async () => {
+    wrapUpMessages = []; // empty: no assistant message -> no token -> blocked
+    await hooks["command.execute.before"]!(
+      { command: "thatch/exit", sessionID: "ses_wrapf", arguments: "" },
+      { parts: [] },
+    );
+    await hooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_wrapf", status: { type: "idle" } } } as any,
+    });
+    expect(tuiPublishCalls).toHaveLength(1); // still only the exit test's
+  });
+
+  test("unknown commands do not arm the wrap-up check", async () => {
+    const before = tuiExecuteCommandCalls.length;
+    await runWrapUp("some-other-command", "ses_wrapu", "done\nTHATCH_COMPACT_READY");
+    expect(tuiExecuteCommandCalls.length).toBe(before);
+  });
+
+  test("session.deleted clears a pending wrap-up", async () => {
+    await hooks["command.execute.before"]!(
+      { command: "thatch/compact", sessionID: "ses_wrapd", arguments: "" },
+      { parts: [] },
+    );
+    wrapUpMessages = [
+      { info: { id: "msg_ud", role: "assistant" }, parts: [{ type: "text", text: "THATCH_COMPACT_READY" }] },
+    ];
+    await hooks.event!({ event: {
+      type: "session.deleted",
+      properties: { info: { id: "ses_wrapd" } } } as any,
+    });
+    await hooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_wrapd", status: { type: "idle" } } } as any,
+    });
+    // No compact trigger beyond the first greenlight test's single call.
+    expect(tuiExecuteCommandCalls).toHaveLength(1);
+  });
+});
+
+describe("installOpencodeCommands", () => {
+  test("writes both command files and is idempotent", async () => {
+    const { installOpencodeCommands } = await import("../src/commands");
+    const home = mkdtempSync(join(tmpdir(), "thatch-cmds-"));
+    try {
+      const first = installOpencodeCommands(home);
+      expect(first).toHaveLength(2);
+      const compact = readFileSync(join(first[0]!), "utf8");
+      expect(compact).toContain("description:");
+      expect(compact).toContain("THATCH_COMPACT_READY");
+      const exit = readFileSync(join(first[1]!), "utf8");
+      expect(exit).toContain("THATCH_EXIT_READY");
+      // Re-run: everything current, nothing rewritten.
+      expect(installOpencodeCommands(home)).toEqual([]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("rewrites when on-disk content diverges (template update self-heal)", async () => {
+    const { installOpencodeCommands } = await import("../src/commands");
+    const home = mkdtempSync(join(tmpdir(), "thatch-cmds2-"));
+    try {
+      const dir = join(home, "opencode", "command", "thatch");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "compact.md"), "stale content");
+      const written = installOpencodeCommands(home);
+      // compact.md was stale (rewritten) and exit.md was missing (created).
+      expect(written).toEqual([join(dir, "compact.md"), join(dir, "exit.md")]);
+      expect(readFileSync(join(dir, "compact.md"), "utf8")).toContain("THATCH_COMPACT_READY");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

@@ -232,6 +232,16 @@ Beyond the tools, thatch hooks into opencode itself:
   notification (`[thatch] recalled 3 memories`, `[thatch] 2 predictions
   surfaced`, or `[thatch] 1 behavior surfaced`). The toast is ephemeral. It
   fades after a few seconds.
+- **Wrap-up commands.** `/thatch/compact` and `/thatch/exit` (opencode only)
+  run a pre-flight checklist before you compact or close a session: the agent
+  flushes pending fact extraction, finishes any promised memory writes, and
+  surfaces todos or follow-ups it never addressed. The agent ends its
+  response with a greenlight token only when the checklist is clean. Thatch
+  watches for the token and then runs the compaction or exits opencode.
+  Without the token nothing fires -- a toast points you at the items the
+  agent listed, and you re-run the command once they're handled. The commands
+  self-install into `~/.config/opencode/command/thatch/` at plugin startup;
+  a first install becomes available after the next opencode start.
 - **Compaction context.** When opencode compacts a long session, thatch injects
   a reminder so the summarized session still knows memory tools exist.
 - **Prediction auto-fire.** When a prompt matches learned contexts, thatch

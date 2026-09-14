@@ -18,6 +18,7 @@ import {
 } from "./prompts";
 import { ExtractionPipeline, type ToolInteraction } from "./extraction";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
+import { installOpencodeCommands, COMPACT_READY_TOKEN, EXIT_READY_TOKEN } from "./commands";
 import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
@@ -51,6 +52,15 @@ const PREDICTION_THRESHOLD = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD 
 // self-discipline rule is disruptive and should only fire when the
 // situation genuinely matches.
 const BEHAVIOR_THRESHOLD = parseFloat(process.env.THATCH_BEHAVIOR_THRESHOLD ?? "0.60");
+
+// Wrap-up command registry: command name as opencode derives it from the
+// installed file path (~/.config/opencode/command/thatch/<name>.md), the
+// greenlight token the command instructs the model to end its response with,
+// and which TUI action the greenlight triggers.
+const WRAPUP_COMMANDS: Record<string, { token: string; kind: "compact" | "exit" }> = {
+  "thatch/compact": { token: COMPACT_READY_TOKEN, kind: "compact" },
+  "thatch/exit": { token: EXIT_READY_TOKEN, kind: "exit" },
+};
 
 export const server: Plugin = async ({ client, worktree }) => {
   // The opencode server's cwd is wherever the server happened to start;
@@ -280,6 +290,15 @@ export const server: Plugin = async ({ client, worktree }) => {
   // Keyed by child session ID. Cleaned up on child idle, error, or deletion.
   const childMetrics = new Map<string, { new: number; updated: number; deleted: number }>();
 
+  // Wrap-up slash commands (/thatch/compact, /thatch/exit) awaiting their
+  // greenlight check. command.execute.before marks the session when one of
+  // these commands runs; when the session next goes idle, the plugin reads
+  // the final assistant message for the ready token (the greenlight) and
+  // triggers the TUI action. Token absence means the model listed blockers
+  // instead, so nothing fires beyond a toast. Cleared on resolution or on
+  // session deletion.
+  const pendingWrapUp = new Map<string, { token: string; kind: "compact" | "exit" }>();
+
   // Skills always install to the global opencode config - installing into the
   // worktree would mutate the user's repo (untracked files in git status).
   // A failed install degrades the nudge workflow but must not kill the plugin.
@@ -290,6 +309,15 @@ export const server: Plugin = async ({ client, worktree }) => {
     ]);
   } catch (err) {
     console.error(`[thatch] skill install failed: ${err}`);
+  }
+
+  // Same for the wrap-up slash commands: synced into the global config dir on
+  // every load so template updates self-heal. Config is loaded before plugins
+  // during server startup, so a first-ever install lands on the next start.
+  try {
+    installOpencodeCommands(configHome);
+  } catch (err) {
+    console.error(`[thatch] command install failed: ${err}`);
   }
 
   const sys = systemPrompt(repo, chatOn);
@@ -549,6 +577,14 @@ export const server: Plugin = async ({ client, worktree }) => {
     // Skipped during compaction: the agent can't call tools while generating
     // a summary, so a nudge that says "use thatch_memory_recall" triggers a
     // blocked-tool error.
+    // Wrap-up commands mark their session here; the actual trigger happens
+    // on the session's next idle event, once the model's greenlight response
+    // is complete.
+    "command.execute.before": async (input) => {
+      const wrapUp = WRAPUP_COMMANDS[input.command];
+      if (wrapUp) pendingWrapUp.set(input.sessionID, wrapUp);
+    },
+
     "chat.message": async (input, output) => {
       // Chat transcript echoes are non-synthetic noReply parts, so they
       // arrive here like any user message - but no model turn ever reads
@@ -854,6 +890,66 @@ export const server: Plugin = async ({ client, worktree }) => {
           }
           return;
         }
+        // Wrap-up command resolution: the session went idle right after
+        // /thatch/compact or /thatch/exit. The final assistant message's
+        // trailing token is the greenlight - the command instructs the model
+        // to end with it only after flushing persistence and confirming no
+        // loose ends. Token absence means the model listed blockers, so the
+        // action never fires; a toast points the user at the blockers above.
+        const wrapUp = sessionID ? pendingWrapUp.get(sessionID) : undefined;
+        if (wrapUp) {
+          pendingWrapUp.delete(sessionID);
+          let ready = false;
+          try {
+            const { data } = await client.session.messages({ path: { id: sessionID } });
+            const last = [...(data ?? [])].reverse().find((m) => m.info.role === "assistant");
+            const text = (last?.parts ?? [])
+              .filter((p) => p.type === "text")
+              .map((p) => p.text ?? "")
+              .join("\n")
+              .trimEnd();
+            ready = text.endsWith(wrapUp.token);
+          } catch (err) {
+            console.error(`[thatch] wrap-up message fetch failed: ${err}`);
+          }
+          if (ready) {
+            try {
+              if (wrapUp.kind === "compact") {
+                // executeCommand only accepts legacy alias names;
+                // "session_compact" maps to the TUI's session.compact action,
+                // the same thing the built-in /compact command runs.
+                await client.tui.executeCommand({ body: { command: "session_compact" } });
+              } else {
+                // No exit alias exists, so publish the TUI keymap command
+                // directly - the same dispatch as the /exit slash command.
+                await client.tui.publish({
+                  body: { type: "tui.command.execute", properties: { command: "app.exit" } },
+                });
+              }
+            } catch (err) {
+              console.error(`[thatch] wrap-up action failed: ${err}`);
+            }
+            // Skip extraction and pending deliveries: compaction is starting
+            // (the checklist drained the buffer) or the process is exiting.
+            return;
+          }
+          try {
+            await client.tui.showToast({
+              body: {
+                message:
+                  wrapUp.kind === "compact"
+                    ? "\u23F8 Not compacting - resolve the items listed above, then run /thatch/compact again"
+                    : "\u23F8 Not exiting - resolve the items listed above, then run /thatch/exit again",
+                variant: "warning",
+                duration: 8000,
+              },
+            });
+          } catch {
+            // TUI may not be connected (e.g. headless mode).
+          }
+          // Blocked: fall through so extraction and pending deliveries still
+          // run - the model may have buffered tool interactions to flush.
+        }
         // Auto-registration: every top-level opencode session joins the
         // chat directory on its first idle event (unless the user turned
         // auto-registration off). The name is assigned, never chosen - a
@@ -934,6 +1030,7 @@ export const server: Plugin = async ({ client, worktree }) => {
         parentSnapshots.delete(id);
         childMetrics.delete(id);
         extractionChildren.delete(id);
+        pendingWrapUp.delete(id);
         // A deleted parent takes its accepted entries with it, and its
         // watchers die with it - the session that would receive their
         // notifications no longer exists.

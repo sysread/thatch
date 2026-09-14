@@ -51,6 +51,15 @@ here first. These are the things that have already cost time.
   the hook object returned by `server`. Moving it into the `event` handler
   (where `session.created` lives) silently never fires it — the event bus has
   no such event. This was dead for weeks because the failure was invisible.
+- **`client.tui.executeCommand` only accepts legacy alias names**
+  (`session_compact`, `agent_cycle`, ...). Unknown commands publish
+  `{command: undefined}` and silently no-op — no error surfaces. For TUI
+  commands without an alias (e.g. `app.exit`), publish
+  `tui.command.execute` directly via `client.tui.publish`.
+- **Command markdown written by the plugin is invisible until the next server
+  start.** opencode loads config (including command discovery) before
+  plugins, so `installOpencodeCommands` self-heals on every load but a
+  first-ever install only lands after a restart.
 - **`tool.execute.after` excludes `skill` and `task` tools**, not just
   `thatch_*`. Buffering them creates a feedback loop: the nudge triggers a
   skill load, which gets buffered, which triggers another nudge on the next

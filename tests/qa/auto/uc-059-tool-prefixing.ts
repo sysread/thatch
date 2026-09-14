@@ -66,6 +66,7 @@ const useCase: UseCase = {
       "session_get",
       "watch_create",
       "watch_branch_create",
+      "watch_command_create",
       "watch_list",
       "watch_cancel",
       "chat_register",

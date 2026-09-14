@@ -1,6 +1,6 @@
 # Session Lifecycle Management (opencode)
 
-opencode emits bus events for session lifecycle changes. Thatch subscribes to these events to manage the extraction pipeline, send session-start reminders, and handle child session cleanup.
+opencode emits bus events for session lifecycle changes. Thatch subscribes to these events to manage the extraction pipeline, send session-start reminders, handle child session cleanup, and resolve wrap-up commands.
 
 ## What it does
 
@@ -11,6 +11,7 @@ opencode emits bus events for session lifecycle changes. Thatch subscribes to th
 - Sub-agent lifecycle: task-dispatched sub-agents complete accepted entries but are not deleted
 - Session error recovery: child errors requeue parent's accepted entries
 - Session deletion recovery: child deletion requeues; parent deletion completes accepted entries
+- Wrap-up commands: `/thatch/compact` and `/thatch/exit` arm a greenlight check resolved on the next idle
 
 ## How it works
 
@@ -56,8 +57,28 @@ When a task-dispatched sub-agent (not created by `triggerExtraction`) goes idle:
 
 When a parent session (no parentID) goes idle:
 
+- Wrap-up resolution first (below): a pending `/thatch/compact` or `/thatch/exit` resolves here, and a greenlit action returns early
 - If not compacting, not already extracting, and buffer has pending interactions: `triggerExtraction(sessionID)`
 - On failure: log error, clear `extracting` flag (nudge path takes over as fallback on next chat.message)
+
+### Wrap-up commands (`/thatch/compact`, `/thatch/exit`)
+
+User-invoked slash commands, shipped as command markdown synced by the plugin (see `src/commands.ts`). The template instructs the model to flush pending fact extraction (`thatch_get_extraction_payload` + `thatch_extraction_done`), finish promised memory writes, and surface unaddressed todos -- then end its response with a greenlight token (`THATCH_COMPACT_READY` / `THATCH_EXIT_READY`) only when safe to proceed.
+
+1. `command.execute.before` arms the session in `pendingWrapUp` when the command runs
+2. On the session's next idle, the plugin fetches the session's messages via the SDK client and checks the final assistant message's trailing text for the token (trimmed, exact match)
+3. Token present: trigger the TUI action and return early -- compaction is starting (the checklist drained the buffer) or the process is exiting
+   - compact: `client.tui.executeCommand({ body: { command: "session_compact" } })`. The execute-command route only accepts legacy alias names; `session_compact` maps to the TUI's `session.compact` action, the same thing the built-in `/compact` runs
+   - exit: `client.tui.publish({ body: { type: "tui.command.execute", properties: { command: "app.exit" } } })`. No exit alias exists, so the TUI keymap command is published directly
+4. Token absent: warning toast pointing at the blockers in the response, then fall through -- the model may have buffered tool interactions that still need extraction
+
+### Command file install
+
+`installOpencodeCommands` syncs the command markdown into
+`$XDG_CONFIG_HOME/opencode/command/thatch/` on every plugin load, writing only
+files whose on-disk content differs (template updates self-heal). opencode
+loads config -- including command discovery -- before plugins, so a
+first-ever install is invisible until the next server start.
 
 ### session.error (child session)
 
@@ -73,6 +94,7 @@ When a parent session (no parentID) goes idle:
 
 - `completeAccepted(id)` -- a deleted parent takes its accepted entries with it
 - Clear `extracting` for the parent
+- Clear `pendingWrapUp` for the parent
 
 ### session.compacted
 
@@ -87,6 +109,7 @@ When a parent session (no parentID) goes idle:
 - **extracting**: `Set<parentID>` -- parent IDs with an active direct-extraction child (suppresses nudge)
 - **extractionChildren**: `Set<childID>` -- distinguishes extraction children from task-dispatched sub-agents
 - **compacting**: `Set<sessionID>` -- sessions currently being compacted (suppresses nudges)
+- **pendingWrapUp**: `Map<sessionID, {token, kind}>` -- wrap-up commands awaiting their greenlight check; armed by `command.execute.before`, resolved on the next idle, cleared on session deletion
 - **missedNudges**: `Map<sessionID, number>` -- extraction nudge escalation counter
 
 ## Interactions with other features

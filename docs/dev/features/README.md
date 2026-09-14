@@ -25,7 +25,7 @@ system, see [../skills.md](../skills.md). For non-obvious invariants, see
 | [deduplication.md](deduplication.md) | Deduplication system (find pairs, verdict lifecycle) |
 | [sideband.md](sideband.md) | Sideband IPC (Unix socket for MCP host hook processes) |
 | [compaction-recovery.md](compaction-recovery.md) | Compaction recovery (opencode compaction hooks) |
-| [session-lifecycle.md](session-lifecycle.md) | Session lifecycle management (opencode events, child tracking) |
+| [session-lifecycle.md](session-lifecycle.md) | Session lifecycle management (opencode events, child tracking, wrap-up commands) |
 | [watchers.md](watchers.md) | Event-driven notifications (in-memory registry, background poller, PR watching) |
 | [cross-session-chat.md](cross-session-chat.md) | Cross-session chat (shared SQLite directory and inbox, per-process wake-up delivery) |
 | [notifications.md](notifications.md) | Out-of-band notification (banner + voice) and the user config file |
