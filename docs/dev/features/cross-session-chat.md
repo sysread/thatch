@@ -1,11 +1,11 @@
 # Cross-Session Chat
 
 Cross-session chat lets independent opencode sessions on one machine message
-each other through thatch: a session registers in a shared directory, other
-sessions see it in the list, and messages land in its inbox. An idle
-recipient is woken with a prompt when mail arrives, so coordination does not
-route through the human ("ask the other session whether the release is
-green" instead of "Jeff, go ask").
+each other through thatch: sessions join a shared directory (automatically,
+under assigned names), see each other in the list, and messages land in
+inboxes. An idle recipient is woken with a prompt when mail arrives, so
+coordination does not route through the human ("ask the other session
+whether the release is green" instead of "Jeff, go ask").
 
 User-facing behavior is documented in
 [docs/user/cross-session-chat.md](../../user/cross-session-chat.md).
@@ -14,8 +14,11 @@ User-facing behavior is documented in
 
 - `thatch_chat_register` / `thatch_chat_list` / `thatch_chat_send` /
   `thatch_chat_read` / `thatch_chat_unregister` / `thatch_chat_broadcast`
-  tools (shared across hosts; opencode injects identity, MCP hosts
-  self-declare with the as argument)
+  tools (shared across hosts; opencode injects identity, MCP hosts pass the
+  name their thatch hook printed as the `as` argument)
+- Automatic registration: the plugin inserts a top-level session's
+  directory row on its first idle event, with an assigned never-reused
+  name (`chat.autoRegister: false` opts out)
 - A shared SQLite directory and inbox in thatch.db, writable by any opencode
   process on the machine
 - A per-process poller that heartbeats hosted sessions and delivers wake
@@ -54,40 +57,63 @@ outlives a process, so liveness needs a signal beyond process lifetime.
 
 ### Registration and identity
 
-`chat_register` joins the directory. Without a name it draws one at random
-from the built-in pool (`src/chat-names.ts`): whimsical geek-culture names
-in the style of fnord's Nomenclater, statically baked in so assignment never
-costs a model call. Pool draws redraw on the rare collision a concurrent
-registration can cause, and skip any name a session already claimed by
-custom registration - so the pool is the recommended path. With a name,
-the session claims it as a custom name -
-uniqueness is case-insensitive ("Landru" and "landru" are one name), so two
-visually identical identities cannot coexist, and message addressing follows
-the same rule. Databases created before the case-insensitive constraint are
-rebuilt at schema init (first row wins per case group; message history
-survives because the endpoints are not foreign keys).
+Sessions are auto-registered by the plugin: the first `session.status`
+idle event for a top-level session inserts its directory row (unless
+`chat.autoRegister: false`). Names are assigned, never claimed:
+`<slug>-<counter>` where the slug is the session title lowercased and
+hyphenated (pool-draw slug when the title is still opencode's placeholder)
+and the counter comes from a per-base counter row
+(`chat_name_counters`, src/db.ts) that only ever increments - drawn
+atomically via INSERT ... ON CONFLICT ... RETURNING. A name is therefore
+minted exactly once per machine: pruning an auto-registered row (host
+silent for CHAT_AUTO_TTL_DAYS = 7 days, swept hourly by the poller) can
+never reissue its name, which is what makes the prune safe. The session's
+live title rides the topic column, refreshed on every idle by
+`refreshAutoTopic` - auto rows only; legacy rows keep their old model-set topics.
 
-Identity is the host session ID, which the model cannot know or forge.
-Re-registering renames. Unregistered sessions are invisible and
-unmessageable in both directions. Only top-level sessions should register -
-sub-agent children are ephemeral - which the tool descriptions and system
-prompt state; there is no mechanical barrier, a documented trust posture.
+`chat_register` (no arguments) is the explicit path: idempotent ensure for
+opencode (identity is the host session ID, which the model cannot know or
+forge), a fresh identity per conversation on MCP hosts, or a reclaim of an
+existing name via `as`. Re-registering keeps the name. Unregistered
+sessions are invisible and unmessageable in both directions. Only
+top-level sessions should register - sub-agent children are ephemeral -
+which the tool descriptions and system prompt state; there is no
+mechanical barrier, a documented trust posture.
 
-Names are claimable by any session (no impersonation defense). The trust
-model is the same as the shared memory stores: every agent on this machine
+### Leave tombstones
+
+Every exit path - `chat_unregister` and `session.deleted` alike - writes a
+`chat_leave_tombstones` row in the same transaction that deletes the
+directory row. The tombstone is what makes a leave stick: both
+registration paths consult it (the plugin's idle auto-registerer is
+suppressed outright; the MCP hook's ensure-register prints the leave line
+instead of rejoining), so a leave cannot be silently undone by the next
+idle moment. The gate lives in `ChatStore.register` via `#tombstoneGate`
+(src/chat.ts), which also closes the in-flight race: an auto-register
+IIFE whose session was deleted during its title-fetch await finds the
+tombstone and stops instead of resurrecting a dead session. An explicit
+`chat_register` clears the tombstone before re-registering (fresh name -
+assigned identities are never reused), and tombstones age out in the
+hourly prune (7-day TTL; a resumed session after expiry simply
+auto-registers under a fresh name).
+
+Because names are system-minted and never recycled, the impersonation
+surface shrinks to whatever the operator runs: every agent on this machine
 is the operator's agent.
 
 ### Topics
 
-The optional topic is the roster's "who is working on what" signal: with a
-dozen registered sessions, a name like "Kurn the Typechecker" says nothing,
-but `topic:QAing the release` in `chat_list` tells a coordinator which
-session to address. Topics are free text, sanitized to one roster line
+The topic is the roster's "who is working on what" signal. For
+auto-registered sessions it is the live session title, refreshed on every
+idle event - the auto-titler usually lands a real title within a turn or
+two, so the roster converges to the actual work with nobody filling in
+forms. Legacy rows (from the claimed-names era) keep whatever topic was
+set at their registration: free text, sanitized to one roster line
 (whitespace runs collapse, 80-character cap, advisory - oversizing degrades
-rather than errors). The null/empty distinction is deliberate: omitting the
-topic on re-register keeps the existing one; an empty topic clears it.
-Broadcast senders benefit most: `chat_broadcast` answers "which of you is
-working on X?" with the roster already in hand.
+rather than errors). There is no tool path to set a topic anymore - topics
+are title-derived for everything the current code mints. Broadcast senders
+benefit most: `chat_broadcast` answers "which of you is working on X?"
+with the roster already in hand.
 
 ### Messages
 
@@ -174,8 +200,7 @@ model's context - a prompt-injection surface by construction. The watcher
 privacy model solves the same surface with pointer-only notifications, but
 chat's payload IS the body, so `chat_read` frames the boundary instead:
 `chatInboxFrame()` (src/prompts.ts) wraps the message lines in
-begin/end fences with an explicit do-not-follow warning, and the sender
-names are labeled self-claimed and unverified. The frame exists only in
+begin/end fences with an explicit do-not-follow warning. The frame exists only in
 the tool output - persisted rows are untouched - and pairs with the wake
 nudge's anti-loop rule and the isChatEchoParts skip as the feature's three
 injection-hygiene layers.
@@ -215,11 +240,11 @@ whenever any thatch process opens the database.
   non-thatch tool calls made during a chat notification turn are buffered
   and extracted like any other turn's.
 - Multi-host ([multi-host.md](multi-host.md)): the chat tools are shared -
-  MCP hosts register with a self-declared identity (the `as` argument;
-  the stored session ID is synthetic, `mcp_<hash of name>`), and pending
-  mail surfaces at prompt time through the flush-tools hook line and
-  `chat_status`. Wake-up delivery remains opencode-only: no MCP server
-  can start a turn in the client's conversation.
+  MCP hosts get their identity from the thatch hook, which ensure-registers
+  the conversation's stable session ID (`mcp_<hash of host session id>`)
+  and prints the assigned name plus unread count on every prompt; chat
+  tools take that name as `as`. Wake-up delivery remains opencode-only: no
+  MCP server can start a turn in the client's conversation.
 
 ## Multi-host delivery tiers
 
@@ -244,12 +269,15 @@ wake analog is the existing hook channel.
 | claude code | yes          | flush-tools hook line        | no           |
 | cursor      | yes          | flush-tools hook line        | no           |
 
-MCP identity is the registered name: `chat_register` without a host
-session stores a synthetic `mcp_<sha256(name)[0:12]>` session ID, so the
-identity is stable across the ephemeral sessions those harnesses run.
-`chat_status` is the quiet check (registered flag + pending/total); the
-flush-tools hook line names the addressee sessions and prints nothing
-when the project has no pending chat - absence is silent by construction.
+MCP identity is anchored by the host hook: `chatHookLine(sessionID)` in
+`bin/thatch` ensure-registers `mcp_<sha256(host session id)[0:12]>` on
+every prompt and prints the assigned name plus unread count, so the
+identity is stable across the ephemeral conversations those harnesses run
+(and a conversation without the hook gets a fresh per-conversation
+identity from `chat_register`). `chat_status` is the quiet check
+(registered flag + pending/total); the flush-tools hook line names the
+caller's identity and mailbox, and is absent entirely when chat is
+disabled - absence is silent by construction.
 Staleness semantics differ by kind: an opencode row's stale age means the
 process is gone (broadcast skips it), while an mcp row's age only means
 "between turns" (broadcast always delivers).
@@ -258,19 +286,23 @@ process is gone (broadcast skips it), while an mcp row's age only means
 
 Timing constants live in `src/chat.ts`: poll interval 30s, staleness
 threshold 10 minutes, re-nudge window 15 minutes, nudge cap 6 per recipient
-per hour. There are no environment overrides yet; add them the way
-`THATCH_WATCH_POLL_SECONDS` works if a user needs them.
+per hour, auto-row TTL 7 days. There are no environment overrides yet; add
+them the way `THATCH_WATCH_POLL_SECONDS` works if a user needs them.
 
 ## Source files
 
-- `src/chat.ts` - ChatStore (directory + inbox SQL, pool assignment),
-  ChatPoller (heartbeat, gated delivery, re-nudge, rate cap), staleness
-  helper
-- `src/chat-names.ts` - the static display-name pool (nomenclater style)
-- `src/db.ts` - the chat tables in schema init, the NOCASE collation
-  migration and topic column migration, delegated methods
+- `src/chat.ts` - ChatStore (directory + inbox SQL, assigned-name draw:
+  slugify, counter bump, insert, prune, topic refresh), ChatPoller
+  (heartbeat, gated delivery, re-nudge, rate cap, hourly prune sweep),
+  staleness helper
+- `src/chat-names.ts` - the static display-name pool (nomenclater style),
+  the fallback base for title-less registrations
+- `src/db.ts` - the chat tables in schema init (including
+  chat_name_counters and the auto column), the NOCASE collation migration
+  and topic column migration, delegated methods
 - `src/tool-defs.ts` - the chat tool definitions
-- `src/index.ts` - poller construction, delivery closure, idle flush,
+- `src/index.ts` - poller construction, delivery closure, idle
+  auto-registration + topic refresh, idle flush,
   session.deleted unregister, dispose, transcript echo in
   tool.execute.after
 - `src/prompts.ts` - `chatNotificationNudge()`, `chatEchoText()` /

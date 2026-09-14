@@ -10,7 +10,7 @@ import { PREDICTION_K, PREDICTION_P0, PREDICTION_W_SOFT } from "./scoring-engine
 export { cosineSimilarity } from "./vector-math";
 export type { PredictionNudgeItem, MatcherRow, PredictionRow, ScoredPrediction } from "./prediction";
 export type { BehaviorNudgeItem, BehaviorRow, ScoredBehavior } from "./behavior";
-export type { ChatSessionRow, ChatInboxItem, ChatNotificationRow, ChatResult } from "./chat";
+export type { ChatSessionRow, ChatInboxItem, ChatNotificationRow } from "./chat";
 
 export interface MemoryRow {
   slug: string;
@@ -238,7 +238,8 @@ export class ThatchDB {
         project       TEXT,
         host_kind     TEXT NOT NULL DEFAULT ('opencode'),
         registered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-        last_seen     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+        last_seen     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        auto          INTEGER NOT NULL DEFAULT 0
       )
     `);
 
@@ -262,11 +263,42 @@ export class ThatchDB {
 
     this.#db.run("INSERT OR IGNORE INTO stores (name) VALUES ('global')");
 
+    // Per-base name counters for assigned chat names. A row only ever
+    // increments (never on prune), so a name is minted exactly once.
+    this.#db.run(`
+      CREATE TABLE IF NOT EXISTS chat_name_counters (
+        base TEXT PRIMARY KEY,
+        next INTEGER NOT NULL DEFAULT 1
+      )
+    `);
+
+    // Explicit leaves (chat_unregister). Suppresses auto-registration so
+    // the next idle event cannot silently re-register the session; cleared
+    // when the session explicitly rejoins via chat_register. Survives the
+    // directory-row delete, which is the point.
+    this.#db.run(`
+      CREATE TABLE IF NOT EXISTS chat_leave_tombstones (
+        session_id TEXT PRIMARY KEY,
+        left_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+      )
+    `);
+
     this.#migrateColumns();
     this.#migrateChatNameCollation();
     this.#migrateChatTopic();
     this.#migrateChatHostKind();
     this.#migrateChatBroadcastFlag();
+    this.#migrateChatAuto();
+  }
+
+  // chat_sessions tables created before the auto column lack it; the ALTER
+  // adds it, and existing rows read as manual (which they were - auto is
+  // only set by the assigned-name registration path).
+  #migrateChatAuto(): void {
+    const cols = (this.#db.query("PRAGMA table_info(chat_sessions)").all() as any[]).map((r) => r.name);
+    if (cols.length > 0 && !cols.includes("auto")) {
+      this.#db.run("ALTER TABLE chat_sessions ADD COLUMN auto INTEGER NOT NULL DEFAULT 0");
+    }
   }
 
   // chat_sessions tables created before the host_kind column lack it; the
@@ -824,12 +856,28 @@ export class ThatchDB {
   // Cross-session chat: delegates to ChatStore
   // ---------------------------------------------------------------------------
 
-  registerChatSession(sessionID: string, name: string, project: string | null, topic: string | null, kind: ChatHostKind) {
-    return this.#chat.register(sessionID, name, project, topic, kind);
+  registerChatSession(sessionID: string, project: string | null, topic: string | null, kind: ChatHostKind, nameBase: string | null = null) {
+    return this.#chat.register(sessionID, project, topic, kind, nameBase);
   }
 
-  assignChatName(sessionID: string, project: string | null, topic: string | null, kind: ChatHostKind) {
-    return this.#chat.assign(sessionID, project, topic, kind);
+  refreshChatTopic(sessionID: string, title: string) {
+    return this.#chat.refreshAutoTopic(sessionID, title);
+  }
+
+  pruneStaleChatAuto(cutoff: string) {
+    return this.#chat.pruneStaleAuto(cutoff);
+  }
+
+  hasChatLeaveTombstone(sessionID: string) {
+    return this.#chat.hasLeaveTombstone(sessionID);
+  }
+
+  clearChatLeaveTombstone(sessionID: string) {
+    return this.#chat.clearLeaveTombstone(sessionID);
+  }
+
+  chatLeaveSuperseded(sessionID: string, project: string | null) {
+    return this.#chat.leaveSuperseded(sessionID, project);
   }
 
   broadcastChatMessage(fromSession: string, body: string) {

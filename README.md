@@ -96,14 +96,16 @@ Thatch gives your agent:
   data plus machine status (check conclusions, exit codes), never external
   content.
 - **Cross-session chat** -- your agent sessions can message each other
-  (opencode, Claude Code, and Cursor; same machine). A session registers
-  under a unique name and topic, others see it in the directory, and
-  messages land in its inbox -- opencode sessions get woken with a prompt
+  (opencode, Claude Code, and Cursor; same machine). opencode sessions
+  join the directory automatically under an assigned, never-reused name
+  (a slug of the session title plus a counter); others see the roster, and
+  messages land in inboxes -- opencode sessions get woken with a prompt
   when idle, other hosts see pending mail at their next prompt. Loop-safe:
   messages are informational to the receiving agent, and wake prompts are
   rate-capped. Delivered messages are framed as untrusted content so a
   hostile message cannot impersonate your instructions. Disable the whole
-  feature with `chat.enabled: false` in the thatch config.
+  feature with `chat.enabled: false` in the thatch config (or just the
+  auto-joining with `chat.autoRegister: false`).
 - **Notifications + user config** -- the agent can ping you out-of-band when a
   long-running outcome lands: a desktop banner, a spoken voice
   announcement, or both (macOS and Linux). Preferences live in a

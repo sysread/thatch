@@ -20,7 +20,7 @@ import { sendNotification, defaultSpawner, type NotifyChannel, type Spawner } fr
 import { predictionVerb, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, type WatcherRegistry, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
-import { CHAT_STALE_MINUTES, isStale, renderChatParticipant, mcpSessionID, type ChatHostKind } from "./chat";
+import { CHAT_STALE_MINUTES, isStale, renderChatParticipant, type ChatHostKind } from "./chat";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
 // creation time. Matches the thatch_find_duplicates threshold (0.85).
@@ -898,12 +898,12 @@ function renderNotificationSection(prefs: NotificationPrefs | undefined): string
   return lines.join("\n");
 }
 
-/** Renders the chat section. Its only field defaults to on. */
+/** Renders the chat section. Both fields default to on. */
 function renderChatSection(prefs: ChatPrefs | undefined): string {
-  const current = prefs?.enabled;
   return [
     "chat:",
-    `  enabled: ${current ?? "<unset>"} (default: on)`,
+    `  enabled: ${prefs?.enabled ?? "<unset>"} (default: on)`,
+    `  autoRegister: ${prefs?.autoRegister ?? "<unset>"} (default: on; opencode sessions join the chat directory automatically)`,
   ].join("\n");
 }
 
@@ -973,6 +973,11 @@ const configSetDef: ToolDef = {
       enabled: z.boolean().optional().describe(
         "Cross-session chat on/off. Unset or true is the default; false " +
         "makes every chat tool refuse and stops wake delivery.",
+      ),
+      autoRegister: z.boolean().optional().describe(
+        "Whether opencode sessions join the chat directory automatically " +
+        "(assigned names). Unset or true is the default; false restores " +
+        "opt-in joining via chat_register only.",
       ),
     }).optional().describe(
       "Chat preferences to update. Fields you omit keep their current " +
@@ -1534,11 +1539,13 @@ async function resolveChatIdentity(
 }
 
 /** The zod arg shared by chat tools whose MCP mode needs the caller's
- *  registered name: MCP hosts have no session context, so identity is
- *  self-declared (the documented trust posture). opencode ignores it. */
+ *  assigned name: MCP hosts have no session context, so identity is passed
+ *  as the name the host's thatch hook printed (names are assigned by
+ *  thatch, never claimed). opencode ignores it. */
 function mcpIdentityArg() {
   return z.string().optional().describe(
-    "Your registered display name. Only needed on hosts without session " +
+    "Your assigned display name - the one your host's thatch hook printed, " +
+    "or that chat_register returned. Only needed on hosts without session " +
     "context (Claude Code, Cursor); opencode supplies your identity itself.",
   );
 }
@@ -1558,85 +1565,93 @@ function degradedDeliveryNote(): string {
 }
 
 /**
- * Joins the chat directory. Without a name, draws one at random from the
- * built-in name pool (whimsical, geek-flavored, guaranteed unused) - the
- * recommended path, since it cannot collide. With a name, claims it
- * case-insensitively; registration is the gate for both directions.
+ * Joins the chat directory (or reports/renews an existing registration).
+ * Names are assigned by thatch, never claimed: there is no name or topic
+ * argument, and registration is the gate for both directions. MCP hosts
+ * without a hook-printed name get a fresh per-conversation identity.
  */
 const chatRegisterDef: ToolDef = {
   name: "chat_register",
   description:
     "Join the cross-session chat directory so other sessions on this " +
     "machine can message you and you can message them (works from opencode, " +
-    "Claude Code, and Cursor). Omit the name to be assigned one from the " +
-    "built-in pool (recommended - cannot collide); pass a name to claim it " +
-    "instead, case-insensitively unique. Include a topic: it is what other " +
-    "sessions see in chat_list when deciding who to talk to. Pass an empty " +
-    "topic to clear it; omit it to keep the current one. Safe to call " +
-    "again - the same name is a no-op, a new name renames you, and a new " +
-    "topic updates it. Delivery: opencode sessions are woken automatically " +
-    "when mail arrives; on other hosts pending mail is reported at your " +
-    "next prompt. Only top-level sessions should register; never " +
-    "register a sub-agent session.",
+    "Claude Code, and Cursor). Display names are assigned by thatch, never " +
+    "chosen: a slug plus a never-reused counter (the slug comes from your " +
+    "session title when one exists, otherwise from a built-in pool), so a " +
+    "name always refers to the same session and cannot be claimed by anyone " +
+    "else. Call with no arguments to join, to rejoin after chat_unregister, " +
+    "or to check your assigned name (opencode sessions are usually " +
+    "registered automatically already). On hosts without session context, " +
+    "pass `as` with the name your thatch hook printed for you, or omit it " +
+    "to be assigned a fresh identity for this conversation. Delivery: " +
+    "opencode sessions are woken automatically when mail arrives; on other " +
+    "hosts pending mail is reported at your next prompt. Only top-level " +
+    "sessions should register; never register a sub-agent session.",
   args: {
-    name: z.string().optional().describe(
-      "Custom display name. Omit to draw one from the built-in name pool.",
-    ),
-    topic: z.string().optional().describe(
-      "One line about what this session is working on (shown to other " +
-      "sessions in chat_list). Omit on re-register to keep the existing " +
-      "topic; pass an empty string to clear it.",
-    ),
     as: mcpIdentityArg(),
   },
   async execute(args, ctx, host) {
     if (!chatEnabled(loadConfig().config)) return chatDisabledReply();
-    const custom = typeof args.name === "string" ? args.name : null;
-    const topic = typeof args.topic === "string" ? args.topic : null;
     const kind: ChatHostKind = host ? "opencode" : "mcp";
-    // MCP mode (host absent): the claimed name is the identity, stored
-    // under a deterministic synthetic session ID so a later conversation
-    // claiming the same name finds the same row.
-    const sessionID = host ? host.sessionID : mcpSessionID(custom!.trim());
-    if (custom !== null) {
-      const result = ctx.db.registerChatSession(sessionID, custom, ctx.defaultStore, topic, kind);
-      if (!result.ok) return `Registration failed: ${result.error}`;
+    // MCP reclaim: `as` must name an EXISTING registration - the identity
+    // printed by the host's thatch hook for this conversation. Names are
+    // assigned, so there is no claim path; a stale name from an old
+    // conversation still resolves to the same row it always did.
+    const asName = host ? null : typeof args.as === "string" ? args.as.trim() : null;
+    if (!host && !asName) {
+      // Fresh identity for this conversation: without session context or a
+      // hook-printed name there is nothing stable to anchor to, and a new
+      // conversation is a new peer anyway. Persistent identity on MCP hosts
+      // comes from the hook, which re-registers the same session ID and
+      // prints the assigned name each prompt.
+      const sessionID = `mcp_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
+      const res = ctx.db.registerChatSession(sessionID, ctx.defaultStore, null, kind);
+      if (!res.ok) return `Registration failed: ${res.error}`;
       return (
-        `[registered] ${custom.trim()}\n` +
+        `[registered] ${res.name}\n` +
         `session_id: ${sessionID}\n` +
         `project: ${ctx.defaultStore}\n` +
-        // The store returns the sanitized topic it kept, so the
-        // confirmation shows the roster value, not the raw input.
-        (result.topic ? `topic: ${result.topic}\n` : "") +
-        (host ? wakeDeliveryNote() : degradedDeliveryNote()) +
+        degradedDeliveryNote() +
         `\n` +
-        `Other sessions can now message you by name with chat_send; use ` +
+        `This identity is fresh for this conversation. If your host runs the ` +
+        `thatch hook, its output names your persistent identity - use that ` +
+        `as the 'as' argument on other chat tools. Use chat_list to see who ` +
+        `is available.`
+      );
+    }
+    if (!host) {
+      const row = ctx.db.findChatSession(asName!);
+      if (!row) {
+        return `No registered session named "${asName}" - names are assigned by thatch (your host hook prints yours); you cannot claim a new one.`;
+      }
+      return (
+        `[registered] ${row.name}\n` +
+        `session_id: ${row.session_id}\n` +
+        `project: ${row.project ?? ctx.defaultStore}\n` +
+        degradedDeliveryNote() +
+        `\n` +
+        `You were already registered. Other sessions can message you by name ` +
+        `with chat_send, or reach everyone at once with chat_broadcast; use ` +
         `chat_list to see who else is available.`
       );
     }
-    // Pool draw: MCP mode requires an explicit name anyway (the identity
-    // must be known to the caller), so a host-less draw is routed through
-    // the same assign path with the name the caller declared.
-    const mcpAs = host ? null : typeof args.as === "string" ? args.as.trim() : null;
-    if (!host && !mcpAs) {
-      return "Chat needs an identity: pass `name` (or `as`) with your display name, since this host has no session context to derive one from.";
-    }
-    const drawSessionID = host ? host.sessionID : mcpSessionID(mcpAs!.trim());
-    const assigned = ctx.db.assignChatName(drawSessionID, ctx.defaultStore, topic, kind);
-    if (!assigned.ok) return `Registration failed: ${assigned.error}`;
-    const origin = assigned.drawn
-      ? "Your name was drawn from the built-in pool."
-      : "You were already registered - keeping your current name.";
+    // An explicit join clears the leave tombstone BEFORE registering:
+    // "I want back in" is the opposite of "I left", and the tombstone must
+    // not block the rejoin it is supposed to yield to. (register() treats
+    // a tombstoned opencode session as blocked; the tombstone is for the
+    // idle path, not for the model's explicit intent.)
+    ctx.db.clearChatLeaveTombstone?.(host.sessionID);
+    const res = ctx.db.registerChatSession(host.sessionID, ctx.defaultStore, null, kind);
+    if (!res.ok) return `Registration failed: ${res.error}`;
     return (
-      `[registered] ${assigned.name}\n` +
-      `session_id: ${drawSessionID}\n` +
+      `[registered] ${res.name}\n` +
+      `session_id: ${host.sessionID}\n` +
       `project: ${ctx.defaultStore}\n` +
-      (assigned.topic ? `topic: ${assigned.topic}\n` : "") +
-      (host ? wakeDeliveryNote() : degradedDeliveryNote()) +
+      wakeDeliveryNote() +
       `\n` +
-      `${origin} Other sessions can now message you by name with chat_send, ` +
-      `or reach everyone at once with chat_broadcast; use chat_list to see ` +
-      `who else is available.`
+      `Other sessions can now message you by name with chat_send, or reach ` +
+      `everyone at once with chat_broadcast; use chat_list to see who else ` +
+      `is available.`
     );
   },
 };
@@ -1657,7 +1672,7 @@ const chatListDef: ToolDef = {
     if (!identity.ok) return identity.error;
     const sessions = ctx.db.listChatSessions();
     if (sessions.length === 0) {
-      return "No sessions registered. chat_register opts in; you would be the first.";
+      return "No sessions registered. Sessions join the directory automatically on their first idle (opencode), or via chat_register - you would be the first.";
     }
     const unread = ctx.db.unreadChatCount(identity.sessionID);
     const lines = sessions.map((s) => {
@@ -1670,7 +1685,17 @@ const chatListDef: ToolDef = {
       const mailbox = self ? (unread > 0 ? ` ${unread} unread` : "") : "";
       return `- ${s.name} (${s.session_id.slice(0, 12)})${project} ${liveness}${topic}${self ? " [you]" : ""}${mailbox}`;
     });
-    return `[chat] ${sessions.length} session${sessions.length === 1 ? "" : "s"} registered\n${lines.join("\n")}`;
+    // The name-stability note closes the roster because it answers the
+    // question a reader asking "is this the same X as before?" needs:
+    // assigned names are unique forever; only hook-anchored MCP identities
+    // can be revisited by an old name.
+    return (
+      `[chat] ${sessions.length} session${sessions.length === 1 ? "" : "s"} registered\n` +
+      `${lines.join("\n")}\n` +
+      `Names are assigned by thatch and never reused or reassigned, so the ` +
+      `same name is always the same session. A name whose row shows stale or ` +
+      `idle has not been seen recently.`
+    );
   },
 };
 

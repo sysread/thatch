@@ -74,19 +74,26 @@ const useCase: UseCase = {
       // Step 3: register through the real store. The project column is
       // null here - the poller selects by hosted session IDs, so project
       // scoping only affects the CLI/hook surfaces (UC-099's scope).
+      // The plugin's own auto-registration fires on the warmup turns'
+      // idle events and may win the race with its title-slug names
+      // ("uc-100-alpha-00001"); register() is an ensure, so whichever
+      // path mints first wins and the harness uses the ASSIGNED names
+      // from here on.
       const db = new ThatchDB(ctx.env.THATCH_DB_PATH);
-      const regA = db.registerChatSession(sA, "alpha", null, null, "opencode");
-      const regB = db.registerChatSession(sB, "bravo", null, null, "opencode");
+      const regA = db.registerChatSession(sA, null, null, "opencode", "alpha");
+      const regB = db.registerChatSession(sB, null, null, "opencode", "bravo");
       if (!regA.ok || !regB.ok) {
         console.log(`  FAIL: registration failed - ${(!regA.ok && regA.error) || (!regB.ok && regB.error)}`);
         return "FAIL";
       }
+      const nameA = regA.name;
+      const nameB = regB.name;
 
       // Step 4: canary alpha -> bravo through the real store, then poll
       // for the delivery stamp (poller wake) and the read stamp (bravo's
       // model turn calling chat_read).
-      const canary = "UC-100 canary message. Acknowledge by calling chat_read, then reply to alpha with the single word ack.";
-      const sent = db.sendChatMessage(sA, "bravo", canary);
+      const canary = `UC-100 canary message. Acknowledge by calling chat_read, then reply to ${nameA} with the single word ack.`;
+      const sent = db.sendChatMessage(sA, nameB, canary);
       if (!sent.ok) {
         console.log(`  FAIL: send failed - ${sent.error}`);
         return "FAIL";
@@ -107,9 +114,9 @@ const useCase: UseCase = {
       // Step 5: deterministic second wake - a fake MCP identity mails
       // alpha; the poller must wake the real alpha session (promptAsync
       // synthetic part), independent of any model decision.
-      db.registerChatSession("uc100-charlie", "charlie", null, null, "mcp");
+      db.registerChatSession("uc100-charlie", null, null, "mcp", "charlie");
       const mail2 = "UC-100 second canary for alpha.";
-      const sent2 = db.sendChatMessage("uc100-charlie", "alpha", mail2);
+      const sent2 = db.sendChatMessage("uc100-charlie", nameA, mail2);
       if (!sent2.ok) {
         console.log(`  FAIL: second send failed - ${sent2.error}`);
         return "FAIL";

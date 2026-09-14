@@ -7,14 +7,13 @@
  * Klingons, Discworld, Sandman, D&D, pulp detectives with software puns,
  * hackerspeak callsigns, AI puns, golden-age sci-fi, spoofed famous robots,
  * unnamed-cast extras). fnord generates its names with an LLM at runtime;
- * thatch bakes the pool in - static contents, no model call - while the
- * draw itself is random (see ChatStore.assign).
+ * thatch bakes the pool in - static contents, no model call.
  *
- * A session may still claim a custom name (chat_register's optional arg);
- * the pool is the default and keeps the directory colorful with zero
- * bikeshedding. Pool names are case-insensitively distinct from each other,
- * matching the directory's NOCASE uniqueness rule - so pool assignment can
- * never collide with another pool name, only with a custom claim.
+ * The pool is the fallback base for registrations with no usable session
+ * title (ChatStore.register slugifies a random pool name). Pool names are
+ * case-insensitively distinct from each other; slugify is lossy, but a
+ * shared base is harmless - the per-base counter still yields unique
+ * names.
  *
  * Names are deliberately short: they appear inside wake prompts and
  * chat_list output, so every character costs context.

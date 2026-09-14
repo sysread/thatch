@@ -83,3 +83,4 @@ import "./uc-097-chat";
 import "./uc-099-chat-cli";
 import "./uc-100-two-session-chat";
 import "./uc-101-command-watchers";
+import "./uc-102-chat-hook-identity";

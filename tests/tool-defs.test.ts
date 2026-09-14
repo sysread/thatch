@@ -860,34 +860,69 @@ describe("chat delivery model in tool output", () => {
 
   test("chat_register tells opencode sessions they are woken automatically", async () => {
     const result = await findChatTool("chat_register").execute(
-      { name: "Wake Caller" },
+      {},
       ctx,
       { sessionID: "ses_wake_oc", agent: "build" },
     );
-    expect(result).toContain("[registered] Wake Caller");
+    expect(result).toMatch(/\[registered\] \S+-\d{5}/);
     expect(result).toContain("woken automatically");
     expect(result).not.toContain("opencode-only");
   });
 
   test("chat_register tells MCP-host sessions mail arrives at prompt time", async () => {
-    const result = await findChatTool("chat_register").execute({ name: "Prompt Reader" }, ctx);
-    expect(result).toContain("[registered] Prompt Reader");
+    const result = await findChatTool("chat_register").execute({}, ctx);
+    expect(result).toMatch(/\[registered\] \S+-\d{5}/);
     expect(result).toContain("at your next prompt");
     expect(result).not.toContain("woken automatically");
   });
 
   test("chat_status states the delivery model per host", async () => {
     await findChatTool("chat_register").execute(
-      { name: "Status Caller" },
+      {},
       ctx,
       { sessionID: "ses_status_oc", agent: "build" },
     );
     const oc = await findChatTool("chat_status").execute({}, ctx, { sessionID: "ses_status_oc", agent: "build" });
     expect(oc).toContain("woken automatically");
 
-    await findChatTool("chat_register").execute({ name: "Status Mcp" }, ctx);
-    const mcp = await findChatTool("chat_status").execute({ as: "Status Mcp" }, ctx);
+    const mcpReg = await findChatTool("chat_register").execute({}, ctx);
+    const mcpName = (mcpReg.match(/\[registered\] (.+)/) ?? [])[1]!;
+    const mcp = await findChatTool("chat_status").execute({ as: mcpName }, ctx);
     expect(mcp).toContain("at your next prompt");
+  });
+
+  test("chat_register MCP reclaim: an existing name resolves to its row; an unknown name is rejected", async () => {
+    // The hook-printed identity path: `as` must name an existing row.
+    const seed = await findChatTool("chat_register").execute({}, ctx);
+    const assigned = (seed.match(/\[registered\] (.+)/) ?? [])[1]!;
+    const reclaim = await findChatTool("chat_register").execute({ as: assigned }, ctx);
+    expect(reclaim).toContain(`[registered] ${assigned}`);
+    expect(reclaim).toContain("already registered");
+    // The row keeps its session_id (identity anchoring, not a new mint).
+    const status = await findChatTool("chat_status").execute({ as: assigned }, ctx);
+    expect(status).toContain("at your next prompt");
+
+    const stale = await findChatTool("chat_register").execute({ as: "nobody-99999" }, ctx);
+    expect(stale).toContain("No registered session named");
+    expect(stale).toContain("names are assigned by thatch");
+  });
+
+  test("chat_unregister tombstones; a rejoin via chat_register clears it and auto-registration resumes", async () => {
+    const ocHost = { sessionID: "ses_tomb", agent: "build" };
+    await findChatTool("chat_register").execute({}, ctx, ocHost);
+    const left = await findChatTool("chat_unregister").execute({}, ctx, ocHost);
+    expect(left).toContain("[unregistered]");
+
+    // The tombstone blocks the plugin's idle-path register (same session
+    // ID, opencode kind) - this is the production suppression call.
+    const blocked = ctx.db.registerChatSession("ses_tomb", ctx.defaultStore, null, "opencode", "tomb");
+    expect(blocked.ok).toBe(false);
+
+    // The explicit rejoin (the production line under test) clears the
+    // tombstone so auto-registration can resume for this session.
+    const rejoin = await findChatTool("chat_register").execute({}, ctx, ocHost);
+    expect(rejoin).toContain("[registered]");
+    expect(ctx.db.hasChatLeaveTombstone("ses_tomb")).toBe(false);
   });
 });
 
@@ -911,7 +946,7 @@ describe("chat config toggle", () => {
   test("chat tools refuse when chat.enabled is false", async () => {
     saveConfig({ chat: { enabled: false } }, join(toggleDir, "thatch.db"));
     const result = await findToggleTool("chat_register").execute(
-      { name: "Reluctant Guest" },
+      {},
       ctx,
       { sessionID: "ses_toggle_off", agent: "build" },
     );
@@ -921,16 +956,16 @@ describe("chat config toggle", () => {
 
   test("chat tools work by default (config unset)", async () => {
     const result = await findToggleTool("chat_register").execute(
-      { name: "Happy Guest" },
+      {},
       ctx,
       { sessionID: "ses_toggle_on", agent: "build" },
     );
-    expect(result).toContain("[registered] Happy Guest");
+    expect(result).toMatch(/\[registered\] \S+-\d{5}/);
   });
 
   test("the identity guard also refuses (chat_status)", async () => {
     await findToggleTool("chat_register").execute(
-      { name: "Status Guest" },
+      {},
       ctx,
       { sessionID: "ses_toggle_status", agent: "build" },
     );
@@ -940,11 +975,15 @@ describe("chat config toggle", () => {
   });
 
   test("config_set manages the chat section and config_get reads it back", async () => {
-    const saved = await findToggleTool("config_set").execute({ chat: { enabled: false } }, ctx);
+    const saved = await findToggleTool("config_set").execute({ chat: { enabled: false, autoRegister: false } }, ctx);
     expect(saved).toContain("[saved]");
     expect(saved).toContain("enabled: false");
+    expect(saved).toContain("autoRegister: false");
     const read = await findToggleTool("config_get").execute({ section: "chat" }, ctx);
     expect(read).toContain("chat:");
     expect(read).toContain("enabled: false");
+    // The render must surface autoRegister: a refactor that drops the
+    // field from either schema fails here instead of hiding the knob.
+    expect(read).toContain("autoRegister:");
   });
 });

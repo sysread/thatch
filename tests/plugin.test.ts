@@ -1,7 +1,10 @@
 import { describe, test, expect, beforeAll, afterAll, mock } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
+import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { saveConfig } from "../src/config";
+import { ThatchDB } from "../src/db";
 
 // Mock @huggingface/transformers so BgeEmbeddingModel can embed without
 // downloading a model. Produces the same hash-based vectors as
@@ -1680,5 +1683,140 @@ describe("compaction guard for chat.message", () => {
 
     // Clean up.
     await hooks["experimental.compaction.autocontinue"]!({ sessionID: "ses_guard_sum" } as any, { enabled: true } as any);
+  });
+});
+
+describe("chat auto-registration on idle", () => {
+  // The auto-register IIFE fetches the live title via client.session.get;
+  // these tests vary only that title (and the settle beat for the
+  // fire-and-forget IIFE), so a factory keeps each test's variable explicit.
+  let arTitle = "New session - 2026-09-13T10:00:00Z";
+  const autoRegisterClient = () => ({
+    session: {
+      prompt: async () => {},
+      promptAsync: async () => {},
+      create: async () => ({ data: { id: "child_ar" } }),
+      delete: async () => {},
+      get: async () => ({ data: { title: arTitle } }),
+      status: async () => ({ data: {} }),
+    },
+    tui: { showToast: async () => {} },
+  });
+  // The IIFE is fire-and-forget; give the microtask queue a beat.
+  const settle = () => new Promise((r) => setTimeout(r, 20));
+
+  test("first idle registers a top-level session with a pool-slug name; a later idle converges the topic", async () => {
+    const arHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-ar" } as any);
+
+    // First idle: placeholder title -> registers with a pool-slug base and
+    // no topic.
+    await arHooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_ar1", status: { type: "idle" } } } as any,
+    });
+    await settle();
+    const arDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    const row1 = arDb.listChatSessions().find((r) => r.session_id === "ses_ar1");
+    expect(row1).toBeDefined();
+    expect(row1!.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
+    expect(row1!.topic).toBeNull();
+
+    // The auto-titler lands a real title; the next idle must converge the
+    // topic (and keep the name - names never re-slug).
+    arTitle = "Fix the auth bug";
+    await arHooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_ar1", status: { type: "idle" } } } as any,
+    });
+    await settle();
+    const row2 = arDb.listChatSessions().find((r) => r.session_id === "ses_ar1")!;
+    expect(row2.name).toBe(row1!.name);
+    expect(row2.topic).toBe("Fix the auth bug");
+
+    // chat_unregister tombstones; the NEXT idle must not re-register.
+    arDb.unregisterChatSession("ses_ar1");
+    expect(arDb.hasChatLeaveTombstone("ses_ar1")).toBe(true);
+    await arHooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_ar1", status: { type: "idle" } } } as any,
+    });
+    await settle();
+    expect(arDb.listChatSessions().find((r) => r.session_id === "ses_ar1")).toBeUndefined();
+    expect(arDb.hasChatLeaveTombstone("ses_ar1")).toBe(true);
+    arDb.close();
+
+    arHooks.dispose?.();
+  });
+
+  test("chat.autoRegister: false suppresses auto-registration but not chat_register", async () => {
+    arTitle = "Real Title Here";
+    const configPath = join(dirname(process.env.THATCH_DB_PATH!), "config.json");
+    saveConfig({ chat: { autoRegister: false } });
+    try {
+      const arHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-ar2" } as any);
+
+      await arHooks.event!({ event: {
+        type: "session.status",
+        properties: { sessionID: "ses_ar2", status: { type: "idle" } } } as any,
+      });
+      await settle();
+      const arDb2 = new ThatchDB(process.env.THATCH_DB_PATH!);
+      expect(arDb2.listChatSessions().find((r) => r.session_id === "ses_ar2")).toBeUndefined();
+      arDb2.close();
+
+      arHooks.dispose?.();
+    } finally {
+      // The config file is shared across this suite's tests (one dbDir):
+      // restore the default (no file) even on failure, so later tests
+      // auto-register again.
+      rmSync(configPath);
+    }
+  });
+});
+
+describe("session.deleted tombstones auto-registration", () => {
+  test("a deleted session's late auto-register IIFE cannot resurrect the row", async () => {
+    // Register via a first idle, then delete the session in the TUI: the
+    // session.deleted handler must tombstone, so a late/second idle event
+    // cannot silently re-register a dead session.
+    const dlClient = {
+      session: {
+        prompt: async () => {},
+        promptAsync: async () => {},
+        create: async () => ({ data: { id: "child_dl" } }),
+        delete: async () => {},
+        get: async () => ({ data: { title: "Doomed Session" } }),
+        status: async () => ({ data: {} }),
+      },
+      tui: { showToast: async () => {} },
+    };
+    const dlHooks = await server({ client: dlClient, worktree: "/tmp/thatch-dl" } as any);
+
+    await dlHooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_dl1", status: { type: "idle" } } } as any,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    const dlDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    expect(dlDb.listChatSessions().find((r) => r.session_id === "ses_dl1")).toBeDefined();
+
+    // User deletes the session in the TUI.
+    await dlHooks.event!({ event: {
+      type: "session.deleted",
+      properties: { info: { id: "ses_dl1" } } } as any,
+    });
+    expect(dlDb.listChatSessions().find((r) => r.session_id === "ses_dl1")).toBeUndefined();
+    expect(dlDb.hasChatLeaveTombstone("ses_dl1")).toBe(true);
+
+    // A straggler idle event (the in-flight IIFE's race window, or a late
+    // duplicate) must not resurrect the row.
+    await dlHooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_dl1", status: { type: "idle" } } } as any,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(dlDb.listChatSessions().find((r) => r.session_id === "ses_dl1")).toBeUndefined();
+    dlDb.close();
+    dlHooks.dispose?.();
   });
 });

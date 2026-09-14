@@ -18,6 +18,7 @@ export const notificationPrefsSchema = z.strictObject({
 
 export const chatPrefsSchema = z.strictObject({
   enabled: z.boolean().optional(),
+  autoRegister: z.boolean().optional(),
 });
 
 export const configSchema = z.strictObject({
@@ -109,6 +110,17 @@ export function mergeChatPrefs(current: ChatPrefs | undefined, patch: ChatPrefs)
  */
 export function chatEnabled(config: Config): boolean {
   return config.chat?.enabled !== false;
+}
+
+/**
+ * Whether opencode sessions join the chat directory automatically (first
+ * idle event, name assigned by thatch). Unset means on - the directory is
+ * only useful when peers are in it, and a session that must be told to
+ * register never is. Turning it off restores opt-in behavior: sessions
+ * stay out of the directory until they call chat_register.
+ */
+export function chatAutoRegister(config: Config): boolean {
+  return config.chat?.autoRegister !== false;
 }
 
 /**

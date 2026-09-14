@@ -23,8 +23,8 @@ import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
 import { WatcherRegistry, ghApiRun, ghAvailable } from "./watchers";
 import { watcherNotificationNudge, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
-import { ChatPoller } from "./chat";
-import { chatEnabled, loadConfig } from "./config";
+import { ChatPoller, isDefaultSessionTitle, slugifyTitle } from "./chat";
+import { chatEnabled, chatAutoRegister, loadConfig } from "./config";
 import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
@@ -854,6 +854,28 @@ export const server: Plugin = async ({ client, worktree }) => {
           }
           return;
         }
+        // Auto-registration: every top-level opencode session joins the
+        // chat directory on its first idle event (unless the user turned
+        // auto-registration off). The name is assigned, never chosen - a
+        // slug of the session title plus a never-reused counter - and the
+        // live title rides the topic column, refreshed on every idle so the
+        // roster tracks what the session is actually working on. Titles are
+        // usually placeholders at first idle and real within a turn or two,
+        // so both name and topic converge fast. Fire-and-forget: a failed
+        // registration or title fetch must never block event delivery.
+        if (chatOn && chatAutoRegister(loadConfig(dbPath).config) && sessionID && !db.hasChatLeaveTombstone(sessionID)) {
+          void (async () => {
+            try {
+              const { data } = await client.session.get({ path: { id: sessionID } });
+              const title = data?.title ?? "";
+              const base = title && !isDefaultSessionTitle(title) ? slugifyTitle(title) : null;
+              db.registerChatSession(sessionID, repo, base ? title : null, "opencode", base);
+              if (base) db.refreshChatTopic(sessionID, title);
+            } catch (err) {
+              console.error(`[thatch] chat auto-register failed for ${sessionID}: ${err}`);
+            }
+          })();
+        }
         // Parent went idle - trigger direct extraction if there are pending
         // tool interactions and no extraction is already running. Falls
         // back to the nudge path on the next chat.message if this throws.
@@ -895,6 +917,13 @@ export const server: Plugin = async ({ client, worktree }) => {
         // error, and a leaked status key would keep heartbeat-ing a dead
         // session as permanently fresh.
         sessionStatus.delete(id);
+        // Tombstone the auto-registerer: an idle IIFE already in flight
+        // (title fetch pending) would otherwise re-insert a directory row
+        // for a session the user just deleted - a week-long roster zombie
+        // whose host is gone. The unregister below tombstones (see
+        // ChatStore.unregister), and the tombstone is cleared only by an
+        // explicit chat_register rejoin, so a genuinely new session is
+        // unaffected.
         // A child deleted before completing never processed its payload.
         const parentID = childToParent.get(id);
         if (parentID) {

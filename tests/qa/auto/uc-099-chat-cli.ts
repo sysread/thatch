@@ -45,9 +45,9 @@ const useCase: UseCase = {
     // through its own env).
     const seeded = new ThatchDB(ctx.env.THATCH_DB_PATH);
     try {
-      const a = seeded.registerChatSession("ses_alpha", "alpha", "acme/widgets", "watching CI", "opencode");
-      const b = seeded.registerChatSession("ses_beta", "beta", "acme/widgets", null, "opencode");
-      const g = seeded.registerChatSession("ses_ghost", "ghost", "acme/widgets", null, "opencode");
+      const a = seeded.registerChatSession("ses_alpha", "acme/widgets", "watching CI", "opencode", "alpha");
+      const b = seeded.registerChatSession("ses_beta", "acme/widgets", null, "opencode", "beta");
+      const g = seeded.registerChatSession("ses_ghost", "acme/widgets", null, "opencode", "ghost");
       if (!a.ok || !b.ok || !g.ok) {
         console.log("  FAIL: seeding failed");
         return "FAIL";
@@ -61,7 +61,7 @@ const useCase: UseCase = {
       // (beta drains its inbox) so the tail shows a read line too.
       seeded.sendChatMessage("ses_alpha", "ses_beta", "direct ping");
       seeded.broadcastChatMessage("ses_alpha", "the machine age begins");
-      seeded.registerChatSession("ses_mortal", "mortal", "acme/widgets", null, "opencode");
+      seeded.registerChatSession("ses_mortal", "acme/widgets", null, "opencode", "mortal");
       seeded.sendChatMessage("ses_mortal", "ses_beta", "my last words");
       seeded.unregisterChatSession("ses_mortal");
       seeded.readChatMessages("ses_beta");
@@ -75,7 +75,7 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const listText = list.stdout.toString();
-    for (const needle of ["alpha", "beta", "watching CI", "project:acme/widgets", "ago"]) {
+    for (const needle of ["alpha-00001", "beta-00001", "watching CI", "project:acme/widgets", "ago"]) {
       if (!listText.includes(needle)) {
         console.log(`  FAIL: chat list output missing "${needle}":\n${listText}`);
         return "FAIL";
@@ -93,7 +93,7 @@ const useCase: UseCase = {
     // seeded with "watching CI"; beta registered without one), local-
     // timezone When line, full body.
     const plainCard = tailText.replace(/\x1b\[[0-9;]*m/g, "");
-    if (!/^ From {3}alpha <watching CI>\n To {5}beta\n When {3}\d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+\n\ndirect ping/m.test(plainCard)) {
+    if (!/^ From {3}alpha-00001 <watching CI>\n To {5}beta-00001\n When {3}\d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+\n\ndirect ping/m.test(plainCard)) {
       console.log(`  FAIL: tail missing the direct-send card:\n${plainCard}`);
       return "FAIL";
     }

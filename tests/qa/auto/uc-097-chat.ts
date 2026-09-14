@@ -6,7 +6,6 @@ import { registerUseCase, type UseCase } from "../runner";
 import { TOOL_DEFS } from "../../../src/tool-defs";
 import { ThatchDB } from "../../../src/db";
 import { ChatPoller, nowIso, isoMinutesAgo as cutoffAgo } from "../../../src/chat";
-import { CHAT_NAME_POOL } from "../../../src/chat-names";
 
 /**
  * UC-097: Cross-session chat round-trip.
@@ -25,8 +24,8 @@ const useCase: UseCase = {
   ].join("\n"),
   steps: [
     "1. Verify the chat tools are opencode-only in TOOL_DEFS.",
-    "2. Register two sessions; confirm name collisions are rejected, including case variants.",
-    "3. Assign names from the built-in pool; confirm draws are unused, distinct, and sensitive to custom claims.",
+    "2. Register sessions with assigned names; confirm the slug-counter format, per-base counters, and case-insensitive lookups/addressing.",
+    "3. Confirm name assignment: distinct sessions with the same base get distinct counters, and a title-less registration draws a pool slug.",
     "4. Send a message and confirm send validation (ghost recipient, unregistered sender, self-send).",
     "5. Poll with the delivery gate closed; confirm messages stay pending.",
     "6. Open the gate; confirm one grouped wake prompt with sender names, and messages marked delivered.",
@@ -35,9 +34,9 @@ const useCase: UseCase = {
     "9. Unregister; confirm message history survives and wake prompts stop for the unregistered recipient.",
   ].join("\n"),
   expected: [
-    "- chat_register, chat_list, chat_send, chat_read, chat_unregister, chat_broadcast, and chat_status are shared tools (no opencodeOnly flag): MCP hosts register with a self-declared identity, and wake-up delivery is the only opencode-only part.",
-    "- A name can only be claimed by one session, case-insensitively; lookups and message addressing follow the same rule.",
-    "- Pool assignment (register without a name) draws an unused pool name, never repeats a draw, and skips names claimed by custom registrations.",
+    "- chat_register, chat_list, chat_send, chat_read, chat_unregister, chat_broadcast, and chat_status are shared tools (no opencodeOnly flag): MCP hosts pass the hook-assigned name as `as`, and wake-up delivery is the only opencode-only part.",
+    "- Names are assigned by thatch as <slug>-<counter>; the same base on two sessions yields distinct counters, and lookups/message addressing are case-insensitive.",
+    "- A title-less registration draws a pool slug as the base, still counter-suffixed.",
     "- Send requires both endpoints registered and distinct, and returns the resolved recipient.",
     "- The poller delivers only when canDeliver passes; undelivered mail stays pending.",
     "- Delivery groups a recipient's messages into one prompt (senders + count) and stamps delivered_at.",
@@ -71,68 +70,46 @@ const useCase: UseCase = {
     const delivered = (): number => deliveries.length;
 
     try {
-      // Step 2: registration and name collisions.
-      if (!db.registerChatSession("ses_alpha", "alpha", "acme/widgets", null, "opencode").ok) {
-        console.log("  FAIL: alpha registration failed");
+      // Step 2: registration with assigned names. Names are minted as
+      // <slug>-<counter>; the same base on two sessions draws distinct
+      // counters, so there is no claim/collision path.
+      const alpha = db.registerChatSession("ses_alpha", "acme/widgets", null, "opencode", "alpha");
+      if (!alpha.ok || alpha.name !== "alpha-00001") {
+        console.log(`  FAIL: alpha registration invalid: ${JSON.stringify(alpha)}`);
         return "FAIL";
       }
-      if (!db.registerChatSession("ses_beta", "beta", "acme/widgets", null, "opencode").ok) {
-        console.log("  FAIL: beta registration failed");
+      const beta = db.registerChatSession("ses_beta", "acme/widgets", null, "opencode", "beta");
+      if (!beta.ok || beta.name !== "beta-00001") {
+        console.log(`  FAIL: beta registration invalid: ${JSON.stringify(beta)}`);
         return "FAIL";
       }
-      if (db.registerChatSession("ses_gamma", "alpha", "p", null, "opencode").ok) {
-        console.log("  FAIL: name collision was accepted");
+      // The same base on a different session gets the next counter value
+      // instead of colliding - assignment never fails on a taken base.
+      const gamma = db.registerChatSession("ses_gamma", "p", null, "opencode", "alpha");
+      if (!gamma.ok || gamma.name !== "alpha-00002") {
+        console.log(`  FAIL: same-base assignment invalid: ${JSON.stringify(gamma)}`);
         return "FAIL";
       }
-      // Case variants collide too: uniqueness is case-insensitive.
-      if (db.registerChatSession("ses_gamma", "ALPHA", "p", null, "opencode").ok) {
-        console.log("  FAIL: case-variant name collision was accepted");
-        return "FAIL";
-      }
-      // Lookups and addressing follow the same rule.
-      if (db.findChatSession("AlPhA")?.session_id !== "ses_alpha") {
+      // Lookups and addressing are case-insensitive.
+      if (db.findChatSession("ALPHA-00001")?.session_id !== "ses_alpha") {
         console.log("  FAIL: case-insensitive lookup failed");
         return "FAIL";
       }
-      if (!db.sendChatMessage("ses_beta", "ALPHA", "cased ping").ok) {
+      if (!db.sendChatMessage("ses_beta", "ALPHA-00001", "cased ping").ok) {
         console.log("  FAIL: case-insensitive addressing failed");
         return "FAIL";
       }
 
-      // Step 3: pool assignment. Draws come from the pool, are unused, and differ.
-      const drawA = db.assignChatName("ses_pool_a", "p", null, "opencode");
-      if (!drawA.ok || !CHAT_NAME_POOL.includes(drawA.name)) {
-        console.log(`  FAIL: pool draw invalid: ${JSON.stringify(drawA)}`);
+      // Step 3: a title-less registration draws a pool slug as the base,
+      // still counter-suffixed; two draws never share a name.
+      const drawA = db.registerChatSession("ses_pool_a", "p", null, "opencode");
+      if (!drawA.ok || !/^[\p{L}\p{N}-]+-\d{5}$/u.test(drawA.name)) {
+        console.log(`  FAIL: pool-slug draw invalid: ${JSON.stringify(drawA)}`);
         return "FAIL";
       }
-      const drawB = db.assignChatName("ses_pool_b", "p", null, "opencode");
+      const drawB = db.registerChatSession("ses_pool_b", "p", null, "opencode");
       if (!drawB.ok || drawB.name === drawA.name) {
-        console.log("  FAIL: two pool draws collided or the second failed");
-        return "FAIL";
-      }
-      // A custom claim removes that name from future draws. Drain the pool
-      // to exhaustion; the claimed name must never be drawn. Two draws
-      // above (drawA, drawB) plus the custom claim account for the three
-      // names removed from circulation, so the drain count cross-checks.
-      // Claim a name neither draw picked, or the claim legitimately
-      // collides and the use case would flake (~2% of runs).
-      const claimed = CHAT_NAME_POOL.find((n) => n !== drawA.name && n !== drawB.name)!;
-      if (!db.registerChatSession("ses_pool_c", claimed, "p", null, "opencode").ok) {
-        console.log("  FAIL: custom claim of a free pool name was rejected");
-        return "FAIL";
-      }
-      let draws = 0;
-      for (;;) {
-        const draw = db.assignChatName(`ses_drain_${draws}`, "p", null, "opencode");
-        if (!draw.ok) break;
-        draws++;
-        if (draw.name === claimed) {
-          console.log("  FAIL: a custom-claimed pool name was drawn again");
-          return "FAIL";
-        }
-      }
-      if (draws !== CHAT_NAME_POOL.length - 3) {
-        console.log(`  FAIL: expected ${CHAT_NAME_POOL.length - 3} free pool names, drew ${draws}`);
+        console.log("  FAIL: two pool-slug draws collided or the second failed");
         return "FAIL";
       }
 
@@ -141,15 +118,15 @@ const useCase: UseCase = {
         console.log("  FAIL: send to unregistered recipient accepted");
         return "FAIL";
       }
-      if (db.sendChatMessage("ses_nobody", "beta", "hi").ok) {
+      if (db.sendChatMessage("ses_nobody", beta.name, "hi").ok) {
         console.log("  FAIL: send from unregistered sender accepted");
         return "FAIL";
       }
-      if (db.sendChatMessage("ses_alpha", "alpha", "note to self").ok) {
+      if (db.sendChatMessage("ses_alpha", "ses_alpha", "note to self").ok) {
         console.log("  FAIL: self-send accepted");
         return "FAIL";
       }
-      if (!db.sendChatMessage("ses_alpha", "beta", "ping from alpha").ok) {
+      if (!db.sendChatMessage("ses_alpha", beta.name, "ping from alpha").ok) {
         console.log("  FAIL: valid send rejected");
         return "FAIL";
       }
@@ -173,7 +150,7 @@ const useCase: UseCase = {
       }
       gateOpen = true;
       await poller.deliverPending();
-      if (delivered() !== 1 || deliveries[0].sessionID !== "ses_beta" || deliveries[0].senders[0] !== "alpha") {
+      if (delivered() !== 1 || deliveries[0].sessionID !== "ses_beta" || deliveries[0].senders[0] !== alpha.name) {
         console.log(`  FAIL: unexpected delivery: ${JSON.stringify(deliveries)}`);
         return "FAIL";
       }
@@ -184,7 +161,7 @@ const useCase: UseCase = {
 
       // Step 7: read drains and stamps.
       const inbox = db.readChatMessages("ses_beta");
-      if (inbox.length !== 1 || inbox[0].body !== "ping from alpha" || inbox[0].from_name !== "alpha") {
+      if (inbox.length !== 1 || inbox[0].body !== "ping from alpha" || inbox[0].from_name !== alpha.name) {
         console.log(`  FAIL: unexpected inbox: ${JSON.stringify(inbox)}`);
         return "FAIL";
       }
@@ -194,7 +171,7 @@ const useCase: UseCase = {
       }
 
       // Step 8: re-nudge and the rate cap.
-      if (!db.sendChatMessage("ses_alpha", "beta", "second ping").ok) {
+      if (!db.sendChatMessage("ses_alpha", beta.name, "second ping").ok) {
         console.log("  FAIL: second send rejected");
         return "FAIL";
       }
@@ -238,7 +215,7 @@ const useCase: UseCase = {
       // Step 9: unregister keeps history - and unregistering the recipient
       // stops wake selection for kept-but-unread mail.
       db.unregisterChatSession("ses_alpha");
-      if (db.findChatSession("alpha")) {
+      if (db.findChatSession(alpha.name)) {
         console.log("  FAIL: unregister left the directory row behind");
         return "FAIL";
       }

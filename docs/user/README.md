@@ -190,7 +190,7 @@ requirements.
 
 | Tool | What it does |
 |------|-------------|
-| `thatch_chat_register` | Join the cross-session chat directory, so other opencode sessions on this machine can message you. Without a name, one is drawn from the built-in pool (recommended - cannot collide); with a name, it is claimed case-insensitively. Pass a topic (one line about what the session is working on) so the roster tells others who to talk to. Safe to call again - same name is a no-op, a new name renames, a new topic updates. |
+| `thatch_chat_register` | Join the cross-session chat directory, so other sessions on this machine can message you. Display names are assigned by thatch, never chosen (a slug plus a never-reused counter), so a name always refers to the same session. Call with no arguments to join, rejoin after unregistering, or check your name. On hosts without session context (Claude Code, Cursor), pass the name your thatch hook printed as `as`. |
 | `thatch_chat_list` | List registered sessions with a liveness marker (fresh = its process is alive, stale = likely gone), each session's project and topic, and your unread count. |
 | `thatch_chat_send` | Send a message to another registered session, by name or session id. The recipient is nudged when its session is idle. |
 | `thatch_chat_read` | Drain your inbox: all unread messages oldest-first, marked read. Senders identified by display name. |

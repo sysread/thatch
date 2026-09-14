@@ -10,7 +10,7 @@ import { hygieneReport } from "../src/hygiene";
 import { claudeSessionStartReminder } from "../src/prompts";
 import { setupClaudeCode, setupCursor } from "../src/setup";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
-import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailCard, CHAT_TAIL_SEPARATOR, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, isStale, CHAT_STALE_MINUTES, type ChatTailFilter } from "../src/chat";
+import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailCard, CHAT_TAIL_SEPARATOR, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, isStale, CHAT_STALE_MINUTES, mcpSessionID, type ChatTailFilter } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
 
 const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
@@ -73,14 +73,15 @@ async function defaultStore(): Promise<string> {
 }
 
 /**
- * Builds the chat-mail hook line for the given project: one line when
- * unread mail is waiting for registered sessions, naming the addressee
- * sessions. Empty string when the project has no chat state or no pending
- * mail - a session that never registered never sees a chat line at all,
- * and the line is about the addressee, not about the reader, so there is
- * nothing for an unregistered model to hallucinate.
+ * Builds the chat-mail hook line for the given project. With a hook
+ * session ID (Claude Code/Cursor pass one in the hook's stdin JSON), it
+ * first ensures the caller is registered - the host's assigned identity -
+ * and prints that identity plus the caller's own unread count, so the
+ * model learns who it is on every prompt without a tool call. Without a
+ * session ID it keeps the old shape: a line only when pending mail exists
+ * for registered sessions in the project, naming the addressees.
  */
-async function chatHookLine(): Promise<string> {
+async function chatHookLine(hookSessionID?: string): Promise<string> {
   // Disabled chat prints nothing: the hook line must not advertise a
   // feature the user turned off (the tools refuse, the poller never
   // starts, the prompt section omits chat).
@@ -91,6 +92,37 @@ async function chatHookLine(): Promise<string> {
   } catch {
     return "";
   }
+
+  if (hookSessionID) {
+    // Ensure-register: idempotent, so every prompt re-touches liveness and
+    // the first prompt of a conversation mints the assigned name. This is
+    // the MCP identity anchor - the session ID is stable per conversation,
+    // so re-registering finds the same row and name.
+    const sessionID = mcpSessionID(hookSessionID);
+    // The leave tombstone blocks this ensure: chat_unregister must outlive
+    // the turn that issued it, on MCP hosts as on opencode. The line is
+    // the standing signal - it repeats every prompt until the model
+    // rejoins, and it says plainly that rejoining mints a fresh identity,
+    // because the old one is closed for good (assigned names are never
+    // reused, so a tombstoned identity cannot be resurrected by a later
+    // register).
+    if (db.hasChatLeaveTombstone(sessionID) && !db.chatLeaveSuperseded(sessionID, repo)) {
+      return `[thatch] chat: this conversation left the chat directory (chat_unregister) and will not receive mail. If the user asks to rejoin, call thatch_chat_register with no arguments - that mints a fresh identity; the old one stays closed.`;
+    }
+    db.registerChatSession(sessionID, repo, null, "mcp");
+    const me = db.findChatSession(sessionID);
+    if (!me) return "";
+    const mine = db.unreadChatCount(sessionID);
+    const pendingOthers = db
+      .chatPendingByProject(repo)
+      .filter((p) => p.name !== me.name);
+    const others = pendingOthers.length > 0
+      ? ` Others in this project with unread mail: ${pendingOthers.map((p) => `${p.name} (${p.pending})`).join(", ")}.`
+      : "";
+    const mailbox = mine > 0 ? `${mine} unread message(s) for you` : "no unread mail for you";
+    return `[thatch] chat: you are ${me.name} (${mailbox}).${others}`;
+  }
+
   const pending = db.chatPendingByProject(repo);
   if (pending.length === 0) return "";
   const parts = pending.map((p) => `${p.name} (${p.pending})`);
@@ -102,8 +134,8 @@ async function chatHookLine(): Promise<string> {
  * warning goes first so the LLM sees it before the nudge text. Used by
  * flush-tools to surface version skew and update-available notices on
  * every UserPromptSubmit, regardless of which tier fired. The chat hook
- * line, when present, is appended last (the mail check is the last thing
- * the model reads before the nudge body).
+ * line, when present, is appended last (the identity/mail check is the
+ * last thing the model reads before the nudge body).
  */
 function emit(output: string, versionWarning: string | null, isJson: boolean, chatLine = ""): void {
   if (chatLine) {
@@ -310,7 +342,7 @@ async function chatCommand(rest: string[]): Promise<void> {
     case "list": {
       const sessions = db.listChatSessions();
       if (sessions.length === 0) {
-        console.log("No sessions registered. Sessions join with thatch_chat_register from opencode.");
+        console.log("No sessions registered. Sessions join the directory automatically on their first idle (opencode), or via chat_register.");
         break;
       }
       for (const s of sessions) {
@@ -565,8 +597,9 @@ switch (command) {
     } catch (err) {
       console.error(`[thatch] hygiene report failed: ${err}`);
     }
-    // Chat mail check: same gating as flush-tools - a line only when
-    // pending mail exists for registered sessions in this project.
+    // Chat mail check. Without a hook session ID (SessionStart does not
+    // read stdin) the line keeps the old shape: a line only when pending
+    // mail exists for registered sessions in this project.
     const chatLine = await chatHookLine();
     const reminder = claudeSessionStartReminder(repo, hygiene) + (chatLine ? `\n\n${chatLine}` : "");
     if (isJson) {
@@ -808,9 +841,10 @@ switch (command) {
       // flush-tools fires on every prompt, including conversational turns
       // with no tool calls.
       const versionWarning = detectSkew(dbPath) ?? readNpmCacheForUpdate(dbPath);
-      // Chat mail check: one line when pending mail exists for registered
-      // sessions in this project, empty string otherwise (see chatHookLine).
-      const chatLine = await chatHookLine();
+      // Chat check: with a hook session ID this always prints the caller's
+      // assigned identity (and its unread count), so the model knows who it
+      // is before any chat tool call; with no mail the line says so.
+      const chatLine = await chatHookLine(sessionID);
 
       // Tier 1: extraction nudge. Peek (don't drain) - the queue persists
       // until the agent calls memory_remember, which triggers consumeQueue.

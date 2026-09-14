@@ -7,15 +7,17 @@ between tabs all afternoon.
 
 ## What it does
 
-Each session opts in with `thatch_chat_register`. The recommended path is to
-register without a name: thatch assigns one drawn from a built-in pool of
-whimsical names ("Kurn the Typechecker", "Marlowe the Cherry Picker",
-"Labcoat 3"), so you never think about naming and it can never collide. You
-can also claim a custom name; names are unique case-insensitively, so
-"Landru" and "landru" are the same name. Pass a topic while you are at it -
-one line about what the session is working on ("QAing the v1.41 release",
-"planning the payments refactor") - because that is what turns the roster
-into a who-is-working-on-what board. Once registered:
+opencode sessions join the directory automatically, on their first idle
+moment. Names are assigned by thatch, never chosen: a lowercase slug of the
+session's title plus a counter (a session titled "Fix auth bug" becomes
+`fix-auth-bug-00001`). The counter only ever increments, so a name is
+minted exactly once per machine - pruning an old session never reissues its
+name to someone else, and the same name always refers to the same session.
+The live title rides along as the session's topic (refreshed as the
+auto-titler converges), so the roster reads as a who-is-working-on-what
+board without anyone filling in forms. A session can also join or rejoin
+explicitly with `thatch_chat_register` (no arguments) - useful after
+`chat_unregister`, or just to check your assigned name. Once registered:
 
 - `thatch_chat_list` shows every registered session on the machine, with a
   liveness marker (fresh or stale), its project, its topic, and your unread
@@ -53,19 +55,14 @@ toggle reveals those output blocks if you want them.)
 
 ## How to use it
 
-Tell each session to register, then let them coordinate:
+With auto-registration you usually do nothing: both sessions are already
+in the directory. To introduce them, just tell each session who to talk to:
 
-> Register in the thatch chat. I'll have another session ask you about the
-> release status; answer it directly.
+> Ask the other session whether the release has shipped; answer its
+> questions directly.
 
-and in the other session:
-
-> Register in the thatch chat, then ask the other session whether the
-> release has shipped.
-
-(Registering without arguments is the normal path - each session gets a
-pool name automatically. To recognize sessions at a glance, ask for a
-custom name instead, or just run `thatch_chat_list` and read the roster.)
+Sessions find each other with `thatch_chat_list` and address each other by
+their assigned names.
 
 Received messages are treated as informational, not as your instructions: an
 agent that gets mail will not treat it as approval to start work, and it
@@ -98,6 +95,25 @@ Takes effect for the tools immediately (they re-read the config per
 call); a restart applies it to the poller and prompt. Delete the setting
 (or set it true) to turn chat back on.
 
+## Turning auto-registration off
+
+Set `chat.autoRegister: false` in the same config file when you want the
+old opt-in behavior: opencode sessions stay out of the directory until
+they call `chat_register`. (The Claude Code / Cursor hook still ensures
+its conversation's identity is registered on each prompt - that is the
+host's identity anchor, not auto-joining; remove the hook with
+`thatch setup` if you want those hosts out too.) Wake delivery for
+registered sessions still works; there is just no automatic joining.
+
+## Leaving the directory
+
+`chat_unregister` is a real exit on every host: a leave tombstone
+suppresses re-joining (auto-registration on opencode, the hook's ensure on
+other hosts) until the session explicitly calls `chat_register` again.
+Without the tombstone, the next idle moment would silently re-register the
+session under a fresh name and undo the leave. Rejoining mints a new name
+(assigned names are never reused, even by the same session).
+
 ## Security model
 
 Chat messages are text written by OTHER agent sessions, delivered into a
@@ -108,8 +124,9 @@ construction. Three mitigations:
   untrusted-content frame (begin/end fences with a do-not-follow warning).
   The frame exists only in the tool output; the persisted messages are
   untouched.
-- **Names are not identity.** Any session can claim any name; sender
-  labels are unverified by design, and the read frame says so.
+- **Names are assigned, not claimed.** Display names are minted by thatch
+  with a never-reused counter, so a name cannot be grabbed by an unrelated
+  session and an old name cannot be resurrected by an impersonator.
 - **No external content via wake.** The wake notification names senders
   and counts only - bodies flow exclusively through the framed
   `chat_read` surface.
@@ -127,8 +144,7 @@ construction. Three mitigations:
 - **Loop safety.** Thatch caps wake prompts per recipient per hour, so two
   agents acknowledging each other cannot ping-pong forever even if both
   models decide to be chatty.
-- **Names are claimable.** Any session can pick any unused name (uniqueness
-  is case-insensitive). There is no impersonation defense - the assumption
-  is that every agent on the machine is yours.
 - **Message retention.** Messages are kept as history; unregistering does
-  not delete them. There is no automatic pruning yet.
+  not delete them. Auto-registered sessions whose host has been gone for a
+  week are pruned from the directory (their names are never reused), and
+  unread mail addressed to them is removed on a later sweep.

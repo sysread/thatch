@@ -77,17 +77,16 @@ export interface ChatInboxItem {
   created_at: string;
 }
 
-export type ChatResult = { ok: true; topic: string | null } | { ok: false; error: string };
-
 /**
  * Derives the synthetic session ID for an MCP-host chat registration: a
- * pure function of the claimed name, so identity survives the ephemeral
- * sessions those hosts run (a later conversation claiming the same name
- * finds the same row). The underscore keeps the ID outside NAME_CHARSET,
- * preserving the name-cannot-shadow-ID invariant that find() relies on.
+ * pure function of the host's own stable session identifier (Claude Code
+ * and Cursor pass one in their hook payloads), so identity survives the
+ * ephemeral conversations those hosts run. The underscore keeps the ID
+ * outside NAME_CHARSET, preserving the name-cannot-shadow-ID invariant
+ * that find() relies on.
  */
-export function mcpSessionID(name: string): string {
-  const hash = Bun.SHA256.hash(name.toLowerCase(), "hex").slice(0, 12);
+export function mcpSessionID(hostSessionID: string): string {
+  const hash = Bun.SHA256.hash(hostSessionID.toLowerCase(), "hex").slice(0, 12);
   return `mcp_${hash}`;
 }
 
@@ -99,19 +98,55 @@ export type ChatHostKind = "opencode" | "mcp";
 // Display names appear inside wake prompts and chat_list output, so they are
 // capped tight. Bodies are capped so a runaway sender cannot turn a nudge
 // into a context bomb; the reader fetches full content via chat_read anyway.
-const MAX_NAME_LEN = 40;
 const MAX_BODY_LEN = 10_000;
 
-// Custom names share the pool's charset: letters, numbers, spaces,
-// apostrophes, hyphens, periods. Parens would truncate the transcript
-// echo's name parse; newlines or tabs would break chat_list's one-line
-// roster format. Exported so the pool conformance test can pin that every
-// baked-in name satisfies it.
+// Assigned names are lowercase slugs with a numeric counter suffix
+// ("fix-auth-bug-00001"), which satisfies NAME_CHARSET. The charset stays
+// exported for the pool conformance test. Slugs never contain underscores,
+// so the name-cannot-shadow-an-ID invariant in find() still holds.
 export const NAME_CHARSET = /^[\p{L}\p{N} '.\-]+$/u;
 
 // Topics are free text (unlike names) but must stay one line for the
 // chat_list roster, so whitespace runs collapse and the value is capped.
 const MAX_TOPIC_LEN = 80;
+
+// Auto-registered sessions whose host has not heartbeat-ed them for this
+// many days are pruned from the directory. Counters never decrement, so a
+// pruned session's name is never reissued - pruning cannot create identity
+// confusion, only roster silence.
+export const CHAT_AUTO_TTL_DAYS = 7;
+
+/**
+ * Slugifies a session title into a name base: lowercase, letter/number runs
+ * joined by single hyphens, capped at 32 characters (leaving room for the
+ * 6-character counter suffix). Returns null for titles with no usable
+ * characters.
+ *
+ * Deliberately NOT the same as ThatchDB.slugify (src/db.ts): chat names
+ * must never contain underscores (find() resolves name-first, and opencode
+ * session IDs contain underscores - a legal display name could shadow an
+ * ID), so non-alphanumeric runs all become hyphens and empty input returns
+ * null rather than a hash fallback.
+ */
+export function slugifyTitle(title: string): string | null {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32)
+    .replace(/-+$/g, "");
+  return slug || null;
+}
+
+/**
+ * Whether a session title is opencode's pre-autotitle placeholder
+ * ("New session - <timestamp>" / "Child session - <timestamp>"). These must
+ * not become names or topics: they carry no information about the work, and
+ * the auto-titler usually replaces them within the first turn or two.
+ */
+export function isDefaultSessionTitle(title: string): boolean {
+  return /^New session - /.test(title) || /^Child session - /.test(title);
+}
 
 // Timing defaults, shared by the poller and the chat_list staleness display
 // so both agree on what "stale" means.
@@ -131,96 +166,66 @@ export class ChatStore {
     this.#db = db;
   }
 
-  /** Joins the directory with a pool name: picks uniformly at random from the
-   * names no other session has claimed (case-insensitively). Idempotent for
-   * an already-registered session - it keeps its current name (drawn:
-   * false). Fails when every pool name is taken, or when concurrent
-   * registrations win every draw attempt - see the redraw loop below.
+  /**
+   * Joins the directory, or refreshes an existing registration. Names are
+   * assigned by the system, never claimed: a new session gets
+   * "<slug>-<counter>" (e.g. "fix-auth-bug-00001"), where the slug comes
+   * from the session title (or a pool-draw slug when there is none) and the
+   * per-base counter only ever increments - so a name is minted exactly
+   * once, machine-wide, and pruning an old session can never reissue its
+   * name to someone else. Idempotent for an already-registered session: it
+   * keeps its name and just refreshes liveness.
+   *
+   * `nameBase` is the slugified title for a new registration (null draws a
+   * pool slug instead). `topic` is the live title for auto-registrations;
+   * null leaves the topic unset. Every row minted here is marked auto=1 -
+   * rows with auto=0 exist only as legacy data from the claimed-names era.
    */
-  assign(
+  register(
     sessionID: string,
     project: string | null,
     topic: string | null,
     kind: ChatHostKind,
-  ): { ok: true; name: string; drawn: boolean; topic: string | null } | { ok: false; error: string } {
+    nameBase: string | null = null,
+  ): { ok: true; name: string; topic: string | null } | { ok: false; error: string } {
     const existing = this.#find(sessionID);
     if (existing) {
       this.#touch(sessionID);
-      const cleaned = this.#cleanTopic(topic);
-      this.#maybeUpdateTopic(sessionID, existing.topic, cleaned);
-      return { ok: true, name: existing.name, drawn: false, topic: cleaned ?? existing.topic };
+      // An explicit registration clears the leave tombstone for its own
+      // session ID: "I want back in" is the opposite of "I left". This is
+      // also what closes the in-flight race - an auto-register IIFE whose
+      // session was deleted mid-await finds the tombstone here and stops.
+      // The caller distinction is by ID: the idle path re-checks with the
+      // session's own ID, so a tombstone set by chat_unregister or
+      // session.deleted suppresses exactly that session.
+      const gate = this.#tombstoneGate(sessionID, kind);
+      if (gate) return gate;
+      return { ok: true, name: existing.name, topic: existing.topic };
     }
-    // Two processes can snapshot the same free list and draw the same name;
-    // the loser's INSERT hits the constraint. Redrawing from the names
-    // still free (the taken set is re-read each attempt) keeps the pool
-    // path's cannot-collide promise even under concurrent registration.
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const taken = new Set(this.list().map((r) => r.name.toLowerCase()));
-      const free = CHAT_NAME_POOL.filter((n) => !taken.has(n.toLowerCase()));
-      if (free.length === 0) {
-        return { ok: false, error: "Name pool exhausted - pass a custom name." };
-      }
-      const name = free[Math.floor(Math.random() * free.length)];
-      const cleanTopic = this.#cleanTopic(topic);
-      const claimed = this.#insertSession(sessionID, name, project, cleanTopic, kind);
-      if (claimed.ok) return { ok: true, name, drawn: true, topic: cleanTopic };
-    }
-    return { ok: false, error: "Could not claim a pool name after several attempts - pass a custom name." };
-  }
-
-  /**
-   * Joins the directory, or refreshes an existing registration. Re-registering
-   * with the same session ID renames the session (including changing only
-   * the casing of its own name); the new name must not be claimed by a
-   * different session. Uniqueness is case-insensitive ("Landru" and "landru"
-   * are the same name), so lookups and claims agree no matter what casing the
-   * model or user types. Both paths stamp last_seen.
-   */
-  register(sessionID: string, rawName: string, project: string | null, topic: string | null, kind: ChatHostKind): ChatResult {
-    const name = rawName.trim();
-    const invalid = this.#invalidName(name);
-    if (invalid) return { ok: false, error: invalid };
+    const gate = this.#tombstoneGate(sessionID, kind);
+    if (gate) return gate;
     const cleanTopic = this.#cleanTopic(topic);
-    const existing = this.#find(sessionID);
-    if (existing) {
-      if (existing.name === name) {
-        this.#touch(sessionID);
-        this.#maybeUpdateTopic(sessionID, existing.topic, cleanTopic);
-        // The kept topic: omitted keeps existing, "" clears to null (the
-        // read-side normalization this return path mirrors).
-        return { ok: true, topic: cleanTopic ?? existing.topic };
-      }
-      // A NOCASE hit is only a collision when it belongs to a different
-      // session - otherwise this is the caller recasing its own name.
-      const clash = this.#findByName(name);
-      if (clash && clash.session_id !== sessionID) {
-        return this.#nameTaken(name);
-      }
-      try {
-        // An omitted topic (null) keeps the existing one, same as the
-        // same-name path below - a rename is a re-register, and the tool
-        // treats name and topic updates as independent.
-        const nextTopic = cleanTopic ?? existing.topic;
-        this.#db.run("UPDATE chat_sessions SET name = ?, topic = ?, last_seen = ? WHERE session_id = ?", [
-          name,
-          nextTopic,
-          nowIso(),
-          sessionID,
-        ]);
-        return { ok: true, topic: nextTopic };
-      } catch (err) {
-        if (this.#isConstraintError(err)) {
-          return this.#nameTaken(name);
-        }
-        throw err;
+    const base =
+      nameBase ??
+      slugifyTitle(CHAT_NAME_POOL[Math.floor(Math.random() * CHAT_NAME_POOL.length)]) ??
+      "session";
+    // The counter draw is atomic, but the name INSERT can still lose to a
+    // legacy row that already holds that exact name (custom claims from
+    // before names were assigned). Each retry bumps the counter, so the
+    // loop always makes forward progress and terminates.
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const next = this.#bumpCounter(base);
+      const name = `${base}-${String(next).padStart(5, "0")}`;
+      const claimed = this.#insertSession(sessionID, name, project, cleanTopic, kind);
+      if (claimed.ok) return { ok: true, name, topic: cleanTopic };
+      if (claimed.reason === "already-registered") {
+        // A concurrent registration of the same session ID won the race;
+        // report its row rather than erroring.
+        const winner = this.#find(sessionID);
+        if (winner) return { ok: true, name: winner.name, topic: winner.topic };
       }
     }
-    if (this.#findByName(name)) {
-      return this.#nameTaken(name);
-    }
-    const inserted = this.#insertSession(sessionID, name, project, cleanTopic, kind);
-    if (inserted.ok) return { ok: true, topic: cleanTopic };
-    return inserted;
+    return { ok: false, error: "Could not assign a unique name after several attempts." };
   }
 
   /** Leaves the directory. Messages already sent to or from the session are
@@ -228,8 +233,104 @@ export class ChatStore {
   unregister(sessionID: string): boolean {
     const existing = this.#find(sessionID);
     if (!existing) return false;
-    this.#db.run("DELETE FROM chat_sessions WHERE session_id = ?", [sessionID]);
+    this.#db.transaction(() => {
+      // Tombstone before delete: auto-registration keys on the row being
+      // absent, so without a marker the next idle event would silently
+      // re-register the session under a brand-new name and the user's
+      // "leave the directory" would last until the turn ended. The
+      // tombstone survives the delete and suppresses auto-registration
+      // until the session explicitly rejoins via chat_register (which
+      // clears it). Both leave paths come through here - chat_unregister
+      // AND session.deleted (a deleted TUI session is an exit too; without
+      // the tombstone an in-flight auto-register could resurrect it).
+      this.#db.run("INSERT OR REPLACE INTO chat_leave_tombstones (session_id, left_at) VALUES (?, ?)", [
+        sessionID,
+        nowIso(),
+      ]);
+      this.#db.run("DELETE FROM chat_sessions WHERE session_id = ?", [sessionID]);
+    })();
     return true;
+  }
+
+  /** Whether the session explicitly left the directory and has not
+   *  rejoined. Auto-registration consults this before inserting; manual
+   *  registration (chat_register) clears the tombstone on join. */
+  hasLeaveTombstone(sessionID: string): boolean {
+    const row = this.#db
+      .query("SELECT 1 FROM chat_leave_tombstones WHERE session_id = ?")
+      .get(sessionID);
+    return row !== null && row !== undefined;
+  }
+
+  /** Clears the leave tombstone (chat_register rejoin path). */
+  clearLeaveTombstone(sessionID: string): void {
+    this.#db.run("DELETE FROM chat_leave_tombstones WHERE session_id = ?", [sessionID]);
+  }
+
+  /**
+   * Whether the leave tombstone for `sessionID` has been superseded: a
+   * newer registration exists in the same project (registered after the
+   * leave). The hook uses this to stop announcing a stale leave once the
+   * model has rejoined under a fresh identity - the tombstoned identity
+   * and the fresh one cannot be linked, but a newer join in the same
+   * project is evidence the conversation moved on.
+   */
+  leaveSuperseded(sessionID: string, project: string | null): boolean {
+    if (!project) return false;
+    const row = this.#db
+      .query(
+        `SELECT 1 FROM chat_leave_tombstones t
+         JOIN chat_sessions cs ON cs.project = ? AND cs.registered_at > t.left_at
+         WHERE t.session_id = ?
+         LIMIT 1`,
+      )
+      .get(project, sessionID);
+    return row !== null && row !== undefined;
+  }
+
+  /**
+   * Refreshes an auto-registered session's topic from its current title.
+   * opencode's auto-titler usually lands a real title within the first turn
+   * or two, so this converges the roster annotation to the actual work.
+   * Manual (legacy) rows are never touched - the topic column on those is
+   * user/model-set, not title-derived.
+   */
+  refreshAutoTopic(sessionID: string, title: string): void {
+    const clean = this.#cleanTopic(title);
+    if (!clean) return;
+    this.#db.run("UPDATE chat_sessions SET topic = ? WHERE session_id = ? AND auto = 1 AND topic IS NOT ?", [
+      clean,
+      sessionID,
+      clean,
+    ]);
+  }
+
+  /**
+   * Removes auto-registered directory rows whose host has not heartbeat-ed
+   * them since `cutoff` (ISO), plus unread mail addressed to sessions no
+   * longer in the directory. The mail delete is bounded by the same
+   * cutoff: unread mail newer than the cutoff survives this sweep and is
+   * removed by a later one once it ages past the moving cutoff - the
+   * cutoff is a conservative bound, not an exact age match. Delivered/read
+   * history and mail from pruned senders to live recipients are kept -
+   * departed senders already render as unknown names. Counters are NOT
+   * touched: never decrementing is what makes reissued names impossible.
+   * Returns the number of directory rows pruned.
+   */
+  pruneStaleAuto(cutoff: string): number {
+    const result = this.#db.run("DELETE FROM chat_sessions WHERE auto = 1 AND last_seen < ?", [cutoff]);
+    this.#db.run(
+      "DELETE FROM chat_messages WHERE read_at IS NULL AND to_session NOT IN (SELECT session_id FROM chat_sessions) AND created_at < ?",
+      [cutoff],
+    );
+    // Tombstones age out too: they are leave markers, not identity records.
+    // A resumed opencode session whose tombstone expired simply
+    // auto-registers under a fresh name - the expiry window is the
+    // grace period for that. Growth is bounded (one row per distinct
+    // session), but the sweep keeps the table from growing monotonically
+    // forever.
+    this.#db.run("DELETE FROM chat_leave_tombstones WHERE left_at < ?", [cutoff]);
+    return result.changes;
   }
 
   list(): ChatSessionRow[] {
@@ -524,15 +625,6 @@ export class ChatStore {
     this.#db.run("UPDATE chat_sessions SET last_seen = ? WHERE session_id = ?", [nowIso(), sessionID]);
   }
 
-  #invalidName(name: string): string | null {
-    if (!name) return "Name cannot be empty.";
-    if (name.length > MAX_NAME_LEN) return `Name too long (max ${MAX_NAME_LEN} characters).`;
-    if (!NAME_CHARSET.test(name)) {
-      return "Names may contain letters, numbers, spaces, apostrophes, hyphens, and periods.";
-    }
-    return null;
-  }
-
   /** Collapses whitespace runs (topics must stay one roster line) and caps
    *  the length. The null/empty distinction is load-bearing: null means
    *  "omit on re-register, keep the existing topic", while empty or
@@ -544,60 +636,82 @@ export class ChatStore {
     return topic.replace(/\s+/g, " ").trim().slice(0, MAX_TOPIC_LEN);
   }
 
-  /** Refreshes the topic on re-registration when it changed. Omitting the
-   *  topic (null) keeps the existing one; passing an empty topic clears it. */
-  #maybeUpdateTopic(sessionID: string, current: string | null, next: string | null): void {
-    if (next === null || next === current) return;
-    this.#db.run("UPDATE chat_sessions SET topic = ? WHERE session_id = ?", [next, sessionID]);
+  /**
+   * The leave-tombstone gate, applied on both register() paths (existing
+   * row and fresh mint). Policy: an opencode registration is the plugin's
+   * auto-registration, so a tombstone suppresses it outright - the in-
+   * flight IIFE whose session was deleted mid-await lands here and stops
+   * instead of resurrecting a dead session as a roster corpse. An MCP
+   * registration over the hook-anchored ID is a genuine rejoin (the
+   * derived session ID matches the tombstone), so the gate clears it and
+   * lets the registration proceed. Defense in depth: no current
+   * production caller reaches the MCP branch with a tombstoned ID (the
+   * tool's rejoin clears at its own layer first); UC-101 pins the DB
+   * contract. Returns the failure result when the gate refuses, or null
+   * to proceed.
+   */
+  #tombstoneGate(sessionID: string, kind: ChatHostKind): { ok: false; error: string } | null {
+    if (!this.hasLeaveTombstone(sessionID)) return null;
+    if (kind === "opencode") {
+      return { ok: false, error: "leave tombstone active" };
+    }
+    this.clearLeaveTombstone(sessionID);
+    return null;
   }
 
   /**
-   * INSERTs a directory row, translating a UNIQUE-constraint violation into
-   * the friendly taken message. The pre-checks are advisory only against
-   * other processes: two sessions claiming one free name in the same
-   * instant both pass the check, and the loser's INSERT must not escape the
-   * { ok, error } contract as a raw SQLite error. Same pattern as
-   * remember()'s slug-collision handling in db.ts.
+   * Atomically draws the next counter value for a name base: the INSERT
+   * ... ON CONFLICT upsert seeds the counter at 2 on first draw and
+   * increments it on every later draw, returning the drawn value in one
+   * statement - two processes racing the same base can never draw the same
+   * number. Counters only ever increment (prune included), which is what
+   * makes assigned names immortal.
    */
-  #insertSession(sessionID: string, name: string, project: string | null, topic: string | null, kind: ChatHostKind): ChatResult {
+  #bumpCounter(base: string): number {
+    // The insert seeds the counter at 2 (1 is being handed out now) so the
+    // stored value always reads as the next unassigned number; the RETURNING
+    // hands out the drawn value. One statement, race-safe.
+    const row = this.#db
+      .query(
+        "INSERT INTO chat_name_counters (base, next) VALUES (?, 2) ON CONFLICT(base) DO UPDATE SET next = next + 1 RETURNING next - 1 AS drawn",
+      )
+      .get(base) as { drawn: number };
+    return row.drawn;
+  }
+
+  /**
+   * INSERTs a directory row as auto=1 (the only rows this class mints;
+   * auto=0 rows are legacy data). Constraint violations are translated
+   * into structured outcomes rather than raw SQLite errors: a UNIQUE hit
+   * on name means the counter draw collided with a legacy row holding that
+   * exact name (the caller bumps and retries), and a PK hit on session_id
+   * means the session row already exists (a concurrent registration won
+   * the race).
+   */
+  #insertSession(
+    sessionID: string,
+    name: string,
+    project: string | null,
+    topic: string | null,
+    kind: ChatHostKind,
+  ): { ok: true; topic: string | null } | { ok: false; reason: "name-taken" | "already-registered" } {
     try {
       this.#db.run(
-        "INSERT INTO chat_sessions (session_id, name, topic, project, host_kind, registered_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO chat_sessions (session_id, name, topic, project, host_kind, registered_at, last_seen, auto) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
         [sessionID, name, topic, project, kind, nowIso(), nowIso()],
       );
       return { ok: true, topic };
     } catch (err) {
-      // The two constraints fail differently: a UNIQUE hit on name means
-      // someone else claimed it; a PK hit on session_id means this session
-      // is somehow registered twice, which is an identity event, not a
-      // naming one.
-      if (this.#isConstraintError(err)) {
-        return this.#alreadyRegistered();
-      }
-      throw err;
+      if (!this.#isConstraintError(err)) throw err;
+      const msg = String((err as any)?.message ?? err);
+      return msg.includes("chat_sessions.name")
+        ? { ok: false, reason: "name-taken" }
+        : { ok: false, reason: "already-registered" };
     }
   }
 
   #isConstraintError(err: unknown): boolean {
     return String((err as any)?.code ?? err).includes("CONSTRAINT");
-  }
-
-  /** The one taken-message every claim path returns, so a rewording cannot
-   *  drift between the pre-checks and the race catches. Points at the
-   *  guaranteed-success recovery (a pool draw) like every other failure
-   *  path in this feature. */
-  #nameTaken(name: string): ChatResult {
-    return {
-      ok: false,
-      error: `Name "${name}" is taken by another session - pick another name, or omit the name to draw one from the pool.`,
-    };
-  }
-
-  /** The one already-registered message for a session-ID PRIMARY KEY hit -
-   *  a constraint collision that is not a taken name (the caller's own
-   *  session row already exists under a different identity path). */
-  #alreadyRegistered(): ChatResult {
-    return { ok: false, error: "You are already registered - call chat_list to see your current name." };
   }
 }
 
@@ -904,6 +1018,9 @@ export interface ChatPollerStore {
   heartbeatChatSessions(sessionIDs: string[]): void;
   pendingChatNotifications(sessionIDs: string[], renudgeCutoff: string): ChatNotificationRow[];
   markChatDelivered(ids: number[]): void;
+  /** Hourly TTL prune of auto-registered directory rows (and the mail that
+   *  can no longer reach a reader). Optional so test fakes stay minimal. */
+  pruneStaleChatAuto?(cutoff: string): number;
 }
 
 export interface ChatPollerOptions {
@@ -947,6 +1064,9 @@ export class ChatPoller {
   #delivering = false;
   /** Per-recipient wake-prompt timestamps inside the last hour. */
   #nudges = new Map<string, number[]>();
+  /** Last TTL prune epoch ms. Auto-registered rows are pruned hourly, not
+   *  every cycle - the prune is a maintenance sweep, not delivery. */
+  #lastPrune = 0;
 
   constructor(opts: ChatPollerOptions) {
     this.#opts = {
@@ -1000,6 +1120,18 @@ export class ChatPoller {
       const hosted = this.#opts.hostedSessions();
       this.#opts.store.heartbeatChatSessions(hosted);
       await this.deliverPending();
+      // Hourly sweep: drop auto-registered rows whose host died more than
+      // CHAT_AUTO_TTL_DAYS ago, plus the unread mail addressed to sessions
+      // no longer in the directory. Automatic registration makes one-shots
+      // and crashed sessions routine, so without this the roster fills
+      // with corpses; counters never decrement, so pruning cannot reissue
+      // a name. The stamp lands before the call, so a throwing prune
+      // retries on the next hourly sweep, not the next cycle.
+      const now = Date.now();
+      if (now - this.#lastPrune > 3_600_000 && this.#opts.store.pruneStaleChatAuto) {
+        this.#lastPrune = now;
+        this.#opts.store.pruneStaleChatAuto(isoMinutesAgo(CHAT_AUTO_TTL_DAYS * 24 * 60));
+      }
     } catch (err) {
       console.error(`[thatch] chat poll failed: ${err}`);
     } finally {
