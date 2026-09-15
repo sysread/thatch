@@ -190,7 +190,7 @@ behavior, with some features having no MCP counterpart.
 | `get_session_info` (session identity) | Yes | No | No |
 | `session_search` / `session_get` (conversation archaeology) | Yes (tools) | CLI only (`thatch session ...`) | CLI only (`thatch session ...`) |
 | `watch_*` (PR, branch, and command watchers) | Yes (tools) | No | No |
-| `chat_*` (cross-session chat) | Yes | No | No |
+| `chat_*` (cross-session chat) | Yes (wake on delivery) | Yes (mail at prompt time) | Yes (mail at prompt time) |
 
 For the full parity matrix, see [../mcp-parity.md](../mcp-parity.md).
 

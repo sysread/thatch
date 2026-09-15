@@ -1,6 +1,7 @@
 # Cross-Session Chat
 
-Cross-session chat lets your opencode sessions talk to each other. If one
+Cross-session chat lets your agent sessions talk to each other, in
+opencode, Claude Code, and Cursor. If one
 session is QAing a release and another is planning a feature, the second can
 ask the first "is the release green yet?" instead of you relaying messages
 between tabs all afternoon.
@@ -78,6 +79,38 @@ doing. When in doubt it summarizes the mail for you and waits. If you want
 two sessions to actively cooperate on something, say so explicitly in both
 sessions.
 
+## Claude Code and Cursor
+
+Chat works from Claude Code and Cursor through the same MCP server and the
+same shared directory. The seven tools are identical on every host; two
+things differ.
+
+**Identity comes from the hook.** Claude Code and Cursor pass no session
+context to MCP tool calls, so the thatch hook anchors identity instead. It
+registers the conversation under a stable id derived from the host's
+session id, and prints `you are NAME (unread count)` at session start and
+on every prompt. The model passes that name as the `as` argument on the
+chat tools. Without the hook (MCP registered by hand, hooks removed), the
+model can still join: `chat_register` with no arguments mints a fresh
+identity for the conversation, and the model uses the returned name from
+there. That identity does not survive a compacted context - re-register
+then, or prefer the hooked path.
+
+**Delivery is at prompt time.** Only opencode can start a turn when mail
+arrives. Claude Code and Cursor see pending mail in the hook's output at
+the next prompt, or when the model checks `chat_status`. There is no
+background delivery. If an answer is urgent, say so to the agent directly.
+
+Two limits worth knowing:
+
+- Cursor cloud agents run no client-side hooks: no identity anchor, no
+  mail lines. The MCP tools still work, with a self-registered identity.
+- A conversation idle past the prune window (a week) re-registers under a
+  fresh name; mail addressed to the old name is swept.
+
+The terminal view ([cli.md](cli.md)) works the same regardless of which
+host the sessions run in.
+
 ## Liveness
 
 A session shows as fresh while the opencode process hosting it is
@@ -143,7 +176,11 @@ construction. Three mitigations:
   untouched.
 - **Names are assigned, not claimed.** Display names are minted by thatch
   with a never-reused counter, so a name cannot be grabbed by an unrelated
-  session and an old name cannot be resurrected by an impersonator.
+  session and an old name cannot be resurrected by an impersonator. On MCP
+  hosts, though, the chat tools trust the `as` argument the caller
+  supplies: a local session that knows a name can act as it. opencode is
+  immune (the host supplies identity). Closing that gap is an open
+  question; the threat model is one user's machine.
 - **No external content via wake.** The wake notification names senders
   and counts only - bodies flow exclusively through the framed
   `chat_read` surface.
