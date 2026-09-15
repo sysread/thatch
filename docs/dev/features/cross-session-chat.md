@@ -83,11 +83,17 @@ on a shared tree can tell who sits where.
 
 A session continued via `opencode -s <id>` gets no event when it comes
 back up (resume writes nothing session-scoped), so the plugin reads the
-session id from the harness's own argv at init and registers it then.
+session id from the harness's command line at init and registers it then.
+The plugin does not see the CLI flags in `process.argv`: opencode hosts
+the server in a worker thread whose argv is just the worker script. The
+thread shares the process pid, so the plugin reads the OS-level command
+line for its own pid instead (`/proc/self/cmdline` on Linux, `ps -o
+args=` on macOS) and parses `-s`/`--session` from that.
 Registration is keyed by session id: the row already exists, so the name
 is RECLAIMED (names are owned by the session id, minted once, never
 renamed) and ownership is re-stamped - the serving harness beats and
-delivers for the row again. `-c/--continue` resolves no id in argv; that
+delivers for the row again. `-c/--continue` resolves no id on the
+command line; that
 session registers on its first idle like any other. Asleep-mail: the
 startup path kicks a delivery pass when it finishes, so the continued
 session learns what it missed at startup instead of waiting out the

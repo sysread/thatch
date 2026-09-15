@@ -1,5 +1,5 @@
 import { join, dirname } from "node:path";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import type { Plugin } from "@opencode-ai/plugin";
 import { ThatchDB } from "./db";
 import { BgeEmbeddingModel } from "./embeddings";
@@ -79,6 +79,37 @@ export function startupSessionIdFromArgv(argv: string[]): string | null {
     if (arg.startsWith("--session=")) return arg.slice("--session=".length) || null;
   }
   return null;
+}
+
+// The plugin does not run in the process's main thread: opencode's TUI
+// spawns a worker thread (cli/tui/worker.js) to host the server, and worker
+// threads get their own argv (just the worker script) with none of the CLI
+// flags. The thread still shares the process's pid, so the OS-level command
+// line for our own pid is the real `opencode -s ses_...` invocation. Read it
+// from /proc on Linux or via ps on macOS. Returns [] when unavailable;
+// callers treat that as "no session flag".
+export function osProcessArgs(): string[] {
+  try {
+    // Linux: cmdline is NUL-separated argv, exact and cheap.
+    return readFileSync("/proc/self/cmdline", "utf8").split("\0").filter(Boolean);
+  } catch {
+    // macOS has no /proc; ask ps for this pid's full command. Splitting on
+    // whitespace is safe for our purpose: session ids never contain spaces.
+    try {
+      const res = Bun.spawnSync(["ps", "-p", String(process.pid), "-o", "args="]);
+      if (res.exitCode !== 0) return [];
+      return res.stdout.toString().trim().split(/\s+/).filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+}
+
+// Resolve the session id this harness was launched to resume, if any:
+// prefer the thread-local argv (covers tests and any non-worker host), then
+// fall back to the process's OS-level command line (the real harness path).
+export function startupSessionId(): string | null {
+  return startupSessionIdFromArgv(process.argv) ?? startupSessionIdFromArgv(osProcessArgs());
 }
 
 export const server: Plugin = async ({ client, worktree }) => {
@@ -265,8 +296,8 @@ export const server: Plugin = async ({ client, worktree }) => {
   // fail on a server that is still starting. The async tail (title fetch,
   // asleep-mail delivery) is best-effort - the poller retries whatever it
   // misses, and the first idle converges the topic.
-  const startupSession = startupSessionIdFromArgv(process.argv);
-  chatDebug(`init: argv=${JSON.stringify(process.argv.slice(0, 8))} parsed=${startupSession} chatOn=${chatOn} autoRegister=${chatAutoRegister(loadConfig(dbPath).config)} tombstone=${startupSession ? db.hasChatLeaveTombstone(startupSession) : "n/a"}`);
+  const startupSession = startupSessionId();
+  chatDebug(`init: argv=${JSON.stringify(process.argv.slice(0, 8))} osArgs=${JSON.stringify(osProcessArgs().slice(0, 8))} parsed=${startupSession} chatOn=${chatOn} autoRegister=${chatAutoRegister(loadConfig(dbPath).config)} tombstone=${startupSession ? db.hasChatLeaveTombstone(startupSession) : "n/a"}`);
   if (chatOn && chatAutoRegister(loadConfig(dbPath).config) && startupSession && !db.hasChatLeaveTombstone(startupSession)) {
     const res = db.registerChatSession(startupSession, repo, null, "opencode", null, detectWorktreeKind(worktree), process.pid);
     chatDebug(`startup registration for ${startupSession}: ok=${res.ok} name=${res.ok ? res.name : res.error}`);

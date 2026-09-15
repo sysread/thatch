@@ -33,7 +33,7 @@ mock.module("@huggingface/transformers", () => ({
   },
 }));
 
-import { server } from "../src/index";
+import { server, osProcessArgs, startupSessionIdFromArgv } from "../src/index";
 import {
   sessionStartReminder,
   recallNudge,
@@ -1788,8 +1788,18 @@ describe("chat auto-registration on idle", () => {
     arHooks.dispose?.();
   });
 
-  test("status events reclaim ownership from a foreign harness", async () => {
-    // A session whose directory row is owned by ANOTHER harness (adopted
+  test("osProcessArgs reads this process's real command line", () => {
+    // The plugin loads in a worker thread whose argv is just the worker
+    // script - the real CLI flags are only visible on the OS-level command
+    // line for our own pid. The helper must return that command line here
+    // (the bun test invocation) and the parser must accept its shape.
+    const args = osProcessArgs();
+    expect(args.length).toBeGreaterThan(0);
+    expect(startupSessionIdFromArgv(["opencode", "-s", "ses_from_os"])).toBe("ses_from_os");
+    expect(startupSessionIdFromArgv(args)).toBeNull();
+  });
+
+  test("status events reclaim ownership from a foreign harness", async () => {    // A session whose directory row is owned by ANOTHER harness (adopted
     // while this one was restarting): when its own TUI's server sees its
     // status events, ownership must move back - wakes delivered by the
     // wrong server run their turns invisibly to the user watching the
