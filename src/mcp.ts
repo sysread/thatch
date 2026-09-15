@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { z } from "zod";
 import { ThatchDB } from "./db";
+import { mcpSessionID } from "./chat";
 import { BgeEmbeddingModel } from "./embeddings";
 import { detectRepo } from "./git";
 import { checkSetup, setupClaudeCode, setupCursor } from "./setup";
@@ -134,12 +135,21 @@ export async function runMcpServer(): Promise<void> {
     defaultStore: repo,
     extractionPayloadProvider,
     drainExtractionQueue,
-    // Claude Code identity anchor: the hooks record (parent pid -> session)
-    // mappings from payloads the model cannot influence, and this server is
-    // a child of the same Claude Code process - so its own parent pid
-    // resolves the calling session without trusting the model's `as`.
-    // Freshness bounds the pid-reuse hazard; a miss falls back to `as`.
-    chatDerivedIdentity: () => db.findChatSessionByHostPid(process.ppid, 600),
+    // Claude Code identity anchor, two model-proof layers:
+    //  1. The hooks record (parent pid -> session) from payloads the model
+    //     cannot influence, and this server is a child of the same Claude
+    //     Code process - current even after a session fork.
+    //  2. CLAUDE_CODE_SESSION_ID, set by the host in this server's env at
+    //     spawn ("retains the ID it was spawned with") - covers the case
+    //     where hook and server parent pids diverge, but goes stale after a
+    //     fork/continue, so it is the fallback, not the primary.
+    // A miss on both falls back to the caller-claimed `as` (Cursor).
+    chatDerivedIdentity: () => {
+      const mapped = db.findChatSessionByHostPid(process.ppid, 600);
+      if (mapped) return mapped;
+      const envID = process.env.CLAUDE_CODE_SESSION_ID;
+      return envID ? db.findChatSession(mcpSessionID(envID))?.session_id ?? null : null;
+    },
   };
   const tools = compileTools();
 

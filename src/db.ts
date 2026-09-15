@@ -968,6 +968,10 @@ export class ThatchDB {
     return this.#chat.findSessionByHostPid(ppid, maxAgeSeconds);
   }
 
+  continueChatSession(oldSessionID: string, newSessionID: string) {
+    return this.#chat.continueSession(oldSessionID, newSessionID);
+  }
+
   heartbeatChatSessions(sessionIDs: string[]) {
     return this.#chat.heartbeat(sessionIDs);
   }

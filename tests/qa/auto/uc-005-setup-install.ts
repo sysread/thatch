@@ -44,8 +44,9 @@ const useCase: UseCase = {
     "- Re-run is idempotent: instructions are not duplicated, thatch hooks are replaced (not appended),",
     "  and non-thatch hooks are preserved. A legacy `thatch echo` hook is replaced with `flush-tools`.",
     "- `--global` (Claude) writes `~/.claude/CLAUDE.md` + `~/.claude/settings.json` + skills to",
-    "  `$CLAUDE_CONFIG_DIR/skills/` but **no project `.mcp.json`** — it prints a `claude mcp add",
-    "  --scope user` command instead. `--global` (Cursor) writes `~/.cursor/mcp.json`,",
+    "  `$CLAUDE_CONFIG_DIR/skills/` but **no project `.mcp.json`** — it registers the MCP server",
+    "  via `claude mcp add --scope user` itself (falling back to printing that command when the",
+    "  claude CLI is missing or fails). `--global` (Cursor) writes `~/.cursor/mcp.json`,",
     "  `~/.cursor/AGENTS.md`, `~/.cursor/hooks.json`, `~/.cursor/skills/`.",
   ].join("\n"),
 
@@ -345,8 +346,13 @@ const useCase: UseCase = {
       console.log("  FAIL: global settings.json not written to config dir");
       return "FAIL";
     }
-    if (!claudeGlobal.stdout.toString().includes("claude mcp add --scope user")) {
-      console.log("  FAIL: --global (Claude) should print 'claude mcp add --scope user' command");
+    // Global MCP registration: setup runs `claude mcp add --scope user` on
+    // the user's behalf. When a claude CLI is on PATH it registers (or
+    // reports an existing registration); otherwise it falls back to
+    // printing the manual command. Either way the user learns the state.
+    const globalOut = claudeGlobal.stdout.toString();
+    if (!globalOut.includes("MCP server:") && !globalOut.includes("claude mcp add --scope user")) {
+      console.log("  FAIL: --global (Claude) should register the MCP server or print the manual command");
       return "FAIL";
     }
     // Global skills land in the config dir, and the run reports them there.

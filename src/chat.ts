@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+import { openSync, readSync, closeSync, readdirSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { CHAT_NAME_POOL } from "./chat-names";
 
 /**
@@ -98,6 +100,110 @@ export function mcpSessionID(hostSessionID: string): string {
   return `mcp_${hash}`;
 }
 
+/**
+ * Reads a Claude Code transcript's last line and returns the session id the
+ * conversation continued INTO, when the file ends with a continued-in record
+ * (Claude Code writes it when a conversation is resumed or forked into a new
+ * session id). Returns null otherwise. This is the link that lets a hook
+ * follow a continuation backwards: the NEW session id is all the hook knows,
+ * and the OLD transcript names it.
+ */
+export function continuedInTarget(transcriptPath: string): string | null {
+  let raw: string;
+  try {
+    // The marker is the file's final record; reading the tail avoids
+    // loading potentially large transcripts.
+    const stat = statSync(transcriptPath);
+    const tailLen = Math.min(stat.size, 4096);
+    const buf = Buffer.alloc(tailLen);
+    const fd = openSync(transcriptPath, "r");
+    try {
+      readSync(fd, buf, 0, tailLen, stat.size - tailLen);
+    } finally {
+      closeSync(fd);
+    }
+    raw = buf.toString("utf8");
+  } catch {
+    return null;
+  }
+  const lines = raw.trimEnd().split("\n").filter((l) => l.trim());
+  const last = lines[lines.length - 1];
+  if (!last) return null;
+  try {
+    const record = JSON.parse(last) as { type?: string; continuedInSessionId?: string };
+    if (record.type !== "continued-in" || !record.continuedInSessionId) return null;
+    return record.continuedInSessionId;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Finds the immediate predecessor of a continued session by scanning the
+ * transcript directory for a sibling whose tail hands off TO this session
+ * (see continuedInTarget). Most recently modified wins. Returns the
+ * predecessor's raw session id (transcript file stem), or null.
+ */
+export function scanPredecessorTranscript(
+  transcriptPath: string,
+  sessionID: string,
+  maxFiles = 200,
+): string | null {
+  const dir = dirname(transcriptPath);
+  let files: string[];
+  try {
+    files = readdirSync(dir)
+      .filter((f) => f.endsWith(".jsonl") && f !== basename(transcriptPath))
+      .map((f) => {
+        try {
+          return { f, m: statSync(join(dir, f)).mtimeMs };
+        } catch {
+          return null;
+        }
+      })
+      .filter((e): e is { f: string; m: number } => e !== null)
+      .sort((a, b) => b.m - a.m)
+      .slice(0, maxFiles)
+      .map((e) => e.f);
+  } catch {
+    return null;
+  }
+  for (const f of files) {
+    if (continuedInTarget(join(dir, f)) === sessionID) {
+      return f.slice(0, -".jsonl".length);
+    }
+  }
+  return null;
+}
+
+/**
+ * Walks a continuation chain back to the nearest session that has a chat
+ * directory row. Claude Code sessions fork on resume (new session id, same
+ * conversation), so a hook registering an unknown session id can adopt the
+ * predecessor's identity - same name, same mailbox - instead of stranding
+ * it. `isRegistered` maps a raw host session id to its chat session id when
+ * that row exists, else null. Bounded by maxHops; multi-hop forks resolve
+ * to the oldest registered ancestor.
+ */
+export function resolveRegisteredPredecessor(
+  transcriptPath: string,
+  sessionID: string,
+  isRegistered: (rawSessionID: string) => string | null,
+  maxHops = 10,
+): string | null {
+  let current = sessionID;
+  let currentPath = transcriptPath;
+  for (let hop = 0; hop < maxHops; hop++) {
+    const pred = scanPredecessorTranscript(currentPath, current);
+    if (!pred) return null;
+    const registered = isRegistered(pred);
+    if (registered) return registered;
+    current = pred;
+    currentPath = join(dirname(transcriptPath), `${pred}.jsonl`);
+  }
+  return null;
+}
+
 /** Which kind of harness hosts a chat session: opencode rows are
  *  poller-driven (liveness = heartbeat fresh), mcp rows are turn-driven
  *  (liveness = a turn ran recently; mail is read at the next prompt). */
@@ -185,8 +291,7 @@ export function humanAge(iso: string, now = Date.now()): string {
 }
 
 /** The liveness verdict for one roster row, from heartbeat age alone:
- *  - "fresh"/"stale" for opencode rows (poller-driven heartbeat; stale means
- *    the hosting harness has missed two beats and is presumed gone)
+ *  - "fresh"/"stale" for opencode rows (poller-driven heartbeat; stale means *    the hosting harness has missed two beats and is presumed gone)
  *  - "active"/"idle" for MCP rows (turn-driven; idle between prompts is the
  *    NORMAL state, so an idle MCP row is reachable, not dead)
  *  Heartbeat age is the only signal on purpose. A process id cannot serve:
@@ -601,6 +706,27 @@ export class ChatStore {
       )
       .get(ppid, cutoff) as { session_id: string } | undefined;
     return row?.session_id ?? null;
+  }
+
+  /**
+   * Migrates a chat identity onto a continued session id. Claude Code forks
+   * the session id on resume/fork while the conversation (name, mailbox,
+   * leave state) belongs to the human-level conversation, so the old row's
+   * key moves forward and everything referencing the old key follows:
+   * message sender/recipient columns (no foreign keys by design - the
+   * departed-sender degradation must not apply to a continued conversation),
+   * hook-recorded host-pid anchors, and leave tombstones. No-op when the
+   * old row does not exist.
+   */
+  continueSession(oldSessionID: string, newSessionID: string): void {
+    if (oldSessionID === newSessionID) return;
+    const row = this.#db.query("SELECT session_id FROM chat_sessions WHERE session_id = ?").get(oldSessionID);
+    if (!row) return;
+    this.#db.run("UPDATE chat_sessions SET session_id = ? WHERE session_id = ?", [newSessionID, oldSessionID]);
+    this.#db.run("UPDATE chat_messages SET from_session = ? WHERE from_session = ?", [newSessionID, oldSessionID]);
+    this.#db.run("UPDATE chat_messages SET to_session = ? WHERE to_session = ?", [newSessionID, oldSessionID]);
+    this.#db.run("UPDATE chat_host_pids SET session_id = ? WHERE session_id = ?", [newSessionID, oldSessionID]);
+    this.#db.run("UPDATE chat_leave_tombstones SET session_id = ? WHERE session_id = ?", [newSessionID, oldSessionID]);
   }
 
   /**

@@ -1,11 +1,11 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { ChatPoller, isStale, nowIso, CHAT_STALE_MS, CHAT_POLL_INTERVAL_MS, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailJsonl, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, slugifyTitle, isDefaultSessionTitle, humanAge, chatLiveness, splitChatRoster, createWakeGate, type ChatSessionRow, type ChatTailRow, type ChatTailFilter } from "../src/chat";
+import { ChatPoller, isStale, nowIso, CHAT_STALE_MS, CHAT_POLL_INTERVAL_MS, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailJsonl, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, slugifyTitle, isDefaultSessionTitle, humanAge, chatLiveness, splitChatRoster, createWakeGate, continuedInTarget, scanPredecessorTranscript, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailRow, type ChatTailFilter } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
 import { TOOL_DEFS } from "../src/tool-defs";
@@ -1186,5 +1186,93 @@ describe("host-pid identity anchor", () => {
     db.clearChatLeaveTombstone("ses_back");
     db.registerChatSession("ses_back", "p", null, "opencode");
     expect(db.findChatSessionByHostPid(7373, 600)).toBe("ses_back");
+  });
+});
+
+describe("continuation adoption", () => {
+  test("continuedInTarget reads the hand-off record from the file tail", () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-cont-"));
+    try {
+      const file = join(dir, "aaaa-1111.jsonl");
+      writeFileSync(file, '{"type":"user","message":{"content":"hi"}}\n{"type":"continued-in","sessionId":"aaaa-1111","continuedInSessionId":"bbbb-2222"}\n');
+      expect(continuedInTarget(file)).toBe("bbbb-2222");
+      writeFileSync(file, '{"type":"user","message":{"content":"hi"}}\n{"type":"assistant","message":{"content":"hello"}}\n');
+      expect(continuedInTarget(file)).toBeNull();
+      writeFileSync(file, "not json\n");
+      expect(continuedInTarget(file)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("scanPredecessorTranscript finds the sibling handing off to this session", () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-cont-"));
+    try {
+      writeFileSync(join(dir, "old-one.jsonl"), '{"type":"continued-in","sessionId":"old-one","continuedInSessionId":"new-one"}\n');
+      writeFileSync(join(dir, "unrelated.jsonl"), '{"type":"continued-in","sessionId":"x","continuedInSessionId":"y"}\n');
+      writeFileSync(join(dir, "new-one.jsonl"), '{"type":"user"}\n');
+      expect(scanPredecessorTranscript(join(dir, "new-one.jsonl"), "new-one")).toBe("old-one");
+      expect(scanPredecessorTranscript(join(dir, "old-one.jsonl"), "old-one")).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("resolveRegisteredPredecessor walks to the nearest registered ancestor", () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-cont-"));
+    try {
+      // Chain: gen0 -> gen1 -> gen2 (the hook knows only gen2).
+      writeFileSync(join(dir, "gen0.jsonl"), `{"type":"continued-in","sessionId":"gen0","continuedInSessionId":"gen1"}\n`);
+      writeFileSync(join(dir, "gen1.jsonl"), `{"type":"continued-in","sessionId":"gen1","continuedInSessionId":"gen2"}\n`);
+      writeFileSync(join(dir, "gen2.jsonl"), '{"type":"user"}\n');
+      // Nothing registered -> null.
+      expect(resolveRegisteredPredecessor(join(dir, "gen2.jsonl"), "gen2", () => null)).toBeNull();
+      // gen1 registered -> adopt gen1.
+      expect(resolveRegisteredPredecessor(join(dir, "gen2.jsonl"), "gen2", (id) => (id === "gen1" ? "mcp_gen1" : null))).toBe("mcp_gen1");
+      // Only gen0 registered -> walk through gen1 and adopt gen0.
+      expect(resolveRegisteredPredecessor(join(dir, "gen2.jsonl"), "gen2", (id) => (id === "gen0" ? "mcp_gen0" : null))).toBe("mcp_gen0");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("continueSession moves the identity, mail, anchors, and tombstone", () => {
+    reg("ses_old_cont", "oldname");
+    const anchor = db.registerChatSession("ses_old_cont", "p", null, "mcp");
+    if (!anchor.ok) throw new Error(`anchor registration failed: ${anchor.error}`);
+    const expectedName = anchor.name;
+    reg("ses_peer_cont", "peername");
+    db.sendChatMessage("ses_peer_cont", "ses_old_cont", "mail for you");
+    db.sendChatMessage("ses_old_cont", "ses_peer_cont", "and one back");
+    db.recordChatHostPid(999, "ses_old_cont");
+
+    db.continueChatSession("ses_old_cont", "ses_new_cont");
+    // The row is gone from the old key...
+    expect(db.findChatSession("ses_old_cont")).toBeNull();
+    // ...and lives on the new key under the SAME name, with the mail.
+    const row = db.findChatSession("ses_new_cont");
+    expect(row?.name).toBe(expectedName);
+    const mail = db.readChatMessages("ses_new_cont");
+    expect(mail.length).toBe(1); // the peer's unread mail followed
+    // The host-pid anchor points at the new key.
+    expect(db.findChatSessionByHostPid(999, 600)).toBe("ses_new_cont");
+
+    // A leave tombstone follows the conversation too. (One is created by
+    // unregistering, which deletes the row - so it is seeded directly here
+    // to test the migration of a tombstone coexisting with a live row.)
+    const raw = new Database(dbPath!);
+    raw.run(
+      "INSERT INTO chat_leave_tombstones (session_id, left_at) VALUES (?, ?)",
+      ["ses_new_cont", cutoffAgo(1)],
+    );
+    raw.close();
+    db.continueChatSession("ses_new_cont", "ses_newer_cont");
+    expect(db.hasChatLeaveTombstone("ses_new_cont")).toBe(false);
+    expect(db.hasChatLeaveTombstone("ses_newer_cont")).toBe(true);
+  });
+
+  test("continueSession with no old row is a no-op", () => {
+    db.continueChatSession("ses_never_was", "ses_whatever");
+    expect(db.findChatSession("ses_whatever")).toBeNull();
   });
 });

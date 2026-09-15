@@ -10,7 +10,7 @@ import { hygieneReport } from "../src/hygiene";
 import { claudeSessionStartReminder } from "../src/prompts";
 import { setupClaudeCode, setupCursor, registerClaudeMcpServer } from "../src/setup";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
-import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, chatLiveness, humanAge, splitChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
+import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, chatLiveness, humanAge, splitChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
 import { chatNotificationNudge } from "../src/prompts";
 import { createDebugLog } from "../src/debug";
@@ -87,7 +87,7 @@ async function defaultStore(): Promise<string> {
  * session ID it keeps the old shape: a line only when pending mail exists
  * for registered sessions in the project, naming the addressees.
  */
-async function chatHookLine(hookSessionID?: string): Promise<string> {
+async function chatHookLine(hookSessionID?: string, transcriptPath?: string): Promise<string> {
   // Disabled chat prints nothing: the hook line must not advertise a
   // feature the user turned off (the tools refuse, the poller never
   // starts, the prompt section omits chat).
@@ -105,6 +105,25 @@ async function chatHookLine(hookSessionID?: string): Promise<string> {
     // the MCP identity anchor - the session ID is stable per conversation,
     // so re-registering finds the same row and name.
     const sessionID = mcpSessionID(hookSessionID);
+    // Continuation adoption: Claude Code forks the session id on resume
+    // (and has been observed to fork spontaneously), stranding the old
+    // identity and mailbox. When this session is unknown, look for a
+    // predecessor transcript handing off to it; adopting keeps the name
+    // and mail following the human-level conversation. Runs before the
+    // ensure so the migrated row is the one re-registered.
+    if (!db.findChatSession(sessionID) && transcriptPath) {
+      try {
+        const pred = resolveRegisteredPredecessor(transcriptPath, hookSessionID, (raw) =>
+          db.findChatSession(mcpSessionID(raw))?.session_id ?? null,
+        );
+        if (pred) {
+          db.continueChatSession(pred, sessionID);
+          hookDebug("hook:adoption", `continued chat identity: ${pred} -> ${sessionID}`);
+        }
+      } catch (err) {
+        console.error(`[thatch] chat continuation adoption failed: ${err}`);
+      }
+    }
     // The leave tombstone blocks this ensure: chat_unregister must outlive
     // the turn that issued it, on MCP hosts as on opencode. The line is
     // the standing signal - it repeats every prompt until the model
@@ -691,12 +710,13 @@ switch (command) {
     // only when pending mail exists for registered sessions in this project.
     const hookInput = await readHookInput("reminder");
     const hookSessionID = (hookInput?.session_id as string | undefined) ?? (hookInput?.conversation_id as string | undefined);
-    const chatLine = await chatHookLine(hookSessionID);
+    const chatLine = await chatHookLine(hookSessionID, hookInput?.transcript_path as string | undefined);
     // Claude Code identity anchor: hooks and the MCP server are children of
     // the same claude process, so recording (parent pid -> session) lets the
     // server resolve the caller without trusting the model's `as`. Recorded
     // only for payloads with session_id (Claude Code) - Cursor's hooks come
-    // from a shared extension host where ppid is ambiguous.
+    // from a shared extension host where ppid is ambiguous. CLAUDE_CODE_
+    // SESSION_ID env in the server process is the spawn-time fallback.
     if (hookInput?.session_id && chatLine) {
       try {
         db.recordChatHostPid(process.ppid, mcpSessionID(String(hookInput.session_id)));
@@ -934,6 +954,7 @@ switch (command) {
       const data = JSON.parse(raw) as {
         session_id?: string;
         conversation_id?: string;
+        transcript_path?: string;
         prompt?: string;
         message?: string;
         text?: string;
@@ -962,7 +983,7 @@ switch (command) {
       // Chat check: with a hook session ID this always prints the caller's
       // assigned identity (and its unread count), so the model knows who it
       // is before any chat tool call; with no mail the line says so.
-      const chatLine = await chatHookLine(sessionID);
+      const chatLine = await chatHookLine(sessionID, data.transcript_path);
       // Claude Code identity anchor (see reminder case): record the
       // parent-process mapping for session_id-bearing (Claude Code)
       // payloads; Cursor's conversation_id stays on the `as` path.
