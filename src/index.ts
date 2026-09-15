@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { appendFileSync } from "node:fs";
 import type { Plugin } from "@opencode-ai/plugin";
 import { ThatchDB } from "./db";
 import { BgeEmbeddingModel } from "./embeddings";
@@ -96,6 +97,17 @@ export const server: Plugin = async ({ client, worktree }) => {
   const chatOn = chatEnabled(loadConfig(dbPath).config);
 
   const db = new ThatchDB(dbPath);
+  // Chat startup diagnostics: one line per harness init, appended beside the
+  // db (so test sandboxes write to their tmp dirs and never reach the
+  // quality gate's zero-[thatch]-lines bar). Answers, per harness: what argv
+  // the plugin saw, what it parsed from it, and which guards passed.
+  const chatDebug = (msg: string) => {
+    try {
+      appendFileSync(join(dirname(dbPath), "chat-debug.log"), `${new Date().toISOString()} ${msg}\n`);
+    } catch {
+      // Diagnostics must never break the host.
+    }
+  };
   const model = new BgeEmbeddingModel(modelName);
   const extraction = new ExtractionPipeline();
 
@@ -254,8 +266,10 @@ export const server: Plugin = async ({ client, worktree }) => {
   // asleep-mail delivery) is best-effort - the poller retries whatever it
   // misses, and the first idle converges the topic.
   const startupSession = startupSessionIdFromArgv(process.argv);
+  chatDebug(`init: argv=${JSON.stringify(process.argv.slice(0, 8))} parsed=${startupSession} chatOn=${chatOn} autoRegister=${chatAutoRegister(loadConfig(dbPath).config)} tombstone=${startupSession ? db.hasChatLeaveTombstone(startupSession) : "n/a"}`);
   if (chatOn && chatAutoRegister(loadConfig(dbPath).config) && startupSession && !db.hasChatLeaveTombstone(startupSession)) {
     const res = db.registerChatSession(startupSession, repo, null, "opencode", null, detectWorktreeKind(worktree), process.pid);
+    chatDebug(`startup registration for ${startupSession}: ok=${res.ok} name=${res.ok ? res.name : res.error}`);
     if (res.ok) {
       void (async () => {
         try {
