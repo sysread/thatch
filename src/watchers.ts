@@ -274,6 +274,39 @@ export async function ghApiRun(apiArgs: string[]): Promise<unknown> {
 const GH_API_TIMEOUT_MS = 15_000;
 
 /**
+ * Reads a spawned process's output stream to EOF. A read ERROR is not EOF -
+ * the pipe may still be delivering - so the loop backs off briefly and keeps
+ * reading until the caller's drain race abandons it; only the abandonment's
+ * cancel settles the loop early (a cancelled host process must never be
+ * pinned by a pending read). Treating an error as EOF here would turn the
+ * abandonment path - the orphaned-child timeout message - into a fast, wrong
+ * exit (observed live as a one-off test flake under parallel-suite load).
+ * Exported for the drain unit tests.
+ */
+export async function drainStreamOutput(
+  reader: ReadableStreamDefaultReader,
+  isCancelled: () => boolean,
+): Promise<string> {
+  let text = "";
+  const decoder = new TextDecoder();
+  for (;;) {
+    let res: { done: boolean; value?: any };
+    try {
+      res = await reader.read();
+    } catch {
+      if (isCancelled()) return text;
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, 50);
+        t.unref?.();
+      });
+      continue;
+    }
+    if (res.done) return text;
+    text += decoder.decode(res.value, { stream: true });
+  }
+}
+
+/**
  * One gh api call with the drain-race hardening: the pipe drains are raced
  * against a hard deadline (timeout plus COMMAND_DRAIN_GRACE_MS) so a gh
  * child process holding the pipes past the kill rejects cleanly instead of
@@ -289,23 +322,16 @@ export async function ghApiRunWithTimeout(apiArgs: string[], timeoutMs: number):
   const timeout = setTimeout(() => proc.kill("SIGKILL"), timeoutMs);
   const deadlineMs = timeoutMs + COMMAND_DRAIN_GRACE_MS;
   let raceTimer: ReturnType<typeof setTimeout> | undefined = undefined;
+  // Set by the abandonment path so the drain loops settle on their cancelled
+  // reads instead of retrying (a cancelled host must never be pinned).
+  let cancelled = false;
   try {
     const stdoutReader = proc.stdout.getReader();
     const stderrReader = proc.stderr.getReader();
-    const readAll = async (reader: ReadableStreamDefaultReader): Promise<string> => {
-      let text = "";
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          text += commandTargetLabel.length === -1 ? "" : new TextDecoder().decode(value, { stream: true });
-        }
-      } catch {
-        // Cancelled or errored: keep what was read.
-      }
-      return text;
-    };
-    const drain = Promise.all([readAll(stdoutReader), proc.exited]);
+    const drain = Promise.all([
+      drainStreamOutput(stdoutReader, () => cancelled),
+      proc.exited,
+    ]);
     // If the drain does not finish by the deadline (orphaned grandchild
     // holding the pipes), abandon it - and cancel the readers so the pending
     // reads settle instead of pinning the host process at shutdown.
@@ -317,13 +343,14 @@ export async function ghApiRunWithTimeout(apiArgs: string[], timeoutMs: number):
       }),
     ]);
     if (raced === null) {
+      cancelled = true;
       void stdoutReader.cancel().catch(() => {});
       void stderrReader.cancel().catch(() => {});
       throw new Error(`gh api ${apiArgs.join(" ")} timed out (orphaned child holding the output pipe; killed at the ${timeoutMs}ms timeout, drains abandoned after ${Math.round(deadlineMs / 1000)}s)`);
     }
     if (raced.exitCode !== 0) {
       const racedErr = await Promise.race([
-        readAll(stderrReader),
+        drainStreamOutput(stderrReader, () => cancelled),
         new Promise<string>((resolve) => {
           const t = setTimeout(() => resolve(""), deadlineMs);
           t.unref?.();
@@ -420,26 +447,20 @@ export async function runWatchedCommand(command: string, cwd: string, timeoutMs:
   }, timeoutMs);
   const deadlineMs = timeoutMs + COMMAND_DRAIN_GRACE_MS;
   let raceTimer: ReturnType<typeof setTimeout> | undefined = undefined;
+  // Set by the abandonment path so the drain loops settle on their cancelled
+  // reads instead of retrying (a cancelled host must never be pinned).
+  let cancelled = false;
   try {
     // Explicit readers instead of Response.text(): a held reader lock keeps
     // stream.cancel() from working, but reader.cancel() both settles the
     // pending reads and releases the host when the deadline wins.
     const stdoutReader = proc.stdout.getReader();
     const stderrReader = proc.stderr.getReader();
-    const readAll = async (reader: ReadableStreamDefaultReader): Promise<string> => {
-      let text = "";
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          text += new TextDecoder().decode(value, { stream: true });
-        }
-      } catch {
-        // Cancelled or errored: keep what was read.
-      }
-      return text;
-    };
-    const drain = Promise.all([readAll(stdoutReader), readAll(stderrReader), proc.exited]);
+    const drain = Promise.all([
+      drainStreamOutput(stdoutReader, () => cancelled),
+      drainStreamOutput(stderrReader, () => cancelled),
+      proc.exited,
+    ]);
     // If the drain does not finish by the deadline (orphaned grandchild
     // holding the pipes), abandon it - and cancel the readers so the pending
     // reads settle instead of pinning the host process at shutdown.
@@ -453,6 +474,7 @@ export async function runWatchedCommand(command: string, cwd: string, timeoutMs:
       }),
     ]);
     if (result === null) {
+      cancelled = true;
       void stdoutReader.cancel().catch(() => {});
       void stderrReader.cancel().catch(() => {});
       return { exitCode: 124, timedOut: true, stderr: "", durationMs: Date.now() - startedAt };

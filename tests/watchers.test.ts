@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { watcherNotificationNudge } from "../src/prompts";
-import { runWatchedCommand } from "../src/watchers";
+import { runWatchedCommand, drainStreamOutput } from "../src/watchers";
 import {
   WatcherRegistry,
   diffPrState,
@@ -915,6 +915,35 @@ test("commandTargetLabel collapses whitespace and clips long commands", () => {
 // runWatchedCommand (real processes - the injected-runner tests cannot see
 // spawn failures, timeouts, or pipe-holding grandchildren)
 // ---------------------------------------------------------------------------
+
+describe("drainStreamOutput", () => {
+  // A read that REJECTS is not EOF: the pipe may still be delivering, so
+  // the loop backs off and keeps reading instead of ending the drain early
+  // (the one-off flake under parallel-suite load). Only the abandonment's
+  // cancel settles the loop on an error.
+  const flakyReader = (failFirst: number, chunks: string[]) => {
+    let reads = 0;
+    let emitted = 0;
+    return {
+      read: async () => {
+        reads++;
+        if (reads <= failFirst) throw new Error("transient pipe error");
+        if (emitted < chunks.length) return { done: false, value: new TextEncoder().encode(chunks[emitted++]) };
+        return { done: true, value: undefined };
+      },
+    } as unknown as ReadableStreamDefaultReader;
+  };
+
+  test("a rejected read backs off and keeps reading (error is not EOF)", async () => {
+    const text = await drainStreamOutput(flakyReader(2, ["hel", "lo"]), () => false);
+    expect(text).toBe("hello");
+  });
+
+  test("a cancelled reader settles immediately with what was read", async () => {
+    const text = await drainStreamOutput(flakyReader(1, ["never"]), () => true);
+    expect(text).toBe("");
+  });
+});
 
 describe("runWatchedCommand", () => {
   test("reports a clean exit with duration", async () => {
