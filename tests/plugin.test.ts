@@ -1794,6 +1794,29 @@ describe("chat auto-registration on idle", () => {
     arHooks.dispose?.();
   });
 
+  test("status events reclaim ownership from a foreign harness", async () => {
+    // A session whose directory row is owned by ANOTHER harness (adopted
+    // while this one was restarting): when its own TUI's server sees its
+    // status events, ownership must move back - wakes delivered by the
+    // wrong server run their turns invisibly to the user watching the
+    // session's real TUI.
+    const seedDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    seedDb.registerChatSession("ses_reclaim", "thatch-ar3", "Foreign-owned", "opencode", null, null, 999999999);
+    seedDb.close();
+    const arHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-ar3" } as any);
+    try {
+      await arHooks.event!({ event: {
+        type: "session.status",
+        properties: { sessionID: "ses_reclaim", status: { type: "busy" } } } as any,
+      });
+      const row = new ThatchDB(process.env.THATCH_DB_PATH!).listChatSessions().find((r) => r.session_id === "ses_reclaim");
+      expect(row).toBeDefined();
+      expect(row!.host_pid).toBe(process.pid);
+    } finally {
+      arHooks.dispose?.();
+    }
+  });
+
   test("chat.autoRegister: false suppresses auto-registration but not chat_register", async () => {
     arTitle = "Real Title Here";
     const configPath = join(dirname(process.env.THATCH_DB_PATH!), "config.json");

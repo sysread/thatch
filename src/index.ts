@@ -880,6 +880,21 @@ export const server: Plugin = async ({ client, worktree }) => {
         // Record the latest status so the watcher registry can gate
         // proactive prompt delivery on idle sessions.
         if (sessionID && statusType) sessionStatus.set(sessionID, statusType);
+        // Reclaim ownership: events only fire on the server whose TUI the
+        // session actually lives in, so a session emitting events here is
+        // visible HERE. If the directory row is owned by another harness
+        // (adoption claims orphans, and can steal a row while its real
+        // harness was restarting), re-stamp ownership so future wakes run
+        // in the process the user is looking at - a wake delivered by the
+        // wrong server runs its turn invisibly (the shared opencode.db
+        // records it; the watching TUI never shows it). MCP rows have no
+        // pid and no local TUI - untouched.
+        if (sessionID && statusType && !childToParent.has(sessionID)) {
+          const row = chatOn ? db.findChatSession(sessionID) : undefined;
+          if (row && row.host_kind === "opencode" && row.host_pid !== process.pid) {
+            db.heartbeatChatSessions([sessionID]);
+          }
+        }
         if (statusType !== "idle") return;
         const parentID = sessionID ? childToParent.get(sessionID) : undefined;
         if (parentID && sessionID) {
