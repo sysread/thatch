@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, formatChatTailCard, CHAT_TAIL_SEPARATOR, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, selectChatBodyRenderer, cleanRenderedBody, slugifyTitle, isDefaultSessionTitle, humanAge, chatLiveness, splitChatRoster, createWakeGate, type ChatSessionRow, type ChatTailRow, type ChatTailFilter } from "../src/chat";
+import { ChatPoller, isStale, nowIso, CHAT_STALE_MS, CHAT_POLL_INTERVAL_MS, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, formatChatTailCard, CHAT_TAIL_SEPARATOR, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, selectChatBodyRenderer, cleanRenderedBody, slugifyTitle, isDefaultSessionTitle, humanAge, chatLiveness, splitChatRoster, createWakeGate, type ChatSessionRow, type ChatTailRow, type ChatTailFilter } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
 import { TOOL_DEFS } from "../src/tool-defs";
@@ -312,14 +312,12 @@ describe("roster age and checkout kind", () => {
     expect(humanAge("not-a-date", now)).toBe("unknown age");
   });
 
-  test("registration records the checkout kind and host pid; default rows read as unknown", () => {
+  test("registration records the checkout kind; default rows read as unknown", () => {
     reg("ses_a", "alpha");
-    db.registerChatSession("ses_w", "p", null, "opencode", "bravo", "worktree", 4242);
+    db.registerChatSession("ses_w", "p", null, "opencode", "bravo", "worktree");
     const rows = db.listChatSessions();
     expect(rows.find((r) => r.session_id === "ses_a")!.worktree).toBeNull();
-    expect(rows.find((r) => r.session_id === "ses_a")!.host_pid).toBeNull();
     expect(rows.find((r) => r.session_id === "ses_w")!.worktree).toBe("worktree");
-    expect(rows.find((r) => r.session_id === "ses_w")!.host_pid).toBe(4242);
   });
 
   test("register reports created vs existing", () => {
@@ -331,46 +329,43 @@ describe("roster age and checkout kind", () => {
     expect(second.created).toBe(false);
   });
 
-  test("heartbeat stamps the host pid", () => {
+  test("heartbeat refreshes last_seen", () => {
     reg("ses_hb", "delta");
+    const before = db.listChatSessions().find((r) => r.session_id === "ses_hb")!.last_seen;
     db.heartbeatChatSessions(["ses_hb"]);
-    expect(db.listChatSessions().find((r) => r.session_id === "ses_hb")!.host_pid).toBe(process.pid);
+    const after = db.listChatSessions().find((r) => r.session_id === "ses_hb")!.last_seen;
+    expect(Date.parse(after)).toBeGreaterThanOrEqual(Date.parse(before));
   });
 });
 
 describe("chatLiveness and roster split", () => {
   const NOW = Date.parse("2026-09-14T12:00:00Z");
+  const ago = (ms: number) => new Date(NOW - ms).toISOString();
   const row = (over: Partial<ChatSessionRow>) =>
     ({
       session_id: "ses_x", name: "x-00001", topic: null, project: "p",
       host_kind: "opencode", registered_at: "2026-09-14T11:00:00Z",
-      last_seen: "2026-09-14T11:59:00Z", worktree: null, host_pid: null,
+      last_seen: ago(5_000), worktree: null,
       ...over,
     }) as ChatSessionRow;
 
-  test("fresh timestamp with a dead pid is stale (instant death detection)", () => {
-    expect(chatLiveness(row({ host_pid: 111 }), { now: NOW, pidAlive: () => false })).toBe("stale");
-    expect(chatLiveness(row({ host_pid: 111 }), { now: NOW, pidAlive: () => true })).toBe("fresh");
-  });
-
-  test("a stale heartbeat is stale even when a pid happens to be alive (pid reuse)", () => {
-    expect(chatLiveness(row({ host_pid: 111, last_seen: "2026-09-12T12:00:00Z" }), { now: NOW, pidAlive: () => true })).toBe("stale");
-  });
-
-  test("legacy rows without a pid fall back to the heartbeat age", () => {
-    expect(chatLiveness(row({ host_pid: null }), { now: NOW, pidAlive: () => false })).toBe("fresh");
+  test("stale is two missed beats: one late beat is still fresh", () => {
+    expect(CHAT_STALE_MS).toBe(2 * CHAT_POLL_INTERVAL_MS);
+    expect(chatLiveness(row({ last_seen: ago(CHAT_POLL_INTERVAL_MS + 5_000) }), NOW)).toBe("fresh");
+    expect(chatLiveness(row({ last_seen: ago(CHAT_STALE_MS) }), NOW)).toBe("fresh");
+    expect(chatLiveness(row({ last_seen: ago(CHAT_STALE_MS + 1) }), NOW)).toBe("stale");
   });
 
   test("mcp rows are turn-driven: idle is the normal between-prompts state", () => {
-    expect(chatLiveness(row({ host_kind: "mcp", host_pid: 111 }), { now: NOW, pidAlive: () => false })).toBe("active");
-    expect(chatLiveness(row({ host_kind: "mcp", last_seen: "2026-09-12T12:00:00Z" }), { now: NOW })).toBe("idle");
+    expect(chatLiveness(row({ host_kind: "mcp" }), NOW)).toBe("active");
+    expect(chatLiveness(row({ host_kind: "mcp", last_seen: ago(CHAT_STALE_MS + 1) }), NOW)).toBe("idle");
   });
 
   test("splitChatRoster separates stale opencode rows; mcp rows are always active", () => {
-    const fresh = row({ session_id: "ses_f", name: "f-00001", host_pid: 111 });
-    const dead = row({ session_id: "ses_d", name: "d-00001", host_pid: 222 });
-    const mcp = row({ session_id: "ses_m", name: "m-00001", host_kind: "mcp" });
-    const { active, stale } = splitChatRoster([fresh, dead, mcp], { now: NOW, pidAlive: (p) => p === 111 });
+    const fresh = row({ session_id: "ses_f", name: "f-00001" });
+    const dead = row({ session_id: "ses_d", name: "d-00001", last_seen: ago(CHAT_STALE_MS + 1) });
+    const mcp = row({ session_id: "ses_m", name: "m-00001", host_kind: "mcp", last_seen: ago(CHAT_STALE_MS + 1) });
+    const { active, stale } = splitChatRoster([fresh, dead, mcp], NOW);
     expect(active.map((r) => r.session_id)).toEqual(["ses_f", "ses_m"]);
     expect(stale.map((r) => r.session_id)).toEqual(["ses_d"]);
   });
@@ -534,10 +529,10 @@ describe("staleness", () => {
   test("isStale flips on heartbeat age", () => {
     reg("ses_a", "alice");
     const fresh = db.listChatSessions()[0];
-    expect(isStale(fresh, CHAT_STALE_MINUTES)).toBe(false);
+    expect(isStale(fresh)).toBe(false);
     raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z'");
     const stale = db.listChatSessions()[0];
-    expect(isStale(stale, CHAT_STALE_MINUTES)).toBe(true);
+    expect(isStale(stale)).toBe(true);
   });
 
   test("heartbeat refreshes last_seen for hosted sessions only", () => {
@@ -546,8 +541,8 @@ describe("staleness", () => {
     raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z'");
     db.heartbeatChatSessions(["ses_hosted"]);
     const rows = new Map(db.listChatSessions().map((r) => [r.session_id, r]));
-    expect(isStale(rows.get("ses_hosted")!, CHAT_STALE_MINUTES)).toBe(false);
-    expect(isStale(rows.get("ses_other")!, CHAT_STALE_MINUTES)).toBe(true);
+    expect(isStale(rows.get("ses_hosted")!)).toBe(false);
+    expect(isStale(rows.get("ses_other")!)).toBe(true);
   });
 });
 
@@ -833,7 +828,7 @@ describe("ChatPoller", () => {
     raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z'");
     await poller.poll();
     const row = db.listChatSessions().find((r) => r.session_id === "ses_b")!;
-    expect(isStale(row, CHAT_STALE_MINUTES)).toBe(false);
+    expect(isStale(row)).toBe(false);
   });
 
   test("messages wait while the gate is closed, then deliver when idle", async () => {

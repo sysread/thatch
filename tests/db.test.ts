@@ -689,12 +689,42 @@ describe("migration", () => {
     const oldRow = migrated.listChatSessions().find((r) => r.session_id === "ses_old");
     expect(oldRow).toBeDefined();
     expect(oldRow!.worktree).toBeNull();
-    expect(oldRow!.host_pid).toBeNull();
-    migrated.registerChatSession("ses_new", "p", null, "opencode", null, "root", 4242);
+    migrated.registerChatSession("ses_new", "p", null, "opencode", null, "root");
     const newRow = migrated.listChatSessions().find((r) => r.session_id === "ses_new");
     expect(newRow!.worktree).toBe("root");
-    expect(newRow!.host_pid).toBe(4242);
     migrated.close();
+  });
+
+  test("opening a database with the retired host_pid column drops it", () => {
+    // host_pid shipped only in unreleased dev builds (process-id liveness,
+    // replaced by heartbeat age alone). Databases that picked it up must
+    // converge on the fresh-install schema, and rows must survive the drop.
+    const oldPath = join(dbDir, "pid-chat.db");
+    const legacy = new Database(oldPath, { create: true });
+    legacy.run(`
+      CREATE TABLE chat_sessions (
+        session_id    TEXT PRIMARY KEY,
+        name          TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        topic         TEXT,
+        project       TEXT,
+        host_kind     TEXT NOT NULL DEFAULT ('opencode'),
+        registered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        last_seen     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        auto          INTEGER NOT NULL DEFAULT 0,
+        worktree      TEXT NOT NULL DEFAULT (''),
+        host_pid      INTEGER
+      )
+    `);
+    legacy.run("INSERT INTO chat_sessions (session_id, name, host_pid) VALUES ('ses_pid', 'pid-00001', 4242)");
+    legacy.close();
+
+    const migrated = new ThatchDB(oldPath);
+    expect(migrated.listChatSessions().find((r) => r.session_id === "ses_pid")).toBeDefined();
+    migrated.close();
+    const check = new Database(oldPath);
+    const cols = (check.query("PRAGMA table_info(chat_sessions)").all() as any[]).map((r) => r.name);
+    expect(cols).not.toContain("host_pid");
+    check.close();
   });
 
   test("opening a pre-telemetry database adds the new columns", () => {

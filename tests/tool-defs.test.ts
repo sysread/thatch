@@ -895,9 +895,9 @@ describe("chat delivery model in tool output", () => {
 
   test("chat_list splits stale sessions into their own section", async () => {
     await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_split_oc", agent: "build" });
-    // A second session whose harness is gone: dead pid = instantly stale.
+    // A second session whose harness is gone: two missed heartbeats = stale.
     await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_split_ghost", agent: "build" });
-    new Database(dbPath).run("UPDATE chat_sessions SET host_pid = 999999999 WHERE session_id = 'ses_split_ghost'");
+    new Database(dbPath).run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_split_ghost'");
     const list = await findChatTool("chat_list").execute({}, ctx, { sessionID: "ses_split_oc", agent: "build" });
     expect(list).toContain("# Active Sessions");
     expect(list).toContain("# Stale Sessions");
@@ -919,7 +919,7 @@ describe("chat delivery model in tool output", () => {
     );
     expect(fresh).toContain("fresh");
     expect(fresh).toContain("will be woken");
-    new Database(dbPath).run("UPDATE chat_sessions SET host_pid = 999999999 WHERE session_id = 'ses_snd_to'");
+    new Database(dbPath).run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_snd_to'");
     const stale = await findChatTool("chat_send").execute(
       { to: "ses_snd_to", body: "ping again" },
       ctx,

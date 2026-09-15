@@ -20,7 +20,7 @@ import { sendNotification, defaultSpawner, type NotifyChannel, type Spawner } fr
 import { predictionVerb, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, type WatcherRegistry, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
-import { CHAT_STALE_MINUTES, chatLiveness, humanAge, renderChatParticipant, splitChatRoster, type ChatHostKind } from "./chat";
+import { CHAT_STALE_MS, chatLiveness, humanAge, renderChatParticipant, splitChatRoster, type ChatHostKind } from "./chat";
 import { detectWorktreeKind } from "./git";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
@@ -1617,7 +1617,7 @@ const chatRegisterDef: ToolDef = {
       // comes from the hook, which re-registers the same session ID and
       // prints the assigned name each prompt.
       const sessionID = `mcp_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
-      const res = ctx.db.registerChatSession(sessionID, ctx.defaultStore, null, kind, null, detectWorktreeKind(ctx.projectDir), null);
+      const res = ctx.db.registerChatSession(sessionID, ctx.defaultStore, null, kind, null, detectWorktreeKind(ctx.projectDir));
       if (!res.ok) return `Registration failed: ${res.error}`;
       return (
         `[registered] ${res.name}\n` +
@@ -1653,7 +1653,7 @@ const chatRegisterDef: ToolDef = {
     // a tombstoned opencode session as blocked; the tombstone is for the
     // idle path, not for the model's explicit intent.)
     ctx.db.clearChatLeaveTombstone?.(host.sessionID);
-    const res = ctx.db.registerChatSession(host.sessionID, ctx.defaultStore, null, kind, null, detectWorktreeKind(ctx.projectDir), process.pid);
+    const res = ctx.db.registerChatSession(host.sessionID, ctx.defaultStore, null, kind, null, detectWorktreeKind(ctx.projectDir));
     if (!res.ok) return `Registration failed: ${res.error}`;
     return (
       `[registered] ${res.name}\n` +
@@ -1708,7 +1708,7 @@ const chatListDef: ToolDef = {
     if (stale.length > 0) {
       sections.push(
         `# Stale Sessions\n\n` +
-          `_These sessions have not reported in for more than ${CHAT_STALE_MINUTES} minutes. ` +
+          `_These sessions have missed their heartbeat for over ${Math.round(CHAT_STALE_MS / 1000)} seconds. ` +
           `Their harnesses may no longer be running; mail waits until they resume._\n\n` +
           `${stale.map(line).join("\n")}`,
       );
@@ -1837,7 +1837,7 @@ const chatBroadcastDef: ToolDef = {
     "Broadcast one message to every other registered session on this " +
     "machine at once - for announcements and open questions (\"which of " +
     "you is working on X?\", \"main just moved, rebase if you are based on " +
-    "it\"). Stale opencode sessions (dead host processes) are skipped and " +
+    "it\"). Stale opencode sessions (harness stopped heartbeating) are skipped and " +
     "reported, since they will never read the mail; MCP sessions receive " +
     "it at their next prompt. Each recipient is woken like any chat " +
     "message, so broadcast sparingly: every live session spends a model " +

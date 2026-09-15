@@ -1756,7 +1756,6 @@ describe("chat auto-registration on idle", () => {
     expect(row1).toBeDefined();
     expect(row1!.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
     expect(row1!.topic).toBeNull();
-    expect(row1!.host_pid).toBe(process.pid);
     // First registration toasts; it must not say anything on later idles.
     const reg = toastCalls.find((t) => t.body.message.includes("registered in chat as"));
     expect(reg).toBeDefined();
@@ -1799,28 +1798,6 @@ describe("chat auto-registration on idle", () => {
     expect(startupSessionIdFromArgv(args)).toBeNull();
   });
 
-  test("status events reclaim ownership from a foreign harness", async () => {    // A session whose directory row is owned by ANOTHER harness (adopted
-    // while this one was restarting): when its own TUI's server sees its
-    // status events, ownership must move back - wakes delivered by the
-    // wrong server run their turns invisibly to the user watching the
-    // session's real TUI.
-    const seedDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-    seedDb.registerChatSession("ses_reclaim", "thatch-ar3", "Foreign-owned", "opencode", null, null, 999999999);
-    seedDb.close();
-    const arHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-ar3" } as any);
-    try {
-      await arHooks.event!({ event: {
-        type: "session.status",
-        properties: { sessionID: "ses_reclaim", status: { type: "busy" } } } as any,
-      });
-      const row = new ThatchDB(process.env.THATCH_DB_PATH!).listChatSessions().find((r) => r.session_id === "ses_reclaim");
-      expect(row).toBeDefined();
-      expect(row!.host_pid).toBe(process.pid);
-    } finally {
-      arHooks.dispose?.();
-    }
-  });
-
   test("chat.autoRegister: false suppresses auto-registration but not chat_register", async () => {
     arTitle = "Real Title Here";
     const configPath = join(dirname(process.env.THATCH_DB_PATH!), "config.json");
@@ -1848,15 +1825,16 @@ describe("chat auto-registration on idle", () => {
 
   test("-s resume reclaims the row, re-stamps ownership, delivers asleep-mail", async () => {
     // A session continued via `opencode -s <id>`: its row exists from a
-    // PREVIOUS harness (dead pid) with mail that queued while it was down.
-    // Startup registration must reclaim the row (same name - names are
-    // owned by the session id), re-stamp ownership, and wake it with the
-    // asleep-mail at init.
+    // PREVIOUS harness (heartbeat long lapsed) with mail that queued while
+    // it was down. Startup registration must reclaim the row (same name -
+    // names are owned by the session id), refresh its heartbeat, and wake
+    // it with the asleep-mail at init.
     const seedDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-    seedDb.registerChatSession("ses_resume", "thatch-resume", "Continued session", "opencode", null, null, 999999999);
+    seedDb.registerChatSession("ses_resume", "thatch-resume", "Continued session", "opencode");
     seedDb.registerChatSession("ses_rsnd", "thatch-resume", null, "opencode", "resender");
     seedDb.sendChatMessage("ses_rsnd", "ses_resume", "while you were asleep");
     seedDb.close();
+    new Database(process.env.THATCH_DB_PATH!).run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_resume'");
 
     const promptAsyncs: any[] = [];
     const resumeClient = {
@@ -1877,9 +1855,9 @@ describe("chat auto-registration on idle", () => {
       await settle();
       const row = new ThatchDB(process.env.THATCH_DB_PATH!).listChatSessions().find((r) => r.session_id === "ses_resume");
       expect(row).toBeDefined();
-      // Same row, SAME NAME (owned by the session id), new owner.
+      // Same row, SAME NAME (owned by the session id), heartbeat fresh again.
       expect(row!.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
-      expect(row!.host_pid).toBe(process.pid);
+      expect(Date.now() - Date.parse(row!.last_seen)).toBeLessThan(60_000);
       expect(row!.topic).toBe("Continued session");
       // The asleep-mail woke it at init.
       const wake = promptAsyncs.find((p) => p.path.id === "ses_resume");

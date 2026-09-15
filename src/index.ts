@@ -292,7 +292,7 @@ export const server: Plugin = async ({ client, worktree }) => {
   const startupSession = startupSessionId();
   debug("chat:startup", `init: argv=${JSON.stringify(process.argv.slice(0, 8))} osArgs=${JSON.stringify(osProcessArgs().slice(0, 8))} parsed=${startupSession} chatOn=${chatOn} autoRegister=${chatAutoRegister(loadConfig(dbPath).config)} tombstone=${startupSession ? db.hasChatLeaveTombstone(startupSession) : "n/a"}`);
   if (chatOn && chatAutoRegister(loadConfig(dbPath).config) && startupSession && !db.hasChatLeaveTombstone(startupSession)) {
-    const res = db.registerChatSession(startupSession, repo, null, "opencode", null, detectWorktreeKind(worktree), process.pid);
+    const res = db.registerChatSession(startupSession, repo, null, "opencode", null, detectWorktreeKind(worktree));
     debug("chat:startup", `registration for ${startupSession}: ok=${res.ok} name=${res.ok ? res.name : res.error}`);
     if (res.ok) {
       void (async () => {
@@ -907,21 +907,6 @@ export const server: Plugin = async ({ client, worktree }) => {
         // Record the latest status so the watcher registry can gate
         // proactive prompt delivery on idle sessions.
         if (sessionID && statusType) sessionStatus.set(sessionID, statusType);
-        // Reclaim ownership: events only fire on the server whose TUI the
-        // session actually lives in, so a session emitting events here is
-        // visible HERE. If the directory row is owned by another harness
-        // (adoption claims orphans, and can steal a row while its real
-        // harness was restarting), re-stamp ownership so future wakes run
-        // in the process the user is looking at - a wake delivered by the
-        // wrong server runs its turn invisibly (the shared opencode.db
-        // records it; the watching TUI never shows it). MCP rows have no
-        // pid and no local TUI - untouched.
-        if (sessionID && statusType && !childToParent.has(sessionID)) {
-          const row = chatOn ? db.findChatSession(sessionID) : undefined;
-          if (row && row.host_kind === "opencode" && row.host_pid !== process.pid) {
-            db.heartbeatChatSessions([sessionID]);
-          }
-        }
         if (statusType !== "idle") return;
         const parentID = sessionID ? childToParent.get(sessionID) : undefined;
         if (parentID && sessionID) {
@@ -1080,7 +1065,7 @@ export const server: Plugin = async ({ client, worktree }) => {
               // Placeholder titles never become topics (the real one
               // converges on a later idle via refreshChatTopic).
               const topic = title && !isDefaultSessionTitle(title) ? title : null;
-              const res = db.registerChatSession(sessionID, repo, topic, "opencode", null, detectWorktreeKind(worktree), process.pid);
+              const res = db.registerChatSession(sessionID, repo, topic, "opencode", null, detectWorktreeKind(worktree));
               // The topic converges as the auto-titler lands a real title:
               // registration is once-per-session, so later idles must
               // refresh it explicitly.

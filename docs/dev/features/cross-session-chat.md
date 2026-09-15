@@ -172,12 +172,16 @@ A `setInterval` loop (default 30s) runs one cycle per process: heartbeat
 the HOSTED sessions (those seen as events in this harness plus the `-s`
 startup session - idle sessions keep beating, so a session stays fresh
 while its harness lives), then deliver their mail. A crashed process
-fires no `session.deleted`, so its rows would linger - liveness is
-therefore a PROCESS check, not just a timestamp: each row carries the
-host PID, and `chatLiveness` (src/chat.ts) marks an opencode row stale
-the moment that PID no longer exists (signal-0 probe), even while the
-heartbeat age would still look fresh. Rows without a PID (legacy, MCP)
-fall back to the heartbeat age alone (default 10 minutes). `chat_list`
+fires no `session.deleted`, so its rows would linger - staleness catches
+them: a row that has missed two consecutive beats (`CHAT_STALE_MS`, 60s
+at the default interval) is stale, meaning its harness stopped. Two beats
+rather than one so a single late poll cycle does not flap the roster.
+Heartbeat age is the ONLY liveness signal, by design. A host process id
+was tried and dropped: the pid changes on every restart of the same
+session, and in a fleet where one harness beats a row another one
+stamped, the pid says dead while the heartbeat proves alive. `isStale`
+(src/chat.ts) is the single rule; `chatLiveness`, the `chat_send` note,
+and the broadcast skip all call it, so they cannot disagree. `chat_list`
 groups the result into Active and Stale sections - the stale section's
 explainer says what stale means - and `chat_send` states the recipient's
 liveness at send time, so a sender mailing a ghost learns it immediately
@@ -329,7 +333,7 @@ process is gone (broadcast skips it), while an mcp row's age only means
 ## Defaults
 
 Timing constants live in `src/chat.ts`: poll interval 30s, staleness
-threshold 10 minutes, re-nudge window 15 minutes, nudge cap 6 per recipient
+threshold two missed beats (60s), re-nudge window 15 minutes, nudge cap 6 per recipient
 per hour, auto-row TTL 7 days. There are no environment overrides yet; add
 them the way `THATCH_WATCH_POLL_SECONDS` works if a user needs them.
 

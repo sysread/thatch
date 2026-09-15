@@ -65,12 +65,6 @@ export interface ChatSessionRow {
   registered_at: string;
   last_seen: string;
   worktree: ChatWorktreeKind;
-  /** Process ID of the host opencode process that owns this session, when
-   *  known. Chat is a single-machine channel, so a live-check on this pid
-   *  is authoritative: a dead pid marks the session stale immediately,
-   *  instead of waiting out the heartbeat window. Legacy rows (and MCP
-   *  hosts) read as null and fall back to timestamp staleness. */
-  host_pid: number | null;
 }
 
 /** One message selected for wake-up delivery, with the sender's display name
@@ -163,9 +157,12 @@ export function isDefaultSessionTitle(title: string): boolean {
 }
 
 // Timing defaults, shared by the poller and the chat_list staleness display
-// so both agree on what "stale" means.
+// so both agree on what "stale" means. A hosting harness beats each of its
+// sessions every poll interval; a row that has missed two consecutive beats
+// belongs to a harness that stopped (crash, kill, machine asleep). Two beats
+// rather than one so a single late poll cycle does not flap the roster.
 export const CHAT_POLL_INTERVAL_MS = 30_000;
-export const CHAT_STALE_MINUTES = 10;
+export const CHAT_STALE_MS = 2 * CHAT_POLL_INTERVAL_MS;
 export const CHAT_RENUDGE_MINUTES = 15;
 export const CHAT_MAX_NUDGES_PER_HOUR = 6;
 
@@ -182,57 +179,30 @@ export function humanAge(iso: string, now = Date.now()): string {
   return `${Math.floor(minutes / (24 * 60))}d ago`;
 }
 
-/** The liveness verdict for one roster row:
- *  - "fresh"/"stale" for opencode rows (poller-driven heartbeat + pid check)
+/** The liveness verdict for one roster row, from heartbeat age alone:
+ *  - "fresh"/"stale" for opencode rows (poller-driven heartbeat; stale means
+ *    the hosting harness has missed two beats and is presumed gone)
  *  - "active"/"idle" for MCP rows (turn-driven; idle between prompts is the
  *    NORMAL state, so an idle MCP row is reachable, not dead)
- *  The pid check is what makes staleness honest: a host process that
- *  exited stops heartbeating, but its row's last_seen stays frozen for up
- *  to the stale window - a stamped pid that no longer exists marks the
- *  session stale immediately. `pidAlive` is injectable for tests; the
- *  default does a signal-0 probe (EPERM still means the process exists). */
-export type PidAlive = (pid: number) => boolean;
-
-function defaultPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err: any) {
-    return err?.code === "EPERM";
-  }
-}
-
-/** Signal-0 probe: is this process alive on this machine? Liveness only -
- *  a dead pid marks the row stale; it never moves ownership. */
-export function isPidAlive(pid: number): boolean {
-  return defaultPidAlive(pid);
-}
-
-export function chatLiveness(
-  row: ChatSessionRow,
-  opts?: { now?: number; pidAlive?: PidAlive },
-): "fresh" | "stale" | "active" | "idle" {
-  const now = opts?.now ?? Date.now();
-  const pidAlive = opts?.pidAlive ?? defaultPidAlive;
-  const tsStale = isStale(row, CHAT_STALE_MINUTES, now);
-  if (row.host_kind === "mcp") return tsStale ? "idle" : "active";
-  if (!tsStale && row.host_pid != null && !pidAlive(row.host_pid)) return "stale";
-  return tsStale ? "stale" : "fresh";
+ *  Heartbeat age is the only signal on purpose. A process id was tried and
+ *  dropped: the pid changes on every restart of the same session, and a row
+ *  beaten by one harness but stamped by an earlier one reads as dead while
+ *  it is plainly alive. One clock, one rule. */
+export function chatLiveness(row: ChatSessionRow, now = Date.now()): "fresh" | "stale" | "active" | "idle" {
+  const stale = isStale(row, now);
+  if (row.host_kind === "mcp") return stale ? "idle" : "active";
+  return stale ? "stale" : "fresh";
 }
 
 /** Splits the roster for the two-section display: Active (wake-able or
  *  reachable - fresh opencode rows and every MCP row, which read mail at
  *  their next prompt) and Stale (opencode rows whose harness has stopped
  *  reporting; mail to them waits until they resume). */
-export function splitChatRoster(
-  rows: ChatSessionRow[],
-  opts?: { now?: number; pidAlive?: PidAlive },
-): { active: ChatSessionRow[]; stale: ChatSessionRow[] } {
+export function splitChatRoster(rows: ChatSessionRow[], now = Date.now()): { active: ChatSessionRow[]; stale: ChatSessionRow[] } {
   const active: ChatSessionRow[] = [];
   const stale: ChatSessionRow[] = [];
   for (const row of rows) {
-    const liveness = chatLiveness(row, opts);
-    (liveness === "stale" ? stale : active).push(row);
+    (chatLiveness(row, now) === "stale" ? stale : active).push(row);
   }
   return { active, stale };
 }
@@ -304,19 +274,14 @@ export class ChatStore {
     kind: ChatHostKind,
     nameBase: string | null = null,
     worktree: ChatWorktreeKind = null,
-    hostPid: number | null = null,
   ): { ok: true; name: string; topic: string | null; created: boolean } | { ok: false; error: string } {
     const existing = this.#find(sessionID);
     if (existing) {
-      this.#touch(sessionID);
       // Reclaim: registration is keyed by session id, so a session
       // continued in a new harness process (`opencode -s <id>`) reclaims
-      // its row and name by re-registering - re-stamp ownership so the
-      // serving harness beats and delivers for it again. The idle path
-      // re-stamps harmlessly (same pid).
-      if (hostPid != null && existing.host_pid !== hostPid) {
-        this.#db.run("UPDATE chat_sessions SET host_pid = ? WHERE session_id = ?", [hostPid, sessionID]);
-      }
+      // its row and name by re-registering. Touching last_seen is the
+      // whole of ownership: the harness that beats a row is its host.
+      this.#touch(sessionID);
       // An explicit registration clears the leave tombstone for its own
       // session ID: "I want back in" is the opposite of "I left". This is
       // also what closes the in-flight race - an auto-register IIFE whose
@@ -342,7 +307,7 @@ export class ChatStore {
     for (let attempt = 0; attempt < 10; attempt++) {
       const next = this.#bumpCounter(base);
       const name = `${base}-${String(next).padStart(5, "0")}`;
-      const claimed = this.#insertSession(sessionID, name, project, cleanTopic, kind, worktree, hostPid);
+      const claimed = this.#insertSession(sessionID, name, project, cleanTopic, kind, worktree);
       if (claimed.ok) return { ok: true, name, topic: cleanTopic, created: true };
       if (claimed.reason === "already-registered") {
         // A concurrent registration of the same session ID won the race;
@@ -461,7 +426,7 @@ export class ChatStore {
 
   list(): ChatSessionRow[] {
     return (this.#db
-      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree, host_pid FROM chat_sessions ORDER BY name")
+      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree FROM chat_sessions ORDER BY name")
       .all() as any[]).map(rowFromSession);
   }
 
@@ -537,7 +502,7 @@ export class ChatStore {
         // Staleness means "host process gone" only for opencode rows; an
         // mcp row between turns reads its mail at the next prompt, so it
         // always receives.
-        if (row.host_kind === "opencode" && isStale(row, CHAT_STALE_MINUTES)) {
+        if (row.host_kind === "opencode" && isStale(row)) {
           skipped.push(row.name);
           continue;
         }
@@ -638,18 +603,14 @@ export class ChatStore {
     ).map((r) => ({ name: r.name, pending: r.pending }));
   }
 
-  /** Refreshes last_seen (and stamps this process as the host) for the
-   *  given sessions. Sessions that never registered are absent from
+  /** Refreshes last_seen for the given sessions - the heartbeat that keeps
+   *  them out of the stale section. Sessions that never registered are absent from
    *  chat_sessions, so the UPDATE is a no-op for them - no filtering needed
    *  on the caller's side. */
   heartbeat(sessionIDs: string[]): void {
     if (sessionIDs.length === 0) return;
     const marks = sessionIDs.map(() => "?").join(",");
-    this.#db.run(`UPDATE chat_sessions SET last_seen = ?, host_pid = ? WHERE session_id IN (${marks})`, [
-      nowIso(),
-      process.pid,
-      ...sessionIDs,
-    ]);
+    this.#db.run(`UPDATE chat_sessions SET last_seen = ? WHERE session_id IN (${marks})`, [nowIso(), ...sessionIDs]);
   }
   /**
    * The full message feed for `thatch chat tail`: every row with sender and
@@ -736,14 +697,14 @@ export class ChatStore {
 
   #find(sessionID: string): ChatSessionRow | null {
     const row = this.#db
-      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree, host_pid FROM chat_sessions WHERE session_id = ?")
+      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree FROM chat_sessions WHERE session_id = ?")
       .get(sessionID) as any;
     return row ? rowFromSession(row) : null;
   }
 
   #findByName(name: string): ChatSessionRow | null {
     const row = this.#db
-      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree, host_pid FROM chat_sessions WHERE name = ? COLLATE NOCASE")
+      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree FROM chat_sessions WHERE name = ? COLLATE NOCASE")
       .get(name) as any;
     return row ? rowFromSession(row) : null;
   }
@@ -822,12 +783,11 @@ export class ChatStore {
     topic: string | null,
     kind: ChatHostKind,
     worktree: ChatWorktreeKind,
-    hostPid: number | null,
   ): { ok: true; topic: string | null } | { ok: false; reason: "name-taken" | "already-registered" } {
     try {
       this.#db.run(
-        "INSERT INTO chat_sessions (session_id, name, topic, project, host_kind, registered_at, last_seen, auto, worktree, host_pid) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
-        [sessionID, name, topic, project, kind, nowIso(), nowIso(), worktree ?? "", hostPid],
+        "INSERT INTO chat_sessions (session_id, name, topic, project, host_kind, registered_at, last_seen, auto, worktree) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
+        [sessionID, name, topic, project, kind, nowIso(), nowIso(), worktree ?? ""],
       );
       return { ok: true, topic };
     } catch (err) {
@@ -858,7 +818,6 @@ function rowFromSession(r: any): ChatSessionRow {
     // Pre-migration rows carry the empty-string default; read back as
     // undetected so the roster omits the token instead of printing a blank.
     worktree: r.worktree === "root" || r.worktree === "worktree" ? r.worktree : null,
-    host_pid: typeof r.host_pid === "number" ? r.host_pid : null,
   };
 }
 
@@ -1380,8 +1339,9 @@ export class ChatPoller {
   }
 }
 
-/** True when a session row's last_seen is older than the staleness
- *  threshold. Used by chat_list to mark ghosts. */
-export function isStale(row: ChatSessionRow, staleMinutes: number, now = Date.now()): boolean {
-  return now - Date.parse(row.last_seen) > staleMinutes * 60_000;
+/** True when a session row has missed two heartbeats (see CHAT_STALE_MS).
+ *  The one staleness rule: chat_list, chat_send's stale note, and the
+ *  broadcast skip all go through here so they can never disagree. */
+export function isStale(row: ChatSessionRow, now = Date.now()): boolean {
+  return now - Date.parse(row.last_seen) > CHAT_STALE_MS;
 }

@@ -240,8 +240,7 @@ export class ThatchDB {
         registered_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
         last_seen     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
         auto          INTEGER NOT NULL DEFAULT 0,
-        worktree      TEXT NOT NULL DEFAULT (''),
-        host_pid      INTEGER
+        worktree      TEXT NOT NULL DEFAULT ('')
       )
     `);
 
@@ -324,13 +323,13 @@ export class ThatchDB {
     }
   }
 
-  // chat_sessions tables created before the host_pid column lack it; the
-  // ALTER adds it, and existing rows read as no-pid (liveness falls back to
-  // the heartbeat age until the owning process heartbeats or re-registers).
+  // A host_pid column briefly existed in unreleased builds (liveness by
+  // process id, dropped in favor of heartbeat age alone). Remove it from
+  // any database that picked it up so the schema matches fresh installs.
   #migrateChatHostPid(): void {
     const cols = (this.#db.query("PRAGMA table_info(chat_sessions)").all() as any[]).map((r) => r.name);
-    if (cols.length > 0 && !cols.includes("host_pid")) {
-      this.#db.run("ALTER TABLE chat_sessions ADD COLUMN host_pid INTEGER");
+    if (cols.includes("host_pid")) {
+      this.#db.run("ALTER TABLE chat_sessions DROP COLUMN host_pid");
     }
   }
 
@@ -880,8 +879,8 @@ export class ThatchDB {
   // Cross-session chat: delegates to ChatStore
   // ---------------------------------------------------------------------------
 
-  registerChatSession(sessionID: string, project: string | null, topic: string | null, kind: ChatHostKind, nameBase: string | null = null, worktree: ChatWorktreeKind = null, hostPid: number | null = null) {
-    return this.#chat.register(sessionID, project, topic, kind, nameBase, worktree, hostPid);
+  registerChatSession(sessionID: string, project: string | null, topic: string | null, kind: ChatHostKind, nameBase: string | null = null, worktree: ChatWorktreeKind = null) {
+    return this.#chat.register(sessionID, project, topic, kind, nameBase, worktree);
   }
 
   refreshChatTopic(sessionID: string, title: string) {
