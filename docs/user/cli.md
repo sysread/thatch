@@ -54,12 +54,15 @@ thatch chat tail --from al --to bob        # substring match on names
 thatch chat tail --since 2026-09-12 --until "2026-09-13 09:00"   # a window
 ```
 
-`chat list` shows every registered session as aligned columns under a
-header row: how long since its last heartbeat (a large age means the
-session's process is probably gone), its status (`fresh` or `STALE`),
-its project, and the topic it registered with - the fastest way to
-answer "which session should I talk to about X?" Color is added only
-when the output is a terminal; a pipe prints plain aligned text.
+`chat list` shows every registered session in two sections, Active and
+Stale, each as aligned columns under a header row: how long since its
+last heartbeat, its status (`fresh` or `stale` for opencode sessions;
+`active` or `idle` for Claude Code and Cursor sessions, which only beat
+when a prompt runs), its project, and its topic (the session's title) -
+the fastest way to answer "which session should I talk to about X?" A
+stale session has missed two heartbeats, about a minute: the opencode
+process hosting it has probably stopped. Color is added only when the
+output is a terminal; a pipe prints plain aligned text.
 
 `chat tail` prints the conversation as a JSONL event log: one JSON
 object per line, one event per line. Sending a message and reading it
@@ -108,8 +111,8 @@ too, so a filtered tail keeps watching the same way:
 
 A `--until` already in the past exits after the backlog (a closed
 window has nothing left to follow); one in the future follows until
-the window closes. Note that the limit hides sent events, not their
-reads: a hidden message that gets read during follow mode still emits
+the window closes. In the backlog, a hidden message's read is hidden
+with it; in follow mode, a hidden message that gets read still emits
 its read event.
 
 ## Priming a new project

@@ -1823,7 +1823,7 @@ describe("chat auto-registration on idle", () => {
     }
   });
 
-  test("-s resume reclaims the row, re-stamps ownership, delivers asleep-mail", async () => {
+  test("-s resume reclaims the row, refreshes its heartbeat, delivers asleep-mail", async () => {
     // A session continued via `opencode -s <id>`: its row exists from a
     // PREVIOUS harness (heartbeat long lapsed) with mail that queued while
     // it was down. Startup registration must reclaim the row (same name -

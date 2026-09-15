@@ -46,7 +46,8 @@ function usage(): never {
                                    Full conversation as OpenAI chat-completions JSONL
   thatch session search <query> [--session <id>] [--regex] [--limit N]
                                    JSONL of matching parts across sessions (decoded content)
-  thatch chat list                 Registered chat sessions: name, age, project, topic
+  thatch chat list                 Registered chat sessions, grouped Active/Stale:
+                                   name, age, status, project, topic
   thatch chat tail [--once] [--limit N|all] [--match RE]
                    [--from NAME] [--to NAME] [--since DT] [--until DT]
                                    Follow cross-session chat as a JSONL
@@ -372,7 +373,7 @@ function formatChatRoster(sessions: ChatSessionRow[]): string {
     parts.push([paint("1", "# Active Sessions"), renderTable(active)].join("\n"));
   }
   if (stale.length > 0) {
-    const explainer = `These sessions have missed their heartbeat for over ${Math.round(CHAT_STALE_MS / 1000)} seconds. Their harnesses have stopped; mail waits until they resume.`;
+    const explainer = `These sessions have missed their heartbeat for over ${Math.round(CHAT_STALE_MS / 1000)} seconds. Their harnesses may no longer be running (stopped, or the machine slept); mail waits until they resume.`;
     parts.push([paint("1", "# Stale Sessions"), paint("3;90", explainer), renderTable(stale)].join("\n"));
   }
   return parts.join("\n\n");

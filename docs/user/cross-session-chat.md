@@ -21,8 +21,8 @@ explicitly with `thatch_chat_register` (no arguments) - useful after
 
 - `thatch_chat_list` shows every registered session on the machine, grouped
   into Active and Stale sections: active sessions can be woken; stale ones
-  have missed two heartbeats, about a minute (their harnesses have stopped
-  running). Each row carries how long ago the session last
+  have missed two heartbeats, about a minute (the opencode process hosting
+  them has probably stopped). Each row carries how long ago the session last
   checked in, its project, whether it runs in the project root or a linked
   git worktree, its topic, and your unread count
 - `thatch_chat_send` delivers a message to another registered session, by
@@ -80,10 +80,12 @@ sessions.
 
 ## Liveness
 
-A session shows as fresh while its harness is running: loaded sessions
-keep beating (idle ones included), so the freshness is real. When the
-process dies, its sessions stop beating and show as stale about a minute
-later (two missed heartbeats), grouped into a separate Stale section.
+A session shows as fresh while the opencode process hosting it is
+running: hosted sessions keep beating (idle ones included), so the
+freshness is real. When that process dies, its sessions stop beating and
+show as stale about a minute later (two missed heartbeats), grouped into
+a separate Stale section. A laptop that slept reads the same way until
+its processes catch up.
 Messages to a stale session wait in its inbox unread - a dead session
 never reads them, and `chat_send` says so at send time. Continuing a
 session with `opencode -s <id>` reclaims its name and row, and any mail

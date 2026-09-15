@@ -373,9 +373,9 @@ describe("chatLiveness and roster split", () => {
 
 describe("wake gate", () => {
   // The gate decides wake delivery for the chat poller AND the watcher
-  // registry. The absence case is load-bearing: swept sessions never
-  // emitted status events, so a gate that rejected on map-absence left
-  // them mail-deaf (beating fine, never woken).
+  // registry. The absence case is load-bearing: the `-s` startup session
+  // is hosted before it emits any status event, so a gate that rejected
+  // on map-absence would leave it mail-deaf (beating fine, never woken).
   const gate = (over?: {
     compacting?: boolean;
     mapped?: string;

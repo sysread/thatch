@@ -323,9 +323,9 @@ export class ThatchDB {
     }
   }
 
-  // A host_pid column briefly existed in unreleased builds (liveness by
-  // process id, dropped in favor of heartbeat age alone). Remove it from
-  // any database that picked it up so the schema matches fresh installs.
+  // The released schema has no host_pid column (liveness is heartbeat age;
+  // see chatLiveness). A development database may carry one; drop it so
+  // every database matches a fresh install.
   #migrateChatHostPid(): void {
     const cols = (this.#db.query("PRAGMA table_info(chat_sessions)").all() as any[]).map((r) => r.name);
     if (cols.includes("host_pid")) {

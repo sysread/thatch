@@ -43,8 +43,9 @@ The split:
   Concurrent access is the already-solved case - multiple sessions share the
   DB for memories today, under WAL plus a busy timeout.
 - **Delivery is local.** Each process polls the inbox for messages addressed
-  to sessions it hosts (those it has seen `session.status` events for) and
-  prompts them through its own SDK client. A sender never prompts a session
+  to sessions it hosts (those it has seen `session.status` events for,
+  plus the `-s` startup session) and prompts them through its own SDK
+  client. A sender never prompts a session
   in another process.
 
 This preserves the watcher rationale's core property - no process prompts a
@@ -59,13 +60,14 @@ outlives a process, so liveness needs a signal beyond process lifetime.
 
 Sessions are auto-registered by the plugin: the first `session.status`
 idle event for a top-level session inserts its directory row, and a
-session continued via `-s <id>` registers at harness start (below) --
-both unless `chat.autoRegister: false`. Names are assigned, never
+session continued via `-s <id>` registers at harness start (below);
+both paths are skipped when `chat.autoRegister: false` or when the
+session left explicitly (a leave tombstone, see below). Names are assigned, never
 claimed: a pool draw (`CHAT_NAME_POOL`, src/chat-names.ts) plus a
 per-base counter row (`chat_name_counters`, src/db.ts) that only ever
 increments - drawn atomically via INSERT ... ON CONFLICT ... RETURNING.
 Pool names are deliberately short: they appear in every wake prompt and
-roster line, and the session's DESCRRIPTIVE identity lives in the topic
+roster line, and the session's descriptive identity lives in the topic
 column instead (the live session title, refreshed on every idle by
 `refreshAutoTopic` - auto rows only; legacy rows keep their old model-set
 topics; placeholder titles never become topics or names). A name is
@@ -91,8 +93,8 @@ line for its own pid instead (`/proc/self/cmdline` on Linux, `ps -o
 args=` on macOS) and parses `-s`/`--session` from that.
 Registration is keyed by session id: the row already exists, so the name
 is RECLAIMED (names are owned by the session id, minted once, never
-renamed) and ownership is re-stamped - the serving harness beats and
-delivers for the row again. `-c/--continue` resolves no id on the
+renamed) and the row's heartbeat is refreshed - hosting is the
+heartbeat, so the serving harness beats and delivers for the row again. `-c/--continue` resolves no id on the
 command line; that
 session registers on its first idle like any other. Asleep-mail: the
 startup path kicks a delivery pass when it finishes, so the continued
@@ -177,9 +179,9 @@ them: a row that has missed two consecutive beats (`CHAT_STALE_MS`, 60s
 at the default interval) is stale, meaning its harness stopped. Two beats
 rather than one so a single late poll cycle does not flap the roster.
 Heartbeat age is the ONLY liveness signal, by design. A host process id
-was tried and dropped: the pid changes on every restart of the same
-session, and in a fleet where one harness beats a row another one
-stamped, the pid says dead while the heartbeat proves alive. `isStale`
+cannot serve: the same session is re-hosted by a new process on every
+`-s` resume, so a pid stamped on the row lies as soon as a different
+harness beats it (it says dead while the heartbeat proves alive). `isStale`
 (src/chat.ts) is the single rule; `chatLiveness`, the `chat_send` note,
 and the broadcast skip all call it, so they cannot disagree. `chat_list`
 groups the result into Active and Stale sections - the stale section's
@@ -326,8 +328,8 @@ identity from `chat_register`). `chat_status` is the quiet check
 (registered flag + pending/total); the flush-tools hook line names the
 caller's identity and mailbox, and is absent entirely when chat is
 disabled - absence is silent by construction.
-Staleness semantics differ by kind: an opencode row's stale age means the
-process is gone (broadcast skips it), while an mcp row's age only means
+Staleness semantics differ by kind: an opencode row's stale age means its
+harness stopped beating (broadcast skips it), while an mcp row's age only means
 "between turns" (broadcast always delivers).
 
 ## Defaults
@@ -349,15 +351,20 @@ them the way `THATCH_WATCH_POLL_SECONDS` works if a user needs them.
   chat_name_counters and the auto column), the NOCASE collation migration
   and topic column migration, delegated methods
 - `src/tool-defs.ts` - the chat tool definitions
-- `src/index.ts` - poller construction, delivery closure, idle
+- `src/index.ts` - poller construction, delivery closure, `-s` startup
+  registration (`osProcessArgs`, `startupSessionId`), idle
   auto-registration + topic refresh, idle flush,
   session.deleted unregister, dispose, transcript echo in
   tool.execute.after
+- `src/debug.ts` - the `THATCH_DEBUG` diagnostic log; `chat:startup` is
+  the chat consumer
 - `src/prompts.ts` - `chatNotificationNudge()`, `chatEchoText()` /
   `isChatEchoParts()`, system prompt Cross-Session Chat section, MCP
   absent-tools note
-- `tests/chat.test.ts` - store, pool, migration, echo-text, and poller unit
-  tests (temp-dir SQLite, injected delivery)
+- `tests/chat.test.ts` - store, pool, migration, echo-text, liveness, tail
+  diff/backlog, and poller unit tests (temp-dir SQLite, injected delivery)
 - `tests/qa/auto/uc-097-chat.ts` - full lifecycle against a mocked poller
+- `tests/qa/auto/uc-099-chat-cli.ts` - `chat list` roster and `chat tail`
+  JSONL contract over a seeded DB
 - `tests/qa/live/uc-098-chat-cross-session.ts` - two real sessions exchange
   a message through the shared DB

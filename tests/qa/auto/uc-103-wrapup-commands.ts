@@ -79,8 +79,6 @@ const useCase: UseCase = {
         get: async () => ({ data: { title: "QA wrap-up session" } }),
         status: async () => ({ data: {} }),
         messages: async () => ({ data: messages }),
-        // The startup sweep lists sessions; this fixture registers none.
-        list: async () => ({ data: [] }),
       },
       tui: {
         showToast: async (opts: any) => {

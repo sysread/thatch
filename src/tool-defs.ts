@@ -1709,7 +1709,7 @@ const chatListDef: ToolDef = {
       sections.push(
         `# Stale Sessions\n\n` +
           `_These sessions have missed their heartbeat for over ${Math.round(CHAT_STALE_MS / 1000)} seconds. ` +
-          `Their harnesses may no longer be running; mail waits until they resume._\n\n` +
+          `Their harnesses may no longer be running (stopped, or the machine slept); mail waits until they resume._\n\n` +
           `${stale.map(line).join("\n")}`,
       );
     }
@@ -1892,9 +1892,8 @@ const chatStatusDef: ToolDef = {
     if (!status.registered) {
       // Distinguish "not YET registered" from "broken": opencode sessions
       // auto-register when the turn goes idle, so a mid-turn check here is
-      // normal and must not read as a failure (the origin of a false bug
-      // report - the bare "Not registered" was indistinguishable from
-      // auto-registration being broken).
+      // normal and must not read as a failure: a bare "Not registered" is
+      // indistinguishable from auto-registration being broken.
       if (host) {
         return "Not registered YET - this session auto-registers when the turn goes idle (or join now with chat_register).";
       }

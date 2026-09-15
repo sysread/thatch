@@ -339,7 +339,7 @@ behavior cycle (agent-driven, self-graded)
   `behaviors(id PK, store, statement, rationale, embedding BLOB, model, confidence REAL, confirm_count REAL, disconfirm_count REAL, created_at, updated_at)`,
   `behavior_edges(matcher_id, behavior_id, weight REAL, PK(matcher_id, behavior_id), FK CASCADE)`,
   `behavior_provenance(id PK, behavior_id, signal, detail, created_at, FK CASCADE)`,
-  `chat_sessions(session_id PK, name UNIQUE COLLATE NOCASE, topic, project, host_kind, registered_at, last_seen, auto)`,
+  `chat_sessions(session_id PK, name UNIQUE COLLATE NOCASE, topic, project, host_kind, registered_at, last_seen, auto, worktree)`,
   `chat_messages(id PK AUTOINCREMENT, from_session, to_session, body, created_at, delivered_at, read_at, via_broadcast)`,
   `chat_name_counters(base PK, next)` - per-base counters for assigned chat names; only ever increments.
   `chat_leave_tombstones(session_id PK, left_at)` - explicit leaves; suppresses auto-registration until chat_register rejoins.

@@ -696,9 +696,9 @@ describe("migration", () => {
   });
 
   test("opening a database with the retired host_pid column drops it", () => {
-    // host_pid shipped only in unreleased dev builds (process-id liveness,
-    // replaced by heartbeat age alone). Databases that picked it up must
-    // converge on the fresh-install schema, and rows must survive the drop.
+    // A database whose chat_sessions carries a host_pid column (a dev-build
+    // artifact) must converge on the released schema, and its rows must
+    // survive the drop.
     const oldPath = join(dbDir, "pid-chat.db");
     const legacy = new Database(oldPath, { create: true });
     legacy.run(`

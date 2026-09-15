@@ -191,7 +191,7 @@ requirements.
 | Tool | What it does |
 |------|-------------|
 | `thatch_chat_register` | Join the cross-session chat directory, so other sessions on this machine can message you. Display names are assigned by thatch, never chosen (a pool name plus a never-reused counter), so a name always refers to the same session. Call with no arguments to join, rejoin after unregistering, or check your name. On hosts without session context (Claude Code, Cursor), pass the name your thatch hook printed as `as`. |
-| `thatch_chat_list` | List registered sessions grouped into Active and Stale sections (stale = two missed heartbeats, about a minute; its harness has stopped), with how long ago each last checked in, each session's project and checkout kind (project root or linked worktree), its topic, and your unread count. |
+| `thatch_chat_list` | List registered sessions grouped into Active and Stale sections (stale = two missed heartbeats, about a minute; its host process has probably stopped), with how long ago each last checked in, each session's project and checkout kind (project root or linked worktree), its topic, and your unread count. |
 | `thatch_chat_send` | Send a message to another registered session, by name or session id. The recipient is nudged when its session is idle. |
 | `thatch_chat_read` | Drain your inbox: all unread messages oldest-first, marked read. Senders identified by display name. |
 | `thatch_chat_unregister` | Leave the chat directory. |

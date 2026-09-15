@@ -280,7 +280,7 @@ const GH_API_TIMEOUT_MS = 15_000;
  * cancel settles the loop early (a cancelled host process must never be
  * pinned by a pending read). Treating an error as EOF here would turn the
  * abandonment path - the orphaned-child timeout message - into a fast, wrong
- * exit (observed live as a one-off test flake under parallel-suite load).
+ * exit.
  * Exported for the drain unit tests.
  */
 export async function drainStreamOutput(

@@ -49,7 +49,9 @@ Read-only window on the cross-session chat directory ([cross-session-chat.md](cr
 - `chat list` renders the roster as aligned columns under a header row
   (NAME/AGE/STATUS/PROJECT/TOPIC), colorized only when stdout is a TTY
   (`formatChatRoster()` in `bin/thatch`; pipes and QA runners get plain
-  text). Status reuses the `isStale()` staleness convention.
+  text). Rows are split into Active and Stale sections by
+  `splitChatRoster()`; the status column is `chatLiveness()`'s verdict
+  (`fresh`/`stale` for opencode rows, `active`/`idle` for MCP rows).
 - `chat tail` follows the message stream as JSONL: one `ChatTailEvent`
   per line via `formatChatTailJsonl()` (a bare `JSON.stringify`; no ANSI,
   no markdown rendering, no local-time conversion - the tail is a log for

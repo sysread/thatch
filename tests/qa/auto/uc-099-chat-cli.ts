@@ -142,7 +142,7 @@ const useCase: UseCase = {
     // default limit would elide, then check each flag's effect. All runs
     // are one-shot (--once); the limit counts messages, so count sent
     // events (read events ride along with their message).
-    const eventCount = (r: { stdout: Buffer }) => parseLines(r.stdout.toString()).filter((e) => e.event === "sent").length;
+    const sentCount = (r: { stdout: Buffer }) => parseLines(r.stdout.toString()).filter((e) => e.event === "sent").length;
 
     // Traffic for the filter checks: 25 numbered filler rows (28 total).
     const more = new ThatchDB(ctx.env.THATCH_DB_PATH);
@@ -161,7 +161,7 @@ const useCase: UseCase = {
       console.log(`  FAIL: missing elision note on stderr:\n${limited.stderr.toString()}`);
       return "FAIL";
     }
-    if (eventCount(limited) !== 3) {
+    if (sentCount(limited) !== 3) {
       console.log("  FAIL: --limit 3 did not print exactly 3 events");
       return "FAIL";
     }
@@ -169,8 +169,8 @@ const useCase: UseCase = {
     // The shipped default: a flagless --once shows exactly the default
     // limit with the same elision note.
     const defaulted = await run(["chat", "tail", "--once"]);
-    if (defaulted.exitCode !== 0 || eventCount(defaulted) !== 20) {
-      console.log(`  FAIL: flagless --once should show 20 of 28 events, got ${eventCount(defaulted)}`);
+    if (defaulted.exitCode !== 0 || sentCount(defaulted) !== 20) {
+      console.log(`  FAIL: flagless --once should show 20 of 28 events, got ${sentCount(defaulted)}`);
       return "FAIL";
     }
     if (!defaulted.stderr.toString().includes("showing last 20 of 28 messages")) {
@@ -180,7 +180,7 @@ const useCase: UseCase = {
 
     // Repeatable --match ANDs: both patterns together isolate filler 12.
     const anded = await run(["chat", "tail", "--once", "--match", "filler", "--match", "12$"]);
-    if (anded.exitCode !== 0 || eventCount(anded) !== 1) {
+    if (anded.exitCode !== 0 || sentCount(anded) !== 1) {
       console.log(`  FAIL: ANDed --match should show exactly filler 12:\n${anded.stdout.toString()}`);
       return "FAIL";
     }
@@ -188,7 +188,7 @@ const useCase: UseCase = {
     // --from matches rendered names case-insensitively; the departed
     // sender only matches through its unknown-departed rendering.
     const departed = await run(["chat", "tail", "--once", "--from", "unknown"]);
-    if (departed.exitCode !== 0 || eventCount(departed) !== 1) {
+    if (departed.exitCode !== 0 || sentCount(departed) !== 1) {
       console.log("  FAIL: --from unknown should show exactly the departed sender's message");
       return "FAIL";
     }
@@ -196,12 +196,12 @@ const useCase: UseCase = {
     // The time window is half-open and bounds the backlog: an --until in
     // the past shows nothing, and --since + --until can slice the window.
     const empty = await run(["chat", "tail", "--once", "--until", "2000-01-01"]);
-    if (empty.exitCode !== 0 || eventCount(empty) !== 0) {
+    if (empty.exitCode !== 0 || sentCount(empty) !== 0) {
       console.log("  FAIL: --until in the past should print no events");
       return "FAIL";
     }
     const today = await run(["chat", "tail", "--once", "--since", "1970-01-01", "--until", "2999-01-01", "--limit", "all"]);
-    if (today.exitCode !== 0 || eventCount(today) !== 28) {
+    if (today.exitCode !== 0 || sentCount(today) !== 28) {
       console.log("  FAIL: a window covering the seed should print all 28 events");
       return "FAIL";
     }

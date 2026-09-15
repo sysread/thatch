@@ -238,13 +238,6 @@ export const server: Plugin = async ({ client, worktree }) => {
   });
   watchers.start();
 
-  // The proactive-prompt gate, shared by both delivery registries
-  // (watchers and chat). Two layers, in cost order: the compacting set and
-  // the event-fed sessionStatus map answer cheaply, and a final check
-  // verifies against the server's live status - the map is only as fresh
-  // as the event stream, and a stale "idle" turns a wake into mid-turn
-  // context injection (observed live: a session read mail mid-burst,
-  // contradicted its own in-flight plan, and looped).
   const chatPoller = new ChatPoller({
     store: db,
     hostedSessions: () => {

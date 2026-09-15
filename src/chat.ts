@@ -99,7 +99,7 @@ export function mcpSessionID(hostSessionID: string): string {
 }
 
 /** Which kind of harness hosts a chat session: opencode rows are
- *  poller-driven (liveness = process alive), mcp rows are turn-driven
+ *  poller-driven (liveness = heartbeat fresh), mcp rows are turn-driven
  *  (liveness = a turn ran recently; mail is read at the next prompt). */
 export type ChatHostKind = "opencode" | "mcp";
 
@@ -185,10 +185,10 @@ export function humanAge(iso: string, now = Date.now()): string {
  *    the hosting harness has missed two beats and is presumed gone)
  *  - "active"/"idle" for MCP rows (turn-driven; idle between prompts is the
  *    NORMAL state, so an idle MCP row is reachable, not dead)
- *  Heartbeat age is the only signal on purpose. A process id was tried and
- *  dropped: the pid changes on every restart of the same session, and a row
- *  beaten by one harness but stamped by an earlier one reads as dead while
- *  it is plainly alive. One clock, one rule. */
+ *  Heartbeat age is the only signal on purpose. A process id cannot serve:
+ *  the same session is re-hosted by a new process on every `-s` resume, so
+ *  a pid stamped on the row lies as soon as a different harness beats it.
+ *  One clock, one rule. */
 export function chatLiveness(row: ChatSessionRow, now = Date.now()): "fresh" | "stale" | "active" | "idle" {
   const stale = isStale(row, now);
   if (row.host_kind === "mcp") return stale ? "idle" : "active";
@@ -213,10 +213,11 @@ export function splitChatRoster(rows: ChatSessionRow[], now = Date.now()): { act
  * registry: can this session be woken with a prompt right now? Three
  * layers - the compacting set, the event-fed status map (cheap pre-filter
  * for KNOWN busy/retry states), and the server's authoritative live status
- * map. ABSENCE from the event-fed map is not evidence of busy - swept
- * sessions (ownership model) may never have emitted a status event - so
- * absence falls through to the live check. (Rejecting on absence left
- * swept-but-quiet sessions mail-deaf: beating fine, never woken.) The live
+ * map. ABSENCE from the event-fed map is not evidence of busy: the `-s`
+ * startup session is hosted from init, before it has emitted any status
+ * event, so absence falls through to the live check. A gate that rejected
+ * on absence would leave that session mail-deaf - beating fine, never
+ * woken - until its first turn. The live
  * map only carries ACTIVE sessions - the server deletes idle entries - so
  * absent means idle there; busy/retry fails closed, as does an unreachable
  * server (the mail stays pending and retries).
@@ -934,7 +935,8 @@ export const CHAT_TAIL_DEFAULT_LIMIT = 20;
 
 /**
  * Parses a tail time-bound value into epoch milliseconds, interpreted in
- * the terminal's local timezone (the same clock the When headers print).
+ * the terminal's local timezone (event timestamps print in UTC; the bounds
+ * are typed by a human at a terminal, so they read as local time).
  * Accepted: "YYYY-MM-DD" (midnight) or "YYYY-MM-DD HH:MM", with either a
  * space or a T between the date and the time. The component round-trip
  * rejects impossible calendar values like 2026-09-31 and 25:99, which
@@ -1011,7 +1013,7 @@ export function filterChatTailRows(rows: Array<ChatTailRow>, filter: ChatTailFil
 /**
  * Prepares the tail's first render. The diff state seeds from EVERY row in
  * the feed - filtered or not, rendered or not - for two reasons. First,
- * the limit hides lines, not history: a state seeded only from the
+ * the limit hides messages, not history: a state seeded only from the
  * printed slice would re-emit the elided history as new sent events on
  * the first follow poll. Second, the name filters test JOIN-resolved
  * participant names that can flip mid-follow (a peer unregisters and its
@@ -1082,9 +1084,10 @@ export interface ChatPollerStore {
 
 export interface ChatPollerOptions {
   store: ChatPollerStore;
-  /** Session IDs this process has seen events for. Only sessions hosted by
-   *  this process can be delivered to - the recipient's host is the single
-   *  deliverer, by design. */
+  /** Session IDs this process hosts: those it has seen events for plus the
+   *  `-s` startup session. Only sessions hosted by this process can be
+   *  delivered to - the recipient's host is the single deliverer, by
+   *  design. */
   hostedSessions: () => string[];
   /** Delivers a wake prompt for a recipient. Injected so tests never spawn. */
   deliver: (sessionID: string, senders: string[], count: number) => Promise<void>;

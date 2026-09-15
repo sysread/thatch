@@ -224,8 +224,11 @@ chat_sessions(
   name TEXT NOT NULL UNIQUE COLLATE NOCASE,
   topic TEXT,
   project TEXT,
+  host_kind TEXT NOT NULL DEFAULT 'opencode',
   registered_at TEXT NOT NULL,
-  last_seen TEXT NOT NULL
+  last_seen TEXT NOT NULL,
+  auto INTEGER NOT NULL DEFAULT 0,
+  worktree TEXT NOT NULL DEFAULT ''
 )
 ```
 
@@ -252,8 +255,9 @@ chat_messages(
 
 - `delivered_at` is the last wake-prompt stamp (restamped on re-nudges);
   `read_at` is set when the recipient drains its inbox. `via_broadcast`
-  marks rows a chat_broadcast fan-out created (the CLI tail renders them
-  as `-> broadcast`). The endpoints are
+  marks rows a chat_broadcast fan-out created (the CLI tail's `sent`
+  events carry it as `broadcast: true` beside the real recipient). The
+  endpoints are
   plain columns, not foreign keys: unregistering a session must not be
   blocked by message history, and a departed sender degrades to an unknown
   name in the reader's view.
