@@ -85,7 +85,9 @@ A harness restart fires no events for sessions that are merely loaded
 (resume fires nothing either - session IDs persist across restarts), so
 the idle-only path leaves the roster empty until each session's next
 turn. At plugin init the sweep registers the project's top-level sessions
-whose last activity is inside 48h (`client.session.list`), backdating
+whose last activity is inside 7 days (`client.session.list`; the window
+matches the auto-prune TTL, so anything the pruner has not reaped is fair
+game to sweep back in), backdating
 each row's `last_seen` to the session's own `time.updated`: a swept
 session has not reported in, so it shows as stale and ages into the 7-day
 prune instead of posing as fresh. Swept sessions join the poller's hosted

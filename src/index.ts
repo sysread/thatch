@@ -24,7 +24,7 @@ import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
 import { WatcherRegistry, ghApiRun, ghAvailable } from "./watchers";
 import { watcherNotificationNudge, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
-import { ChatPoller, isDefaultSessionTitle } from "./chat";
+import { ChatPoller, isDefaultSessionTitle, CHAT_AUTO_TTL_DAYS } from "./chat";
 import { chatEnabled, chatAutoRegister, loadConfig } from "./config";
 import pkg from "../package.json";
 
@@ -251,7 +251,10 @@ export const server: Plugin = async ({ client, worktree }) => {
         // instead of logging an error on every startup.
         if (typeof client.session?.list !== "function") return;
         const { data } = await client.session.list();
-        const cutoff = Date.now() - 48 * 3_600_000;
+        // The window matches the auto-prune TTL (CHAT_AUTO_TTL_DAYS):
+        // anything the pruner has not reaped is fair game to sweep back
+        // in, so a resumed-or-restarted session always reappears.
+        const cutoff = Date.now() - CHAT_AUTO_TTL_DAYS * 24 * 3_600_000;
         for (const s of data ?? []) {
           if ((s as any).parentID) continue; // top-level sessions only
           const updated = s.time?.updated ?? 0;

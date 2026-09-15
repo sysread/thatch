@@ -1823,8 +1823,8 @@ describe("chat auto-registration on idle", () => {
     sweepSessions = [
       // Recent, top-level, real title: swept, backdated to its own recency.
       { id: "ses_sweep1", title: "Sweep Me", time: { created: now - 3600_000, updated: now - 1800_000 } },
-      // Too old (48h window): not swept.
-      { id: "ses_sweep_old", title: "Ancient", time: { created: now - 96 * 3600_000, updated: now - 72 * 3600_000 } },
+      // Older than the sweep window (matches the 7-day auto-prune TTL): not swept.
+      { id: "ses_sweep_old", title: "Ancient", time: { created: now - 9 * 24 * 3600_000, updated: now - 8 * 24 * 3600_000 } },
       // Sub-agent child: never swept.
       { id: "ses_sweep_child", parentID: "ses_sweep1", title: "Child session - x", time: { created: now, updated: now } },
       // Placeholder title: swept, but no topic from it.
