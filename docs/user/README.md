@@ -446,6 +446,7 @@ Most configuration needs none. Two layers exist:
 | `THATCH_DB_PATH` | `$XDG_CONFIG_HOME/thatch/thatch.db` | Override database location (the config file follows it) |
 | `THATCH_MODEL` | `Xenova/bge-small-en-v1.5` | Override embedding model |
 | `THATCH_EMBEDDING_BACKEND` | `wasm` | Set to `native` to run embeddings on onnxruntime-node (NAPI) instead of the wasm runtime |
+| `THATCH_DEBUG` | unset (off) | Diagnostic logging to `debug.log` beside the database. `1` logs everything; or a comma-separated list of tags, e.g. `chat` or `chat:startup` |
 
 Unchanged defaults: the database is created automatically, the embedding
 model downloads once and is cached, the store name is auto-detected from

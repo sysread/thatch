@@ -90,6 +90,7 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `behavior.ts` | Thin wrapper around `ScoringEngine` with behavior-specific table names. |
 | `seed-behaviors.ts` | Default behavior seeding on first run. Populates starter self-discipline rules. |
 | `vector-math.ts` | `blobToVector` and `cosineSimilarity` helpers used across the codebase. |
+| `debug.ts` | Opt-in diagnostic logging (`THATCH_DEBUG`) to `debug.log` beside the database, never to the host's stdout/stderr (invisible inside the TUI; would leak into the quality gate from tests). Lines are `<iso> [feature:aspect] msg`; the env var is `1`/`all`/`*` for everything or a comma-separated list of tag filters matching a whole tag or its feature part. Add a tagged line wherever a live harness might need to answer "what did the plugin actually see here?" - the first consumer is `chat:startup`, which records the resolved `-s` session and every registration guard. |
 
 ## Plugin hooks
 
@@ -381,6 +382,12 @@ use-case template's bold-label + tight-list format). Run `mise run lint-md`
 alone to check docs without the test suite. Run `mise run typecheck` for
 `tsc` alone (uses `tsconfig.check.json`, which includes the test files that
 the build's `tsconfig.json` excludes).
+
+To watch what a live harness's plugin actually sees at init, launch opencode
+with `THATCH_DEBUG=chat` (or `=1` for every tag) and tail
+`~/.config/thatch/debug.log`. The env var must be set on the `opencode`
+process itself: the plugin runs in a worker thread that inherits the
+process environment but not its argv.
 
 ## Release
 
