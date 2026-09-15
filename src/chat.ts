@@ -168,7 +168,7 @@ export const CHAT_POLL_INTERVAL_MS = 30_000;
 export const CHAT_STALE_MS = 2 * CHAT_POLL_INTERVAL_MS;
 // Wake re-nudge window and the per-recipient hourly nudge cap (the anti-loop
 // hard brake); see ChatPoller.
-const CHAT_RENUDGE_MINUTES = 15;
+export const CHAT_RENUDGE_MINUTES = 15;
 const CHAT_MAX_NUDGES_PER_HOUR = 6;
 
 /** Human-readable age of an ISO timestamp: "45s ago", "5m ago", "3h ago",

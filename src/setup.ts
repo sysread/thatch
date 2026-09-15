@@ -394,21 +394,29 @@ function writeCursorHooks(path: string, thatchBin: string): void {
   // beforeSubmitPrompt is Cursor's UserPromptSubmit equivalent. Drains the
   // queue and prints the extraction nudge as JSON additional_context.
   const flushCmd = `${thatchBin} flush-tools --json`;
+  // stop fires when the agent loop ends. chat-notify emits followup_message
+  // (auto-submitted by Cursor as the next user message) when chat mail is
+  // unread - the Cursor analog of opencode's poller wake. loop_limit bounds
+  // consecutive auto-followups; reading the mail naturally terminates the
+  // loop (unread drops to 0), the limit is the backstop.
+  const notifyCmd = `${thatchBin} chat-notify`;
 
   config.hooks.sessionStart = replaceCursorThatchHooks(config.hooks.sessionStart ?? [], sessionStartCmd);
   config.hooks.postToolUse = replaceCursorThatchHooks(config.hooks.postToolUse ?? [], bufferCmd);
   config.hooks.beforeSubmitPrompt = replaceCursorThatchHooks(config.hooks.beforeSubmitPrompt ?? [], flushCmd);
+  config.hooks.stop = replaceCursorThatchHooks(config.hooks.stop ?? [], notifyCmd, 3);
 
   mkdirSync(join(path, ".."), { recursive: true });
   writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
 }
 
 function replaceCursorThatchHooks(
-  entries: { command: string }[],
+  entries: { command: string; loop_limit?: number }[],
   command: string,
-): { command: string }[] {
+  loopLimit?: number,
+): { command: string; loop_limit?: number }[] {
   const filtered = entries.filter((e) => !e.command?.includes("thatch"));
-  filtered.push({ command });
+  filtered.push(loopLimit === undefined ? { command } : { command, loop_limit: loopLimit });
   return filtered;
 }
 

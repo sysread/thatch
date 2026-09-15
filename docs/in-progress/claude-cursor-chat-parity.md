@@ -136,6 +136,12 @@ Recommendation: option 1 now, revisit if a real multi-tenant use appears.
 
 ## Step 4.5: post-turn mail delivery (Cursor stop hook)
 
+IMPLEMENTED 2026-09-15 (`thatch chat-notify`, wired into `setup --cursor`
+with `loop_limit: 3`, uc-105 pins the contract). Live Cursor test pending:
+after re-running setup and restarting Cursor, send mail while a Cursor
+turn runs and confirm the follow-up arrives at turn end without a new
+user prompt.
+
 The gap: mail arriving during or after a turn has no delivery vector in
 Cursor. The hook line only runs at prompts (beforeSubmitPrompt) and session
 start. opencode's poller wakes idle sessions; Cursor has no analog today.

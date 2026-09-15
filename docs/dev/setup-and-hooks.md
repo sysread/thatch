@@ -103,16 +103,18 @@ is honored for symmetry and forward-compatibility. Cursor has no equivalent of
   "hooks": {
     "sessionStart":         [{ "command": "<bin> reminder --json" }],
     "postToolUse":          [{ "command": "<bin> buffer-tool" }],
-    "beforeSubmitPrompt":   [{ "command": "<bin> flush-tools --json" }]
+    "beforeSubmitPrompt":   [{ "command": "<bin> flush-tools --json" }],
+    "stop":                 [{ "command": "<bin> chat-notify", "loop_limit": 3 }]
   }
 }
 ```
 
 | Event | Command | Output | Role |
 |-------|---------|--------|------|
-| `sessionStart` | `thatch reminder --json` | `{ additional_context: "..." }` | Recall + heartbeat, JSON-wrapped for Cursor |
+| `sessionStart` | `thatch reminder --json` | `{ additional_context: "..." }` | Recall + heartbeat + chat identity/mail line, JSON-wrapped for Cursor |
 | `postToolUse` | `thatch buffer-tool` | **silent** | Appends a **single** tool call to the file-backed queue |
 | `beforeSubmitPrompt` | `thatch flush-tools --json` | JSON `additional_context` | Peeks queue, else recall, prediction, and behavior via sideband, else write nudge |
+| `stop` | `thatch chat-notify` | `{ followup_message }` or `{}` | Post-turn chat wake: when chat mail is unread, Cursor auto-submits the follow-up as the next user message (Cursor's analog of opencode's poller wake); `loop_limit: 3` bounds consecutive follow-ups |
 
 Differences from Claude Code:
 

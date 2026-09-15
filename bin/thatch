@@ -10,8 +10,9 @@ import { hygieneReport } from "../src/hygiene";
 import { claudeSessionStartReminder } from "../src/prompts";
 import { setupClaudeCode, setupCursor } from "../src/setup";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
-import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, chatLiveness, humanAge, splitChatRoster, mcpSessionID, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
+import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, chatLiveness, humanAge, splitChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
+import { chatNotificationNudge } from "../src/prompts";
 import { createDebugLog } from "../src/debug";
 
 const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
@@ -35,6 +36,7 @@ function usage(): never {
   thatch buffer-batch              Append a PostToolBatch payload to the queue (Claude Code hook only)
   thatch buffer-tool               Append a single postToolUse interaction to the queue (Cursor hook only)
   thatch flush-tools [--json]      Peek the queue + print an extraction nudge (hook only)
+  thatch chat-notify               Print a chat follow-up message when mail is unread (Cursor stop hook)
   thatch flush-predictions [--json] Query predictions for the prompt (hook only)
   thatch setup --claude [--cursor] [--local|--global]
                                    Install config + instructions + hooks + skills
@@ -142,17 +144,17 @@ async function chatHookLine(hookSessionID?: string): Promise<string> {
  * undefined rather than failing the reminder.
  */
 /**
- * Reads the hook session ID from stdin without hanging when no payload is
- * coming. Interactive runs skip the read outright (isTTY); a piped or
- * inherited stdin that never closes (bare spawns) gives up after a short
- * grace period and destroys the stream, because a pending stdin read keeps
+ * Reads the hook's stdin JSON without hanging when no payload is coming.
+ * Interactive runs skip the read outright (isTTY); a piped or inherited
+ * stdin that never closes (bare spawns) gives up after a short grace
+ * period and destroys the stream, because a pending stdin read keeps
  * the process alive after main finishes. Hook hosts write the payload
  * immediately at spawn, so the grace window costs nothing on the hot path.
- * Malformed payloads resolve to undefined rather than failing the reminder.
+ * Malformed payloads resolve to undefined rather than failing the command.
  * Uses the Node stream API instead of Bun.stdin.text(): a pending
  * Bun.stdin read cannot be cancelled and pins the process forever.
  */
-function readHookSessionID(): Promise<string | undefined> {
+function readHookInput(tag: string): Promise<Record<string, unknown> | undefined> {
   if (process.stdin.isTTY) return Promise.resolve(undefined);
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
@@ -162,9 +164,8 @@ function readHookSessionID(): Promise<string | undefined> {
       process.stdin.destroy();
       try {
         if (!value) return resolve(undefined);
-        logHookPayload("reminder", value);
-        const data = JSON.parse(value) as { session_id?: string; conversation_id?: string };
-        resolve(data.session_id ?? data.conversation_id);
+        logHookPayload(tag, value);
+        resolve(JSON.parse(value) as Record<string, unknown>);
       } catch {
         resolve(undefined);
       }
@@ -688,7 +689,10 @@ switch (command) {
     // its first prompt. When no payload is coming (manual runs, bare
     // spawns) the read is skipped and the line keeps the old shape: a line
     // only when pending mail exists for registered sessions in this project.
-    const chatLine = await chatHookLine(await readHookSessionID());
+    const hookInput = await readHookInput("reminder");
+    const chatLine = await chatHookLine(
+      (hookInput?.session_id as string | undefined) ?? (hookInput?.conversation_id as string | undefined),
+    );
     const reminder = claudeSessionStartReminder(repo, hygiene) + (chatLine ? `\n\n${chatLine}` : "");
     if (isJson) {
       console.log(JSON.stringify({ additional_context: reminder }));
@@ -1003,6 +1007,57 @@ switch (command) {
         // If even the fallback import fails, do nothing - silent failure is
         // preferable to blocking the user's prompt over an unrelated hook.
       }
+    }
+    break;
+  }
+
+  case "chat-notify": {
+    // Cursor stop hook: the post-turn chat wake. Fires when the agent loop
+    // ends; when the conversation has unread chat mail, emits
+    // { followup_message }, which Cursor auto-submits as the next user
+    // message - the MCP analog of opencode's poller wake. Pointer-only:
+    // sender names and a count, never bodies (bodies flow only through
+    // the framed chat_read). The follow-up text carries the system-
+    // notification framing because Cursor submits it as user input.
+    // Only fires on status "completed": auto-continuing an aborted or
+    // errored turn would fight the user's stop key.
+    try {
+      const hookInput = await readHookInput("chat-notify");
+      if (!chatEnabled(loadConfig(dbPath).config)) {
+        console.log("{}");
+        break;
+      }
+      const status = hookInput?.status as string | undefined;
+      const sessionID =
+        (hookInput?.conversation_id as string | undefined) ?? (hookInput?.session_id as string | undefined);
+      if (!sessionID || status !== "completed") {
+        console.log("{}");
+        break;
+      }
+      // Lookup, not ensure-register: registration exists by the time stop
+      // fires (the prompt hooks anchored the conversation), and minting
+      // rows from contexts we do not understand is how the throwaway
+      // sessionStart identities happened.
+      const anchor = mcpSessionID(sessionID);
+      if (!db.findChatSession(anchor)) {
+        console.log("{}");
+        break;
+      }
+      const pending = db
+        .pendingChatNotifications([anchor], isoMinutesAgo(CHAT_RENUDGE_MINUTES))
+        .filter((m) => m.to_session === anchor);
+      if (pending.length === 0) {
+        console.log("{}");
+        break;
+      }
+      const senders = [
+        ...new Set(pending.map((m) => renderChatParticipant(m.from_name, m.from_session))),
+      ];
+      db.markChatDelivered(pending.map((m) => m.id));
+      console.log(JSON.stringify({ followup_message: chatNotificationNudge(senders, pending.length) }));
+    } catch (err) {
+      console.error(`[thatch chat-notify] failed: ${err}`);
+      console.log("{}");
     }
     break;
   }
