@@ -67,19 +67,29 @@ use case that covers hook output if one exists.
 
 ### Step 2: live Cursor test of beforeSubmitPrompt output
 
-Manual step, needs a real Cursor session on a machine with Cursor installed.
+DONE 2026-09-15, live Cursor session in this repo. Results:
 
-1. Run `thatch setup --cursor --local` in a test repo.
-2. Start a Cursor conversation, check whether the identity line reaches the
-   model (ask it "what name did your thatch hook print?").
-3. Send the session mail from an opencode session; confirm the model sees
-   the pending-mail line at the next prompt.
+- `beforeSubmitPrompt` DOES deliver `additional_context`. The model quoted
+  the flush-tools hook line verbatim, unread count included. The July 2026
+  memory flagged this as assumed; it is now verified.
+- Identity is stable: one name at session start, same name at every later
+  prompt (`mervyn-of-the-pumpkin-patch-00002`). No drift.
+- Round trip verified in both directions: opencode sent mail that the
+  Cursor model saw at its next prompt (hook line reported the unread
+  count, model called `chat_read`), and the Cursor model replied via
+  `chat_send`, which arrived in opencode as a wake with the framed inbox.
+- One artifact: `sessionStart` can mint throwaway identities before the
+  real conversation anchors (two single-registration rows, one with
+  project `unknown`, from workspace-restore contexts). They go idle
+  immediately and prune out after a week. Roster noise, not a bug.
+- Jeff launches Cursor from the Dock. A minimal GUI environment kills
+  `#!/usr/bin/env bun` (verified with `env -i`: "No such file or
+  directory"), yet these hooks fire and complete. Cursor's hook runner
+  evidently resolves more than the bare LaunchServices PATH on this
+  machine. Portability footnote: a user whose GUI environment lacks the
+  bun install dir on PATH gets silently dead hooks; the fix shape would
+  be a wrapper script that sets PATH before exec. Not needed here.
 
-Outcomes: if `additional_context` works, record that in the memory and in
-the user doc. If not, the mitigation from step 1 covers identity, and the
-user doc gains a "Cursor shows mail at session start only" note. Record the
-result either way; the July 2026 memory flagged this as assumed, never
-verified.
 
 ### Step 3: user docs for Claude Code and Cursor
 
