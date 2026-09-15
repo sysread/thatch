@@ -340,11 +340,11 @@ them the way `THATCH_WATCH_POLL_SECONDS` works if a user needs them.
 ## Source files
 
 - `src/chat.ts` - ChatStore (directory + inbox SQL, assigned-name draw:
-  slugify, counter bump, insert, prune, topic refresh), ChatPoller
+  pool pick, slugify, counter bump, insert, prune, topic refresh), ChatPoller
   (heartbeat, gated delivery, re-nudge, rate cap, hourly prune sweep),
   staleness helper
 - `src/chat-names.ts` - the static display-name pool (nomenclater style),
-  the fallback base for title-less registrations
+  the base for every assigned name
 - `src/db.ts` - the chat tables in schema init (including
   chat_name_counters and the auto column), the NOCASE collation migration
   and topic column migration, delegated methods

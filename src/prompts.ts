@@ -20,8 +20,8 @@ const chatPromptSection = `
 
 Sessions on this machine - opencode, Claude Code, and Cursor alike - can
 message each other through thatch. opencode sessions join the directory
-automatically: your display name is assigned by thatch (a slug of your
-session title plus a counter, e.g. fix-auth-bug-00001) and is never
+automatically: your display name is assigned by thatch (a name drawn from
+a built-in pool plus a counter, e.g. al-go-rithm-00001) and is never
 reassigned or reused, so a given name is always the same session.
 thatch_chat_register with no arguments reports your name or rejoins after
 unregistering. On MCP hosts, pass the name your thatch hook printed as the

@@ -108,10 +108,11 @@ export type ChatHostKind = "opencode" | "mcp";
 // into a context bomb; the reader fetches full content via chat_read anyway.
 const MAX_BODY_LEN = 10_000;
 
-// Assigned names are lowercase slugs with a numeric counter suffix
-// ("fix-auth-bug-00001"), which satisfies NAME_CHARSET. The charset stays
-// exported for the pool conformance test. Slugs never contain underscores,
-// so the name-cannot-shadow-an-ID invariant in find() still holds.
+// Assigned names are lowercase slugs of a pool name with a numeric counter
+// suffix ("al-go-rithm-00001"), which satisfies NAME_CHARSET. The charset
+// stays exported for the pool conformance test. Slugs never contain
+// underscores, so the name-cannot-shadow-an-ID invariant in find() still
+// holds.
 export const NAME_CHARSET = /^[\p{L}\p{N} '.\-]+$/u;
 
 // Topics are free text (unlike names) but must stay one line for the
@@ -255,17 +256,20 @@ export class ChatStore {
   /**
    * Joins the directory, or refreshes an existing registration. Names are
    * assigned by the system, never claimed: a new session gets
-   * "<slug>-<counter>" (e.g. "fix-auth-bug-00001"), where the slug comes
-   * from the session title (or a pool-draw slug when there is none) and the
-   * per-base counter only ever increments - so a name is minted exactly
-   * once, machine-wide, and pruning an old session can never reissue its
-   * name to someone else. Idempotent for an already-registered session: it
-   * keeps its name and just refreshes liveness.
+   * "<slug>-<counter>" (e.g. "al-go-rithm-00001"), where the slug is a
+   * random pool name (chat-names.ts) and the per-base counter only ever
+   * increments - so a name is minted exactly once, machine-wide, and
+   * pruning an old session can never reissue its name to someone else. The
+   * session title never feeds the name; it rides along as the topic, so a
+   * placeholder or later-edited title cannot leave a misleading name
+   * behind. Idempotent for an already-registered session: it keeps its
+   * name and just refreshes liveness.
    *
-   * `nameBase` is the slugified title for a new registration (null draws a
-   * pool slug instead). `topic` is the live title for auto-registrations;
-   * null leaves the topic unset. Every row minted here is marked auto=1 -
-   * rows with auto=0 exist only as legacy data from the claimed-names era.
+   * `nameBase` overrides the pool draw with a fixed base (tests only; every
+   * production caller passes null). `topic` is the live title for
+   * auto-registrations; null leaves the topic unset. Every row minted here
+   * is marked auto=1 - rows with auto=0 exist only as legacy data from the
+   * claimed-names era.
    */
   register(
     sessionID: string,
@@ -1016,8 +1020,9 @@ export function filterChatTailRows(rows: Array<ChatTailRow>, filter: ChatTailFil
  * as a sent event no matter how its rendered name changes. The last
  * `limit` filtered rows (null = all) shape into sent events, plus a read
  * event for each row already read, via chatTailDiff, so event shaping
- * keeps a single source. `elided` counts matching rows the limit hid,
- * for the CLI's summary line.
+ * keeps a single source. `shown` and `elided` count MESSAGES (not
+ * events: a shown message contributes one or two lines) for the CLI's
+ * summary line.
  *
  * The caller must re-apply the same filter to every follow poll's feed
  * BEFORE the diff (filterChatTailRows, then chatTailDiff with the state
@@ -1028,7 +1033,7 @@ export function chatTailBacklog(
   rows: Array<ChatTailRow>,
   filter: ChatTailFilter,
   limit: number | null,
-): { events: ChatTailEvent[]; state: Map<number, string | null>; elided: number } {
+): { events: ChatTailEvent[]; state: Map<number, string | null>; shown: number; elided: number } {
   const state = new Map(rows.map((r) => [r.id, r.read_at]));
   const filtered = filterChatTailRows(rows, filter);
   const shown = limit === null ? filtered : filtered.slice(-limit);
@@ -1042,7 +1047,7 @@ export function chatTailBacklog(
     if (r.read_at !== null) events.push(...chatTailDiff(new Map([[r.id, null]]), [r]).events);
   }
   events.sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || (a.event === b.event ? 0 : a.event === "sent" ? -1 : 1));
-  return { events, state, elided: filtered.length - shown.length };
+  return { events, state, shown: shown.length, elided: filtered.length - shown.length };
 }
 
 /**

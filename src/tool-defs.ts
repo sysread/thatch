@@ -1588,9 +1588,9 @@ const chatRegisterDef: ToolDef = {
     "Join the cross-session chat directory so other sessions on this " +
     "machine can message you and you can message them (works from opencode, " +
     "Claude Code, and Cursor). Display names are assigned by thatch, never " +
-    "chosen: a slug plus a never-reused counter (the slug comes from your " +
-    "session title when one exists, otherwise from a built-in pool), so a " +
-    "name always refers to the same session and cannot be claimed by anyone " +
+    "chosen: a name drawn from a built-in pool plus a never-reused counter, " +
+    "so a name always refers to the same session and cannot be claimed by " +
+    "anyone " +
     "else. Call with no arguments to join, to rejoin after chat_unregister, " +
     "or to check your assigned name (opencode sessions are usually " +
     "registered automatically already). On hosts without session context, " +

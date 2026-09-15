@@ -8,9 +8,9 @@ between tabs all afternoon.
 ## What it does
 
 opencode sessions join the directory automatically, on their first idle
-moment. Names are assigned by thatch, never chosen: a lowercase slug of the
-session's title plus a counter (a session titled "Fix auth bug" becomes
-`fix-auth-bug-00001`). The counter only ever increments, so a name is
+moment. Names are assigned by thatch, never chosen: a name drawn from a
+built-in pool plus a counter (`al-go-rithm-00001`). The counter only ever
+increments, so a name is
 minted exactly once per machine - pruning an old session never reissues its
 name to someone else, and the same name always refers to the same session.
 The live title rides along as the session's topic (refreshed as the

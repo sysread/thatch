@@ -65,10 +65,11 @@ const WRAPUP_COMMANDS: Record<string, { token: string; kind: "compact" | "exit" 
 };
 
 /**
- * The session id this harness was started to continue, parsed from the
- * opencode process's own argv (`opencode -s <id>` / `--session <id>` /
- * `--session=<id>`). The framework passes no session id to plugins and
- * resuming a session fires no events, so argv is the only signal that a
+ * Parses the session id a harness was started to continue from an argument
+ * list (`opencode -s <id>` / `--session <id>` / `--session=<id>`). Pure:
+ * the caller supplies the list (see startupSessionId for where it comes
+ * from). The framework passes no session id to plugins and resuming a
+ * session fires no events, so the command line is the only signal that a
  * fresh harness is the new home of a continued session. `-c/--continue`
  * (continue last) resolves no id here - that session registers on its
  * first idle like any other.
@@ -109,8 +110,9 @@ export function osProcessArgs(): string[] {
 // Resolve the session id this harness was launched to resume, if any:
 // prefer the thread-local argv (covers tests and any non-worker host), then
 // fall back to the process's OS-level command line (the real harness path).
-export function startupSessionId(): string | null {
-  return startupSessionIdFromArgv(process.argv) ?? startupSessionIdFromArgv(osProcessArgs());
+// The caller passes the OS command line in so it is read once per init.
+export function startupSessionId(osArgs: string[]): string | null {
+  return startupSessionIdFromArgv(process.argv) ?? startupSessionIdFromArgv(osArgs);
 }
 
 export const server: Plugin = async ({ client, worktree }) => {
@@ -283,15 +285,19 @@ export const server: Plugin = async ({ client, worktree }) => {
   // Startup registration: `opencode -s <id>` continues a session whose
   // directory row may predate this process (its harness died, or the
   // machine restarted). The framework passes no session id to plugins and
-  // resuming fires no events, so argv is the source. Registering here
-  // RECLAIMS the row - the name is owned by the session id and never
-  // changes - and stamps ownership synchronously: local SQLite, it cannot
-  // fail on a server that is still starting. The async tail (title fetch,
-  // asleep-mail delivery) is best-effort - the poller retries whatever it
-  // misses, and the first idle converges the topic.
-  const startupSession = startupSessionId();
-  debug("chat:startup", `init: argv=${JSON.stringify(process.argv.slice(0, 8))} osArgs=${JSON.stringify(osProcessArgs().slice(0, 8))} parsed=${startupSession} chatOn=${chatOn} autoRegister=${chatAutoRegister(loadConfig(dbPath).config)} tombstone=${startupSession ? db.hasChatLeaveTombstone(startupSession) : "n/a"}`);
-  if (chatOn && chatAutoRegister(loadConfig(dbPath).config) && startupSession && !db.hasChatLeaveTombstone(startupSession)) {
+  // resuming fires no events, so the command line is the source (see
+  // startupSessionId). Registering here RECLAIMS the row - the name is
+  // owned by the session id and never changes - and refreshes its
+  // heartbeat synchronously: local SQLite, it cannot fail on a server that
+  // is still starting. The async tail (title fetch, asleep-mail delivery)
+  // is best-effort - the poller retries whatever it misses, and the first
+  // idle converges the topic.
+  const osArgs = osProcessArgs();
+  const startupSession = startupSessionId(osArgs);
+  const autoRegisterOn = chatAutoRegister(loadConfig(dbPath).config);
+  const tombstoned = startupSession ? db.hasChatLeaveTombstone(startupSession) : false;
+  debug("chat:startup", `init: argv=${JSON.stringify(process.argv.slice(0, 8))} osArgs=${JSON.stringify(osArgs.slice(0, 8))} parsed=${startupSession} chatOn=${chatOn} autoRegister=${autoRegisterOn} tombstone=${startupSession ? tombstoned : "n/a"}`);
+  if (chatOn && autoRegisterOn && startupSession && !tombstoned) {
     const res = db.registerChatSession(startupSession, repo, null, "opencode", null, detectWorktreeKind(worktree));
     debug("chat:startup", `registration for ${startupSession}: ok=${res.ok} name=${res.ok ? res.name : res.error}`);
     if (res.ok) {

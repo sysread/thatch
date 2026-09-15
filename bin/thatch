@@ -472,7 +472,7 @@ async function chatCommand(rest: string[]): Promise<void> {
           // The elision note goes to stderr so stdout stays pure JSONL
           // for pipes.
           console.error(
-            `[thatch chat tail] showing last ${backlog.events.length} of ${backlog.elided + backlog.events.length} messages (--limit N, --limit all)`,
+            `[thatch chat tail] showing last ${backlog.shown} of ${backlog.elided + backlog.shown} messages (--limit N, --limit all)`,
           );
         }
         for (const event of backlog.events) console.log(formatChatTailJsonl(event));

@@ -1068,10 +1068,15 @@ describe("chat tail backlog", () => {
       row({ id: 2, body: "two", created_at: "2026-09-12T10:01:00Z" }),
       row({ id: 3, body: "three", created_at: "2026-09-12T10:03:00Z", read_at: "2026-09-12T10:03:30Z" }),
     ];
-    const { events } = chatTailBacklog(rows, noFilter(), null);
+    const { events, shown, elided } = chatTailBacklog(rows, noFilter(), null);
     expect(events.map((e) => `${e.event}:${e.id}`)).toEqual(["sent:1", "sent:2", "read:1", "sent:3", "read:3"]);
+    // shown/elided count messages, not lines: 5 events, 3 messages.
+    expect(shown).toBe(3);
+    expect(elided).toBe(0);
     const limited = chatTailBacklog(rows, noFilter(), 1);
     expect(limited.events.map((e) => `${e.event}:${e.id}`)).toEqual(["sent:3", "read:3"]);
+    expect(limited.shown).toBe(1);
+    expect(limited.elided).toBe(2);
   });
 
   test("filters shrink the feed before the limit applies", () => {

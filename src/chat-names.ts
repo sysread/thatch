@@ -9,8 +9,8 @@
  * unnamed-cast extras). fnord generates its names with an LLM at runtime;
  * thatch bakes the pool in - static contents, no model call.
  *
- * The pool is the fallback base for registrations with no usable session
- * title (ChatStore.register slugifies a random pool name). Pool names are
+ * The pool is the base for every registration (ChatStore.register
+ * slugifies a random pool name and appends a counter). Pool names are
  * case-insensitively distinct from each other; slugify is lossy, but a
  * shared base is harmless - the per-base counter still yields unique
  * names.
