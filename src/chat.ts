@@ -239,6 +239,40 @@ export function splitChatRoster(
 }
 
 /**
+ * The wake-delivery gate, shared by the chat poller and the watcher
+ * registry: can this session be woken with a prompt right now? Three
+ * layers - the compacting set, the event-fed status map (cheap pre-filter
+ * for KNOWN busy/retry states), and the server's authoritative live status
+ * map. ABSENCE from the event-fed map is not evidence of busy - swept
+ * sessions (ownership model) may never have emitted a status event - so
+ * absence falls through to the live check. (Rejecting on absence left
+ * swept-but-quiet sessions mail-deaf: beating fine, never woken.) The live
+ * map only carries ACTIVE sessions - the server deletes idle entries - so
+ * absent means idle there; busy/retry fails closed, as does an unreachable
+ * server (the mail stays pending and retries).
+ */
+export function createWakeGate(deps: {
+  isCompacting: (sessionID: string) => boolean;
+  mappedStatus: (sessionID: string) => string | undefined;
+  fetchStatuses: () => Promise<Record<string, { type?: string } | undefined>>;
+  onStatusError?: (sessionID: string, err: unknown) => void;
+}): (sessionID: string) => Promise<boolean> {
+  return async (sessionID: string) => {
+    if (deps.isCompacting(sessionID)) return false;
+    const mapped = deps.mappedStatus(sessionID);
+    if (mapped === "busy" || mapped === "retry") return false;
+    try {
+      const statuses = await deps.fetchStatuses();
+      const live = statuses[sessionID];
+      return !live || live.type === "idle";
+    } catch (err) {
+      deps.onStatusError?.(sessionID, err);
+      return false;
+    }
+  };
+}
+
+/**
  * SQLite CRUD for the chat tables. Constructed by ThatchDB with the shared
  * Database handle; the tables are created by ThatchDB's schema init.
  */

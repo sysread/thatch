@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, formatChatTailCard, CHAT_TAIL_SEPARATOR, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, selectChatBodyRenderer, cleanRenderedBody, slugifyTitle, isDefaultSessionTitle, humanAge, chatLiveness, splitChatRoster, type ChatSessionRow, type ChatTailRow, type ChatTailFilter } from "../src/chat";
+import { ChatPoller, isStale, nowIso, CHAT_STALE_MINUTES, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, formatChatTailCard, CHAT_TAIL_SEPARATOR, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, selectChatBodyRenderer, cleanRenderedBody, slugifyTitle, isDefaultSessionTitle, humanAge, chatLiveness, splitChatRoster, createWakeGate, type ChatSessionRow, type ChatTailRow, type ChatTailFilter } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
 import { TOOL_DEFS } from "../src/tool-defs";
@@ -373,6 +373,57 @@ describe("chatLiveness and roster split", () => {
     const { active, stale } = splitChatRoster([fresh, dead, mcp], { now: NOW, pidAlive: (p) => p === 111 });
     expect(active.map((r) => r.session_id)).toEqual(["ses_f", "ses_m"]);
     expect(stale.map((r) => r.session_id)).toEqual(["ses_d"]);
+  });
+});
+
+describe("wake gate", () => {
+  // The gate decides wake delivery for the chat poller AND the watcher
+  // registry. The absence case is load-bearing: swept sessions never
+  // emitted status events, so a gate that rejected on map-absence left
+  // them mail-deaf (beating fine, never woken).
+  const gate = (over?: {
+    compacting?: boolean;
+    mapped?: string;
+    statuses?: Record<string, { type?: string } | undefined>;
+    failFetch?: boolean;
+  }) => {
+    const errors: unknown[] = [];
+    const canPrompt = createWakeGate({
+      isCompacting: () => over?.compacting ?? false,
+      mappedStatus: () => over?.mapped,
+      fetchStatuses: async () => {
+        if (over?.failFetch) throw new Error("server down");
+        return over?.statuses ?? {};
+      },
+      onStatusError: (_id, err) => errors.push(err),
+    });
+    return { canPrompt, errors };
+  };
+
+  test("map-absent session falls through to the live check and wakes", async () => {
+    const { canPrompt } = gate({});
+    expect(await canPrompt("ses_quiet")).toBe(true);
+  });
+
+  test("known busy/retry rejects without fetching", async () => {
+    const { canPrompt, errors } = gate({ mapped: "busy", failFetch: true });
+    expect(await canPrompt("ses_busy")).toBe(false);
+    expect(await gate({ mapped: "retry", failFetch: true }).canPrompt("s")).toBe(false);
+    expect(errors).toHaveLength(0); // pre-filter: never reached the server
+  });
+
+  test("the live status map is authoritative: busy fails closed, absent means idle", async () => {
+    const { canPrompt: busy } = gate({ statuses: { ses_x: { type: "busy" } } });
+    expect(await busy("ses_x")).toBe(false);
+    const { canPrompt: idleish } = gate({ statuses: { ses_x: { type: "idle" } } });
+    expect(await idleish("ses_x")).toBe(true);
+  });
+
+  test("compacting fails closed; server failure fails closed", async () => {
+    expect(await gate({ compacting: true, failFetch: true }).canPrompt("ses_c")).toBe(false);
+    const { canPrompt, errors } = gate({ failFetch: true });
+    expect(await canPrompt("ses_c")).toBe(false);
+    expect(errors).toHaveLength(1);
   });
 });
 

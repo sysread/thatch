@@ -24,7 +24,7 @@ import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
 import { WatcherRegistry, ghApiRun, ghAvailable } from "./watchers";
 import { watcherNotificationNudge, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
-import { ChatPoller, isDefaultSessionTitle, isPidAlive } from "./chat";
+import { ChatPoller, createWakeGate, isDefaultSessionTitle, isPidAlive } from "./chat";
 import { chatEnabled, chatAutoRegister, loadConfig } from "./config";
 import pkg from "../package.json";
 
@@ -119,22 +119,17 @@ export const server: Plugin = async ({ client, worktree }) => {
   // event stream, and a stale "idle" turns a wake into mid-turn context
   // injection (observed live: a session read mail mid-burst, contradicted
   // its own in-flight plan, and looped).
-  const canPromptSession = async (sessionID: string): Promise<boolean> => {
-    if (compacting.has(sessionID)) return false;
-    if (sessionStatus.get(sessionID) !== "idle") return false;
-    try {
+  const canPromptSession = createWakeGate({
+    isCompacting: (sessionID) => compacting.has(sessionID),
+    mappedStatus: (sessionID) => sessionStatus.get(sessionID),
+    fetchStatuses: async () => {
       const { data } = await client.session.status();
-      // The server's status map only carries ACTIVE sessions - it deletes
-      // the entry when a session goes idle (session/status.ts), so absent
-      // means idle. Fail closed on busy/retry, pass on idle-or-absent.
-      const live = data?.[sessionID];
-      return !live || live.type === "idle";
-    } catch (err) {
-      // Unreachable server: do not deliver (the mail stays pending).
+      return data ?? {};
+    },
+    onStatusError: (sessionID, err) => {
       console.error(`[thatch] status check failed for ${sessionID}: ${err}`);
-      return false;
-    }
-  };
+    },
+  });
 
   // In-memory watcher registry for proactive event notifications (GitHub PR
   // and branch watching, plus local command watches). Deliberately
