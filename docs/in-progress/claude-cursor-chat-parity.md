@@ -152,15 +152,23 @@ PASSED, with one new finding:
 
 Design follow-ups (new steps):
 
-- **Fork-stable identity.** The fork transcript carries the same
-  `prompt_id` across the continuation. If hook payloads expose
-  `prompt_id` (v2.1.196+) and it is stable across forks, anchor the
-  Claude identity on `prompt_id` instead of `session_id`; else follow
-  the `continued-in` chain at registration time. Verify with
-  `THATCH_DEBUG=hook` payloads across a forced fork.
-- **Stranded-mail sweep.** Mail addressed to a forked-away identity
-  should follow the continuation chain (or surface in the successor's
-  hook line) instead of waiting for a week-long prune.
+- **Fork-stable identity: LANDED (1993aa7), live-verified.** Hooks resolve
+  the predecessor via the `continued-in` chain and adopt the existing
+  identity. Live test (Sep 15): exit + `claude -c` -> same name returned
+  (`pete-parallax-00001`), and mail queued before the exit surfaced in
+  BOTH the SessionStart:resume hook line and UserPromptSubmit. The
+  `prompt_id` alternative was not needed. One model-side wobble: the
+  first post-resume response said "nothing queued" despite the hook line
+  announcing the mail - a model attention miss, not plumbing; the mail
+  was read at the next prompt.
+- **Stranded-mail sweep: subsumed by adoption.** Mail follows the
+  identity when the conversation continues; no sweep needed.
+- **Claude Stop hook (post-turn wake): designed, not built.** Claude's
+  Stop contract: `decision: "block"` + `reason` prevents stopping and
+  feeds the reason back - a real wake. Guard: block at most once per
+  mail batch (the delivered stamp / re-nudge window already bounds it),
+  so an agent that ignores mail is never trapped. `StopFailure` is
+  inert. Build when wanted; Cursor already has the equivalent.
 
 ## Step 5: close out
 
