@@ -12,6 +12,7 @@ import { setupClaudeCode, setupCursor } from "../src/setup";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
 import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, chatLiveness, humanAge, splitChatRoster, mcpSessionID, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
+import { createDebugLog } from "../src/debug";
 
 const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 const dbPath = process.env.THATCH_DB_PATH ?? join(configHome, "thatch", "thatch.db");
@@ -161,6 +162,7 @@ function readHookSessionID(): Promise<string | undefined> {
       process.stdin.destroy();
       try {
         if (!value) return resolve(undefined);
+        logHookPayload("reminder", value);
         const data = JSON.parse(value) as { session_id?: string; conversation_id?: string };
         resolve(data.session_id ?? data.conversation_id);
       } catch {
@@ -171,6 +173,20 @@ function readHookSessionID(): Promise<string | undefined> {
     process.stdin.on("end", () => done(Buffer.concat(chunks).toString()));
     process.stdin.on("error", () => done(undefined));
   });
+}
+
+const hookDebug = createDebugLog(dbPath);
+
+/**
+ * Debug-logs one hook invocation's raw stdin payload (tag hook:<command>,
+ * payload truncated). Answers "did the host fire the hook at all, and what
+ * did it send?" - the chat DB cannot distinguish a hook that never fired
+ * from one whose payload carried no session id, and host hook contracts
+ * are sometimes documented wrong.
+ */
+function logHookPayload(command: string, raw: string): void {
+  const clipped = raw.length > 2000 ? `${raw.slice(0, 2000)}...` : raw;
+  hookDebug(`hook:${command}`, `stdin: ${JSON.stringify(clipped)}`);
 }
 
 /**
@@ -821,6 +837,7 @@ switch (command) {
     // is not delayed waiting for an exit code-driven message.
     try {
       const raw = await Bun.stdin.text();
+      logHookPayload("buffer-batch", raw);
       const data = JSON.parse(raw) as { session_id?: string; tool_calls?: unknown[] };
       if (data.session_id && Array.isArray(data.tool_calls)) {
         const { appendBatch } = await import("../src/extract-queue");
@@ -841,6 +858,7 @@ switch (command) {
     // so we try the most likely candidates.
     try {
       const raw = await Bun.stdin.text();
+      logHookPayload("buffer-tool", raw);
       const data = JSON.parse(raw) as {
         conversation_id?: string;
         session_id?: string;
@@ -885,6 +903,7 @@ switch (command) {
     const isJson = args.includes("--json");
     try {
       const raw = await Bun.stdin.text();
+      logHookPayload("flush-tools", raw);
       const data = JSON.parse(raw) as {
         session_id?: string;
         conversation_id?: string;
