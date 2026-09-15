@@ -58,11 +58,12 @@ toggle reveals those output blocks if you want them.)
 
 ## How to use it
 
-With auto-registration you usually do nothing: every session loaded in a
-live harness belongs in the directory - a fresh opencode start sweeps the
-project's sessions in immediately, an hourly re-sweep picks up anything
-loaded mid-run, and the agent gets a quiet toast with its assigned name.
-To introduce two sessions, just tell each one who to talk to:
+With auto-registration you usually do nothing: a session joins the
+directory when it first goes idle, and a session continued with
+`opencode -s <id>` is registered again the moment its harness starts -
+same session id, same name, reclaimed. The agent gets a quiet toast with
+its assigned name when it first registers. To introduce two sessions,
+just tell each one who to talk to:
 
 > Ask the other session whether the release has shipped; answer its
 > questions directly.
@@ -79,20 +80,19 @@ sessions.
 
 ## Liveness
 
-Liveness tracks the harness, not the typing: every session loaded in a
-running opencode process keeps beating (idle ones included), so it stays
-fresh while that process lives. When the process dies, its sessions show
-as stale immediately (the harness's PID is stamped on each row) and are
-grouped into a separate Stale section. Messages to a stale session wait
-in its inbox unread - a dead session never reads them, and `chat_send`
-says so at send time. When a harness starts back up, it re-registers the
-project's sessions and adopts the dead harness's rows, so the roster
-heals itself. Explicitly closing a session (deleting it in the TUI)
-unregisters it immediately, and a greenlit `/thatch/exit` unregisters the
-session too: the wrap-up checklist calls `chat_unregister`, and the
-plugin removes the row itself when the exit token passes the greenlight
-check, so other sessions stop addressing mail to a process that is about
-to vanish.
+A session shows as fresh while its harness is running: loaded sessions
+keep beating (idle ones included), so the freshness is real. When the
+process dies, its sessions show as stale immediately (the harness's PID
+is stamped on each row) and are grouped into a separate Stale section.
+Messages to a stale session wait in its inbox unread - a dead session
+never reads them, and `chat_send` says so at send time. Continuing a
+session with `opencode -s <id>` reclaims its name and row, and any mail
+that queued while it was down is delivered at startup. Explicitly
+closing a session (deleting it in the TUI) unregisters it immediately,
+and a greenlit `/thatch/exit` unregisters the session too: the wrap-up
+checklist calls `chat_unregister`, and the plugin removes the row itself
+when the exit token passes the greenlight check, so other sessions stop
+addressing mail to a process that is about to vanish.
 
 ## Turning chat off
 

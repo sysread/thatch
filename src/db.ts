@@ -884,10 +884,6 @@ export class ThatchDB {
     return this.#chat.register(sessionID, project, topic, kind, nameBase, worktree, hostPid);
   }
 
-  ownedChatSessions(project: string, pid: number) {
-    return this.#chat.ownedSessions(project, pid);
-  }
-
   refreshChatTopic(sessionID: string, title: string) {
     return this.#chat.refreshAutoTopic(sessionID, title);
   }

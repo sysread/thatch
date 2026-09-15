@@ -310,6 +310,14 @@ export class ChatStore {
     const existing = this.#find(sessionID);
     if (existing) {
       this.#touch(sessionID);
+      // Reclaim: registration is keyed by session id, so a session
+      // continued in a new harness process (`opencode -s <id>`) reclaims
+      // its row and name by re-registering - re-stamp ownership so the
+      // serving harness beats and delivers for it again. The idle path
+      // re-stamps harmlessly (same pid).
+      if (hostPid != null && existing.host_pid !== hostPid) {
+        this.#db.run("UPDATE chat_sessions SET host_pid = ? WHERE session_id = ?", [hostPid, sessionID]);
+      }
       // An explicit registration clears the leave tombstone for its own
       // session ID: "I want back in" is the opposite of "I left". This is
       // also what closes the in-flight race - an auto-register IIFE whose
@@ -644,19 +652,6 @@ export class ChatStore {
       ...sessionIDs,
     ]);
   }
-
-  /** The directory rows this process owns: opencode sessions of one project
-   *  stamped with this host's pid. Ownership is the delivery and heartbeat
-   *  contract - the owning harness beats them fresh and delivers their
-   *  mail - so two harnesses on one project partition the roster instead of
-   *  double-waking. Dead owners' rows are adopted by a live harness's
-   *  sweep. */
-  ownedSessions(project: string, pid: number): ChatSessionRow[] {
-    return (this.#db
-      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree, host_pid FROM chat_sessions WHERE project = ? AND host_pid = ? ORDER BY name")
-      .all(project, pid) as any[]).map(rowFromSession);
-  }
-
   /**
    * The full message feed for `thatch chat tail`: every row with sender and
    * recipient display names resolved (departed senders degrade to unknown),

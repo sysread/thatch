@@ -92,9 +92,6 @@ beforeAll(async () => {
       create: async () => ({ data: { id: "test-child" } }),
       delete: async () => {},
       messages: async () => ({ data: wrapUpMessages }),
-      // The startup sweep lists the project's sessions; tests that need
-      // rows override this via their own client. Empty by default.
-      list: async () => ({ data: [] }),
     },
     tui: {
       showToast: async (opts: any) => {
@@ -1729,8 +1726,6 @@ describe("chat auto-registration on idle", () => {
   // these tests vary only that title (and the settle beat for the
   // fire-and-forget IIFE), so a factory keeps each test's variable explicit.
   let arTitle = "New session - 2026-09-13T10:00:00Z";
-  // Sessions the startup sweep will find (empty unless a test sets it).
-  let sweepSessions: any[] = [];
   const toastCalls: any[] = [];
   const autoRegisterClient = () => ({
     session: {
@@ -1740,7 +1735,6 @@ describe("chat auto-registration on idle", () => {
       delete: async () => {},
       get: async () => ({ data: { title: arTitle } }),
       status: async () => ({ data: {} }),
-      list: async () => ({ data: sweepSessions }),
     },
     tui: { showToast: async (opts: any) => { toastCalls.push(opts); } },
   });
@@ -1842,72 +1836,52 @@ describe("chat auto-registration on idle", () => {
     }
   });
 
-  test("startup sweep registers all top-level sessions, adopts orphans, delivers asleep-mail", async () => {
-    // An orphan: registered by a harness that no longer exists (dead pid),
-    // same project as the test worktree (detectRepo of /tmp/thatch-sweep
-    // falls back to the directory basename) - the sweep must adopt it
-    // (re-stamp pid + beat fresh). Mail queued to it while its harness was
-    // down must wake it at init.
-    const orphanDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-    orphanDb.registerChatSession("ses_orphan", "thatch-sweep", "Old review round", "opencode", null, null, 999999999);
-    orphanDb.registerChatSession("ses_sender", "thatch-sweep", null, "opencode", "sender");
-    orphanDb.sendChatMessage("ses_sender", "ses_orphan", "while you were asleep");
-    orphanDb.close();
+  test("-s resume reclaims the row, re-stamps ownership, delivers asleep-mail", async () => {
+    // A session continued via `opencode -s <id>`: its row exists from a
+    // PREVIOUS harness (dead pid) with mail that queued while it was down.
+    // Startup registration must reclaim the row (same name - names are
+    // owned by the session id), re-stamp ownership, and wake it with the
+    // asleep-mail at init.
+    const seedDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    seedDb.registerChatSession("ses_resume", "thatch-resume", "Continued session", "opencode", null, null, 999999999);
+    seedDb.registerChatSession("ses_rsnd", "thatch-resume", null, "opencode", "resender");
+    seedDb.sendChatMessage("ses_rsnd", "ses_resume", "while you were asleep");
+    seedDb.close();
 
-    const now = Date.now();
     const promptAsyncs: any[] = [];
-    const clientWithSweep = {
+    const resumeClient = {
       ...autoRegisterClient(),
       session: {
         ...autoRegisterClient().session,
+        get: async () => ({ data: { title: "Continued session" } }),
         promptAsync: async (args: any) => {
           promptAsyncs.push(args);
         },
       },
     };
-    sweepSessions = [
-      // Top-level with a real title: swept, topic set. Age is irrelevant -
-      // membership tracks the live harness, not recency.
-      { id: "ses_sweep1", title: "Sweep Me", time: { created: now - 9 * 24 * 3600_000, updated: now - 8 * 24 * 3600_000 } },
-      // Sub-agent child: never swept.
-      { id: "ses_sweep_child", parentID: "ses_sweep1", title: "Child session - x", time: { created: now, updated: now } },
-      // Placeholder title: swept, but no topic from it.
-      { id: "ses_sweep_ph", title: `New session - ${new Date(now).toISOString()}`, time: { created: now, updated: now } },
-    ];
-    const arHooks = await server({ client: clientWithSweep, worktree: "/tmp/thatch-sweep" } as any);
-    await settle();
-    const swDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    const argvSave = process.argv;
+    process.argv = [...argvSave, "-s", "ses_resume"];
+    let resumeHooks: Awaited<ReturnType<typeof server>> | undefined;
     try {
-      const rows = swDb.listChatSessions();
-      // Ancient session: still swept - no age cut-off for membership.
-      const swept = rows.find((r) => r.session_id === "ses_sweep1");
-      expect(swept).toBeDefined();
-      expect(swept!.topic).toBe("Sweep Me");
-      expect(swept!.host_pid).toBe(process.pid);
-      expect(swDb.listChatSessions().find((r) => r.session_id === "ses_sweep_child")).toBeUndefined();
-      const placeholderRow = rows.find((r) => r.session_id === "ses_sweep_ph");
-      expect(placeholderRow).toBeDefined();
-      expect(placeholderRow!.topic).toBeNull();
-      // The orphan was adopted: same row, now owned (and beaten fresh) by
-      // this harness...
-      const adopted = rows.find((r) => r.session_id === "ses_orphan");
-      expect(adopted).toBeDefined();
-      expect(adopted!.host_pid).toBe(process.pid);
-      // ...and its asleep-mail woke it at init: the wake nudge went out
-      // (the nudge is a pointer naming the sender and count, not the body)
-      // and the mail is stamped delivered (unread until the woken turn
-      // calls chat_read, which is expected - the mock does not run one).
-      const wake = promptAsyncs.find((p) => p.path.id === "ses_orphan");
+      resumeHooks = await server({ client: resumeClient, worktree: "/tmp/thatch-resume" } as any);
+      await settle();
+      const row = new ThatchDB(process.env.THATCH_DB_PATH!).listChatSessions().find((r) => r.session_id === "ses_resume");
+      expect(row).toBeDefined();
+      // Same row, SAME NAME (owned by the session id), new owner.
+      expect(row!.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
+      expect(row!.host_pid).toBe(process.pid);
+      expect(row!.topic).toBe("Continued session");
+      // The asleep-mail woke it at init.
+      const wake = promptAsyncs.find((p) => p.path.id === "ses_resume");
       expect(wake).toBeDefined();
-      expect(JSON.stringify(wake.body)).toContain("1 unread message from sender-00001");
+      expect(JSON.stringify(wake.body)).toContain("1 unread message from resender-00001");
       const stamp = new Database(process.env.THATCH_DB_PATH!)
-        .query("SELECT delivered_at FROM chat_messages WHERE to_session = 'ses_orphan'")
+        .query("SELECT delivered_at FROM chat_messages WHERE to_session = 'ses_resume'")
         .get() as any;
       expect(stamp?.delivered_at).not.toBeNull();
     } finally {
-      swDb.close();
-      arHooks.dispose?.();
-      sweepSessions = [];
+      process.argv = argvSave;
+      resumeHooks?.dispose?.();
     }
   });
 });

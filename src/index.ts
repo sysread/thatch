@@ -24,7 +24,7 @@ import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
 import { WatcherRegistry, ghApiRun, ghAvailable } from "./watchers";
 import { watcherNotificationNudge, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
-import { ChatPoller, createWakeGate, isDefaultSessionTitle, isPidAlive } from "./chat";
+import { ChatPoller, createWakeGate, isDefaultSessionTitle } from "./chat";
 import { chatEnabled, chatAutoRegister, loadConfig } from "./config";
 import pkg from "../package.json";
 
@@ -61,6 +61,24 @@ const WRAPUP_COMMANDS: Record<string, { token: string; kind: "compact" | "exit" 
   "thatch/compact": { token: COMPACT_READY_TOKEN, kind: "compact" },
   "thatch/exit": { token: EXIT_READY_TOKEN, kind: "exit" },
 };
+
+/**
+ * The session id this harness was started to continue, parsed from the
+ * opencode process's own argv (`opencode -s <id>` / `--session <id>` /
+ * `--session=<id>`). The framework passes no session id to plugins and
+ * resuming a session fires no events, so argv is the only signal that a
+ * fresh harness is the new home of a continued session. `-c/--continue`
+ * (continue last) resolves no id here - that session registers on its
+ * first idle like any other.
+ */
+export function startupSessionIdFromArgv(argv: string[]): string | null {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "-s" || arg === "--session") return argv[i + 1] ?? null;
+    if (arg.startsWith("--session=")) return arg.slice("--session=".length) || null;
+  }
+  return null;
+}
 
 export const server: Plugin = async ({ client, worktree }) => {
   // The opencode server's cwd is wherever the server happened to start;
@@ -192,16 +210,14 @@ export const server: Plugin = async ({ client, worktree }) => {
   const chatPoller = new ChatPoller({
     store: db,
     hostedSessions: () => {
-      // Ownership, not event history: this harness beats and delivers for
-      // every project session stamped with its pid (the sweep claims
-      // orphans). Sub-agent children are excluded even if someone
-      // registered one - a registered child would be heartbeat-ed
-      // fresh-forever and burn nudge budget on undeliverable wake
-      // prompts.
-      return db
-        .ownedChatSessions(repo, process.pid)
-        .map((r) => r.session_id)
-        .filter((id) => !childToParent.has(id));
+      // Hosting = the sessions this harness serves: those seen as events
+      // here (used in this TUI) plus the `-s` startup session. Sub-agent
+      // children are excluded even if someone registered one - a
+      // registered child would be heartbeat-ed fresh-forever and burn
+      // nudge budget on undeliverable wake prompts.
+      const hosted = [...sessionStatus.keys()];
+      if (startupSession) hosted.push(startupSession);
+      return hosted.filter((id) => !childToParent.has(id));
     },
     deliver: async (sessionID, senders, count) => {
       await client.session.promptAsync({
@@ -228,65 +244,29 @@ export const server: Plugin = async ({ client, worktree }) => {
   // sessions and burn wake budget against a feature the user turned off.
   if (chatOn) chatPoller.start();
 
-  // Startup sweep + hourly re-sweep: membership in the roster tracks what
-  // is LOADED in a live harness, not what recently moved. A harness restart
-  // fires no events for sessions that are merely loaded (resume fires
-  // nothing either - session IDs persist across restarts), so the sweep
-  // registers the project's top-level sessions from client.session.list at
-  // init, re-runs hourly to catch mid-run loads, and ADOPTS rows whose
-  // owning harness died (dead pid): re-stamping the pid and beating them
-  // fresh - a live harness can wake any of its project's sessions. All of
-  // it is idempotent; registration assigns pool names, and a real title
-  // rides the topic column like everyone else's.
-  const chatSweep = async () => {
-    // Feature-detect: an older opencode client may not expose
-    // session.list. The sweep is best-effort (idle registration still
-    // covers those sessions), so an absent method skips silently
-    // instead of logging an error on every startup.
-    if (typeof client.session?.list !== "function") return;
-    const { data } = await client.session.list();
-    for (const s of data ?? []) {
-      if ((s as any).parentID) continue; // top-level sessions only
-      const title = s.title ?? "";
-      // Same placeholder guard as the idle path: a fresh session may still
-      // carry opencode's pre-autotitle title.
-      const topic = title && !isDefaultSessionTitle(title) ? title : null;
-      const res = db.registerChatSession(s.id, repo, topic, "opencode", null, detectWorktreeKind(worktree), process.pid);
-      // Converge the topic for sessions that already had a row: the title
-      // may have changed while they were away.
-      if (res.ok && topic) db.refreshChatTopic(s.id, topic);
-    }
-    // Adopt the dead: opencode rows of this project whose owning pid no
-    // longer exists. Their harness is gone; this one is alive and takes
-    // over the beating and delivery - listed or not, a dead-owner row is
-    // claimable. MCP rows are turn-driven and have no pid - never touched.
-    // register() is idempotent for the row (and respects leave tombstones
-    // - a session the user left stays gone); the heartbeat then re-stamps
-    // ownership and freshness, which the register-existing path
-    // deliberately does not.
-    for (const row of db.listChatSessions()) {
-      if (row.project !== repo || row.host_kind !== "opencode") continue;
-      if (row.host_pid != null && isPidAlive(row.host_pid)) continue; // a live harness owns it
-      const res = db.registerChatSession(row.session_id, repo, row.topic, "opencode", null, row.worktree, process.pid);
-      if (res.ok) db.heartbeatChatSessions([row.session_id]);
-    }
-    // Asleep-mail: a restarted harness may hold sessions with unread mail
-    // that queued while they were down. Deliver now through the normal
-    // path (gate, nudge, toast, stamps) instead of making the session wait
-    // out the first poll cycle - the restarted session learns what it
-    // missed at startup, which is the whole point of the sweep.
-    await chatPoller.deliverPending();
-  };
-  if (chatOn && chatAutoRegister(loadConfig(dbPath).config)) {
-    void chatSweep().catch((err) => {
-      console.error(`[thatch] chat startup sweep failed: ${err}`);
-    });
-    const sweepTimer = setInterval(() => {
-      void chatSweep().catch((err) => {
-        console.error(`[thatch] chat sweep failed: ${err}`);
-      });
-    }, 3_600_000);
-    sweepTimer.unref?.();
+  // Startup registration: `opencode -s <id>` continues a session whose
+  // directory row may predate this process (its harness died, or the
+  // machine restarted). The framework passes no session id to plugins and
+  // resuming fires no events, so argv is the source. Registering here
+  // RECLAIMS the row - the name is owned by the session id and never
+  // changes - and the delivery kick below wakes the session with any mail
+  // that queued while it was down.
+  const startupSession = startupSessionIdFromArgv(process.argv);
+  if (chatOn && chatAutoRegister(loadConfig(dbPath).config) && startupSession && !db.hasChatLeaveTombstone(startupSession)) {
+    void (async () => {
+      try {
+        const { data } = await client.session.get({ path: { id: startupSession } });
+        const title = data?.title ?? "";
+        const topic = title && !isDefaultSessionTitle(title) ? title : null;
+        const res = db.registerChatSession(startupSession, repo, topic, "opencode", null, detectWorktreeKind(worktree), process.pid);
+        if (res.ok && topic) db.refreshChatTopic(startupSession, topic);
+        // Asleep-mail: deliver what queued while this session was away,
+        // through the normal path (gate, nudge, toast, stamps).
+        await chatPoller.deliverPending();
+      } catch (err) {
+        console.error(`[thatch] chat startup registration failed for ${startupSession}: ${err}`);
+      }
+    })();
   }
 
   // Sessions currently being compacted. chat.message nudges are skipped while

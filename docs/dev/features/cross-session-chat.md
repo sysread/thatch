@@ -58,9 +58,9 @@ outlives a process, so liveness needs a signal beyond process lifetime.
 ### Registration and identity
 
 Sessions are auto-registered by the plugin: the first `session.status`
-idle event for a top-level session inserts its directory row (unless
-`chat.autoRegister: false`), and a startup sweep registers the project's
-recent sessions before any turn runs (below). Names are assigned, never
+idle event for a top-level session inserts its directory row, and a
+session continued via `-s <id>` registers at harness start (below) --
+both unless `chat.autoRegister: false`. Names are assigned, never
 claimed: a pool draw (`CHAT_NAME_POOL`, src/chat-names.ts) plus a
 per-base counter row (`chat_name_counters`, src/db.ts) that only ever
 increments - drawn atomically via INSERT ... ON CONFLICT ... RETURNING.
@@ -79,25 +79,19 @@ worktree, a `.git` directory means the project root, no `.git` reads as
 undetected. The roster shows it as a `loc:` token so sessions coordinating
 on a shared tree can tell who sits where.
 
-### Startup sweep and ownership
+### Startup registration and reclaim
 
-A harness restart fires no events for sessions that are merely loaded
-(resume fires nothing either - session IDs persist across restarts), so
-the idle-only path leaves the roster empty until each session's next
-turn. The sweep closes that gap and defines OWNERSHIP: at plugin init and
-then hourly, the harness registers every top-level session of its project
-from `client.session.list` - no age cut-off; anything loaded in a live
-harness belongs in the roster - and ADOPTS opencode rows whose owning pid
-no longer exists (dead harness): it re-stamps the pid and the row is
-beaten fresh again. The pid stamp is the ownership contract: the owning
-harness heartbeats its rows (every poll cycle, idle or not) and delivers
-their mail, so two harnesses on one project partition the roster instead
-of double-waking. An owner that dies stops beating; its rows go stale
-(instantly, by the pid probe) until a live harness's sweep adopts them.
-`chat.autoRegister: false` disables the sweep along with idle
-registration. The 7-day TTL prune remains only as the table bound for
-rows whose harness never returned; a returning harness re-registers them
-under fresh pool names (names are never reused).
+A session continued via `opencode -s <id>` gets no event when it comes
+back up (resume writes nothing session-scoped), so the plugin reads the
+session id from the harness's own argv at init and registers it then.
+Registration is keyed by session id: the row already exists, so the name
+is RECLAIMED (names are owned by the session id, minted once, never
+renamed) and ownership is re-stamped - the serving harness beats and
+delivers for the row again. `-c/--continue` resolves no id in argv; that
+session registers on its first idle like any other. Asleep-mail: the
+startup path kicks a delivery pass when it finishes, so the continued
+session learns what it missed at startup instead of waiting out the
+first poll cycle.
 
 `chat_register` (no arguments) is the explicit path: idempotent ensure for
 opencode (identity is the host session ID, which the model cannot know or
@@ -169,19 +163,19 @@ behavior drastically on a parameter value is two functions.
 ### Polling, heartbeat, staleness
 
 A `setInterval` loop (default 30s) runs one cycle per process: heartbeat
-the OWNED sessions (every project row stamped with this harness's pid -
-idle sessions keep beating, so a loaded session stays fresh while its
-harness lives), then deliver their mail. A crashed process fires no
-`session.deleted`, so its rows would linger - liveness is therefore a
-PROCESS check, not just a timestamp: each row carries the host PID, and
-`chatLiveness` (src/chat.ts) marks an opencode row stale the moment that
-PID no longer exists (signal-0 probe), even while the heartbeat age would
-still look fresh. Rows without a PID (legacy, MCP) fall back to the
-heartbeat age alone (default 10 minutes). `chat_list` groups the result
-into Active and Stale sections - the stale section's explainer says what
-stale means - and `chat_send` states the recipient's liveness at send
-time, so a sender mailing a ghost learns it immediately instead of
-waiting on a wake that will never fire.
+the HOSTED sessions (those seen as events in this harness plus the `-s`
+startup session - idle sessions keep beating, so a session stays fresh
+while its harness lives), then deliver their mail. A crashed process
+fires no `session.deleted`, so its rows would linger - liveness is
+therefore a PROCESS check, not just a timestamp: each row carries the
+host PID, and `chatLiveness` (src/chat.ts) marks an opencode row stale
+the moment that PID no longer exists (signal-0 probe), even while the
+heartbeat age would still look fresh. Rows without a PID (legacy, MCP)
+fall back to the heartbeat age alone (default 10 minutes). `chat_list`
+groups the result into Active and Stale sections - the stale section's
+explainer says what stale means - and `chat_send` states the recipient's
+liveness at send time, so a sender mailing a ghost learns it immediately
+instead of waiting on a wake that will never fire.
 `session.deleted` is the graceful-exit fast path that unregisters immediately.
 
 ### Delivery, re-nudge, and the rate cap
