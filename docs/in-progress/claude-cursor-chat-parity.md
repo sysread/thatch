@@ -134,7 +134,63 @@ Recommendation: option 1 now, revisit if a real multi-tenant use appears.
   `docs/user/cross-session-chat.md` and the dev feature docs. Delete this
   file and note the move, per the plans graduation convention.
 
-## Non-goals
+## Step 4.5: post-turn mail delivery (Cursor stop hook)
+
+The gap: mail arriving during or after a turn has no delivery vector in
+Cursor. The hook line only runs at prompts (beforeSubmitPrompt) and session
+start. opencode's poller wakes idle sessions; Cursor has no analog today.
+Mail that lands after the last prompt waits for the user's next keystroke.
+
+Research against current Cursor hook docs (2026-09-15), delivery-capable
+events assessed:
+
+| Event               | Can deliver? | Verdict                                        |
+| ------------------- | ------------ | ---------------------------------------------- |
+| `stop`              | yes          | **the fix** - see below                        |
+| `postToolUse`       | `additional_context` mid-turn | too noisy, N fires per turn   |
+| `subagentStop`      | `followup_message` | wrong scope (Task sub-agents)           |
+| `preCompact`        | `user_message` shown at compaction only | marginal          |
+| `afterAgentResponse` / `afterAgentThought` | no output fields   | observational only |
+| `sessionEnd`        | fire-and-forget | cleanup use only                            |
+
+The `stop` hook contract (verified):
+
+- Input: common schema plus `status` (`completed` | `aborted` | `error`)
+  and `loop_count` (how many follow-ups this hook already triggered,
+  starting at 0). `conversation_id` is documented "stable across many
+  turns", so `mcpSessionID(conversation_id)` resolves the same chat row
+  the other hooks anchor.
+- Output: `{ "followup_message": "..." }` - non-empty means Cursor
+  auto-submits it as the next user message. A real wake.
+- Built-in loop safety: `loop_limit` per script, default 5; natural
+  termination because once the model reads its mail the unread count
+  drops to 0 and the hook emits `{}`.
+- Runs in cloud agents, but their VMs lack the local thatch.db, so the
+  mailbox check is empty there. Exception: self-hosted pool workers run
+  on the user's machine, where it would work.
+
+Design for `thatch chat-notify`:
+
+1. New CLI subcommand: reads the hook stdin (`conversation_id`), looks up
+   unread mail for `mcpSessionID(id)`, prints `{ followup_message }` when
+   unread > 0, `{}` otherwise. Plain text body never included - the
+   notification is a pointer, bodies flow only through the framed
+   `chat_read`.
+2. The follow-up text reuses the opencode wake shape
+   (`chatNotificationNudge`): sender names + count + the load-bearing
+   system-notification framing. The follow-up arrives as a user message,
+   so the "not user input, do not auto-reply, stop and wait" wording is
+   mandatory (same lesson as the tier-0 extraction nudge).
+3. `thatch setup --cursor` writes the hook: `{ "command": "<bin>
+   chat-notify", "loop_limit": 3 }`. `replaceCursorThatchHooks` already
+   does idempotent per-event replacement.
+4. Claude Code's Stop hook has a different contract
+   (`decision: "block"` + `reason` forces continuation - invasive) and
+   `additionalContext` without block only lands in the transcript for the
+   next turn, which UserPromptSubmit already covers. Skip Claude Code for
+   v1; revisit if the prompt-time model proves annoying in practice.
+
+
 
 - Wake delivery on MCP hosts. Neither Claude Code nor Cursor can start a
   turn from outside; the prompt-time delivery model is the ceiling.
