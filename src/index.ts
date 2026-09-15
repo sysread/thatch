@@ -249,24 +249,33 @@ export const server: Plugin = async ({ client, worktree }) => {
   // machine restarted). The framework passes no session id to plugins and
   // resuming fires no events, so argv is the source. Registering here
   // RECLAIMS the row - the name is owned by the session id and never
-  // changes - and the delivery kick below wakes the session with any mail
-  // that queued while it was down.
+  // changes - and stamps ownership synchronously: local SQLite, it cannot
+  // fail on a server that is still starting. The async tail (title fetch,
+  // asleep-mail delivery) is best-effort - the poller retries whatever it
+  // misses, and the first idle converges the topic.
   const startupSession = startupSessionIdFromArgv(process.argv);
   if (chatOn && chatAutoRegister(loadConfig(dbPath).config) && startupSession && !db.hasChatLeaveTombstone(startupSession)) {
-    void (async () => {
-      try {
-        const { data } = await client.session.get({ path: { id: startupSession } });
-        const title = data?.title ?? "";
-        const topic = title && !isDefaultSessionTitle(title) ? title : null;
-        const res = db.registerChatSession(startupSession, repo, topic, "opencode", null, detectWorktreeKind(worktree), process.pid);
-        if (res.ok && topic) db.refreshChatTopic(startupSession, topic);
-        // Asleep-mail: deliver what queued while this session was away,
-        // through the normal path (gate, nudge, toast, stamps).
-        await chatPoller.deliverPending();
-      } catch (err) {
-        console.error(`[thatch] chat startup registration failed for ${startupSession}: ${err}`);
-      }
-    })();
+    const res = db.registerChatSession(startupSession, repo, null, "opencode", null, detectWorktreeKind(worktree), process.pid);
+    if (res.ok) {
+      void (async () => {
+        try {
+          const { data } = await client.session.get({ path: { id: startupSession } });
+          const title = data?.title ?? "";
+          const topic = title && !isDefaultSessionTitle(title) ? title : null;
+          if (topic) db.refreshChatTopic(startupSession, topic);
+        } catch {
+          // Server may still be starting; the topic converges on the
+          // session's first idle either way.
+        }
+        try {
+          // Asleep-mail: deliver what queued while this session was away,
+          // through the normal path (gate, nudge, toast, stamps).
+          await chatPoller.deliverPending();
+        } catch {
+          // The poller cycle retries delivery; nothing to do here.
+        }
+      })();
+    }
   }
 
   // Sessions currently being compacted. chat.message nudges are skipped while
