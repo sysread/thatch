@@ -312,6 +312,92 @@ export function setupClaudeCode(
 }
 
 // ---------------------------------------------------------------------------
+// Global MCP registration (Claude Code)
+// ---------------------------------------------------------------------------
+
+/**
+ * Outcome of trying to register the thatch MCP server with the `claude`
+ * CLI. `registered` and `already-registered` mean the MCP server is
+ * usable; `claude-missing` and `failed` mean the caller must print
+ * `manualCommand` for the user to run by hand.
+ */
+export interface ClaudeMcpRegistration {
+  status: "registered" | "already-registered" | "claude-missing" | "failed";
+  manualCommand: string;
+  detail: string;
+}
+
+export interface CommandRunResult {
+  exitCode: number;
+}
+
+async function defaultCommandRun(argv: string[]): Promise<CommandRunResult> {
+  const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
+  await proc.exited;
+  return { exitCode: proc.exitCode ?? 1 };
+}
+
+/**
+ * Runs `claude mcp add --scope user` on the user's behalf - the
+ * global-setup counterpart of writing .mcp.json, which project-local
+ * setup does directly. ~/.claude.json is not hand-writable (the reason
+ * setup used to print the command instead), so the claude CLI does it.
+ *
+ * Idempotent and non-destructive: an existing registration is detected
+ * via `claude mcp get thatch` (exit 1 when absent) and left untouched,
+ * whatever scope or binary it points at. `claudeBin` and `run` are
+ * injectable for tests; when `claude` is missing the result says so and
+ * the manual command stands in.
+ */
+export async function registerClaudeMcpServer(
+  thatchBin: string,
+  opts: {
+    claudeBin?: string | null;
+    run?: (argv: string[]) => Promise<CommandRunResult>;
+  } = {},
+): Promise<ClaudeMcpRegistration> {
+  const claudeBin = opts.claudeBin === undefined ? Bun.which("claude") : opts.claudeBin;
+  const manualCommand = `claude mcp add --scope user thatch -- ${thatchBin} mcp`;
+  const run = opts.run ?? defaultCommandRun;
+  if (!claudeBin) {
+    return {
+      status: "claude-missing",
+      manualCommand,
+      detail: "claude CLI not found on PATH",
+    };
+  }
+  try {
+    const get = await run([claudeBin, "mcp", "get", "thatch"]);
+    if (get.exitCode === 0) {
+      return {
+        status: "already-registered",
+        manualCommand,
+        detail: "a thatch MCP registration already exists (`claude mcp get thatch` to inspect)",
+      };
+    }
+    const add = await run([claudeBin, "mcp", "add", "--scope", "user", "thatch", "--", thatchBin, "mcp"]);
+    if (add.exitCode === 0) {
+      return {
+        status: "registered",
+        manualCommand,
+        detail: "registered with `claude mcp add --scope user`",
+      };
+    }
+    return {
+      status: "failed",
+      manualCommand,
+      detail: "`claude mcp add` exited non-zero",
+    };
+  } catch (err) {
+    return {
+      status: "failed",
+      manualCommand,
+      detail: `claude invocation failed: ${err}`,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Cursor setup - .cursor/mcp.json, AGENTS.md, .cursor/hooks.json, skills
 // ---------------------------------------------------------------------------
 

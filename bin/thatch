@@ -8,7 +8,7 @@ import { detectRepo } from "../src/git";
 import { BgeEmbeddingModel } from "../src/embeddings";
 import { hygieneReport } from "../src/hygiene";
 import { claudeSessionStartReminder } from "../src/prompts";
-import { setupClaudeCode, setupCursor } from "../src/setup";
+import { setupClaudeCode, setupCursor, registerClaudeMcpServer } from "../src/setup";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
 import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, chatLiveness, humanAge, splitChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
@@ -802,8 +802,20 @@ switch (command) {
       printSkills(result);
       console.log();
       if (result.mcpAddCommand) {
-        console.log("To register the MCP server globally, run:");
-        console.log(`  ${result.mcpAddCommand}`);
+        // Global setup cannot write ~/.claude.json directly, so run the
+        // registration on the user's behalf. Idempotent: an existing
+        // registration is left alone; a missing or failing claude CLI
+        // falls back to printing the manual command.
+        const reg = await registerClaudeMcpServer(thatchBin);
+        if (reg.status === "registered") {
+          console.log(`  MCP server:    ${reg.detail}`);
+        } else if (reg.status === "already-registered") {
+          console.log(`  MCP server:    already registered (claude mcp get thatch to inspect)`);
+        } else {
+          console.log("To register the MCP server globally, run:");
+          console.log(`  ${result.mcpAddCommand}`);
+          console.log(`  (${reg.detail})`);
+        }
         console.log();
       }
       console.log("Restart Claude Code for the changes to take effect.");

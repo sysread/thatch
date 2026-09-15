@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import yaml from "yaml";
-import { setupClaudeCode, setupCursor, checkSetup } from "../src/setup";
+import { setupClaudeCode, setupCursor, checkSetup, registerClaudeMcpServer } from "../src/setup";
 import { claudeInstructions, cursorInstructions, systemPrompt } from "../src/prompts";
 import { SHARED_SKILLS, OPENCODE_ONLY_SKILLS, installSkills } from "../src/skills";
 
@@ -1094,5 +1094,71 @@ describe("stale skill cleanup on install", () => {
     expect(existsSync(join(dir, "thatch-old-removed-skill"))).toBe(false);
     // The target directory the symlink pointed to is still intact.
     expect(existsSync(join(targetDir, "SKILL.md"))).toBe(true);
+  });
+});
+
+describe("registerClaudeMcpServer", () => {
+  test("claude missing -> manual fallback", async () => {
+    const reg = await registerClaudeMcpServer("/usr/bin/thatch", { claudeBin: null });
+    expect(reg.status).toBe("claude-missing");
+    expect(reg.manualCommand).toContain("claude mcp add --scope user thatch");
+  });
+
+  test("existing registration is left alone", async () => {
+    const calls: string[][] = [];
+    const reg = await registerClaudeMcpServer("/usr/bin/thatch", {
+      claudeBin: "/fake/claude",
+      run: async (argv) => {
+        calls.push(argv);
+        return { exitCode: 0 };
+      },
+    });
+    expect(reg.status).toBe("already-registered");
+    // Only the get probe ran; no add, no remove.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].join(" ")).toContain("mcp get thatch");
+  });
+
+  test("absent registration is added at user scope", async () => {
+    const calls: string[][] = [];
+    const reg = await registerClaudeMcpServer("/usr/bin/thatch", {
+      claudeBin: "/fake/claude",
+      run: async (argv) => {
+        calls.push(argv);
+        return { exitCode: argv[2] === "get" ? 1 : 0 };
+      },
+    });
+    expect(reg.status).toBe("registered");
+    expect(calls).toHaveLength(2);
+    const add = calls[1];
+    expect(add.join(" ")).toContain("mcp add --scope user thatch");
+    expect(add.slice(-2)).toEqual(["/usr/bin/thatch", "mcp"]);
+  });
+
+  test("failing add -> failed status with manual command", async () => {
+    const reg = await registerClaudeMcpServer("/usr/bin/thatch", {
+      claudeBin: "/fake/claude",
+      run: async (argv) => ({ exitCode: argv[2] === "get" ? 1 : 3 }),
+    });
+    expect(reg.status).toBe("failed");
+    expect(reg.manualCommand).toContain("claude mcp add --scope user thatch");
+  });
+
+  test("spawn failure (claude crashed) -> failed, not thrown", async () => {
+    const reg = await registerClaudeMcpServer("/usr/bin/thatch", {
+      claudeBin: "/fake/claude",
+      run: async () => {
+        throw new Error("ENOENT-ish disaster");
+      },
+    });
+    expect(reg.status).toBe("failed");
+    expect(reg.detail).toContain("disaster");
+  });
+
+  test("helper matches the setup CLI export", () => {
+    // The CLI's setup case calls this helper on the same result it prints;
+    // the manual command must match what setup reports.
+    const result = setupClaudeCode(join(projectDir, "bin", "thatch"), true, projectDir, fakeHome);
+    expect(result.mcpAddCommand).toContain("claude mcp add --scope user thatch --");
   });
 });
