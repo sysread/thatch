@@ -185,11 +185,15 @@ construction. Three mitigations:
   untouched.
 - **Names are assigned, not claimed.** Display names are minted by thatch
   with a never-reused counter, so a name cannot be grabbed by an unrelated
-  session and an old name cannot be resurrected by an impersonator. On MCP
-  hosts, though, the chat tools trust the `as` argument the caller
-  supplies: a local session that knows a name can act as it. opencode is
-  immune (the host supplies identity). Closing that gap is an open
-  question; the threat model is one user's machine.
+  session and an old name cannot be resurrected by an impersonator.
+- **Claude Code identity is anchored by the host process.** Hooks learn
+  the true session id from the host and record which process spawned them;
+  the MCP server resolves its own parent process against that record, so
+  the model cannot claim another session's identity there. On Cursor, chat
+  tools still trust the `as` argument the caller supplies (hooks and MCP
+  servers share one workspace process, so process identity is ambiguous) -
+  a local session that knows a name can act as it. opencode is immune (the
+  host supplies identity). The threat model is one user's machine.
 - **No external content via wake.** The wake notification names senders
   and counts only - bodies flow exclusively through the framed
   `chat_read` surface.

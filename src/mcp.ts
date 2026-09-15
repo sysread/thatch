@@ -134,6 +134,12 @@ export async function runMcpServer(): Promise<void> {
     defaultStore: repo,
     extractionPayloadProvider,
     drainExtractionQueue,
+    // Claude Code identity anchor: the hooks record (parent pid -> session)
+    // mappings from payloads the model cannot influence, and this server is
+    // a child of the same Claude Code process - so its own parent pid
+    // resolves the calling session without trusting the model's `as`.
+    // Freshness bounds the pid-reuse hazard; a miss falls back to `as`.
+    chatDerivedIdentity: () => db.findChatSessionByHostPid(process.ppid, 600),
   };
   const tools = compileTools();
 

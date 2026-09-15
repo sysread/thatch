@@ -86,6 +86,12 @@ export interface CoreContext {
   /** Injectable command runner for notify_user. Defaults to Bun.spawn.
    *  Tests inject a mock so notifications never actually fire or speak. */
   spawner?: Spawner;
+  /** Resolves the calling MCP server process's own chat identity from its
+   *  parent process id (the hook-recorded Claude Code anchor). Wired on the
+   *  MCP path only; the model cannot influence it, which is what makes it
+   *  authoritative over the caller-claimed `as` argument. Returns null when
+   *  no fresh mapping exists (Cursor, unknown server process). */
+  chatDerivedIdentity?: () => string | null;
 }
 
 /**
@@ -1519,10 +1525,13 @@ function chatDisabledReply(): string {
 }
 
 /**
- * Resolves the chat identity for a tool call. opencode supplies the host
- * session; MCP hosts (host === undefined) declare theirs with the `as`
- * argument, which must name a registered session. Returns either a usable
- * identity or the failure text the tool should return.
+ * Resolves the chat identity for a tool call, by priority:
+ *  1. opencode supplies the host-injected session (cannot be claimed).
+ *  2. The MCP server's derived identity (hook-recorded host-pid mapping on
+ *     Claude Code - the process fact the model cannot spoof).
+ *  3. The caller-claimed `as` argument (Cursor; documented limit).
+ * Returns either a usable identity or the failure text the tool should
+ * return.
  */
 async function resolveChatIdentity(
   ctx: CoreContext,
@@ -1533,6 +1542,11 @@ async function resolveChatIdentity(
     return { ok: false, error: chatDisabledReply() };
   }
   if (host) return { ok: true, sessionID: host.sessionID, kind: "opencode" };
+  const derived = ctx.chatDerivedIdentity?.() ?? null;
+  if (derived) {
+    const row = ctx.db.findChatSession(derived);
+    if (row) return { ok: true, sessionID: row.session_id, kind: row.host_kind };
+  }
   if (typeof as !== "string" || !as.trim()) {
     return {
       ok: false,
@@ -1540,14 +1554,14 @@ async function resolveChatIdentity(
         "Chat needs an identity: pass `as` with your registered display name (MCP hosts have no session context).",
     };
   }
-  const row = ctx.db.findChatSession(as.trim());
-  if (!row) {
+  const claimed = ctx.db.findChatSession(as.trim());
+  if (!claimed) {
     return {
       ok: false,
       error: `No registered session named "${as.trim()}" - call chat_register first (or chat_status to check).`,
     };
   }
-  return { ok: true, sessionID: row.session_id, kind: row.host_kind };
+  return { ok: true, sessionID: claimed.session_id, kind: claimed.host_kind };
 }
 
 /** The zod arg shared by chat tools whose MCP mode needs the caller's
@@ -1605,6 +1619,27 @@ const chatRegisterDef: ToolDef = {
   async execute(args, ctx, host) {
     if (!chatEnabled(loadConfig().config)) return chatDisabledReply();
     const kind: ChatHostKind = host ? "opencode" : "mcp";
+    // Derived identity (hook-recorded host-pid mapping): the conversation is
+    // already anchored by its own hooks, so this is an idempotent ensure -
+    // the same contract the hook path uses. An explicit join clears the
+    // leave tombstone first: "I want back in" is the model's explicit
+    // intent, and the tombstone must not override it.
+    const derived = !host ? ctx.chatDerivedIdentity?.() ?? null : null;
+    if (derived) {
+      ctx.db.clearChatLeaveTombstone?.(derived);
+      const res = ctx.db.registerChatSession(derived, ctx.defaultStore, null, kind, null, detectWorktreeKind(ctx.projectDir));
+      if (!res.ok) return `Registration failed: ${res.error}`;
+      return (
+        `[registered] ${res.name}\n` +
+        `session_id: ${derived}\n` +
+        `project: ${ctx.defaultStore}\n` +
+        degradedDeliveryNote() +
+        `\n` +
+        `Your identity comes from your host's hook anchor, so it is stable across prompts. ` +
+        `Other sessions can message you by name with chat_send, or reach everyone at once with ` +
+        `chat_broadcast; use chat_list to see who else is available.`
+      );
+    }
     // MCP reclaim: `as` must name an EXISTING registration - the identity
     // printed by the host's thatch hook for this conversation. Names are
     // assigned, so there is no claim path; a stale name from an old

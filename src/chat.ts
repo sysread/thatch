@@ -566,6 +566,44 @@ export class ChatStore {
   }
 
   /**
+   * Records (or refreshes) the hook-parent-process -> session mapping: the
+   * identity anchor that closes the caller-claimed `as` hole on Claude Code.
+   * Hooks receive the true session id from the host and run as children of
+   * the same Claude Code process that spawned the MCP server, so the server
+   * can resolve its own parent pid against this mapping - a fact the model
+   * cannot influence. Recorded only from payloads that carried Claude Code's
+   * `session_id`; Cursor's hooks come from a shared extension host with
+   * per-workspace MCP servers, so ppid is ambiguous there and `as` stays the
+   * identity source.
+   */
+  recordHostPid(ppid: number, sessionID: string): void {
+    this.#db.run(
+      `INSERT INTO chat_host_pids (ppid, session_id, seen_at) VALUES (?, ?, ?)
+       ON CONFLICT(ppid) DO UPDATE SET session_id = excluded.session_id, seen_at = excluded.seen_at`,
+      [ppid, sessionID, nowIso()],
+    );
+  }
+
+  /**
+   * Resolves a host process id to a chat session id, when a hook recorded
+   * the mapping recently and the session still exists in the directory.
+   * Freshness bounds the pid-reuse hazard: a dead host's pid can be
+   * reassigned by the OS, and a stale mapping must not hand the new
+   * occupant the old conversation's identity.
+   */
+  findSessionByHostPid(ppid: number, maxAgeSeconds: number): string | null {
+    const cutoff = isoMinutesAgo(Math.ceil(maxAgeSeconds / 60));
+    const row = this.#db
+      .query(
+        `SELECT p.session_id FROM chat_host_pids p
+         JOIN chat_sessions s ON s.session_id = p.session_id
+         WHERE p.ppid = ? AND p.seen_at >= ?`,
+      )
+      .get(ppid, cutoff) as { session_id: string } | undefined;
+    return row?.session_id ?? null;
+  }
+
+  /**
    * The caller's mailbox summary for chat_status: whether a directory row
    * exists, and pending/total counts. Touches last_seen on use, which is
    * what keeps an active MCP session's roster row fresh between prompt-time

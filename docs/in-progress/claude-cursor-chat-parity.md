@@ -108,23 +108,24 @@ non-opencode hosts covering:
 - name churn (a conversation idle past the prune window comes back under a
   fresh name; mail to the old name is swept)
 
-### Step 4: spoofing decision (blocked on Jeff)
+### Step 4: spoofing decision - CLOSED for Claude Code (Sep 15)
 
-Design call, not a bug fix. Options, cheapest first:
+Jeff chose to close the hole. Claude Code's settings docs offer no
+session-scoped env for MCP servers (`CLAUDE_PROJECT_DIR` is the only
+host-provided variable, and it is not per-session), so the fix uses
+process topology instead: hooks learn the true session id from the host
+payload and run as children of the same Claude Code process that spawned
+the MCP server. The hooks record (parent pid -> session) in
+`chat_host_pids`; the server resolves its own parent pid against that
+table (`chatDerivedIdentity` in CoreContext, freshness-capped at 600 s to
+bound the pid-reuse hazard). `resolveChatIdentity` priority: opencode
+host context > derived pid mapping > claimed `as`. The model cannot
+influence the derived identity, and no secret transits the model context.
 
-- **Do nothing.** Threat model is one user's machine; every session already
-  runs as the same OS user. Document the limit in the security model section
-  of the user doc.
-- **Hook-delivered secret.** The hook generates a per-session token, stores
-  it keyed by the hashed session id, and prints it with the name. Chat tools
-  require `as` plus the matching token. Cost: a new required argument on
-  every chat tool for MCP hosts, and the token still transits the same
-  model context an attacker would read. Closes casual spoofing, not a
-  determined one.
-- **Do not adopt anything stronger.** The hook channel and the tool calls
-  share one context; there is no channel a local attacker cannot read.
-
-Recommendation: option 1 now, revisit if a real multi-tenant use appears.
+Claude Code mapping is recorded only from payloads carrying `session_id`.
+Cursor hooks and MCP servers share one workspace process (ambiguous
+ppid), so Cursor keeps the caller-claimed `as` - documented in the user
+doc's security model as a Cursor-specific limit.
 
 ### Step 4.6: Claude Code live test results (Sep 15)
 

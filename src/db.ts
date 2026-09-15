@@ -284,6 +284,20 @@ export class ThatchDB {
       )
     `);
 
+    // Hook-parent-process -> session mapping (Claude Code identity anchor):
+    // hooks learn the true session id from the host's hook payload and run
+    // as children of the same process that spawned the MCP server, so the
+    // server resolves its own parent pid against this table - an identity
+    // the model cannot claim. Rows are timestamped; stale rows are ignored
+    // (pid reuse) rather than deleted.
+    this.#db.run(`
+      CREATE TABLE IF NOT EXISTS chat_host_pids (
+        ppid       INTEGER PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        seen_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+      )
+    `);
+
     this.#migrateColumns();
     this.#migrateChatNameCollation();
     this.#migrateChatTopic();
@@ -944,6 +958,14 @@ export class ThatchDB {
 
   unreadChatCount(sessionID: string) {
     return this.#chat.unreadCount(sessionID);
+  }
+
+  recordChatHostPid(ppid: number, sessionID: string) {
+    return this.#chat.recordHostPid(ppid, sessionID);
+  }
+
+  findChatSessionByHostPid(ppid: number, maxAgeSeconds: number): string | null {
+    return this.#chat.findSessionByHostPid(ppid, maxAgeSeconds);
   }
 
   heartbeatChatSessions(sessionIDs: string[]) {

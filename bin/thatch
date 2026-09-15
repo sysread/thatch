@@ -690,9 +690,20 @@ switch (command) {
     // spawns) the read is skipped and the line keeps the old shape: a line
     // only when pending mail exists for registered sessions in this project.
     const hookInput = await readHookInput("reminder");
-    const chatLine = await chatHookLine(
-      (hookInput?.session_id as string | undefined) ?? (hookInput?.conversation_id as string | undefined),
-    );
+    const hookSessionID = (hookInput?.session_id as string | undefined) ?? (hookInput?.conversation_id as string | undefined);
+    const chatLine = await chatHookLine(hookSessionID);
+    // Claude Code identity anchor: hooks and the MCP server are children of
+    // the same claude process, so recording (parent pid -> session) lets the
+    // server resolve the caller without trusting the model's `as`. Recorded
+    // only for payloads with session_id (Claude Code) - Cursor's hooks come
+    // from a shared extension host where ppid is ambiguous.
+    if (hookInput?.session_id && chatLine) {
+      try {
+        db.recordChatHostPid(process.ppid, mcpSessionID(String(hookInput.session_id)));
+      } catch (err) {
+        console.error(`[thatch] chat host-pid anchor failed: ${err}`);
+      }
+    }
     const reminder = claudeSessionStartReminder(repo, hygiene) + (chatLine ? `\n\n${chatLine}` : "");
     if (isJson) {
       console.log(JSON.stringify({ additional_context: reminder }));
@@ -952,6 +963,16 @@ switch (command) {
       // assigned identity (and its unread count), so the model knows who it
       // is before any chat tool call; with no mail the line says so.
       const chatLine = await chatHookLine(sessionID);
+      // Claude Code identity anchor (see reminder case): record the
+      // parent-process mapping for session_id-bearing (Claude Code)
+      // payloads; Cursor's conversation_id stays on the `as` path.
+      if (data.session_id && chatLine && sessionID) {
+        try {
+          db.recordChatHostPid(process.ppid, mcpSessionID(sessionID));
+        } catch (err) {
+          console.error(`[thatch] chat host-pid anchor failed: ${err}`);
+        }
+      }
 
       // Tier 1: extraction nudge. Peek (don't drain) - the queue persists
       // until the agent calls memory_remember, which triggers consumeQueue.

@@ -1150,3 +1150,41 @@ describe("chat tail backlog", () => {
     expect(events.map((e) => (e.event === "sent" ? e.body : null))).toEqual(["direct hit"]);
   });
 });
+
+describe("host-pid identity anchor", () => {
+  test("records and resolves a fresh mapping when the session exists", () => {
+    reg("ses_anchor", "anchor");
+    db.recordChatHostPid(4242, "ses_anchor");
+    expect(db.findChatSessionByHostPid(4242, 600)).toBe("ses_anchor");
+  });
+
+  test("stale mappings are ignored (pid reuse hazard)", () => {
+    reg("ses_old", "oldpid");
+    db.recordChatHostPid(5151, "ses_old");
+    // Backdate the mapping past any reasonable freshness window.
+    const raw = new Database(dbPath!);
+    raw.run("UPDATE chat_host_pids SET seen_at = ?", [cutoffAgo(60)]);
+    raw.close();
+    expect(db.findChatSessionByHostPid(5151, 600)).toBeNull();
+  });
+
+  test("mapping to a pruned session resolves to null", () => {
+    reg("ses_gone", "gonepid");
+    db.recordChatHostPid(6262, "ses_gone");
+    db.unregisterChatSession("ses_gone");
+    expect(db.findChatSessionByHostPid(6262, 600)).toBeNull();
+  });
+
+  test("re-registration under the same session id revives the mapping", () => {
+    reg("ses_back", "backpid");
+    db.recordChatHostPid(7373, "ses_back");
+    db.unregisterChatSession("ses_back");
+    expect(db.findChatSessionByHostPid(7373, 600)).toBeNull();
+    // Unregistering leaves a leave tombstone, and an opencode-kind register
+    // refuses tombstoned sessions - clear it first, as an explicit rejoin
+    // does.
+    db.clearChatLeaveTombstone("ses_back");
+    db.registerChatSession("ses_back", "p", null, "opencode");
+    expect(db.findChatSessionByHostPid(7373, 600)).toBe("ses_back");
+  });
+});
