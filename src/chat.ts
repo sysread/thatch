@@ -202,9 +202,8 @@ function defaultPidAlive(pid: number): boolean {
   }
 }
 
-/** Signal-0 probe: is this process alive on this machine? Exported for the
- *  sweep's adoption pass (a dead owner's rows get claimed by a live
- *  harness). */
+/** Signal-0 probe: is this process alive on this machine? Liveness only -
+ *  a dead pid marks the row stale; it never moves ownership. */
 export function isPidAlive(pid: number): boolean {
   return defaultPidAlive(pid);
 }
