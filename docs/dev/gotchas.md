@@ -146,6 +146,14 @@ here first. These are the things that have already cost time.
 - **The binary path is baked into installed hook commands.** `thatch setup`
   resolves `<bin>` from PATH (or the script's absolute path) and writes it into
   every hook command, so hooks survive after the setup session ends.
+- **Tool-arg optionality cannot be per-host at the schema level.** The zod
+  arg shape in `TOOL_DEFS` is shared by the opencode plugin and the MCP
+  server, so making an arg optional (e.g. `get_extraction_payload`'s
+  `session_id`) makes it optional everywhere. Per-host enforcement has to
+  happen in the tool's `execute`: fall back to `HostToolContext.sessionID`
+  on the opencode path, return a "pass the parent's session_id" error on
+  MCP hosts, which have no session context. See
+  [features/commands.md](features/commands.md).
 
 ## Tests
 
