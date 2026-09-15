@@ -5,11 +5,13 @@ import { registerUseCase, MODEL, type UseCase, type QaContext, type UseCaseResul
  * UC-098: Cross-session chat between two real opencode sessions.
  *
  * Live: two sequential `opencode run` sessions share one fixture (and one
- * thatch.db). Session one registers as "alpha"; session two registers as
- * "beta" and sends alpha a message. The assertion reads the shared database
- * directly: both directory rows exist and the message landed in alpha's
- * inbox unread. The wake-up half of the flow (idle delivery via promptAsync)
- * cannot run here - alpha's host process exits when its run completes, and
+ * thatch.db). Names are assigned by thatch (pool name plus counter), never
+ * chosen, so the test learns session one's name from the shared database
+ * after it registers, then tells session two to message that name. The
+ * assertion reads the database directly: both directory rows exist with
+ * distinct session ids and the message landed in session one's inbox
+ * unread. The wake-up half of the flow (idle delivery via promptAsync)
+ * cannot run here - session one's host process exits when its run completes, and
  * by design only the recipient's host delivers - so it is covered by the
  * user doc workflow and UC-097's mocked poller.
  */
@@ -21,13 +23,14 @@ const useCase: UseCase = {
     "- Two sequential sessions share the fixture's THATCH_DB_PATH",
   ].join("\n"),
   steps: [
-    "1. Session A registers in the chat directory as alpha.",
-    "2. Session B registers as beta and sends alpha a message by name.",
-    "3. Read the shared thatch.db: assert both directory rows and the message row.",
+    "1. Session A registers in the chat directory and reports its assigned name.",
+    "2. Read A's assigned name from the shared thatch.db.",
+    "3. Session B registers and sends A a message addressed to that name.",
+    "4. Read the shared thatch.db: assert both directory rows and the message row.",
   ].join("\n"),
   expected: [
-    "- chat_sessions contains alpha and beta with distinct session ids.",
-    "- chat_messages contains one row from beta's session to alpha's session, read_at NULL.",
+    "- chat_sessions contains two rows with assigned <pool-slug>-<counter> names and distinct session ids.",
+    "- chat_messages contains one row from B's session to A's session, read_at NULL.",
     "- Both sessions reported tool success in their output.",
   ].join("\n"),
 
@@ -63,25 +66,40 @@ const useCase: UseCase = {
       }
     };
 
-    // Session A: register as alpha.
+    const assignedName = /^[\p{L}\p{N}-]+-\d{5}$/u;
+    const rows = () =>
+      new Database(ctx.env.THATCH_DB_PATH, { readonly: true })
+        .query("SELECT session_id, name FROM chat_sessions ORDER BY registered_at")
+        .all() as Array<{ session_id: string; name: string }>;
+
+    // Session A: register with no arguments; thatch assigns the name.
     const outA = await spawnSession(
-      "Call thatch_chat_register with the name \"alpha\". Report the tool's exact output, then stop.",
+      "Call thatch_chat_register with no arguments. Report the tool's exact output, then stop.",
     );
-    if (!outA.includes("[registered] alpha")) {
+    if (!outA.includes("[registered] ")) {
       console.log(`  FAIL: session A did not register: ${outA.slice(0, 400)}`);
       return "FAIL";
     }
+    // `opencode run` sessions may also auto-register on idle; the row we
+    // want is whichever the explicit call produced, so take the directory
+    // as it stands and require exactly one A-side row.
+    const afterA = rows();
+    if (afterA.length !== 1 || !assignedName.test(afterA[0].name)) {
+      console.log(`  FAIL: expected one assigned-name row after session A, got ${JSON.stringify(afterA)}`);
+      return "FAIL";
+    }
+    const alpha = afterA[0];
 
-    // Session B: register as beta, then message alpha by name.
+    // Session B: register, then message A by its assigned name.
     const outB = await spawnSession(
-      "Call thatch_chat_register with the name \"beta\". Then call thatch_chat_send " +
-      "with to=\"alpha\" and body=\"ping from beta\". Report both tools' exact outputs, then stop.",
+      "Call thatch_chat_register with no arguments. Then call thatch_chat_send " +
+      `with to="${alpha.name}" and body="ping from beta". Report both tools' exact outputs, then stop.`,
     );
-    if (!outB.includes("[registered] beta")) {
+    if (!outB.includes("[registered] ")) {
       console.log(`  FAIL: session B did not register: ${outB.slice(0, 400)}`);
       return "FAIL";
     }
-    if (!outB.includes("[sent] to alpha")) {
+    if (!outB.includes(`[sent] to ${alpha.name}`)) {
       console.log(`  FAIL: session B did not send: ${outB.slice(0, 400)}`);
       return "FAIL";
     }
@@ -89,17 +107,10 @@ const useCase: UseCase = {
     // Assert against the shared database the plugin wrote through.
     const db = new Database(ctx.env.THATCH_DB_PATH, { readonly: true });
     try {
-      const sessions = db
-        .query("SELECT session_id, name FROM chat_sessions ORDER BY name")
-        .all() as Array<{ session_id: string; name: string }>;
-      const alpha = sessions.find((s) => s.name === "alpha");
-      const beta = sessions.find((s) => s.name === "beta");
-      if (!alpha || !beta) {
-        console.log(`  FAIL: directory rows missing: ${JSON.stringify(sessions)}`);
-        return "FAIL";
-      }
-      if (alpha.session_id === beta.session_id) {
-        console.log("  FAIL: both registrations landed on one session id");
+      const sessions = rows();
+      const beta = sessions.find((s) => s.session_id !== alpha.session_id);
+      if (sessions.length !== 2 || !beta || !assignedName.test(beta.name)) {
+        console.log(`  FAIL: expected two assigned-name rows, got ${JSON.stringify(sessions)}`);
         return "FAIL";
       }
       const messages = db
@@ -115,7 +126,7 @@ const useCase: UseCase = {
         return "FAIL";
       }
       if (ping.read_at !== null) {
-        console.log("  FAIL: message was read - alpha's host process is gone, nothing should have drained it");
+        console.log("  FAIL: message was read - session A's host process is gone, nothing should have drained it");
         return "FAIL";
       }
       return "PASS";
