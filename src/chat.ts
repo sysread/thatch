@@ -1014,9 +1014,10 @@ export function filterChatTailRows(rows: Array<ChatTailRow>, filter: ChatTailFil
  * history starts rendering as "unknown (... departed)", or it re-registers
  * under a new name); seeding everything means an old row can never resurface
  * as a sent event no matter how its rendered name changes. The last
- * `limit` filtered rows (null = all) shape into sent events via
- * chatTailDiff, so event shaping keeps a single source. `elided` counts
- * matching rows the limit hid, for the CLI's summary line.
+ * `limit` filtered rows (null = all) shape into sent events, plus a read
+ * event for each row already read, via chatTailDiff, so event shaping
+ * keeps a single source. `elided` counts matching rows the limit hid,
+ * for the CLI's summary line.
  *
  * The caller must re-apply the same filter to every follow poll's feed
  * BEFORE the diff (filterChatTailRows, then chatTailDiff with the state
@@ -1031,7 +1032,16 @@ export function chatTailBacklog(
   const state = new Map(rows.map((r) => [r.id, r.read_at]));
   const filtered = filterChatTailRows(rows, filter);
   const shown = limit === null ? filtered : filtered.slice(-limit);
-  const events = chatTailDiff(new Map(), shown).events;
+  // A snapshot has the full history of each shown message: its send, and
+  // its read if read_at is set. Emit both, in time order, so `--once`
+  // prints the same event log a follow would have accumulated. Reads of
+  // messages the limit hid stay hidden with them.
+  const events: ChatTailEvent[] = [];
+  for (const r of shown) {
+    events.push(...chatTailDiff(new Map(), [r]).events);
+    if (r.read_at !== null) events.push(...chatTailDiff(new Map([[r.id, null]]), [r]).events);
+  }
+  events.sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || (a.event === b.event ? 0 : a.event === "sent" ? -1 : 1));
   return { events, state, elided: filtered.length - shown.length };
 }
 

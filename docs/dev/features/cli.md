@@ -57,8 +57,9 @@ Read-only window on the cross-session chat directory ([cross-session-chat.md](cr
   message `id`; broadcast fan-out is one `sent` per recipient with
   `broadcast: true` and the real `to`. Event shaping is `chatTailDiff()`
   in `src/chat.ts`, unit-tested there. `--once` prints one snapshot and
-  exits, because a snapshot has no previous state to diff read events
-  against.
+  exits; the snapshot includes a `read` event for every shown message
+  whose `read_at` is set, sorted by time, so it is the same log a follow
+  would have accumulated.
 - The backlog prints only the last `CHAT_TAIL_DEFAULT_LIMIT` (20) messages;
   `chatTailBacklog()` in `src/chat.ts` filters the feed, seeds the diff
   state from every feed row (so the limit hides lines, not history, and a

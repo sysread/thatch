@@ -83,9 +83,9 @@ thatch chat tail | jq -r '"\(.at) \(.event) \(.from) -> \(.to // .reader): \(.bo
 thatch chat tail --once --limit all | jq -c 'select(.event == "read")'
 ```
 
-Follow mode runs until Ctrl-C. Read events appear only in follow mode
-(they fire when an inbox is drained after the tail started). When
-timestamps are in your local timezone. The chat itself flows through the
+Follow mode runs until Ctrl-C. The backlog includes the `read` event of
+every message already read; in follow mode, reads appear as inboxes
+drain. The chat itself flows through the
 agents (the CLI never sends, reads, or registers on a session's behalf;
 that happens from opencode sessions via the `thatch_chat_*` tools).
 

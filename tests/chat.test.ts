@@ -1058,6 +1058,22 @@ describe("chat tail backlog", () => {
     expect(elided).toBe(0);
   });
 
+  test("already-read messages emit their read event in the snapshot, in time order", () => {
+    // A snapshot is a log, not a diff: a message read before the tail
+    // started still shows both events. Reads sort by their own timestamp
+    // (here row 1's read lands after row 2's send), and reads of messages
+    // the limit hid stay hidden with them.
+    const rows = [
+      row({ id: 1, body: "one", created_at: "2026-09-12T10:00:00Z", read_at: "2026-09-12T10:02:00Z" }),
+      row({ id: 2, body: "two", created_at: "2026-09-12T10:01:00Z" }),
+      row({ id: 3, body: "three", created_at: "2026-09-12T10:03:00Z", read_at: "2026-09-12T10:03:30Z" }),
+    ];
+    const { events } = chatTailBacklog(rows, noFilter(), null);
+    expect(events.map((e) => `${e.event}:${e.id}`)).toEqual(["sent:1", "sent:2", "read:1", "sent:3", "read:3"]);
+    const limited = chatTailBacklog(rows, noFilter(), 1);
+    expect(limited.events.map((e) => `${e.event}:${e.id}`)).toEqual(["sent:3", "read:3"]);
+  });
+
   test("filters shrink the feed before the limit applies", () => {
     const filter = { ...noFilter(), matches: [/t/] };
     // "two" and "three" are the only bodies containing "t"; limit 1 keeps

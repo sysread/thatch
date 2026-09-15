@@ -26,7 +26,7 @@ const useCase: UseCase = {
   steps: [
     "1. Seed a DB: three registered sessions (alpha with a topic, beta, ghost aged stale), a direct message, a broadcast, and a message from a sender that then unregisters.",
     "2. Run `thatch chat list` and verify the roster renders two sections - Active and Stale (with a missed-heartbeat explainer) - each an aligned header row plus name, human age, status, project, and topic columns.",
-    "3. Run `thatch chat tail --once` and verify every stdout line is one JSON object with event/at/id/from/to/body fields, and broadcast copies carry broadcast: true with their real recipient.",
+    "3. Run `thatch chat tail --once` and verify every stdout line is one JSON object with event/at/id/from/to/body fields, broadcast copies carry broadcast: true with their real recipient, and already-read messages have a read event linked by id.",
     "4. Verify a departed sender renders as unknown in the tail.",
     "5. Seed 25 numbered filler messages, then run filtered tails: verify --limit line counts and the stderr elision note, ANDed --match, --from name matching, and the --since/--until window.",
   ].join("\n"),
@@ -129,10 +129,20 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
+    // The snapshot is a log: beta drained its inbox at seed time, so every
+    // message it received carries a read event linked by id, timestamped
+    // by the read.
+    const reads = events.filter((e) => e.event === "read");
+    if (reads.length !== 3 || !reads.every((e) => e.reader === "beta-00001" && events.some((s) => s.event === "sent" && s.id === e.id))) {
+      console.log(`  FAIL: expected 3 read events by beta linked to sent events, got:\n${JSON.stringify(reads)}`);
+      return "FAIL";
+    }
+
     // --limit/--match/--from/--since/--until: seed enough rows that the
     // default limit would elide, then check each flag's effect. All runs
-    // are one-shot (--once); one line is one event.
-    const eventCount = (r: { stdout: Buffer }) => parseLines(r.stdout.toString()).length;
+    // are one-shot (--once); the limit counts messages, so count sent
+    // events (read events ride along with their message).
+    const eventCount = (r: { stdout: Buffer }) => parseLines(r.stdout.toString()).filter((e) => e.event === "sent").length;
 
     // Traffic for the filter checks: 25 numbered filler rows (28 total).
     const more = new ThatchDB(ctx.env.THATCH_DB_PATH);
@@ -200,9 +210,6 @@ const useCase: UseCase = {
       console.log(`  FAIL: --limit all should not print an elision note:\n${today.stderr.toString()}`);
       return "FAIL";
     }
-    // Read events never appear in a --once snapshot by design (they fire
-    // only in follow mode, when a read happens after the tail started);
-    // the diff logic is unit-tested in tests/chat.test.ts (chatTailDiff).
     return "PASS";
   },
 };
