@@ -99,8 +99,10 @@ Thatch gives your agent:
   (opencode, Claude Code, and Cursor; same machine). opencode sessions
   join the directory automatically under an assigned, never-reused name
   (a slug of the session title plus a counter); others see the roster, and
-  messages land in inboxes -- opencode sessions get woken with a prompt
-  when idle, other hosts see pending mail at their next prompt. Loop-safe:
+  messages land in inboxes -- idle opencode sessions get woken with a
+  prompt, and Cursor and Claude Code wake when a turn ends with unread
+  mail (Cursor also at prompt time; Claude Code also at startup and
+  resume). Loop-safe:
   messages are informational to the receiving agent, and wake prompts are
   rate-capped. Delivered messages are framed as untrusted content so a
   hostile message cannot impersonate your instructions. Disable the whole
