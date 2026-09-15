@@ -66,6 +66,12 @@ substitution, matching the existing systemPrompt/mcpInstructions convention.
 The wrap-up commands (`compact`, `exit`) stay as-is; their checklist text
 becomes a core reused by both templates (already true via `sharedChecklist`).
 
+`/thatch/extract` interacts with opencode's direct extraction (parent idle
+spawns the extractor child; the nudge is only a fallback). The action must
+reuse the same accept/complete semantics and must not fight the `extracting`
+set: if direct extraction is already running for the session, the action
+should report that and stop rather than double-dispatch.
+
 ## Host parity
 
 Commands are markdown or MCP prompts, synced per host. Behavior parity is the
@@ -74,30 +80,49 @@ goal; format differences are documented, not hidden.
 - **opencode** (existing): `installOpencodeCommands` syncs markdown to
   `~/.config/opencode/command/thatch/` on every plugin load.
 - **Claude Code**: native user-level slash commands read markdown from
-  `~/.claude/commands/thatch/` with the same `$ARGUMENTS` substitution.
-  `thatch setup --claude` gains a sync step (idempotent content-compare, same
-  as the opencode installer). Differences: no plugin, so no
+  `~/.claude/commands/thatch/` (user scope) or `.claude/commands/thatch/`
+  (project scope), with the same `$ARGUMENTS` substitution. The sync lives in
+  `setup.ts` alongside the existing installers and follows their patterns:
+  idempotent content-compare like `installSkills`, both global and local
+  scopes, and a `checkSetup` entry so a missing or stale command file shows up
+  in the MCP server's startup warning. Differences: no plugin, so no
   `command.execute.before` arming -- greenlight-token wrap-up commands do not
-  ship to Claude Code; and tool names use the `mcp__thatch__` prefix.
+  ship to Claude Code; and tool names use the `mcp__thatch__` prefix. MCP
+  hosts do have hooks now (session-start reminders, chat-wake stop hooks), so
+  hook wiring is not the barrier; the missing piece is only the plugin's TUI
+  control routes.
 - **Cursor**: no file-based commands. The stdio MCP server (`mcp.ts`) gains
   MCP Prompts support (`prompts/list`, `prompts/get`), which Cursor surfaces
-  as slash commands. Prompt arguments use MCP's
+  as slash commands. The dispatch switch currently handles `initialize`,
+  `tools/list`, `tools/call`, and `ping`; prompts get a `compileTools`-style
+  `compilePrompts()` and two new cases. Prompt arguments use MCP's
   `{{argument}}`-style templating, so each action core gets an MCP-prompt
   rendering alongside the markdown rendering.
 
 README gains "What works in Claude Code" and "What works in Cursor" sections
-listing per-host support without restating the shared docs.
+listing per-host support without restating the shared docs. The parity matrix
+in `docs/dev/mcp-parity.md` gets an Actions row next to the existing
+Wrap-up commands row.
 
 ## Session ID plumbing
 
-`get_extraction_payload` and `extraction_done` take `session_id`. Today the
-nudge carries the ID; an action has no way to know it.
+Since the plan was drafted, `HostToolContext` (tool-defs.ts) landed: every
+tool's `execute` receives the invoking session's ID as a third parameter on
+the opencode path, and the watch tools already consume it. `extraction_done`
+also already has the optional `session_id` with the omit-vs-parent rule in
+its description. The remaining work is narrower than first planned:
 
-- opencode path: the thin wrappers in `tools.ts` receive the invoking
-  session's ID from the host. `session_id` becomes optional there; omitted
-  means "the current session."
-- MCP path: there is no session context in a tool call, so `session_id`
-  stays required. The tool description and docs state this plainly.
+- `get_extraction_payload`: `session_id` becomes optional. `execute` uses
+  `args.session_id ?? host?.sessionID`. On the opencode path the wrapper
+  supplies the invoking session, so omitted means "this session."
+- MCP path: the host context is omitted (no session concept), so an omitted
+  `session_id` returns a clear error telling the model to pass the parent
+  session's ID from the extraction nudge.
+
+One wrinkle to document: the zod arg shape is shared between hosts, so
+optionality is global -- you cannot make the arg required on MCP and optional
+on opencode at the schema level. Enforcement happens in `execute` per host,
+and the arg description must carry the rule so the model self-corrects.
 
 The rule the LLM must apply, stated everywhere the tools are described:
 
@@ -105,10 +130,10 @@ The rule the LLM must apply, stated everywhere the tools are described:
 > parent session's `session_id` when running inside a sub-agent that was
 > dispatched to process another session's extraction queue.
 
-This rule appears in: the tool descriptions in `tool-defs.ts`, the extraction
+This rule appears in: the arg descriptions in `tool-defs.ts`, the extraction
 prompt core (used by both nudge and action envelopes), the fact-extractor
-skill, and the dev docs. Tests cover both paths: omit-resolves-to-current and
-explicit-parent-ID (the existing sub-agent drain bug's regression path).
+skill, and the dev docs. Tests cover both paths: omit-resolves-to-current
+and explicit-parent-ID (the existing sub-agent drain bug's regression path).
 
 ## Decisions
 
@@ -127,18 +152,25 @@ explicit-parent-ID (the existing sub-agent drain bug's regression path).
 - `tests/commands.test.ts` (or the existing plugin tests): command-file
   content assertions per host, including that each action's markdown contains
   its core text verbatim.
+- Claude setup tests: command sync writes, updates only on content change,
+  and `checkSetup` flags a missing or stale command file.
 - MCP tests: `prompts/list` returns every action; `prompts/get` interpolates
-  arguments.
-- Plugin tests: `get_extraction_payload` without `session_id` resolves to the
-  invoking session; with an explicit parent ID, drains the parent's queue.
+  arguments; an omitted-session-ID `get_extraction_payload` call errors with
+  the pass-the-parent-ID message (no host context on the MCP path).
+- Plugin tests: `get_extraction_payload` without `session_id` resolves via
+  the host context to the invoking session; with an explicit parent ID,
+  drains the parent's queue (the existing sub-agent drain bug's regression
+  path).
 - Parity guard: a test asserts every opencode command def has a
   corresponding MCP prompt (and vice versa) except the documented exclusions
   (wrap-up greenlight commands on non-opencode hosts).
 
 ## Docs
 
-- `docs/dev/commands.md` (two-tier: dev doc + user-facing README section):
+- `docs/dev/features/commands.md` and `docs/user/commands.md` (two-tier):
   action list, host parity matrix, session ID rule.
+- `docs/dev/mcp-parity.md`: Actions row in the parity matrix; revisit the
+  Wrap-up commands row if greenlight arming ever lands on MCP hosts.
 - README: "What works in Claude Code" / "What works in Cursor" sections.
 - QA use cases: one auto use case for `/thatch/defrag` end-to-end, one for
   `/thatch/extract` with omitted session ID.
