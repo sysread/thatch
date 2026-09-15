@@ -8,8 +8,10 @@ between tabs all afternoon.
 
 ## What it does
 
-opencode sessions join the directory automatically, on their first idle
-moment. Names are assigned by thatch, never chosen: a name drawn from a
+opencode sessions join the directory automatically, the moment their
+first user message arrives (before the assistant responds), and a session
+resumed with `opencode -c` or `opencode -s <id>` is back in the directory
+at harness start with its old name. Names are assigned by thatch, never chosen: a name drawn from a
 built-in pool plus a counter (`al-go-rithm-00001`). The counter only ever
 increments, so a name is
 minted exactly once per machine - pruning an old session never reissues its
@@ -60,9 +62,10 @@ toggle reveals those output blocks if you want them.)
 ## How to use it
 
 With auto-registration you usually do nothing: a session joins the
-directory when it first goes idle, and a session continued with
-`opencode -s <id>` is registered again the moment its harness starts -
-same session id, same name, reclaimed. The agent gets a quiet toast with
+directory when its first user message arrives, and a session continued
+with `opencode -c` or `opencode -s <id>` is registered again the moment
+its harness starts - same session id, same name, reclaimed. The agent
+gets a quiet toast with
 its assigned name when it first registers. To introduce two sessions,
 just tell each one who to talk to:
 

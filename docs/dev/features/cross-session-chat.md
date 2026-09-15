@@ -58,10 +58,13 @@ outlives a process, so liveness needs a signal beyond process lifetime.
 
 ### Registration and identity
 
-Sessions are auto-registered by the plugin: the first `session.status`
-idle event for a top-level session inserts its directory row, and a
-session continued via `-s <id>` registers at harness start (below);
-both paths are skipped when `chat.autoRegister: false` or when the
+Sessions are auto-registered by the plugin: a top-level session's first
+real user message inserts its directory row (the `chat.message` hook,
+which fires before the model runs - so the session is addressable within
+its very first turn), and the first `session.status` idle event remains a
+backstop that also converges the topic once the auto-titler lands. A
+session continued via `-s <id>` or `-c` registers at harness start
+(below). All paths are skipped when `chat.autoRegister: false` or when the
 session left explicitly (a leave tombstone, see below). Names are assigned, never
 claimed: a pool draw (`CHAT_NAME_POOL`, src/chat-names.ts) plus a
 per-base counter row (`chat_name_counters`, src/db.ts) that only ever
@@ -94,9 +97,14 @@ args=` on macOS) and parses `-s`/`--session` from that.
 Registration is keyed by session id: the row already exists, so the name
 is RECLAIMED (names are owned by the session id, minted once, never
 renamed) and the row's heartbeat is refreshed - hosting is the
-heartbeat, so the serving harness beats and delivers for the row again. `-c/--continue` resolves no id on the
-command line; that
-session registers on its first idle like any other. Asleep-mail: the
+heartbeat, so the serving harness beats and delivers for the row again.
+`-c/--continue` resolves no id on the command line, so the plugin
+resolves the same target the harness does: `client.session.list()`
+(directory-scoped, the plugin's client carries the directory), sorted by
+`time.updated` descending like the TUI does, first row without a
+`parentID`. That registration is not synchronous at init (the list call
+is a server round trip), but it lands within a beat of startup - the
+heartbeat is live long before the first prompt. Asleep-mail: the
 startup path kicks a delivery pass when it finishes, so the continued
 session learns what it missed at startup instead of waiting out the
 first poll cycle.
@@ -118,8 +126,8 @@ publishing `app.exit`, so the roster stops advertising a host that is
 about to vanish; the exit template's checklist step asks the model to do
 the same earlier) - writes a
 `chat_leave_tombstones` row in the same transaction that deletes the
-directory row. The tombstone is what makes a leave stick: both
-registration paths consult it (the plugin's idle auto-registerer is
+directory row. The tombstone is what makes a leave stick: all
+registration paths consult it (the plugin's idle and prompt auto-registerers are
 suppressed outright; the MCP hook's ensure-register prints the leave line
 instead of rejoining), so a leave cannot be silently undone by the next
 idle moment. The gate lives in `ChatStore.register` via `#tombstoneGate`

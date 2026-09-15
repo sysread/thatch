@@ -70,9 +70,7 @@ const WRAPUP_COMMANDS: Record<string, { token: string; kind: "compact" | "exit" 
  * the caller supplies the list (see startupSessionId for where it comes
  * from). The framework passes no session id to plugins and resuming a
  * session fires no events, so the command line is the only signal that a
- * fresh harness is the new home of a continued session. `-c/--continue`
- * (continue last) resolves no id here - that session registers on its
- * first idle like any other.
+ * fresh harness is the new home of a continued session.
  */
 export function startupSessionIdFromArgv(argv: string[]): string | null {
   for (let i = 0; i < argv.length; i++) {
@@ -81,6 +79,39 @@ export function startupSessionIdFromArgv(argv: string[]): string | null {
     if (arg.startsWith("--session=")) return arg.slice("--session=".length) || null;
   }
   return null;
+}
+
+/**
+ * Whether the harness was started with `-c`/`--continue` (continue the most
+ * recent session). Pure. Yargs-style boolean flags only: `--continue=false`
+ * reads as the negation, everything else as a plain switch. The session id
+ * itself is not on the command line - the harness resolves "most recent
+ * top-level session" at startup, which the plugin replicates via the SDK
+ * (continuesLastSessionId).
+ */
+export function continuesLastSessionFromArgv(argv: string[]): boolean {
+  for (const arg of argv) {
+    if (arg === "-c" || arg === "--continue") return true;
+    if (arg.startsWith("--continue=")) return arg.slice("--continue=".length) !== "false";
+  }
+  return false;
+}
+
+/**
+ * Picks the session `opencode -c` continues: the most recently updated
+ * top-level session. Pure; the caller supplies the session list from
+ * client.session.list() (directory-scoped, like the plugin's own client).
+ * The server's list order is not trusted - the TUI re-sorts by
+ * time.updated before picking, and so does this.
+ */
+export function continuesLastSessionId(
+  sessions: { id: string; parentID?: string; time?: { updated?: number } }[],
+): string | null {
+  return (
+    [...sessions]
+      .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
+      .find((s) => !s.parentID)?.id ?? null
+  );
 }
 
 // The plugin does not run in the process's main thread: opencode's TUI
@@ -254,16 +285,23 @@ export const server: Plugin = async ({ client, worktree }) => {
   });
   watchers.start();
 
+  // The session this harness was launched to resume, resolved at startup:
+  // `-s <id>` names it on the command line, `-c` means "most recent in this
+  // directory" and resolves through the SDK. Either way the poller hosts it
+  // from the first beat, so the heartbeat and delivery are live before the
+  // user's first prompt.
+  let resumedSession: string | null = null;
+
   const chatPoller = new ChatPoller({
     store: db,
     hostedSessions: () => {
       // Hosting = the sessions this harness serves: those seen as events
-      // here (used in this TUI) plus the `-s` startup session. Sub-agent
+      // here (used in this TUI) plus the resumed startup session. Sub-agent
       // children are excluded even if someone registered one - a
       // registered child would be heartbeat-ed fresh-forever and burn
       // nudge budget on undeliverable wake prompts.
       const hosted = [...sessionStatus.keys()];
-      if (startupSession) hosted.push(startupSession);
+      if (resumedSession) hosted.push(resumedSession);
       return hosted.filter((id) => !childToParent.has(id));
     },
     deliver: async (sessionID, senders, count) => {
@@ -293,42 +331,62 @@ export const server: Plugin = async ({ client, worktree }) => {
 
   // Startup registration: `opencode -s <id>` continues a session whose
   // directory row may predate this process (its harness died, or the
-  // machine restarted). The framework passes no session id to plugins and
+  // machine restarted); `opencode -c` continues the most recent session in
+  // this directory. The framework passes no session id to plugins and
   // resuming fires no events, so the command line is the source (see
   // startupSessionId). Registering here RECLAIMS the row - the name is
   // owned by the session id and never changes - and refreshes its
-  // heartbeat synchronously: local SQLite, it cannot fail on a server that
-  // is still starting. The async tail (title fetch, asleep-mail delivery)
-  // is best-effort - the poller retries whatever it misses, and the first
+  // heartbeat: synchronously for -s (local SQLite, it cannot fail on a
+  // server that is still starting); for -c after an SDK list call resolves
+  // the target. The async tail (title fetch, asleep-mail delivery) is
+  // best-effort - the poller retries whatever it misses, and the first
   // idle converges the topic.
+  const reclaimTail = (sessionID: string) => {
+    void (async () => {
+      try {
+        const { data } = await client.session.get({ path: { id: sessionID } });
+        const title = data?.title ?? "";
+        const topic = title && !isDefaultSessionTitle(title) ? title : null;
+        if (topic) db.refreshChatTopic(sessionID, topic);
+      } catch {
+        // Server may still be starting; the topic converges on the
+        // session's first idle either way.
+      }
+      try {
+        // Asleep-mail: deliver what queued while this session was away,
+        // through the normal path (gate, nudge, toast, stamps).
+        await chatPoller.deliverPending();
+      } catch {
+        // The poller cycle retries delivery; nothing to do here.
+      }
+    })();
+  };
   const osArgs = osProcessArgs();
   const startupSession = startupSessionId(osArgs);
+  const continueLast = !startupSession && (continuesLastSessionFromArgv(process.argv) || continuesLastSessionFromArgv(osArgs));
   const autoRegisterOn = chatAutoRegister(loadConfig(dbPath).config);
   const tombstoned = startupSession ? db.hasChatLeaveTombstone(startupSession) : false;
-  debug("chat:startup", `init: argv=${JSON.stringify(process.argv.slice(0, 8))} osArgs=${JSON.stringify(osArgs.slice(0, 8))} parsed=${startupSession} chatOn=${chatOn} autoRegister=${autoRegisterOn} tombstone=${startupSession ? tombstoned : "n/a"}`);
+  debug("chat:startup", `init: argv=${JSON.stringify(process.argv.slice(0, 8))} osArgs=${JSON.stringify(osArgs.slice(0, 8))} parsed=${startupSession} continue=${continueLast} chatOn=${chatOn} autoRegister=${autoRegisterOn} tombstone=${startupSession ? tombstoned : "n/a"}`);
   if (chatOn && autoRegisterOn && startupSession && !tombstoned) {
+    resumedSession = startupSession;
     const res = db.registerChatSession(startupSession, repo, null, "opencode", null, detectWorktreeKind(worktree));
     debug("chat:startup", `registration for ${startupSession}: ok=${res.ok} name=${res.ok ? res.name : res.error}`);
-    if (res.ok) {
-      void (async () => {
-        try {
-          const { data } = await client.session.get({ path: { id: startupSession } });
-          const title = data?.title ?? "";
-          const topic = title && !isDefaultSessionTitle(title) ? title : null;
-          if (topic) db.refreshChatTopic(startupSession, topic);
-        } catch {
-          // Server may still be starting; the topic converges on the
-          // session's first idle either way.
-        }
-        try {
-          // Asleep-mail: deliver what queued while this session was away,
-          // through the normal path (gate, nudge, toast, stamps).
-          await chatPoller.deliverPending();
-        } catch {
-          // The poller cycle retries delivery; nothing to do here.
-        }
-      })();
-    }
+    if (res.ok) reclaimTail(startupSession);
+  } else if (chatOn && autoRegisterOn && continueLast) {
+    void (async () => {
+      try {
+        const { data } = await client.session.list();
+        const target = continuesLastSessionId(data ?? []);
+        debug("chat:startup", `-c resolved: ${target ?? "none"}`);
+        if (!target || db.hasChatLeaveTombstone(target)) return;
+        resumedSession = target;
+        const res = db.registerChatSession(target, repo, null, "opencode", null, detectWorktreeKind(worktree));
+        debug("chat:startup", `registration for ${target}: ok=${res.ok} name=${res.ok ? res.name : res.error}`);
+        if (res.ok) reclaimTail(target);
+      } catch (err) {
+        console.error(`[thatch] chat -c startup registration failed: ${err}`);
+      }
+    })();
   }
 
   // Sessions currently being compacted. chat.message nudges are skipped while
@@ -692,6 +750,39 @@ export const server: Plugin = async ({ client, worktree }) => {
       // nothing (and fire spurious toasts when thresholds cross). Skip
       // them entirely.
       if (isChatEchoParts(output.parts)) return;
+
+      // Prompt-path registration: a brand-new session joins the chat
+      // directory the moment its first real user message arrives - before
+      // the model runs - so it is addressable within that first turn (the
+      // first-idle path alone leaves a turn-long dark window). Local
+      // SQLite, so it runs inline; on an already-registered session this
+      // is a free mid-turn heartbeat touch. Sub-agent children are excluded
+      // (they register only by mistake, and their deletion tombstones the
+      // row), as are sessions that left via chat_unregister. The idle path
+      // below stays as the backstop and converges the topic.
+      if (
+        chatOn &&
+        chatAutoRegister(loadConfig(dbPath).config) &&
+        input.sessionID &&
+        !childToParent.has(input.sessionID) &&
+        !db.hasChatLeaveTombstone(input.sessionID)
+      ) {
+        try {
+          const res = db.registerChatSession(input.sessionID, repo, null, "opencode", null, detectWorktreeKind(worktree));
+          if (res.ok && res.created) {
+            // First registration is the one moment the user should
+            // notice: a quiet toast, not a conversation message.
+            try {
+              await client.tui.showToast({ body: { message: `registered in chat as ${res.name}`, variant: "info", duration: 4000 } });
+            } catch {
+              // Headless or disconnected TUI - registration stands.
+            }
+          }
+        } catch (err) {
+          console.error(`[thatch] chat prompt-register failed for ${input.sessionID}: ${err}`);
+        }
+      }
+
       if (compacting.has(input.sessionID)) {
         // The session is marked as compacting. If this message is the
         // compaction summary generation itself (has a compaction-type part),

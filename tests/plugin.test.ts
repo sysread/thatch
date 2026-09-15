@@ -33,7 +33,14 @@ mock.module("@huggingface/transformers", () => ({
   },
 }));
 
-import { server, osProcessArgs, startupSessionId, startupSessionIdFromArgv } from "../src/index";
+import {
+  server,
+  osProcessArgs,
+  startupSessionId,
+  startupSessionIdFromArgv,
+  continuesLastSessionFromArgv,
+  continuesLastSessionId,
+} from "../src/index";
 import {
   sessionStartReminder,
   recallNudge,
@@ -1721,7 +1728,7 @@ describe("compaction guard for chat.message", () => {
   });
 });
 
-describe("chat auto-registration on idle", () => {
+describe("chat auto-registration (idle, prompt, startup)", () => {
   // The auto-register IIFE fetches the live title via client.session.get;
   // these tests vary only that title (and the settle beat for the
   // fire-and-forget IIFE), so a factory keeps each test's variable explicit.
@@ -1832,6 +1839,26 @@ describe("chat auto-registration on idle", () => {
     } finally {
       process.argv = argvSave;
     }
+  });
+
+  test("continuesLastSessionFromArgv parses -c/--continue; continuesLastSessionId picks the newest top-level session", () => {
+    expect(continuesLastSessionFromArgv(["opencode", "-c"])).toBe(true);
+    expect(continuesLastSessionFromArgv(["opencode", "--continue"])).toBe(true);
+    expect(continuesLastSessionFromArgv(["opencode", "--continue=true"])).toBe(true);
+    expect(continuesLastSessionFromArgv(["opencode", "--continue=false"])).toBe(false);
+    expect(continuesLastSessionFromArgv(["opencode"])).toBe(false);
+    expect(continuesLastSessionFromArgv(["opencode", "-s", "ses_x"])).toBe(false);
+
+    // Newest time.updated wins; children (parentID set) are never picked -
+    // the TUI's own -c resolution skips them.
+    const sessions = [
+      { id: "ses_old_top", time: { updated: 100 } },
+      { id: "ses_child", parentID: "ses_old_top", time: { updated: 300 } },
+      { id: "ses_new_top", time: { updated: 200 } },
+    ];
+    expect(continuesLastSessionId(sessions)).toBe("ses_new_top");
+    expect(continuesLastSessionId([])).toBeNull();
+    expect(continuesLastSessionId([{ id: "s1", parentID: "p" }])).toBeNull();
   });
 
   test("chat.autoRegister: false suppresses auto-registration but not chat_register", async () => {
@@ -1950,6 +1977,178 @@ describe("chat auto-registration on idle", () => {
     } finally {
       process.argv = argvSave;
       hooks?.dispose?.();
+    }
+  });
+
+  test("-c resume reclaims the most recent top-level session at startup", async () => {
+    // `opencode -c` continues the most recent top-level session in this
+    // directory. The plugin resolves the same target through the SDK at
+    // init, so the row's heartbeat is fresh and the poller hosts it before
+    // the user's first prompt - the roster shows it Active immediately.
+    const seedDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    seedDb.registerChatSession("ses_cont", "thatch-continue", "Continued last", "opencode");
+    seedDb.close();
+    new Database(process.env.THATCH_DB_PATH!).run(
+      "UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_cont'",
+    );
+
+    const contClient = {
+      ...autoRegisterClient(),
+      session: {
+        ...autoRegisterClient().session,
+        // Directory-scoped list; the child is newer but must never be
+        // picked (children are not top-level sessions).
+        list: async () => ({
+          data: [
+            { id: "ses_cont_child", parentID: "ses_cont", time: { updated: 300 } },
+            { id: "ses_cont", time: { updated: 200 } },
+          ],
+        }),
+        get: async () => ({ data: { title: "Continued last" } }),
+      },
+    };
+    const argvSave = process.argv;
+    process.argv = [...argvSave, "-c"];
+    let contHooks: Awaited<ReturnType<typeof server>> | undefined;
+    try {
+      contHooks = await server({ client: contClient, worktree: "/tmp/thatch-cont" } as any);
+      await settle();
+      const row = new ThatchDB(process.env.THATCH_DB_PATH!)
+        .listChatSessions()
+        .find((r) => r.session_id === "ses_cont");
+      expect(row).toBeDefined();
+      // Same row, same never-reused name shape, heartbeat fresh again,
+      // topic converged from the title fetch.
+      expect(row!.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
+      expect(Date.now() - Date.parse(row!.last_seen)).toBeLessThan(60_000);
+      expect(row!.topic).toBe("Continued last");
+      // The child session must not have been registered instead.
+      const childRow = new ThatchDB(process.env.THATCH_DB_PATH!)
+        .listChatSessions()
+        .find((r) => r.session_id === "ses_cont_child");
+      expect(childRow).toBeUndefined();
+    } finally {
+      process.argv = argvSave;
+      contHooks?.dispose?.();
+    }
+  });
+
+  test("-c startup registration honors a leave tombstone and chat.autoRegister: false", async () => {
+    // Tombstone case: seed a left session; -c resolves it but must not
+    // re-register it. The client's list mock resolves it as the continue
+    // target, so the tombstone (not a missing list) is what blocks.
+    const seedDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    seedDb.registerChatSession("ses_cont_left", "thatch-continue", null, "opencode", "leaver");
+    seedDb.unregisterChatSession("ses_cont_left");
+    seedDb.close();
+
+    const contLeftClient = {
+      ...autoRegisterClient(),
+      session: {
+        ...autoRegisterClient().session,
+        list: async () => ({ data: [{ id: "ses_cont_left", time: { updated: 1 } }] }),
+      },
+    };
+    const configPath = join(dirname(process.env.THATCH_DB_PATH!), "config.json");
+    const argvSave = process.argv;
+    let hooks: Awaited<ReturnType<typeof server>> | undefined;
+    try {
+      process.argv = [...argvSave, "-c"];
+      hooks = await server({ client: contLeftClient, worktree: "/tmp/thatch-cont-left" } as any);
+      await settle();
+      const db = new ThatchDB(process.env.THATCH_DB_PATH!);
+      expect(db.listChatSessions().find((r) => r.session_id === "ses_cont_left")).toBeUndefined();
+      expect(db.hasChatLeaveTombstone("ses_cont_left")).toBe(true);
+      db.close();
+      hooks.dispose?.();
+      hooks = undefined;
+
+      // autoRegister: false case: a -c restart must not register either.
+      saveConfig({ chat: { autoRegister: false } });
+      hooks = await server({ client: contLeftClient, worktree: "/tmp/thatch-cont-noauto" } as any);
+      await settle();
+      const db2 = new ThatchDB(process.env.THATCH_DB_PATH!);
+      expect(db2.listChatSessions().find((r) => r.session_id === "ses_cont_left")).toBeUndefined();
+      db2.close();
+    } finally {
+      process.argv = argvSave;
+      hooks?.dispose?.();
+      rmSync(configPath);
+    }
+  });
+
+  // Reuses the client factory and toast sink (above): the prompt path
+  // registers with the same pool-name model and the same quiet toast.
+  const promptOutput = (id: string, text = "hello, what is your chat name?"): any => ({
+    message: { id },
+    parts: [{ type: "text", text }],
+  });
+
+  test("chat.message registers an unregistered top-level session before the model runs", async () => {
+    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr" } as any);
+    try {
+      const regToastsBefore = toastCalls.filter((t) => t.body.message.includes("registered in chat as")).length;
+      await prHooks["chat.message"]!({ sessionID: "ses_pr1", messageID: "msg_pr1" } as any, promptOutput("msg_pr1"));
+      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+      const row = prDb.listChatSessions().find((r) => r.session_id === "ses_pr1");
+      expect(row).toBeDefined();
+      expect(row!.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
+      // Placeholder title at prompt time - the topic converges on idle.
+      expect(row!.topic).toBeNull();
+
+      // Second prompt: touch, not a second registration - one toast total.
+      await prHooks["chat.message"]!({ sessionID: "ses_pr1", messageID: "msg_pr2" } as any, promptOutput("msg_pr2", "second prompt"));
+      const regToasts = toastCalls.filter((t) => t.body.message.includes("registered in chat as"));
+      expect(regToasts.length).toBe(regToastsBefore + 1);
+      prDb.close();
+    } finally {
+      prHooks.dispose?.();
+    }
+  });
+
+  test("chat.message does not register a sub-agent child session", async () => {
+    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr-child" } as any);
+    try {
+      await prHooks.event!({ event: {
+        type: "session.created",
+        properties: { info: { id: "ses_pr_child", parentID: "ses_pr_parent" } } } as any,
+      });
+      await prHooks["chat.message"]!({ sessionID: "ses_pr_child", messageID: "msg_child" } as any, promptOutput("msg_child", "child prompt"));
+      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+      expect(prDb.listChatSessions().find((r) => r.session_id === "ses_pr_child")).toBeUndefined();
+      prDb.close();
+    } finally {
+      prHooks.dispose?.();
+    }
+  });
+
+  test("chat.message honors a leave tombstone", async () => {
+    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr-left" } as any);
+    try {
+      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+      prDb.registerChatSession("ses_pr_left", "thatch-pr", null, "opencode", "leaver");
+      prDb.unregisterChatSession("ses_pr_left");
+      await prHooks["chat.message"]!({ sessionID: "ses_pr_left", messageID: "msg_left" } as any, promptOutput("msg_left"));
+      expect(prDb.listChatSessions().find((r) => r.session_id === "ses_pr_left")).toBeUndefined();
+      expect(prDb.hasChatLeaveTombstone("ses_pr_left")).toBe(true);
+      prDb.close();
+    } finally {
+      prHooks.dispose?.();
+    }
+  });
+
+  test("chat.message registration honors chat.autoRegister: false", async () => {
+    const configPath = join(dirname(process.env.THATCH_DB_PATH!), "config.json");
+    saveConfig({ chat: { autoRegister: false } });
+    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr-noauto" } as any);
+    try {
+      await prHooks["chat.message"]!({ sessionID: "ses_pr_noauto", messageID: "msg_noauto" } as any, promptOutput("msg_noauto"));
+      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+      expect(prDb.listChatSessions().find((r) => r.session_id === "ses_pr_noauto")).toBeUndefined();
+      prDb.close();
+    } finally {
+      prHooks.dispose?.();
+      rmSync(configPath);
     }
   });
 });
