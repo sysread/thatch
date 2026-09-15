@@ -70,7 +70,7 @@ project and every contributor gets them).
 
 | Event | Command | Output | Role |
 |-------|---------|--------|------|
-| `SessionStart` | `thatch reminder` | plain text to stdout (becomes context) | Recall instructions + hygiene heartbeat |
+| `SessionStart` | `thatch reminder` | plain text to stdout (becomes context) | Recall instructions + hygiene heartbeat + chat identity/mail line (reads the hook's stdin `session_id`) |
 | `PostToolBatch` | `thatch buffer-batch` | **silent** (no stdout) | Appends a batch of tool calls to the file-backed JSONL queue |
 | `UserPromptSubmit` | `thatch flush-tools` | nudge text to stdout | Peeks queue (extraction nudge), else fires recall, prediction, and behavior nudges via sideband in parallel, else write nudge |
 

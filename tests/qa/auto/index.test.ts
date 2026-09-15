@@ -85,3 +85,4 @@ import "./uc-100-two-session-chat";
 import "./uc-101-command-watchers";
 import "./uc-102-chat-hook-identity";
 import "./uc-103-wrapup-commands";
+import "./uc-104-session-start-identity";

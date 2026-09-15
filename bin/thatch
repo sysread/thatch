@@ -133,6 +133,47 @@ async function chatHookLine(hookSessionID?: string): Promise<string> {
 }
 
 /**
+ * Reads the hook session ID from stdin without hanging when no payload is
+ * coming. Interactive runs skip the read outright (isTTY); a piped or
+ * inherited stdin that never closes (bare spawns) gives up after a short
+ * grace period. Hook hosts write the payload immediately at spawn, so the
+ * grace window costs nothing on the hot path. Malformed payloads resolve to
+ * undefined rather than failing the reminder.
+ */
+/**
+ * Reads the hook session ID from stdin without hanging when no payload is
+ * coming. Interactive runs skip the read outright (isTTY); a piped or
+ * inherited stdin that never closes (bare spawns) gives up after a short
+ * grace period and destroys the stream, because a pending stdin read keeps
+ * the process alive after main finishes. Hook hosts write the payload
+ * immediately at spawn, so the grace window costs nothing on the hot path.
+ * Malformed payloads resolve to undefined rather than failing the reminder.
+ * Uses the Node stream API instead of Bun.stdin.text(): a pending
+ * Bun.stdin read cannot be cancelled and pins the process forever.
+ */
+function readHookSessionID(): Promise<string | undefined> {
+  if (process.stdin.isTTY) return Promise.resolve(undefined);
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    const timer = setTimeout(() => done(undefined), 500);
+    const done = (value: string | undefined) => {
+      clearTimeout(timer);
+      process.stdin.destroy();
+      try {
+        if (!value) return resolve(undefined);
+        const data = JSON.parse(value) as { session_id?: string; conversation_id?: string };
+        resolve(data.session_id ?? data.conversation_id);
+      } catch {
+        resolve(undefined);
+      }
+    };
+    process.stdin.on("data", (chunk: Buffer) => chunks.push(chunk));
+    process.stdin.on("end", () => done(Buffer.concat(chunks).toString()));
+    process.stdin.on("error", () => done(undefined));
+  });
+}
+
+/**
  * Emits the nudge output, prepending a version warning if present. The
  * warning goes first so the LLM sees it before the nudge text. Used by
  * flush-tools to surface version skew and update-available notices on
@@ -625,10 +666,13 @@ switch (command) {
     } catch (err) {
       console.error(`[thatch] hygiene report failed: ${err}`);
     }
-    // Chat mail check. Without a hook session ID (SessionStart does not
-    // read stdin) the line keeps the old shape: a line only when pending
-    // mail exists for registered sessions in this project.
-    const chatLine = await chatHookLine();
+    // Chat mail check. SessionStart DOES pass a session id in the hook's
+    // stdin JSON (session_id for Claude Code, conversation_id for Cursor),
+    // so a hooked session learns its identity at session start, not only at
+    // its first prompt. When no payload is coming (manual runs, bare
+    // spawns) the read is skipped and the line keeps the old shape: a line
+    // only when pending mail exists for registered sessions in this project.
+    const chatLine = await chatHookLine(await readHookSessionID());
     const reminder = claudeSessionStartReminder(repo, hygiene) + (chatLine ? `\n\n${chatLine}` : "");
     if (isJson) {
       console.log(JSON.stringify({ additional_context: reminder }));

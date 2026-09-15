@@ -144,6 +144,7 @@ Claude Code / Cursor session
 ├── PostToolBatch → thatch buffer-batch (Claude Code)
 │   └── postToolUse → thatch buffer-tool (Cursor)
 └── SessionStart / sessionStart hook → thatch reminder [--json]
+    └── reads the hook's stdin session id: chat identity + mail line
 ```
 
 The socket path is derived from a SHA-256 hash of the DB path — both the MCP

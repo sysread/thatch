@@ -292,7 +292,8 @@ whenever any thatch process opens the database.
 - Multi-host ([multi-host.md](multi-host.md)): the chat tools are shared -
   MCP hosts get their identity from the thatch hook, which ensure-registers
   the conversation's stable session ID (`mcp_<hash of host session id>`)
-  and prints the assigned name plus unread count on every prompt; chat
+  and prints the assigned name plus unread count at session start and on
+  every prompt; chat
   tools take that name as `as`. Wake-up delivery remains opencode-only: no
   MCP server can start a turn in the client's conversation.
 
@@ -320,8 +321,9 @@ wake analog is the existing hook channel.
 | cursor      | yes          | flush-tools hook line        | no           |
 
 MCP identity is anchored by the host hook: `chatHookLine(sessionID)` in
-`bin/thatch` ensure-registers `mcp_<sha256(host session id)[0:12]>` on
-every prompt and prints the assigned name plus unread count, so the
+`bin/thatch` ensure-registers `mcp_<sha256(host session id)[0:12]>` at
+session start (the reminder reads the hook's stdin) and on every prompt,
+and prints the assigned name plus unread count, so the
 identity is stable across the ephemeral conversations those harnesses run
 (and a conversation without the hook gets a fresh per-conversation
 identity from `chat_register`). `chat_status` is the quiet check
