@@ -123,7 +123,7 @@ const MAX_TOPIC_LEN = 80;
 // many days are pruned from the directory. Counters never decrement, so a
 // pruned session's name is never reissued - pruning cannot create identity
 // confusion, only roster silence.
-export const CHAT_AUTO_TTL_DAYS = 7;
+const CHAT_AUTO_TTL_DAYS = 7;
 
 /**
  * Slugifies a session title into a name base: lowercase, letter/number runs
@@ -157,15 +157,19 @@ export function isDefaultSessionTitle(title: string): boolean {
   return /^New session - /.test(title) || /^Child session - /.test(title);
 }
 
-// Timing defaults, shared by the poller and the chat_list staleness display
-// so both agree on what "stale" means. A hosting harness beats each of its
-// sessions every poll interval; a row that has missed two consecutive beats
-// belongs to a harness that stopped (crash, kill, machine asleep). Two beats
-// rather than one so a single late poll cycle does not flap the roster.
+// Poller cadence. A hosting harness beats each of its sessions once per
+// interval and delivers their mail on the same tick.
 export const CHAT_POLL_INTERVAL_MS = 30_000;
+// Staleness threshold, shared by the poller, chat_list, chat_send, and the
+// broadcast skip so every surface agrees on what "stale" means: a row that
+// has missed two consecutive beats belongs to a harness that stopped
+// (crash, kill, machine asleep). Two beats rather than one so a single
+// late poll cycle does not flap the roster.
 export const CHAT_STALE_MS = 2 * CHAT_POLL_INTERVAL_MS;
-export const CHAT_RENUDGE_MINUTES = 15;
-export const CHAT_MAX_NUDGES_PER_HOUR = 6;
+// Wake re-nudge window and the per-recipient hourly nudge cap (the anti-loop
+// hard brake); see ChatPoller.
+const CHAT_RENUDGE_MINUTES = 15;
+const CHAT_MAX_NUDGES_PER_HOUR = 6;
 
 /** Human-readable age of an ISO timestamp: "45s ago", "5m ago", "3h ago",
  *  "2d ago". Shared by the CLI roster and the chat_list tool so both
