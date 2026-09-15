@@ -187,7 +187,10 @@ and the broadcast skip all call it, so they cannot disagree. `chat_list`
 groups the result into Active and Stale sections - the stale section's
 explainer says what stale means - and `chat_send` states the recipient's
 liveness at send time, so a sender mailing a ghost learns it immediately
-instead of waiting on a wake that will never fire.
+instead of waiting on a wake that will never fire. The CLI roster bounds
+the stale display to one day by default (`--stale N` in days, `--stale all`
+unbounded), collapsing older rows into a hidden-count note; the tool
+surface stays unbounded so an agent always sees the full directory.
 `session.deleted` is the graceful-exit fast path that unregisters immediately.
 
 ### Delivery, re-nudge, and the rate cap

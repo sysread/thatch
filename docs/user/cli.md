@@ -46,6 +46,7 @@ Read-only access to the chat directory your opencode sessions share
 
 ```bash
 thatch chat list               # who is registered: name, age, project, topic
+thatch chat list --stale all   # also show stale sessions older than a day
 thatch chat tail               # follow sent and read events, live (JSONL)
 thatch chat tail --once        # print the last 20 messages and exit
 thatch chat tail --once --limit 50   # a longer backlog (or --limit all)
@@ -61,7 +62,11 @@ last heartbeat, its status (`fresh` or `stale` for opencode sessions;
 when a prompt runs), its project, and its topic (the session's title) -
 the fastest way to answer "which session should I talk to about X?" A
 stale session has missed two heartbeats, about a minute: the opencode
-process hosting it has probably stopped. Color is added only when the
+process hosting it has probably stopped. The stale section shows rows
+up to one day old by default; older ones collapse into a hidden-count
+note so long-dead sessions cannot bury the fresh signal. Pass
+`--stale N` (days) to widen the window or `--stale all` to see every
+stale row. Color is added only when the
 output is a terminal; a pipe prints plain aligned text.
 
 `chat tail` prints the conversation as a JSONL event log: one JSON

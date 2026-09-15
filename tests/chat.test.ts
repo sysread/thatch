@@ -369,6 +369,24 @@ describe("chatLiveness and roster split", () => {
     expect(active.map((r) => r.session_id)).toEqual(["ses_f", "ses_m"]);
     expect(stale.map((r) => r.session_id)).toEqual(["ses_d"]);
   });
+
+  test("splitChatRoster staleCapMs hides stale rows older than the cap and reports the count", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const fresh = row({ session_id: "ses_f", name: "f-00001" });
+    const dayOld = row({ session_id: "ses_d1", name: "d1-00001", last_seen: ago(DAY) });
+    const weekOld = row({ session_id: "ses_d7", name: "d7-00001", last_seen: ago(7 * DAY) });
+    const idleMcp = row({ session_id: "ses_m", name: "m-00001", host_kind: "mcp", last_seen: ago(7 * DAY) });
+    // No cap (null): today's default for the tool surface, nothing hidden.
+    expect(splitChatRoster([fresh, dayOld, weekOld, idleMcp], NOW).staleHidden).toBe(0);
+    // One-day cap (the CLI default): the week-old row is hidden and
+    // counted, the day-old row sits exactly at the boundary so it shows,
+    // and the old-but-idle MCP row stays active (the cap only bounds the
+    // stale section).
+    const capped = splitChatRoster([fresh, dayOld, weekOld, idleMcp], NOW, DAY);
+    expect(capped.stale.map((r) => r.session_id)).toEqual(["ses_d1"]);
+    expect(capped.staleHidden).toBe(1);
+    expect(capped.active.map((r) => r.session_id)).toEqual(["ses_f", "ses_m"]);
+  });
 });
 
 describe("wake gate", () => {

@@ -307,14 +307,28 @@ export function chatLiveness(row: ChatSessionRow, now = Date.now()): "fresh" | "
 /** Splits the roster for the two-section display: Active (wake-able or
  *  reachable - fresh opencode rows and every MCP row, which read mail at
  *  their next prompt) and Stale (opencode rows whose harness has stopped
- *  reporting; mail to them waits until they resume). */
-export function splitChatRoster(rows: ChatSessionRow[], now = Date.now()): { active: ChatSessionRow[]; stale: ChatSessionRow[] } {
+ *  reporting; mail to them waits until they resume).
+ *  staleCapMs bounds how old a stale row the roster displays, so
+ *  long-dead sessions cannot bury the fresh signal; hidden rows come
+ *  back only as the staleHidden count, so the CLI can say what it left
+ *  out. null (the default) shows every stale row - the tool surface has
+ *  no cap, only the CLI applies one. */
+export function splitChatRoster(rows: ChatSessionRow[], now = Date.now(), staleCapMs: number | null = null): { active: ChatSessionRow[]; stale: ChatSessionRow[]; staleHidden: number } {
   const active: ChatSessionRow[] = [];
   const stale: ChatSessionRow[] = [];
+  let staleHidden = 0;
   for (const row of rows) {
-    (chatLiveness(row, now) === "stale" ? stale : active).push(row);
+    if (chatLiveness(row, now) === "stale") {
+      if (staleCapMs !== null && now - Date.parse(row.last_seen) > staleCapMs) {
+        staleHidden++;
+      } else {
+        stale.push(row);
+      }
+    } else {
+      active.push(row);
+    }
   }
-  return { active, stale };
+  return { active, stale, staleHidden };
 }
 
 /**

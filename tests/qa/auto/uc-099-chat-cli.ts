@@ -10,7 +10,9 @@ import { ThatchDB } from "../../../src/db";
  * CLI reads over a controlled DB. Seeds registered sessions with topics
  * (fresh and stale), a direct message, a broadcast, and a departed sender,
  * then verifies the roster and the tail's JSONL events, including the
- * broadcast flag and the departed-sender fallback. A second seed
+ * broadcast flag and the departed-sender fallback. The roster's default
+ * one-day stale window is verified against the long-stale ghost, plus
+ * the --stale all escape hatch. A second seed
  * batch (numbered fillers) exercises the tail's --limit elision note,
  * ANDed --match body filters, --from name matching, and the --since/
  * --until window. The follow mode (no --once) is a live loop and is
@@ -24,14 +26,16 @@ const useCase: UseCase = {
     "- A DB with registered sessions and seeded messages",
   ].join("\n"),
   steps: [
-    "1. Seed a DB: three registered sessions (alpha with a topic, beta, ghost aged stale), a direct message, a broadcast, and a message from a sender that then unregisters.",
+    "1. Seed a DB: three registered sessions (alpha with a topic, beta, ghost aged long stale), a direct message, a broadcast, and a message from a sender that then unregisters.",
     "2. Run `thatch chat list` and verify the roster renders two sections - Active and Stale (with a missed-heartbeat explainer) - each an aligned header row plus name, human age, status, project, and topic columns.",
-    "3. Run `thatch chat tail --once` and verify every stdout line is one JSON object with event/at/id/from/to/body fields, broadcast copies carry broadcast: true with their real recipient, and already-read messages have a read event linked by id.",
-    "4. Verify a departed sender renders as unknown in the tail.",
-    "5. Seed 25 numbered filler messages, then run filtered tails: verify --limit line counts and the stderr elision note, ANDed --match, --from name matching, and the --since/--until window.",
+    "3. Verify the default one-day stale window hides the long-stale ghost behind a hidden-count note, and `--stale all` shows it again.",
+    "4. Run `thatch chat tail --once` and verify every stdout line is one JSON object with event/at/id/from/to/body fields, broadcast copies carry broadcast: true with their real recipient, and already-read messages have a read event linked by id.",
+    "5. Verify a departed sender renders as unknown in the tail.",
+    "6. Seed 25 numbered filler messages, then run filtered tails: verify --limit line counts and the stderr elision note, ANDed --match, --from name matching, and the --since/--until window.",
   ].join("\n"),
   expected: [
     "- The roster shows every registered session with a human-readable age, its project, and its topic when set, grouped into Active and Stale sections by liveness.",
+    "- The default stale window is one day: stale rows older than that are hidden and counted in a note; --stale all displays every stale row.",
     "- The tail is JSONL: one sent event per line with the body verbatim and each participant's topic; via_broadcast rows are one sent event per recipient with broadcast: true.",
     "- A sender whose directory row is gone renders as 'unknown (id, departed)'.",
     "- --limit caps the backlog with an elision note on stderr; --match ANDs; --from/--to match names; --since/--until bound the window.",
@@ -77,9 +81,11 @@ const useCase: UseCase = {
     const listText = list.stdout.toString();
     // The roster renders two sections - Active and Stale - each an aligned
     // header row plus session rows with name, age, status, project, and
-    // topic. Piped output carries no ANSI.
+    // topic. Piped output carries no ANSI. The stale-row explainer only
+    // prints when stale rows are displayed, so it is asserted on the
+    // unbounded run below.
     for (const needle of [
-      "# Active Sessions", "# Stale Sessions", "missed their heartbeat",
+      "# Active Sessions", "# Stale Sessions",
       "NAME", "AGE", "STATUS", "PROJECT", "TOPIC",
       "alpha-00001", "beta-00001", "watching CI", "acme/widgets", "ago",
     ]) {
@@ -87,6 +93,30 @@ const useCase: UseCase = {
         console.log(`  FAIL: chat list output missing "${needle}":\n${listText}`);
         return "FAIL";
       }
+    }
+    // The one-day default stale window hides long-dead rows: the ghost
+    // (aged to 2020) is out of the stale section, and the hidden-count
+    // note says so. --stale all restores the unbounded view.
+    if (listText.includes("ghost-00001")) {
+      console.log(`  FAIL: default roster should hide the long-stale ghost:\n${listText}`);
+      return "FAIL";
+    }
+    if (!listText.includes("older stale session")) {
+      console.log(`  FAIL: default roster should carry the hidden-stale note:\n${listText}`);
+      return "FAIL";
+    }
+    const unbounded = await run(["chat", "list", "--stale", "all"]);
+    if (unbounded.exitCode !== 0) {
+      console.log(`  FAIL: chat list --stale all exited ${unbounded.exitCode}`);
+      return "FAIL";
+    }
+    if (!unbounded.stdout.toString().includes("ghost-00001")) {
+      console.log(`  FAIL: --stale all should show the ghost:\n${unbounded.stdout.toString()}`);
+      return "FAIL";
+    }
+    if (!unbounded.stdout.toString().includes("missed their heartbeat")) {
+      console.log(`  FAIL: --stale all should show the missed-heartbeat explainer:\n${unbounded.stdout.toString()}`);
+      return "FAIL";
     }
 
     const tail = await run(["chat", "tail", "--once"]);

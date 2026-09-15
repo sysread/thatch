@@ -49,8 +49,11 @@ function usage(): never {
                                    Full conversation as OpenAI chat-completions JSONL
   thatch session search <query> [--session <id>] [--regex] [--limit N]
                                    JSONL of matching parts across sessions (decoded content)
-  thatch chat list                 Registered chat sessions, grouped Active/Stale:
-                                   name, age, status, project, topic
+  thatch chat list [--stale N|all]  Registered chat sessions, grouped Active/Stale:
+                                    name, age, status, project, topic.
+                                    --stale N (days) hides stale sessions
+                                    older than N; default 1. --stale all
+                                    shows every stale session.
   thatch chat tail [--once] [--limit N|all] [--match RE]
                    [--from NAME] [--to NAME] [--since DT] [--until DT]
                                    Follow cross-session chat as a JSONL
@@ -412,14 +415,17 @@ const CHAT_ROSTER_HEADER = ["NAME", "AGE", "STATUS", "PROJECT", "TOPIC"];
  * an aligned-column table under a header row. Section headers are bold,
  * the stale explainer is muted italic; rows use green names, dim age,
  * green/red status, and a muted italic topic.
+ * staleCapMs bounds how old a stale row is displayed (null = no bound);
+ * rows past the cap collapse into a muted hidden-count note so the reader
+ * knows rows exist that the window left out.
  * Color is applied only when stdout is an interactive terminal (and
  * NO_COLOR is unset), so piped output - grep, redirect, QA runners - stays
  * clean plain text.
  */
-function formatChatRoster(sessions: ChatSessionRow[]): string {
+function formatChatRoster(sessions: ChatSessionRow[], staleCapMs: number | null = null): string {
   const colored = process.stdout.isTTY === true && !process.env.NO_COLOR;
   const paint = (code: string, s: string) => (colored ? `\x1b[${code}m${s}\x1b[0m` : s);
-  const { active, stale } = splitChatRoster(sessions);
+  const { active, stale, staleHidden } = splitChatRoster(sessions, Date.now(), staleCapMs);
   const renderTable = (rows: ChatSessionRow[]) => {
     const cells = (r: ChatSessionRow) => [
       r.name,
@@ -449,9 +455,21 @@ function formatChatRoster(sessions: ChatSessionRow[]): string {
   if (active.length > 0) {
     parts.push([paint("1", "# Active Sessions"), renderTable(active)].join("\n"));
   }
-  if (stale.length > 0) {
-    const explainer = `These sessions have missed their heartbeat for over ${Math.round(CHAT_STALE_MS / 1000)} seconds. Their harnesses may no longer be running (stopped, or the machine slept); mail waits until they resume.`;
-    parts.push([paint("1", "# Stale Sessions"), paint("3;90", explainer), renderTable(stale)].join("\n"));
+  if (stale.length > 0 || staleHidden > 0) {
+    const lines = [paint("1", "# Stale Sessions")];
+    if (stale.length > 0) {
+      const explainer = `These sessions have missed their heartbeat for over ${Math.round(CHAT_STALE_MS / 1000)} seconds. Their harnesses may no longer be running (stopped, or the machine slept); mail waits until they resume.`;
+      lines.push(paint("3;90", explainer), renderTable(stale));
+    }
+    if (staleHidden > 0) {
+      lines.push(
+        paint(
+          "3;90",
+          `${staleHidden} older stale session${staleHidden === 1 ? "" : "s"} hidden; --stale N widens the window to N days, --stale all shows everything.`,
+        ),
+      );
+    }
+    parts.push(lines.join("\n"));
   }
   return parts.join("\n\n");
 }
@@ -461,12 +479,26 @@ async function chatCommand(rest: string[]): Promise<void> {
 
   switch (sub) {
     case "list": {
+      // --stale N bounds how old a stale row the roster displays, in days
+      // (fractions allowed); the default of one day keeps long-dead
+      // sessions from burying the fresh signal. --stale all restores the
+      // unbounded view. A bad value dies loudly rather than silently
+      // shrinking the roster.
+      const staleArg = flagValue(restArgs, "--stale");
+      let staleCapMs: number | null = 24 * 60 * 60 * 1000;
+      if (staleArg !== undefined) {
+        if (staleArg === "all") staleCapMs = null;
+        else if (!/^\d+(\.\d+)?$/.test(staleArg) || Number(staleArg) <= 0) {
+          console.error(`error: --stale expects a positive number of days or "all", got "${staleArg}"`);
+          process.exit(1);
+        } else staleCapMs = Number(staleArg) * 24 * 60 * 60 * 1000;
+      }
       const sessions = db.listChatSessions();
       if (sessions.length === 0) {
         console.log("No sessions registered. Sessions join the directory automatically on their first idle (opencode), or via chat_register.");
         break;
       }
-      console.log(formatChatRoster(sessions));
+      console.log(formatChatRoster(sessions, staleCapMs));
       break;
     }
 
