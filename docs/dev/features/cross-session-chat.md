@@ -255,19 +255,19 @@ injection-hygiene layers.
 The user watches the conversation without an agent: `thatch chat list`
 renders the roster as aligned columns under a header row (TTY-gated
 color; `formatChatRoster()` in `bin/thatch`), and `thatch chat tail`
-follows the message stream as cards, with sent bodies rendered as
-markdown on a TTY via `glow`/`gum` (plain fallback, never in pipes).
-The backlog renders only the
+follows the message stream as JSONL: one event per line, `sent` and
+`read` as separate events linked by message id, bodies verbatim.
+The backlog prints only the
 last `CHAT_TAIL_DEFAULT_LIMIT` (20) messages via `chatTailBacklog()`;
 `filterChatTailRows()` narrows every feed snapshot (backlog and follow
 polls alike) by body regexes, participant-name substrings, and a
 half-open time window. The diff itself is `chatTailDiff()` (unit-tested
-in `tests/chat.test.ts`): sent cards on first view, then new sends and
+in `tests/chat.test.ts`): sent events on first view, then new sends and
 newly-read messages per poll, with the diff state seeded from the full
 feed so neither the limit nor a mid-follow rename/unregister can
 resurface old rows as sent events. `chat_messages.via_broadcast` marks
-fan-out rows so the tail renders one `-> broadcast` card per recipient
-instead of what would otherwise look like identical direct sends. The
+fan-out rows so each copy's `sent` event carries `broadcast: true`
+alongside its real recipient. The
 CLI takes no chat write actions (the wake machinery owns those paths);
 the only writes it can trigger are the schema migrations that run
 whenever any thatch process opens the database.

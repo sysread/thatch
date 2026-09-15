@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { ChatPoller, isStale, nowIso, CHAT_STALE_MS, CHAT_POLL_INTERVAL_MS, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailEvent, formatChatTailCard, CHAT_TAIL_SEPARATOR, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, selectChatBodyRenderer, cleanRenderedBody, slugifyTitle, isDefaultSessionTitle, humanAge, chatLiveness, splitChatRoster, createWakeGate, type ChatSessionRow, type ChatTailRow, type ChatTailFilter } from "../src/chat";
+import { ChatPoller, isStale, nowIso, CHAT_STALE_MS, CHAT_POLL_INTERVAL_MS, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailJsonl, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, slugifyTitle, isDefaultSessionTitle, humanAge, chatLiveness, splitChatRoster, createWakeGate, type ChatSessionRow, type ChatTailRow, type ChatTailFilter } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
 import { TOOL_DEFS } from "../src/tool-defs";
@@ -682,15 +682,15 @@ const tailNoFilter = (): ChatTailFilter => ({ matches: [], fromSubstr: [], toSub
 describe("chat tail diff", () => {
   const row = tailRow;
 
-  test("new rows emit sent events; broadcast rows mark the recipient", () => {
+  test("new rows emit sent events; broadcast rows keep their recipient and set the flag", () => {
     const { events, state } = chatTailDiff(new Map(), [
       row({ id: 1 }),
-      row({ id: 2, viaBroadcast: true, to: null, body: "rise up" }),
+      row({ id: 2, viaBroadcast: true, to: "carol", body: "rise up" }),
       row({ id: 3, from: null, to: "bob", body: "from a departed sender" }),
     ]);
-    expect(events.map((e) => e.kind)).toEqual(["sent", "sent", "sent"]);
-    expect(events[0]).toMatchObject({ from: "alice", to: "bob" });
-    expect(events[1]).toMatchObject({ to: "broadcast" });
+    expect(events.map((e) => e.event)).toEqual(["sent", "sent", "sent"]);
+    expect(events[0]).toMatchObject({ id: 1, from: "alice", to: "bob", broadcast: false });
+    expect(events[1]).toMatchObject({ id: 2, to: "carol", broadcast: true });
     expect(events[2]).toMatchObject({ from: "unknown" });
     expect([...state.keys()]).toEqual([1, 2, 3]);
   });
@@ -701,21 +701,21 @@ describe("chat tail diff", () => {
       row({ id: 1, fromTopic: "watching CI", toTopic: "plotting rebase" }),
       row({ id: 2, fromTopic: "watching CI" }),
     ]);
-    expect(first.events[0]).toMatchObject({ kind: "sent", from: "alice", fromTopic: "watching CI", to: "bob", toTopic: "plotting rebase" });
+    expect(first.events[0]).toMatchObject({ event: "sent", from: "alice", from_topic: "watching CI", to: "bob", to_topic: "plotting rebase" });
     // Second poll: row 2's read stamp appears (null -> set) and emits a
     // read event, with the sender's topic riding along for the annotation.
     const second = chatTailDiff(first.state, [
       row({ id: 2, fromTopic: "watching CI", read_at: "2026-09-12T10:02:00Z" }),
     ]);
     expect(second.events).toHaveLength(1);
-    expect(second.events[0]).toMatchObject({ kind: "read", reader: "bob", from: "alice", fromTopic: "watching CI" });
+    expect(second.events[0]).toMatchObject({ event: "read", id: 2, reader: "bob", from: "alice", from_topic: "watching CI" });
   });
 
   test("a row's read_at appearing emits a read event exactly once", () => {
     const state = new Map([[7, null]]);
     const first = chatTailDiff(state, [row({ id: 7, read_at: "2026-09-12T10:01:00Z" })]);
     expect(first.events).toEqual([
-      { kind: "read", timestamp: "2026-09-12T10:01:00Z", reader: "bob", from: "alice", fromTopic: null, toTopic: null, body: "hello" },
+      { event: "read", at: "2026-09-12T10:01:00Z", id: 7, reader: "bob", reader_topic: null, from: "alice", from_topic: null },
     ]);
     // The second poll over the same state is silent.
     expect(chatTailDiff(first.state, [row({ id: 7, read_at: "2026-09-12T10:01:00Z" })]).events).toEqual([]);
@@ -723,77 +723,23 @@ describe("chat tail diff", () => {
 
   test("a message inserted and read between polls emits only its sent line", () => {
     const { events } = chatTailDiff(new Map(), [row({ id: 5, read_at: "2026-09-12T10:01:00Z" })]);
-    expect(events.map((e) => e.kind)).toEqual(["sent"]);
+    expect(events.map((e) => e.event)).toEqual(["sent"]);
   });
 
-  test("rendering clips long bodies on read events and marks broadcasts", () => {
-    const sent = { kind: "sent" as const, timestamp: "T", from: "a", to: "b", fromTopic: null, toTopic: null, body: "hi" };
-    expect(formatChatTailEvent(sent)).toBe("[T] a -> b: hi");
-    const broadcast = { ...sent, to: "broadcast" };
-    expect(formatChatTailEvent(broadcast)).toBe("[T] a -> broadcast: hi");
-    const read = { kind: "read" as const, timestamp: "T", reader: "bob", from: "a", fromTopic: null, toTopic: null, body: "x".repeat(70) };
-    expect(formatChatTailEvent(read)).toBe("[T] bob read a message from a: " + "x".repeat(60) + "...");
-  });
-
-  test("cards render styled header block, full body, local timezone, and drawn separator", () => {
-    const sent = { kind: "sent" as const, timestamp: "2026-09-12T19:46:00Z", from: "Al Go Rithm", to: "Brute the Dream Farrier", fromTopic: null, toTopic: null, body: "the machine age begins" };
-    const card = formatChatTailCard(sent);
-    // Labels are bg-styled with padding spaces, names are fg-styled: the
-    // plain text survives stripping ANSI codes (with the label's padding).
-    const plain = card.replace(/\x1b\[[0-9;]*m/g, "");
-    // Cards sit flush (no indent): content starts at column 1 - the
-    // chip's own leading pad space.
-    expect(plain.split("\n")[0]).toBe(" From   Al Go Rithm");
-    expect(plain.split("\n")[1]).toBe(" To     Brute the Dream Farrier");
-    // The tz abbreviation is environment-dependent (UTC under bun test,
-    // the local zone in a real terminal), so assert only date and time.
-    expect(plain.split("\n")[2]).toMatch(/^ When {3}2026-09-12 19:46 /);
-    expect(card).toContain("\x1b[30;42m From  \x1b[0m");
-    expect(card).toContain("\x1b[32mAl Go Rithm\x1b[0m");
-    expect(card.split("\n")[4]).toBe("the machine age begins");
-    expect(CHAT_TAIL_SEPARATOR).toBe("_".repeat(60));
-    // Read cards put the reader in the From slot.
-    const read = { kind: "read" as const, timestamp: "T", reader: "bob", from: "alice", fromTopic: null, toTopic: null, body: "hi" };
-    const readCard = formatChatTailCard(read);
-    expect(readCard.replace(/\x1b\[[0-9;]*m/g, "").split("\n")[1]).toBe("read alice");
-  });
-});
-
-describe("chat body markdown rendering", () => {
-  test("renderer selection prefers glow, falls back to gum, then null", () => {
-    expect(selectChatBodyRenderer("/opt/homebrew/bin/glow", "/opt/homebrew/bin/gum")).toEqual([
-      "/opt/homebrew/bin/glow",
-      "-",
-      "-w",
-      "0",
-      "-s",
-      "dark",
-    ]);
-    expect(selectChatBodyRenderer(null, "/opt/homebrew/bin/gum")).toEqual(["/opt/homebrew/bin/gum", "format", "-t", "markdown"]);
-    expect(selectChatBodyRenderer(null, null)).toBeNull();
-  });
-
-  test("plain bodies round-trip through the renderer's padded output", () => {
-    // Renderers pad every line with a 2-space document margin and surround
-    // the document with blank lines; cleanup must undo both so a plain
-    // body prints exactly as sent.
-    expect(cleanRenderedBody("\n  direct ping\n\n")).toBe("direct ping");
-    expect(cleanRenderedBody("\n  line one\n  line two\n\n")).toBe("line one\nline two");
-  });
-
-  test("cleanup strips the common indent only, preserving deeper structure", () => {
-    // A code block sits deeper than the document margin and keeps its
-    // extra indent.
-    expect(cleanRenderedBody("\n  intro\n\n      deeper\n\n")).toBe("intro\n\n    deeper");
-    // Already-flush output has nothing to strip.
-    expect(cleanRenderedBody("as-is")).toBe("as-is");
-  });
-
-  test("cleanup strips surrounding blank lines without eating the first line's indent", () => {
-    // trim() would also eat the first line's own leading whitespace and
-    // leave it flush while later lines keep theirs - the bug this pins.
-    expect(cleanRenderedBody("\n  first\n  second\n\n")).toBe("first\nsecond");
-    expect(cleanRenderedBody("")).toBe("");
+  test("JSONL rendering: one JSON object per event, sent and read distinct, linked by id", () => {
+    const { events } = chatTailDiff(new Map(), [row({ id: 9, body: "multi\nline **markdown** \u001b[31mred\u001b[0m" })]);
+    const line = formatChatTailJsonl(events[0]);
+    // Exactly one line, parseable, body untouched (no rendering, no ANSI
+    // stripping, no local time): a log is for jq and grep.
+    expect(line.includes("\n")).toBe(false);
+    expect(JSON.parse(line)).toEqual({
+      event: "sent", at: "2026-09-12T10:00:00Z", id: 9, from: "alice", from_topic: null,
+      to: "bob", to_topic: null, broadcast: false, body: "multi\nline **markdown** \u001b[31mred\u001b[0m",
+    });
+    const read = chatTailDiff(new Map([[9, null]]), [row({ id: 9, read_at: "2026-09-12T10:05:00Z" })]).events[0];
+    expect(JSON.parse(formatChatTailJsonl(read))).toEqual({
+      event: "read", at: "2026-09-12T10:05:00Z", id: 9, reader: "bob", reader_topic: null, from: "alice", from_topic: null,
+    });
   });
 });
 
@@ -1075,12 +1021,11 @@ describe("chat tail row filter", () => {
     expect(filterChatTailRows([row({ id: 1 })], noFilter())).toHaveLength(1);
   });
 
-  test("broadcast and departed participants match their rendered strings", () => {
-    const filter = { ...noFilter(), toSubstr: ["broadcast"] };
-    // The row keeps the real recipient; only the rendered event says
-    // "broadcast", so --to broadcast matches nothing here...
-    expect(filterChatTailRows([row({ id: 1, viaBroadcast: true, to: "beta" })], filter)).toHaveLength(0);
-    // ...while a departed sender matches its unknown-departed rendering,
+  test("broadcast rows match their real recipient; departed participants match their rendered strings", () => {
+    // Fan-out rows carry the real recipient, so --to <name> finds them.
+    expect(filterChatTailRows([row({ id: 1, viaBroadcast: true, to: "beta" })], { ...noFilter(), toSubstr: ["beta"] })).toHaveLength(1);
+    expect(filterChatTailRows([row({ id: 1, viaBroadcast: true, to: "beta" })], { ...noFilter(), toSubstr: ["broadcast"] })).toHaveLength(0);
+    // A departed sender matches its unknown-departed rendering,
     // because messageFeed already renders names through
     // renderChatParticipant before the filter sees the row.
     const departed = { ...noFilter(), fromSubstr: ["departed"] };
@@ -1101,7 +1046,7 @@ describe("chat tail backlog", () => {
 
   test("limit renders the last N rows and counts the elided rest", () => {
     const { events, state, elided } = chatTailBacklog(feed(), noFilter(), 2);
-    expect(events.map((e) => (e.kind === "sent" ? e.body : null))).toEqual(["four", "five"]);
+    expect(events.map((e) => (e.event === "sent" ? e.body : null))).toEqual(["four", "five"]);
     expect(elided).toBe(3);
     // The diff state covers every filtered row, not just the rendered ones.
     expect([...state.keys()]).toEqual([1, 2, 3, 4, 5]);
@@ -1119,7 +1064,7 @@ describe("chat tail backlog", () => {
     // the LAST matching row, and the elided count is relative to the
     // filtered feed, not the raw one.
     const { events, elided } = chatTailBacklog(feed(), filter, 1);
-    expect(events.map((e) => (e.kind === "sent" ? e.body : null))).toEqual(["three"]);
+    expect(events.map((e) => (e.event === "sent" ? e.body : null))).toEqual(["three"]);
     expect(elided).toBe(1);
   });
 
@@ -1156,10 +1101,10 @@ describe("chat tail backlog", () => {
     const rows = feed();
     const { state } = chatTailBacklog(rows, noFilter(), 2);
     // Re-polling the same feed after every inbox drains must not re-emit
-    // the elided history as sent - the limit hid cards, not rows - but
+    // the elided history as sent - the limit hid lines, not rows - but
     // read transitions on those rows are news and do fire.
     const events = chatTailDiff(state, rows.map((r) => ({ ...r, read_at: "2026-09-12T11:00:00Z" }))).events;
-    expect(events.map((e) => e.kind)).toEqual(["read", "read", "read", "read", "read"]);
+    expect(events.map((e) => e.event)).toEqual(["read", "read", "read", "read", "read"]);
   });
 
   test("a new matching row in follow mode emits, a non-matching one does not", () => {
@@ -1169,6 +1114,6 @@ describe("chat tail backlog", () => {
       { matches: [/hit/], fromSubstr: [], toSubstr: [], sinceMs: null, untilMs: null },
     );
     const events = chatTailDiff(state, poll).events;
-    expect(events.map((e) => (e.kind === "sent" ? e.body : null))).toEqual(["direct hit"]);
+    expect(events.map((e) => (e.event === "sent" ? e.body : null))).toEqual(["direct hit"]);
   });
 });

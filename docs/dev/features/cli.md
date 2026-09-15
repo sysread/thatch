@@ -50,23 +50,18 @@ Read-only window on the cross-session chat directory ([cross-session-chat.md](cr
   (NAME/AGE/STATUS/PROJECT/TOPIC), colorized only when stdout is a TTY
   (`formatChatRoster()` in `bin/thatch`; pipes and QA runners get plain
   text). Status reuses the `isStale()` staleness convention.
-- `chat tail` follows the message stream as styled cards: label chips,
-  colored names, dimmed timestamps, topic annotations after names, and a
-  drawn rule between cards. On a TTY, sent bodies render as markdown via
-  an external renderer (`glow`, then `gum format`; plain fallback):
-  selection (`selectChatBodyRenderer()`) and body cleanup
-  (`cleanRenderedBody()`) live in `src/chat.ts`, unit-tested there;
-  `bin/thatch` owns the TTY/NO_COLOR gate, the once-per-process cache,
-  and the spawn. The card renderer is
-  `formatChatTailCard()` (optional `renderBody` hook; the read-event
-  clip is never rendered) and the event shaping is `chatTailDiff()` in
-  `src/chat.ts`, unit-tested there; the single-line `formatChatTailEvent()`
-  remains for tests and compact contexts. `--once` prints one snapshot
-  and exits, because a snapshot has no previous state to diff read
-  events against.
-- The backlog renders only the last `CHAT_TAIL_DEFAULT_LIMIT` (20) messages;
+- `chat tail` follows the message stream as JSONL: one `ChatTailEvent`
+  per line via `formatChatTailJsonl()` (a bare `JSON.stringify`; no ANSI,
+  no markdown rendering, no local-time conversion - the tail is a log for
+  `jq` and `grep`). `sent` and `read` are separate events linked by the
+  message `id`; broadcast fan-out is one `sent` per recipient with
+  `broadcast: true` and the real `to`. Event shaping is `chatTailDiff()`
+  in `src/chat.ts`, unit-tested there. `--once` prints one snapshot and
+  exits, because a snapshot has no previous state to diff read events
+  against.
+- The backlog prints only the last `CHAT_TAIL_DEFAULT_LIMIT` (20) messages;
   `chatTailBacklog()` in `src/chat.ts` filters the feed, seeds the diff
-  state from every feed row (so the limit hides cards, not history, and a
+  state from every feed row (so the limit hides lines, not history, and a
   mid-follow rename or unregister cannot resurface old rows as sent
   events), and reports the elided count for
   the CLI's stderr note. `filterChatTailRows()` ANDs body regexes

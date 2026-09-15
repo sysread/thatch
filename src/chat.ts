@@ -838,9 +838,27 @@ export function renderChatParticipant(name: string | null, sessionID: string | n
 // Tail events (pure logic behind `thatch chat tail`)
 // ---------------------------------------------------------------------------
 
+/**
+ * One line of the `thatch chat tail` event log. Sending a message and
+ * reading it are two events, each on its own line, linked by `id` (the
+ * message row id). Broadcast fan-out is one message row per recipient, so
+ * a broadcast to N sessions is N sent events with `broadcast: true`, each
+ * naming its real recipient and tracking its own read. Timestamps are the
+ * database's ISO-8601 UTC strings, untouched.
+ */
 export type ChatTailEvent =
-  | { kind: "sent"; timestamp: string; from: string; to: string; fromTopic: string | null; toTopic: string | null; body: string }
-  | { kind: "read"; timestamp: string; reader: string; from: string; fromTopic: string | null; toTopic: string | null; body: string };
+  | {
+      event: "sent";
+      at: string;
+      id: number;
+      from: string;
+      from_topic: string | null;
+      to: string;
+      to_topic: string | null;
+      broadcast: boolean;
+      body: string;
+    }
+  | { event: "read"; at: string; id: number; reader: string; reader_topic: string | null; from: string; from_topic: string | null };
 
 /** One message row as the tail diff consumes it. */
 export interface ChatTailRow {
@@ -873,25 +891,27 @@ export function chatTailDiff(
     const isNew = !prev.has(r.id);
     if (isNew) {
       events.push({
-        kind: "sent",
-        timestamp: r.created_at,
+        event: "sent",
+        at: r.created_at,
+        id: r.id,
         from: r.from ?? "unknown",
-        to: r.viaBroadcast ? "broadcast" : r.to ?? "unknown",
-        fromTopic: r.fromTopic,
-        toTopic: r.viaBroadcast ? null : r.toTopic,
+        from_topic: r.fromTopic,
+        to: r.to ?? "unknown",
+        to_topic: r.toTopic,
+        broadcast: r.viaBroadcast,
         body: r.body,
       });
     } else {
       const prevRead = prev.get(r.id) ?? null;
       if (r.read_at !== null && prevRead === null) {
         events.push({
-          kind: "read",
-          timestamp: r.read_at,
+          event: "read",
+          at: r.read_at,
+          id: r.id,
           reader: r.to ?? "unknown",
+          reader_topic: r.toTopic,
           from: r.from ?? "unknown",
-          fromTopic: r.fromTopic,
-          toTopic: r.toTopic,
-          body: r.body,
+          from_topic: r.fromTopic,
         });
       }
     }
@@ -901,7 +921,7 @@ export function chatTailDiff(
 }
 
 /**
- * The default number of backlog cards `thatch chat tail` renders before
+ * The default number of backlog messages `thatch chat tail` prints before
  * follow mode takes over. The message table is machine-scale but the
  * history still grows forever, so an unbounded default would dump the
  * entire database on every run.
@@ -950,11 +970,10 @@ function roundTrip(date: Date, y: number, mo: number, d: number, h: number, mi: 
  * test the message body; `fromSubstr`/`toSubstr` are case-insensitive
  * substrings of the rendered participant names (so a departed sender can
  * only match as "unknown (...)", the string the reader actually sees).
- * One deliberate asymmetry: broadcast rows keep the real recipient in
- * `to`, so `--to <realname>` matches fan-out rows even though their cards
- * say "broadcast", and `--to broadcast` matches nothing. `sinceMs`/
- * `untilMs` bound created_at in a since-inclusive, until-exclusive
- * window. An empty field is no constraint.
+ * Broadcast fan-out rows carry their real recipient in `to`, so `--to
+ * <name>` matches them like any direct message. `sinceMs`/`untilMs`
+ * bound created_at in a since-inclusive, until-exclusive window. An empty
+ * field is no constraint.
  *
  * Name inputs are not stable across polls: they are re-resolved from the
  * live directory on every feed snapshot, so an unregister or rename
@@ -988,15 +1007,15 @@ export function filterChatTailRows(rows: Array<ChatTailRow>, filter: ChatTailFil
 /**
  * Prepares the tail's first render. The diff state seeds from EVERY row in
  * the feed - filtered or not, rendered or not - for two reasons. First,
- * the limit hides cards, not history: a state seeded only from the
- * rendered slice would re-emit the elided history as new sent events on
+ * the limit hides lines, not history: a state seeded only from the
+ * printed slice would re-emit the elided history as new sent events on
  * the first follow poll. Second, the name filters test JOIN-resolved
  * participant names that can flip mid-follow (a peer unregisters and its
  * history starts rendering as "unknown (... departed)", or it re-registers
  * under a new name); seeding everything means an old row can never resurface
  * as a sent event no matter how its rendered name changes. The last
  * `limit` filtered rows (null = all) shape into sent events via
- * chatTailDiff, so card rendering keeps a single source. `elided` counts
+ * chatTailDiff, so event shaping keeps a single source. `elided` counts
  * matching rows the limit hid, for the CLI's summary line.
  *
  * The caller must re-apply the same filter to every follow poll's feed
@@ -1016,127 +1035,14 @@ export function chatTailBacklog(
   return { events, state, elided: filtered.length - shown.length };
 }
 
-/** Renders one tail event in the CLI's line format. */
-export function formatChatTailEvent(event: ChatTailEvent): string {
-  if (event.kind === "sent") {
-    return `[${event.timestamp}] ${event.from} -> ${event.to}: ${event.body}`;
-  }
-  const clipped = event.body.length > 60 ? event.body.slice(0, 60) + "..." : event.body;
-  return `[${event.timestamp}] ${event.reader} read a message from ${event.from}: ${clipped}`;
-}
-
-/** "2026-09-12 19:46 MT" - the UTC timestamp converted to the terminal's
- *  local timezone (abbreviation from the locale, fallback "UTC"), one line
- *  for the card header. */
-function localWhen(timestamp: string): string {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return timestamp;
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return (
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
-    `${pad(date.getHours())}:${pad(date.getMinutes())} ${tz}`
-  );
-}
-
 /**
- * Renders one tail event as a chat card: header block (From / To / When),
- * blank line, full body, then a separator line. This is the human format
- * for `thatch chat tail` - the single-line formatChatTailEvent remains for
- * tests and compact contexts. Read events use the same card shape with the
- * reader in the From slot; broadcast events show "broadcast" as the
- * recipient. The separator is between cards, so the caller joins cards
- * with it and never gets a trailing rule.
+ * Renders one tail event as a JSON line. Plain JSON.stringify of the event
+ * object: no ANSI, no markdown rendering, no local-time conversion. The
+ * tail is a log, and a log is for grep and jq; a terminal reader who wants
+ * color pipes through their own tool.
  */
-// ANSI styling for the tail cards: black-on-green field-label chips, green
-// values, dim for the timestamps and the "read" marker, and a drawn rule
-// for the separator. Bare ESC sequences rather than a color library - the
-// tail is a terminal surface, and the codes are trivial.
-const ANSI = {
-  // Label chips are padded to a fixed width (5 + padding = 7 columns) so
-  // every line's content starts at the same column - To's 2-char label
-  // misaligned against 4-char labels without this.
-  labelBg: (s: string) => `\x1b[30;42m ${s.padEnd(5)} \x1b[0m`,
-  valueFg: (s: string) => `\x1b[32m${s}\x1b[0m`, // green (field values)
-  dim: (s: string) => `\x1b[2m${s}\x1b[0m`, // dim ("read" marker)
-  rule: (s: string) => `\x1b[2m${s}\x1b[0m`, // dim (the drawn separator)
-  // Session-of-origin annotation: italic + bright-black (muted gray).
-  originLabel: (s: string) => `\x1b[3;90m<${s}>\x1b[0m`,
-};
-
-const CARD_INDENT = ""; // cards sit flush with the separator (no extra indent)
-
-/**
- * Renders one tail event as a card. renderBody lets the CLI re-render the
- * sent body (markdown-to-ANSI via an external renderer); the read-event
- * clip is never rendered - a 60-char truncated fragment is not a document.
- */
-export function formatChatTailCard(event: ChatTailEvent, renderBody: (body: string) => string = (b) => b): string {
-  const lines: string[] = [];
-  const when = ANSI.dim(localWhen(event.timestamp));
-  // The session-of-origin annotation: the participant's registered topic,
-  // italic + muted bright-black, after the name. Omitted for participants
-  // without a topic (and for the broadcast pseudo-recipient, whose topic
-  // is null by construction).
-  const origin = (topic: string | null) => (topic ? ` ${ANSI.originLabel(topic)}` : "");
-  const chip = (label: string, value: string, topic: string | null) =>
-    `${CARD_INDENT}${ANSI.labelBg(label)} ${ANSI.valueFg(value)}${origin(topic)}`;
-  if (event.kind === "sent") {
-    lines.push(chip("From", event.from, event.fromTopic));
-    lines.push(chip("To", event.to, event.toTopic));
-    lines.push(chip("When", when, null));
-    lines.push("");
-    lines.push(renderBody(event.body));
-  } else {
-    const clipped = event.body.length > 60 ? event.body.slice(0, 60) + "..." : event.body;
-    lines.push(chip("From", event.reader, event.toTopic));
-    lines.push(`${CARD_INDENT}${ANSI.dim("read")} ${ANSI.valueFg(event.from)}${origin(event.fromTopic)}`);
-    lines.push(chip("When", when, null));
-    lines.push("");
-    lines.push(clipped);
-  }
-  return lines.join("\n");
-}
-
-export const CHAT_TAIL_SEPARATOR = "_".repeat(60);
-
-/**
- * Chooses the markdown-to-ANSI renderer for chat tail bodies, in preference
- * order: glow first, then gum format. Returns the spawn argv (the body
- * arrives on stdin), or null when neither tool is installed. Pure so tests
- * can pin the order; the caller owns PATH detection and the spawn itself.
- *
- * -w 0: no wrapping - bodies overflow like they do unrendered, and
- * wrapping inside cards would rag the layout. -s dark: glow picks its
- * style from ITS stdout, which is always a pipe here, so the style is
- * forced; notty would keep literal "#" and "**" markers, which is not
- * rendering.
- */
-export function selectChatBodyRenderer(glowPath: string | null, gumPath: string | null): string[] | null {
-  if (glowPath) return [glowPath, "-", "-w", "0", "-s", "dark"];
-  if (gumPath) return [gumPath, "format", "-t", "markdown"];
-  return null;
-}
-
-/**
- * Normalizes a rendered markdown body: external renderers pad documents
- * with a uniform leading margin and surrounding blank lines, which would
- * shift the card layout and change plain-text bodies. Stripping the
- * common indent plus the blank lines makes a plain body round-trip
- * unchanged through its renderer.
- */
-export function cleanRenderedBody(out: string): string {
-  // Blank-line strip, not trim(): trim() would also eat the first body
-  // line's own leading whitespace and leave it flush while later lines
-  // stay indented.
-  const lines = out.replace(/^\n+/, "").replace(/\n+$/, "").split("\n");
-  let indent = Infinity;
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    indent = Math.min(indent, line.length - line.trimStart().length);
-  }
-  if (!Number.isFinite(indent) || indent === 0) return lines.join("\n");
-  return lines.map((line) => line.slice(indent)).join("\n");
+export function formatChatTailJsonl(event: ChatTailEvent): string {
+  return JSON.stringify(event);
 }
 
 // ---------------------------------------------------------------------------

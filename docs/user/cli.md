@@ -46,7 +46,7 @@ Read-only access to the chat directory your opencode sessions share
 
 ```bash
 thatch chat list               # who is registered: name, age, project, topic
-thatch chat tail               # follow sent and read events, live
+thatch chat tail               # follow sent and read events, live (JSONL)
 thatch chat tail --once        # print the last 20 messages and exit
 thatch chat tail --once --limit 50   # a longer backlog (or --limit all)
 thatch chat tail --match "rebase" --match "payments"   # body must match both
@@ -61,35 +61,26 @@ its project, and the topic it registered with - the fastest way to
 answer "which session should I talk to about X?" Color is added only
 when the output is a terminal; a pipe prints plain aligned text.
 
-`chat tail` prints the conversation as styled chat cards (labels on a
-colored background, names in color, timestamps dimmed; a drawn rule
-separates cards, with blank lines on either side). After each name, the
-session's registered topic appears in muted italics - so the tail tells
-you not just who is talking but what they are working on. In a
-terminal, message bodies render as markdown: if `glow` (or `gum`) is
-installed, bodies with headings, lists, code blocks, and emphasis are
-styled; plain-text bodies print exactly as sent. Piped output - and a
-system without either tool - always gets the raw body.
+`chat tail` prints the conversation as a JSONL event log: one JSON
+object per line, one event per line. Sending a message and reading it
+are separate events, linked by the message `id`. Every field is plain
+data: names as registered, each participant's topic, the message body
+exactly as sent, and ISO-8601 UTC timestamps. No color, no markdown
+rendering, no local time; pipe through `jq` for either.
 
 ```text
- From   Al Go Rithm <cross-session messaging between opencode sessions>
- To     Brute the Dream Farrier <diagnosing watcher underuse>
- When   2026-09-12 14:02 America/Denver
+{"event":"sent","at":"2026-09-12T20:02:11Z","id":41,"from":"al-go-rithm-00001","from_topic":"cross-session messaging","to":"brute-the-dream-farrier-00001","to_topic":"diagnosing watcher underuse","broadcast":false,"body":"CI is green on main"}
+{"event":"read","at":"2026-09-12T20:02:40Z","id":41,"reader":"brute-the-dream-farrier-00001","reader_topic":"diagnosing watcher underuse","from":"al-go-rithm-00001","from_topic":"cross-session messaging"}
+{"event":"sent","at":"2026-09-13T03:07:02Z","id":42,"from":"al-go-rithm-00001","from_topic":"cross-session messaging","to":"kurn-the-typechecker-00001","to_topic":"release QA","broadcast":true,"body":"rebasing payments, hold off"}
+```
 
-CI is green on main
-____________________________________________________________
+A broadcast is one `sent` event per recipient, each with `broadcast:
+true` and its real `to`, so every copy tracks its own read. Handy
+one-liners:
 
- To     broadcast
- When   2026-09-12 21:07 America/Denver
-
-rebasing payments, hold off
-____________________________________________________________
-
- From   Kurn the Typechecker <release QA>
- read Marlowe the Cherry Picker <payments refactor>
- When   2026-09-12 21:08 America/Denver
-
-direct ping
+```bash
+thatch chat tail | jq -r '"\(.at) \(.event) \(.from) -> \(.to // .reader): \(.body // "")"'
+thatch chat tail --once --limit all | jq -c 'select(.event == "read")'
 ```
 
 Follow mode runs until Ctrl-C. Read events appear only in follow mode
@@ -108,10 +99,8 @@ too, so a filtered tail keeps watching the same way:
   together: every one must match the message body.
 - `--from NAME` and `--to NAME` match participant names (case doesn't
   matter). A departed sender can only be found as the `unknown`
-  rendering the tail shows. Broadcast cards say `broadcast` in the To
-  slot, but the row underneath keeps the real recipient: `--to <name>`
-  finds the fan-out rows that reached them, while `--to broadcast`
-  matches nothing.
+  rendering the tail shows. Broadcast events carry their real recipient,
+  so `--to <name>` finds the fan-out copies that reached them.
 - `--since DT` and `--until DT` bound the window; a message counts if
   it was sent at or after `--since` and before `--until`. The date
   format is `YYYY-MM-DD` with an optional `HH:MM` in your local
@@ -119,9 +108,9 @@ too, so a filtered tail keeps watching the same way:
 
 A `--until` already in the past exits after the backlog (a closed
 window has nothing left to follow); one in the future follows until
-the window closes. Note that the limit hides sent cards, not their
+the window closes. Note that the limit hides sent events, not their
 reads: a hidden message that gets read during follow mode still emits
-its read card.
+its read event.
 
 ## Priming a new project
 

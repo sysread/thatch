@@ -10,7 +10,7 @@ import { hygieneReport } from "../src/hygiene";
 import { claudeSessionStartReminder } from "../src/prompts";
 import { setupClaudeCode, setupCursor } from "../src/setup";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
-import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailCard, CHAT_TAIL_SEPARATOR, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MINUTES, chatLiveness, humanAge, splitChatRoster, mcpSessionID, selectChatBodyRenderer, cleanRenderedBody, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
+import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, chatLiveness, humanAge, splitChatRoster, mcpSessionID, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
 
 const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
@@ -49,8 +49,10 @@ function usage(): never {
   thatch chat list                 Registered chat sessions: name, age, project, topic
   thatch chat tail [--once] [--limit N|all] [--match RE]
                    [--from NAME] [--to NAME] [--since DT] [--until DT]
-                                   Follow cross-session chat: sent and read
-                                   events. The backlog shows the last
+                                   Follow cross-session chat as a JSONL
+                                   event log: one line per event, "sent"
+                                   and "read" as separate events linked by
+                                   message id. The backlog shows the last
                                    ${CHAT_TAIL_DEFAULT_LIMIT} messages
                                    (--limit N or --limit all to override).
                                    --match filters message bodies
@@ -330,8 +332,8 @@ const CHAT_ROSTER_HEADER = ["NAME", "AGE", "STATUS", "PROJECT", "TOPIC"];
 /**
  * Renders the `chat list` roster as two sections - Active and Stale - each
  * an aligned-column table under a header row. Section headers are bold,
- * the stale explainer is muted italic; per-row colors match the chat tail
- * cards (green names, dim age, green/red status, muted italic topic).
+ * the stale explainer is muted italic; rows use green names, dim age,
+ * green/red status, and a muted italic topic.
  * Color is applied only when stdout is an interactive terminal (and
  * NO_COLOR is unset), so piped output - grep, redirect, QA runners - stays
  * clean plain text.
@@ -370,50 +372,10 @@ function formatChatRoster(sessions: ChatSessionRow[]): string {
     parts.push([paint("1", "# Active Sessions"), renderTable(active)].join("\n"));
   }
   if (stale.length > 0) {
-    const explainer = `These sessions have not reported in for more than ${CHAT_STALE_MINUTES} minutes. Their harnesses may no longer be running; mail waits until they resume.`;
+    const explainer = `These sessions have missed their heartbeat for over ${Math.round(CHAT_STALE_MS / 1000)} seconds. Their harnesses have stopped; mail waits until they resume.`;
     parts.push([paint("1", "# Stale Sessions"), paint("3;90", explainer), renderTable(stale)].join("\n"));
   }
   return parts.join("\n\n");
-}
-
-/**
- * Markdown-to-ANSI renderer for chat tail bodies: prefers glow, then
- * `gum format`, and degrades to the plain body when neither is installed.
- * Detection runs once and only for interactive terminals - pipes (grep,
- * QA runners) always get the raw body, and NO_COLOR opts out entirely.
- * The renderer never fails open: a crashed or missing binary returns the
- * body unchanged.
- */
-let renderChatBody: (body: string) => string | null | undefined;
-
-/**
- * Markdown-to-ANSI renderer for chat tail bodies: renderer selection
- * (glow, then gum format) and body cleanup live in src/chat.ts
- * (selectChatBodyRenderer, cleanRenderedBody, unit-tested there); this
- * wrapper owns the TTY gate, the once-per-process cache, and the spawn.
- * Detection runs only for interactive terminals - pipes (grep, QA
- * runners) always get the raw body, and NO_COLOR opts out entirely.
- * The renderer never fails open: a crashed or missing binary returns the
- * body unchanged.
- */
-function markdownBodyRenderer(): (body: string) => string {
-  if (renderChatBody !== undefined) return renderChatBody;
-  if (process.stdout.isTTY !== true || process.env.NO_COLOR) {
-    renderChatBody = (body) => body;
-    return renderChatBody;
-  }
-  const argv = selectChatBodyRenderer(Bun.which("glow"), Bun.which("gum"));
-  if (!argv) {
-    renderChatBody = (body) => body;
-    return renderChatBody;
-  }
-  // spawnSync stdin needs a Response (the `input` option is a no-op in
-  // Bun 1.3.14).
-  renderChatBody = (body) => {
-    const run = Bun.spawnSync(argv, { stdin: new Response(body), stdout: "pipe", stderr: "pipe" });
-    return run.exitCode === 0 ? cleanRenderedBody(run.stdout.toString()) : body;
-  };
-  return renderChatBody;
 }
 
 async function chatCommand(rest: string[]): Promise<void> {
@@ -433,7 +395,7 @@ async function chatCommand(rest: string[]): Promise<void> {
     case "tail": {
       const onceOnly = restArgs.includes("--once");
       // Parse and validate everything up front: a bad regex or date must
-      // fail before any cards print, not mid-follow.
+      // fail before any lines print, not mid-follow.
       const matches = flagValues(restArgs, "--match").map((pattern) => {
         try {
           return new RegExp(pattern);
@@ -484,16 +446,15 @@ async function chatCommand(rest: string[]): Promise<void> {
       // each poll emits only new messages and newly-read rows. The diff
       // and backlog logic lives in src/chat.ts (chatTailDiff,
       // chatTailBacklog), unit-tested there. The backlog seeds the state
-      // from every feed row, so the limit hides cards, not history.
+      // from every feed row, so the limit hides lines, not history.
       let state: Map<number, string | null>;
-      let firstFollowEvent = true;
 
       // Follow mode holds the handle open until Ctrl-C. The finally below
       // closes it on every exit path except the SIGINT handler's, which
       // is why the handler closes it itself: process.exit does not unwind
       // finally blocks (closing twice is harmless).
       try {
-        // First pass: render the backlog as cards, then follow unless
+        // First pass: print the backlog, then follow unless
         // --once or the --until window has already closed (a closed
         // window has no future events to follow). The backlog fetch gets
         // the same friendly failure treatment as follow polls: a locked
@@ -508,13 +469,13 @@ async function chatCommand(rest: string[]): Promise<void> {
         }
         state = backlog.state;
         if (backlog.elided > 0) {
-          // The elision note goes to stderr so stdout stays a clean card
-          // stream for pipes.
+          // The elision note goes to stderr so stdout stays pure JSONL
+          // for pipes.
           console.error(
             `[thatch chat tail] showing last ${backlog.events.length} of ${backlog.elided + backlog.events.length} messages (--limit N, --limit all)`,
           );
         }
-        console.log(backlog.events.map((e) => formatChatTailCard(e, markdownBodyRenderer())).join(`\n\n${CHAT_TAIL_SEPARATOR}\n\n`));
+        for (const event of backlog.events) console.log(formatChatTailJsonl(event));
         if (onceOnly || (filter.untilMs !== null && filter.untilMs <= Date.now())) break;
 
         process.on("SIGINT", () => {
@@ -527,10 +488,7 @@ async function chatCommand(rest: string[]): Promise<void> {
             // Follow polls re-filter the live feed: matching messages
             // surface as they arrive, non-matching ones stay invisible.
             for (const event of chatTailDiff(state, filterChatTailRows(db.chatMessageFeed(), filter)).events) {
-              // Separate follow-mode cards from whatever came before.
-              if (firstFollowEvent && backlog.events.length > 0) console.log(`\n${CHAT_TAIL_SEPARATOR}\n`);
-              firstFollowEvent = false;
-              console.log(formatChatTailCard(event, markdownBodyRenderer()));
+              console.log(formatChatTailJsonl(event));
             }
           } catch (err) {
             // The surface's whole job is watching a shared, mutable file;
