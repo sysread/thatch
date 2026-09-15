@@ -24,7 +24,7 @@ import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
 import { WatcherRegistry, ghApiRun, ghAvailable } from "./watchers";
 import { watcherNotificationNudge, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
-import { ChatPoller, isDefaultSessionTitle, CHAT_AUTO_TTL_DAYS } from "./chat";
+import { ChatPoller, isDefaultSessionTitle, isPidAlive } from "./chat";
 import { chatEnabled, chatAutoRegister, loadConfig } from "./config";
 import pkg from "../package.json";
 
@@ -197,14 +197,16 @@ export const server: Plugin = async ({ client, worktree }) => {
   const chatPoller = new ChatPoller({
     store: db,
     hostedSessions: () => {
-      // Sub-agent children share this process's sessionStatus (their
-      // status events land here), but they are never legitimate chat
-      // participants - a registered child would be heartbeat-ed
+      // Ownership, not event history: this harness beats and delivers for
+      // every project session stamped with its pid (the sweep claims
+      // orphans). Sub-agent children are excluded even if someone
+      // registered one - a registered child would be heartbeat-ed
       // fresh-forever and burn nudge budget on undeliverable wake
-      // prompts. Keep them out of the hosted set even when guidance
-      // against registering them is ignored.
-      const hosted = [...sessionStatus.keys()].filter((id) => !childToParent.has(id));
-      return hosted;
+      // prompts.
+      return db
+        .ownedChatSessions(repo, process.pid)
+        .map((r) => r.session_id)
+        .filter((id) => !childToParent.has(id));
     },
     deliver: async (sessionID, senders, count) => {
       await client.session.promptAsync({
@@ -231,45 +233,60 @@ export const server: Plugin = async ({ client, worktree }) => {
   // sessions and burn wake budget against a feature the user turned off.
   if (chatOn) chatPoller.start();
 
-  // Startup sweep: a harness restart fires no events for sessions that are
-  // merely loaded (resume fires nothing either - session IDs persist across
-  // restarts), so without this the roster stays empty until each session's
-  // next idle and senders keep mailing ghosts. Sweep the project's recent
-  // top-level sessions into the directory instead. The registrations are
-  // backdated to the session's own last activity: a swept session has not
-  // reported in, so it must show as stale (and age into the 7-day prune)
-  // rather than looking fresh. Swept sessions are not in the poller's
-  // hosted set until they emit status events, so nothing heartbeats them
-  // meanwhile. Registration still assigns pool names - a swept session's
-  // real title rides the topic column like everyone else's.
+  // Startup sweep + hourly re-sweep: membership in the roster tracks what
+  // is LOADED in a live harness, not what recently moved. A harness restart
+  // fires no events for sessions that are merely loaded (resume fires
+  // nothing either - session IDs persist across restarts), so the sweep
+  // registers the project's top-level sessions from client.session.list at
+  // init, re-runs hourly to catch mid-run loads, and ADOPTS rows whose
+  // owning harness died (dead pid): re-stamping the pid and beating them
+  // fresh - a live harness can wake any of its project's sessions. All of
+  // it is idempotent; registration assigns pool names, and a real title
+  // rides the topic column like everyone else's.
+  const chatSweep = async () => {
+    // Feature-detect: an older opencode client may not expose
+    // session.list. The sweep is best-effort (idle registration still
+    // covers those sessions), so an absent method skips silently
+    // instead of logging an error on every startup.
+    if (typeof client.session?.list !== "function") return;
+    const { data } = await client.session.list();
+    const live = new Set(data?.map((s) => s.id) ?? []);
+    for (const s of data ?? []) {
+      if ((s as any).parentID) continue; // top-level sessions only
+      const title = s.title ?? "";
+      // Same placeholder guard as the idle path: a fresh session may still
+      // carry opencode's pre-autotitle title.
+      const topic = title && !isDefaultSessionTitle(title) ? title : null;
+      const res = db.registerChatSession(s.id, repo, topic, "opencode", null, detectWorktreeKind(worktree), process.pid);
+      // Converge the topic for sessions that already had a row: the title
+      // may have changed while they were away.
+      if (res.ok && topic) db.refreshChatTopic(s.id, topic);
+    }
+    // Adopt the dead: opencode rows of this project whose owning pid no
+    // longer exists. Their harness is gone; this one is alive and takes
+    // over the beating and delivery. MCP rows are turn-driven and have no
+    // pid - never touched. register() is idempotent for the row (and
+    // respects leave tombstones - a session the user left stays gone);
+    // the heartbeat then re-stamps ownership and freshness, which the
+    // register-existing path deliberately does not.
+    for (const row of db.listChatSessions()) {
+      if (row.project !== repo || row.host_kind !== "opencode") continue;
+      if (live.has(row.session_id)) continue; // handled by the loop above
+      if (row.host_pid != null && isPidAlive(row.host_pid)) continue; // another live harness owns it
+      const res = db.registerChatSession(row.session_id, repo, row.topic, "opencode", null, row.worktree, process.pid);
+      if (res.ok) db.heartbeatChatSessions([row.session_id]);
+    }
+  };
   if (chatOn && chatAutoRegister(loadConfig(dbPath).config)) {
-    void (async () => {
-      try {
-        // Feature-detect: an older opencode client may not expose
-        // session.list. The sweep is best-effort (idle registration still
-        // covers those sessions), so an absent method skips silently
-        // instead of logging an error on every startup.
-        if (typeof client.session?.list !== "function") return;
-        const { data } = await client.session.list();
-        // The window matches the auto-prune TTL (CHAT_AUTO_TTL_DAYS):
-        // anything the pruner has not reaped is fair game to sweep back
-        // in, so a resumed-or-restarted session always reappears.
-        const cutoff = Date.now() - CHAT_AUTO_TTL_DAYS * 24 * 3_600_000;
-        for (const s of data ?? []) {
-          if ((s as any).parentID) continue; // top-level sessions only
-          const updated = s.time?.updated ?? 0;
-          if (updated < cutoff) continue;
-          const title = s.title ?? "";
-          // Same placeholder guard as the idle path: a recent session may
-          // still carry opencode's pre-autotitle title.
-          const topic = title && !isDefaultSessionTitle(title) ? title : null;
-          const res = db.registerChatSession(s.id, repo, topic, "opencode", null, detectWorktreeKind(worktree), process.pid);
-          if (res.ok && res.created) db.backdateChatSession(s.id, new Date(updated).toISOString());
-        }
-      } catch (err) {
-        console.error(`[thatch] chat startup sweep failed: ${err}`);
-      }
-    })();
+    void chatSweep().catch((err) => {
+      console.error(`[thatch] chat startup sweep failed: ${err}`);
+    });
+    const sweepTimer = setInterval(() => {
+      void chatSweep().catch((err) => {
+        console.error(`[thatch] chat sweep failed: ${err}`);
+      });
+    }, 3_600_000);
+    sweepTimer.unref?.();
   }
 
   // Sessions currently being compacted. chat.message nudges are skipped while

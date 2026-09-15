@@ -79,21 +79,25 @@ worktree, a `.git` directory means the project root, no `.git` reads as
 undetected. The roster shows it as a `loc:` token so sessions coordinating
 on a shared tree can tell who sits where.
 
-### Startup sweep
+### Startup sweep and ownership
 
 A harness restart fires no events for sessions that are merely loaded
 (resume fires nothing either - session IDs persist across restarts), so
 the idle-only path leaves the roster empty until each session's next
-turn. At plugin init the sweep registers the project's top-level sessions
-whose last activity is inside 7 days (`client.session.list`; the window
-matches the auto-prune TTL, so anything the pruner has not reaped is fair
-game to sweep back in), backdating
-each row's `last_seen` to the session's own `time.updated`: a swept
-session has not reported in, so it shows as stale and ages into the 7-day
-prune instead of posing as fresh. Swept sessions join the poller's hosted
-set (and begin heartbeating) only when they emit status events.
+turn. The sweep closes that gap and defines OWNERSHIP: at plugin init and
+then hourly, the harness registers every top-level session of its project
+from `client.session.list` - no age cut-off; anything loaded in a live
+harness belongs in the roster - and ADOPTS opencode rows whose owning pid
+no longer exists (dead harness): it re-stamps the pid and the row is
+beaten fresh again. The pid stamp is the ownership contract: the owning
+harness heartbeats its rows (every poll cycle, idle or not) and delivers
+their mail, so two harnesses on one project partition the roster instead
+of double-waking. An owner that dies stops beating; its rows go stale
+(instantly, by the pid probe) until a live harness's sweep adopts them.
 `chat.autoRegister: false` disables the sweep along with idle
-registration.
+registration. The 7-day TTL prune remains only as the table bound for
+rows whose harness never returned; a returning harness re-registers them
+under fresh pool names (names are never reused).
 
 `chat_register` (no arguments) is the explicit path: idempotent ensure for
 opencode (identity is the host session ID, which the model cannot know or
@@ -164,18 +168,20 @@ behavior drastically on a parameter value is two functions.
 
 ### Polling, heartbeat, staleness
 
-A `setInterval` loop (default 30s) runs one cycle per process: heartbeat the
-hosted sessions' `last_seen` (stamping the host PID as it goes), then deliver.
-A crashed process fires no `session.deleted`, so its rows would linger -
-liveness is therefore a PROCESS check, not just a timestamp: each row
-carries the host PID, and `chatLiveness` (src/chat.ts) marks an opencode
-row stale the moment that PID no longer exists (signal-0 probe), even
-while the heartbeat age would still look fresh. Rows without a PID
-(legacy, MCP) fall back to the heartbeat age alone (default 10 minutes).
-`chat_list` groups the result into Active and Stale sections - the stale
-section's explainer says what stale means - and `chat_send` states the
-recipient's liveness at send time, so a sender mailing a ghost learns it
-immediately instead of waiting on a wake that will never fire.
+A `setInterval` loop (default 30s) runs one cycle per process: heartbeat
+the OWNED sessions (every project row stamped with this harness's pid -
+idle sessions keep beating, so a loaded session stays fresh while its
+harness lives), then deliver their mail. A crashed process fires no
+`session.deleted`, so its rows would linger - liveness is therefore a
+PROCESS check, not just a timestamp: each row carries the host PID, and
+`chatLiveness` (src/chat.ts) marks an opencode row stale the moment that
+PID no longer exists (signal-0 probe), even while the heartbeat age would
+still look fresh. Rows without a PID (legacy, MCP) fall back to the
+heartbeat age alone (default 10 minutes). `chat_list` groups the result
+into Active and Stale sections - the stale section's explainer says what
+stale means - and `chat_send` states the recipient's liveness at send
+time, so a sender mailing a ghost learns it immediately instead of
+waiting on a wake that will never fire.
 `session.deleted` is the graceful-exit fast path that unregisters immediately.
 
 ### Delivery, re-nudge, and the rate cap

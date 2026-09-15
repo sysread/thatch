@@ -884,8 +884,8 @@ export class ThatchDB {
     return this.#chat.register(sessionID, project, topic, kind, nameBase, worktree, hostPid);
   }
 
-  backdateChatSession(sessionID: string, iso: string) {
-    this.#chat.backdate(sessionID, iso);
+  ownedChatSessions(project: string, pid: number) {
+    return this.#chat.ownedSessions(project, pid);
   }
 
   refreshChatTopic(sessionID: string, title: string) {

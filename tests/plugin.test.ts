@@ -1818,13 +1818,20 @@ describe("chat auto-registration on idle", () => {
     }
   });
 
-  test("startup sweep registers recent top-level sessions with backdated last_seen", async () => {
+  test("startup sweep registers all top-level sessions and adopts orphans", async () => {
+    // An orphan: registered by a harness that no longer exists (dead pid),
+    // same project as the test worktree (detectRepo of /tmp/thatch-sweep
+    // falls back to the directory basename) - the sweep must adopt it
+    // (re-stamp pid + beat fresh).
+    const orphanDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    orphanDb.registerChatSession("ses_orphan", "thatch-sweep", "Old review round", "opencode", null, null, 999999999);
+    orphanDb.close();
+
     const now = Date.now();
     sweepSessions = [
-      // Recent, top-level, real title: swept, backdated to its own recency.
-      { id: "ses_sweep1", title: "Sweep Me", time: { created: now - 3600_000, updated: now - 1800_000 } },
-      // Older than the sweep window (matches the 7-day auto-prune TTL): not swept.
-      { id: "ses_sweep_old", title: "Ancient", time: { created: now - 9 * 24 * 3600_000, updated: now - 8 * 24 * 3600_000 } },
+      // Top-level with a real title: swept, topic set. Age is irrelevant -
+      // membership tracks the live harness, not recency.
+      { id: "ses_sweep1", title: "Sweep Me", time: { created: now - 9 * 24 * 3600_000, updated: now - 8 * 24 * 3600_000 } },
       // Sub-agent child: never swept.
       { id: "ses_sweep_child", parentID: "ses_sweep1", title: "Child session - x", time: { created: now, updated: now } },
       // Placeholder title: swept, but no topic from it.
@@ -1835,17 +1842,21 @@ describe("chat auto-registration on idle", () => {
     const swDb = new ThatchDB(process.env.THATCH_DB_PATH!);
     try {
       const rows = swDb.listChatSessions();
+      // Ancient session: still swept - no age cut-off for membership.
       const swept = rows.find((r) => r.session_id === "ses_sweep1");
       expect(swept).toBeDefined();
       expect(swept!.topic).toBe("Sweep Me");
-      // Backdated: a swept session has not reported in, so it must show
-      // stale rather than fresh (it was last active 30 minutes ago here).
-      expect(swept!.last_seen).toBe(new Date(now - 1800_000).toISOString());
-      expect(swDb.listChatSessions().find((r) => r.session_id === "ses_sweep_old")).toBeUndefined();
+      expect(swept!.host_pid).toBe(process.pid);
       expect(swDb.listChatSessions().find((r) => r.session_id === "ses_sweep_child")).toBeUndefined();
       const placeholderRow = rows.find((r) => r.session_id === "ses_sweep_ph");
       expect(placeholderRow).toBeDefined();
       expect(placeholderRow!.topic).toBeNull();
+      // The orphan was adopted: same row, now owned (and beaten fresh) by
+      // this harness.
+      const adopted = rows.find((r) => r.session_id === "ses_orphan");
+      expect(adopted).toBeDefined();
+      expect(adopted!.host_pid).toBe(process.pid);
+      expect(adopted!.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
     } finally {
       swDb.close();
       arHooks.dispose?.();

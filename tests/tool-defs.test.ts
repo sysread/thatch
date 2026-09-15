@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { z } from "zod";
 import { ThatchDB } from "../src/db";
 import { saveConfig } from "../src/config";
@@ -894,9 +895,9 @@ describe("chat delivery model in tool output", () => {
 
   test("chat_list splits stale sessions into their own section", async () => {
     await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_split_oc", agent: "build" });
-    // A second session, backdated past the staleness window.
+    // A second session whose harness is gone: dead pid = instantly stale.
     await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_split_ghost", agent: "build" });
-    db.backdateChatSession("ses_split_ghost", new Date(Date.now() - 3600_000).toISOString());
+    new Database(dbPath).run("UPDATE chat_sessions SET host_pid = 999999999 WHERE session_id = 'ses_split_ghost'");
     const list = await findChatTool("chat_list").execute({}, ctx, { sessionID: "ses_split_oc", agent: "build" });
     expect(list).toContain("# Active Sessions");
     expect(list).toContain("# Stale Sessions");
@@ -918,7 +919,7 @@ describe("chat delivery model in tool output", () => {
     );
     expect(fresh).toContain("fresh");
     expect(fresh).toContain("will be woken");
-    db.backdateChatSession("ses_snd_to", new Date(Date.now() - 3600_000).toISOString());
+    new Database(dbPath).run("UPDATE chat_sessions SET host_pid = 999999999 WHERE session_id = 'ses_snd_to'");
     const stale = await findChatTool("chat_send").execute(
       { to: "ses_snd_to", body: "ping again" },
       ctx,

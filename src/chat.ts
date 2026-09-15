@@ -202,6 +202,13 @@ function defaultPidAlive(pid: number): boolean {
   }
 }
 
+/** Signal-0 probe: is this process alive on this machine? Exported for the
+ *  sweep's adoption pass (a dead owner's rows get claimed by a live
+ *  harness). */
+export function isPidAlive(pid: number): boolean {
+  return defaultPidAlive(pid);
+}
+
 export function chatLiveness(
   row: ChatSessionRow,
   opts?: { now?: number; pidAlive?: PidAlive },
@@ -604,12 +611,16 @@ export class ChatStore {
     ]);
   }
 
-  /** Backdates a session's last_seen to the session's own last activity
-   *  (used by the startup sweep: a swept session that has been idle for
-   *  days must not look like it just reported in, or the roster would show
-   *  a graveyard of live-looking rows). */
-  backdate(sessionID: string, iso: string): void {
-    this.#db.run("UPDATE chat_sessions SET last_seen = ? WHERE session_id = ?", [iso, sessionID]);
+  /** The directory rows this process owns: opencode sessions of one project
+   *  stamped with this host's pid. Ownership is the delivery and heartbeat
+   *  contract - the owning harness beats them fresh and delivers their
+   *  mail - so two harnesses on one project partition the roster instead of
+   *  double-waking. Dead owners' rows are adopted by a live harness's
+   *  sweep. */
+  ownedSessions(project: string, pid: number): ChatSessionRow[] {
+    return (this.#db
+      .query("SELECT session_id, name, topic, project, host_kind, registered_at, last_seen, worktree, host_pid FROM chat_sessions WHERE project = ? AND host_pid = ? ORDER BY name")
+      .all(project, pid) as any[]).map(rowFromSession);
   }
 
   /**
