@@ -90,53 +90,111 @@ function writeMcpConfig(path: string, thatchBin: string): void {
 // CLAUDE.md - append thatch instructions (idempotent)
 // ---------------------------------------------------------------------------
 
+/**
+ * Sentinel delimiters for the thatch instructions block. HTML comments, not
+ * prose: agents edit these files constantly (and normalize punctuation while
+ * they are in there), so any prose sentence used as a delimiter eventually
+ * stops matching and the block becomes un-updatable. Sentinels survive prose
+ * edits because they are not prose.
+ */
+export const THATCH_BEGIN = "<!-- thatch:begin -->";
+export const THATCH_END = "<!-- thatch:end -->";
+
+/**
+ * Legacy delimiters, used by installs before the sentinels: prose sentences
+ * from the instructions themselves. Detection-only - they exist so setup can
+ * find and migrate (or heal) pre-sentinel blocks. Do not write new blocks
+ * with them; any edit to the file's prose breaks the match.
+ */
 const THATCH_MARKER = "# Persistence\n\nThatch provides persistent memory across Claude Code sessions.";
 const THATCH_END_MARKER = '"Forget X" - `memory_recall` to find it, then `memory_forget`.';
 const CURSOR_MARKER = "# Persistence\n\nThatch provides persistent memory across Cursor sessions.";
 const CURSOR_END_MARKER = THATCH_END_MARKER;
 
 /**
- * Idempotently append (or replace) a block of instructions in a markdown file.
- * The block is delimited by startMarker and endMarker so re-running setup
- * updates drifted content without clobbering surrounding text.
+ * The instructions' last line (punctuation-insensitive tail test): the
+ * "heal" rule may only consume file tail when the corruption is the known
+ * kind - the legacy block running to EOF. Without this guard, a broken
+ * legacy block followed by unrelated user content would eat that content.
  */
+const INSTRUCTIONS_TAIL_SENTINEL = "memory_forget";
+
 function appendBlock(
   path: string,
   instructions: string,
-  startMarker: string,
-  endMarker: string,
+  legacyStartMarker: string,
+  legacyEndMarker: string,
 ): void {
-  if (existsSync(path)) {
-    const existing = readFileSync(path, "utf8");
-    if (existing.includes(startMarker)) {
-      const startIdx = existing.indexOf(startMarker);
-      if (startIdx >= 0) {
-        const endIdx = existing.indexOf(endMarker, startIdx);
-        if (endIdx >= 0) {
-          const afterEnd = endIdx + endMarker.length;
-          const updated = existing.slice(0, startIdx) + instructions.trimEnd() + existing.slice(afterEnd);
-          writeFileSync(path, updated);
-          return;
-        }
-      }
-      // Marker found but block boundaries didn't parse - leave it alone.
+  const block = `${THATCH_BEGIN}\n${instructions.trimEnd()}\n${THATCH_END}`;
+
+  if (!existsSync(path)) {
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, block + "\n");
+    return;
+  }
+
+  const existing = readFileSync(path, "utf8");
+
+  // Current format: replace between the sentinels.
+  if (existing.includes(THATCH_BEGIN)) {
+    const beginIdx = existing.indexOf(THATCH_BEGIN);
+    const endIdx = existing.indexOf(THATCH_END, beginIdx);
+    if (endIdx >= 0) {
+      const afterEnd = endIdx + THATCH_END.length;
+      writeFileSync(path, existing.slice(0, beginIdx) + block + existing.slice(afterEnd));
       return;
     }
-    // Append to existing file.
-    const sep = existing.endsWith("\n") ? "\n" : "\n\n";
-    writeFileSync(path, existing + sep + instructions);
-  } else {
-    mkdirSync(join(path, ".."), { recursive: true });
-    writeFileSync(path, instructions);
+    // Begin without end: the sentinel block itself was corrupted. Same heal
+    // rule as the legacy broken case below.
+    healBrokenBlock(path, existing, beginIdx, block);
+    return;
   }
+
+  // Legacy format: prose-sentence delimiters from a pre-sentinel install.
+  if (existing.includes(legacyStartMarker)) {
+    const startIdx = existing.indexOf(legacyStartMarker);
+    const endIdx = existing.indexOf(legacyEndMarker, startIdx);
+    if (endIdx >= 0) {
+      // Intact legacy block: swap the whole span for the sentinel block.
+      const afterEnd = endIdx + legacyEndMarker.length;
+      writeFileSync(path, existing.slice(0, startIdx) + block + existing.slice(afterEnd));
+      return;
+    }
+    // Broken legacy block (the observed corruption: an agent edit normalized
+    // the prose - hyphens became em dashes - so the end sentence no longer
+    // matches). Heal by replacing from the legacy start to EOF, but only
+    // when the tail is recognizably the instructions; otherwise leave it
+    // for manual repair.
+    healBrokenBlock(path, existing, startIdx, block);
+    return;
+  }
+
+  // No thatch block yet: append.
+  const sep = existing.endsWith("\n") ? "\n" : "\n\n";
+  writeFileSync(path, existing + sep + block + "\n");
+}
+
+/**
+ * Replaces everything from `startIdx` to EOF with the fresh sentinel block,
+ * but only when the corrupted tail is recognizably the thatch instructions
+ * (the tail test). Reports via return value so callers can surface a
+ * skipped heal; the file is left untouched when the guard does not pass.
+ */
+function healBrokenBlock(path: string, existing: string, startIdx: number, block: string): boolean {
+  const tail = existing.slice(startIdx).slice(-400);
+  if (!tail.includes(INSTRUCTIONS_TAIL_SENTINEL)) {
+    return false;
+  }
+  writeFileSync(path, existing.slice(0, startIdx) + block + "\n");
+  return true;
 }
 
 function appendInstructions(path: string): void {
-  appendBlock(path, claudeInstructions() + "\n", THATCH_MARKER, THATCH_END_MARKER);
+  appendBlock(path, claudeInstructions(), THATCH_MARKER, THATCH_END_MARKER);
 }
 
 function appendCursorInstructions(path: string): void {
-  appendBlock(path, cursorInstructions() + "\n", CURSOR_MARKER, CURSOR_END_MARKER);
+  appendBlock(path, cursorInstructions(), CURSOR_MARKER, CURSOR_END_MARKER);
 }
 
 // ---------------------------------------------------------------------------
@@ -578,12 +636,19 @@ export type SetupStatus =
 
 type FileCheck = "installed" | "absent" | "broken";
 
-function checkInstructionsFile(path: string, startMarker: string, endMarker: string): FileCheck {
+function checkInstructionsFile(path: string, legacyStartMarker: string, legacyEndMarker: string): FileCheck {
   if (!existsSync(path)) return "absent";
   const content = readFileSync(path, "utf8");
-  const startIdx = content.indexOf(startMarker);
+  // Current format: sentinel-delimited. Begin without end is the same
+  // corruption class as the legacy broken case.
+  const sentinelIdx = content.indexOf(THATCH_BEGIN);
+  if (sentinelIdx !== -1) {
+    return content.indexOf(THATCH_END, sentinelIdx) === -1 ? "broken" : "installed";
+  }
+  // Legacy format: prose-sentence delimiters.
+  const startIdx = content.indexOf(legacyStartMarker);
   if (startIdx === -1) return "absent";
-  const endIdx = content.indexOf(endMarker, startIdx);
+  const endIdx = content.indexOf(legacyEndMarker, startIdx);
   if (endIdx === -1) return "broken";
   return "installed";
 }

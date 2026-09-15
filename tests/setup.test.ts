@@ -1162,3 +1162,105 @@ describe("registerClaudeMcpServer", () => {
     expect(result.mcpAddCommand).toContain("claude mcp add --scope user thatch --");
   });
 });
+
+describe("instruction block sentinels", () => {
+  const BEGIN = "<!-- thatch:begin -->";
+  const END = "<!-- thatch:end -->";
+  const LEGACY_END = '"Forget X" - `memory_recall` to find it, then `memory_forget`.';
+
+  test("fresh install wraps instructions in sentinels", () => {
+    setupClaudeCode("/usr/bin/thatch", false, projectDir, fakeHome);
+    const md = readFileSync(join(projectDir, "CLAUDE.md"), "utf8");
+    expect(md).toContain(BEGIN);
+    expect(md).toContain(END);
+    expect(md.indexOf(BEGIN)).toBeLessThan(md.indexOf(END));
+    expect(md.match(/# Persistence/g)?.length).toBe(1);
+  });
+
+  test("re-run replaces the sentinel block instead of duplicating", () => {
+    setupClaudeCode("/usr/bin/thatch", false, projectDir, fakeHome);
+    setupClaudeCode("/usr/bin/thatch", false, projectDir, fakeHome);
+    setupClaudeCode("/usr/bin/thatch", false, projectDir, fakeHome);
+    const md = readFileSync(join(projectDir, "CLAUDE.md"), "utf8");
+    expect(md.match(/# Persistence/g)?.length).toBe(1);
+    expect(md.match(/<!-- thatch:begin -->/g)?.length).toBe(1);
+  });
+
+  test("content after the sentinel block survives a re-run", () => {
+    const path = join(projectDir, "CLAUDE.md");
+    setupClaudeCode("/usr/bin/thatch", false, projectDir, fakeHome);
+    writeFileSync(path, readFileSync(path, "utf8") + "\n## My own notes\n\nKeep me.\n");
+    setupClaudeCode("/usr/bin/thatch", false, projectDir, fakeHome);
+    const md = readFileSync(path, "utf8");
+    expect(md).toContain("## My own notes");
+    expect(md.indexOf("## My own notes")).toBeGreaterThan(md.indexOf(END));
+  });
+
+  test("intact legacy prose block migrates to sentinels", () => {
+    const path = join(projectDir, "CLAUDE.md");
+    writeFileSync(
+      path,
+      "# My project\n\nUser content up top.\n\n" +
+        "# Persistence\n\nThatch provides persistent memory across Claude Code sessions.\n\n" +
+        "...(instructions)...\n\n" +
+        LEGACY_END +
+        "\n\n## Appended later\n\nTail content.\n",
+    );
+    setupClaudeCode("/usr/bin/thatch", false, projectDir, fakeHome);
+    const md = readFileSync(path, "utf8");
+    expect(md).toContain("# My project");
+    expect(md).toContain("## Appended later");
+    expect(md).toContain(BEGIN);
+    expect(md).toContain(END);
+    expect(md.match(/# Persistence/g)?.length).toBe(1);
+    expect(md).not.toContain("...(instructions)...");
+  });
+
+  test("broken legacy block with instructions tail heals to sentinels", () => {
+    // The observed corruption: an agent edit normalized the prose - the
+    // end sentence's hyphen became an em dash - so the legacy end marker
+    // no longer matches. The instructions run to EOF, so the heal replaces
+    // from the legacy start marker to the end of the file.
+    const path = join(projectDir, "CLAUDE.md");
+    writeFileSync(
+      path,
+      "# My project\n\nUser content up top.\n\n" +
+        "# Persistence\n\nThatch provides persistent memory across Claude Code sessions.\n\n" +
+        "...(stale instructions)...\n\n" +
+        '"Forget X" \u2014 `memory_recall` to find it, then `memory_forget`.\n',
+    );
+    setupClaudeCode("/usr/bin/thatch", false, projectDir, fakeHome);
+    const md = readFileSync(path, "utf8");
+    expect(md).toContain("# My project");
+    expect(md).toContain(BEGIN);
+    expect(md).toContain(END);
+    expect(md).not.toContain("...(stale instructions)...");
+    expect(md).not.toContain("\u2014 `memory_recall`");
+  });
+
+  test("broken legacy block with foreign tail is left alone", () => {
+    const path = join(projectDir, "CLAUDE.md");
+    const before =
+      "# Persistence\n\nThatch provides persistent memory across Claude Code sessions.\n\nUnrelated user content that happens to follow.\n";
+    writeFileSync(path, before);
+    setupClaudeCode("/usr/bin/thatch", false, projectDir, fakeHome);
+    // The heal guard did not pass, so nothing was written...
+    expect(readFileSync(path, "utf8")).toBe(before);
+    // ...but the append path still ran (no legacy end, no sentinel start
+    // matched), wait - no: the legacy start IS present, so the append path
+    // is unreachable. The file must be untouched.
+    expect(readFileSync(path, "utf8")).not.toContain(BEGIN);
+  });
+
+  test("sentinel begin without end heals on re-run", () => {
+    const path = join(projectDir, "CLAUDE.md");
+    setupClaudeCode("/usr/bin/thatch", false, projectDir, fakeHome);
+    const truncated = readFileSync(path, "utf8").slice(0, readFileSync(path, "utf8").indexOf(END));
+    writeFileSync(path, truncated);
+    setupClaudeCode("/usr/bin/thatch", false, projectDir, fakeHome);
+    const md = readFileSync(path, "utf8");
+    expect(md).toContain(BEGIN);
+    expect(md).toContain(END);
+    expect(md.match(/<!-- thatch:begin -->/g)?.length).toBe(1);
+  });
+});

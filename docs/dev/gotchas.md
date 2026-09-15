@@ -176,3 +176,15 @@ here first. These are the things that have already cost time.
   discovered by bun on their own. UC-095 sat out of the suite for a release
   cycle and rotted (asserted 3 watch tools when 4 existed) because nobody
   noticed it never ran.
+
+## Instruction-block markers must be sentinels, not prose
+
+The thatch instructions block in `CLAUDE.md` / `AGENTS.md` is delimited by
+`<!-- thatch:begin -->` / `<!-- thatch:end -->` (src/setup.ts). Before
+September 2026 the delimiters were prose sentences from the instructions
+themselves - and agents edit those files. An editing agent normalized
+punctuation (hyphens to em dashes) in both of Jeff's instruction files, the
+prose end marker stopped matching, and setup could never update the block
+again while `checkSetup` reported `markers-broken` on every session. Rule:
+never use file content as its own delimiter; agents will reword it. The
+legacy-prose detection constants exist only to migrate old installs.

@@ -128,9 +128,15 @@ Differences from Claude Code:
 
 All setup operations are idempotent:
 
-- **Instructions**: `appendBlock` searches for start/end markers and replaces
-  the block between them, so re-running setup updates drifted content without
-  clobbering surrounding text. No marker found → append.
+- **Instructions**: `appendBlock` wraps the block in sentinel comments
+  (`<!-- thatch:begin -->` / `<!-- thatch:end -->`) and replaces the block
+  between them, so re-running setup updates drifted content without
+  clobbering surrounding text. No marker found → append. Pre-sentinel
+  installs used prose sentences from the instructions themselves as
+  delimiters; `appendBlock` migrates intact legacy blocks and heals the
+  broken kind (an agent edit normalizing punctuation - hyphens to em
+  dashes - breaks the prose end marker) when the file tail still looks
+  like the instructions; anything else is left for manual repair.
 - **Hooks**: `replaceThatchHooks` / `replaceCursorThatchHooks` filter out any
   hook group whose command contains `thatch`, then add the current ones. A
   legacy `thatch echo` hook is replaced with `flush-tools`. Non-thatch hooks are

@@ -126,7 +126,42 @@ Design call, not a bug fix. Options, cheapest first:
 
 Recommendation: option 1 now, revisit if a real multi-tenant use appears.
 
-### Step 5: close out
+### Step 4.6: Claude Code live test results (Sep 15)
+
+PASSED, with one new finding:
+
+- Identity anchor works: SessionStart registers before any prompt (the
+  stdin change), and the hook line holds the same name across prompts.
+- Prompt-time delivery works: mail sent mid-turn surfaced in the
+  UserPromptSubmit hook line; the model read it via
+  `mcp__thatch__chat_read` and replied back to opencode.
+- **Claude Code defers MCP tool schemas**: the model had to
+  `ToolSearch "select:mcp__thatch__chat_read"` before its first
+  `chat_read`. First tool use costs a ToolSearch round-trip. Doc as a
+  gotcha; nothing to fix.
+- **Session continuation forks the identity.** Between two prompts in
+  the same TUI, with no user restart, Claude Code continued the
+  conversation into a new session id (old transcript records
+  `continued-in: <new-id>`). The chat identity anchors to the session
+  id, so the conversation got a new name and the pre-fork mailbox was
+  stranded (unread forever). Suspected trigger: setup rewrites
+  (`settings.json` / `~/.claude.json`) while the session runs; Claude
+  Code may also fork on its own (resume, update). Same thing will
+  happen on `claude -c` after a terminal close.
+
+Design follow-ups (new steps):
+
+- **Fork-stable identity.** The fork transcript carries the same
+  `prompt_id` across the continuation. If hook payloads expose
+  `prompt_id` (v2.1.196+) and it is stable across forks, anchor the
+  Claude identity on `prompt_id` instead of `session_id`; else follow
+  the `continued-in` chain at registration time. Verify with
+  `THATCH_DEBUG=hook` payloads across a forced fork.
+- **Stranded-mail sweep.** Mail addressed to a forked-away identity
+  should follow the continuation chain (or surface in the successor's
+  hook line) instead of waiting for a week-long prune.
+
+## Step 5: close out
 
 - Run `mise run check` (typecheck, tests, markdownlint).
 - Fold anything learned in step 2 into the audit memory.
