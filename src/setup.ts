@@ -211,6 +211,7 @@ interface SettingsJson {
     SessionStart?: { hooks: HookEntry[] }[];
     PostToolBatch?: { hooks: HookEntry[] }[];
     UserPromptSubmit?: { hooks: HookEntry[] }[];
+    Stop?: { hooks: HookEntry[] }[];
   };
   [key: string]: any;
 }
@@ -236,6 +237,12 @@ function writeHooks(path: string, thatchBin: string): void {
   // falls back to the static write-nudge. Either output is transcript-visible
   // since UserPromptSubmit adds stdout to context.
   const flushCmd = `${thatchBin} flush-tools`;
+  // Stop fires when the agent turn ends. chat-notify emits a Stop-hook
+  // additionalContext reminder when chat mail is unread - the turn
+  // continues so the model can read its mail, the Claude Code analog of
+  // opencode's poller wake. The host's loop protections (stop_hook_active,
+  // the 8-consecutive cap) plus the delivered stamp bound repeats.
+  const notifyCmd = `${thatchBin} chat-notify`;
 
   settings.hooks.SessionStart = replaceThatchHooks(
     settings.hooks.SessionStart ?? [],
@@ -248,6 +255,10 @@ function writeHooks(path: string, thatchBin: string): void {
   settings.hooks.UserPromptSubmit = replaceThatchHooks(
     settings.hooks.UserPromptSubmit ?? [],
     flushCmd,
+  );
+  settings.hooks.Stop = replaceThatchHooks(
+    settings.hooks.Stop ?? [],
+    notifyCmd,
   );
 
   mkdirSync(join(path, ".."), { recursive: true });

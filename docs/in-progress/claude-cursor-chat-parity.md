@@ -163,12 +163,20 @@ Design follow-ups (new steps):
   was read at the next prompt.
 - **Stranded-mail sweep: subsumed by adoption.** Mail follows the
   identity when the conversation continues; no sweep needed.
-- **Claude Stop hook (post-turn wake): designed, not built.** Claude's
-  Stop contract: `decision: "block"` + `reason` prevents stopping and
-  feeds the reason back - a real wake. Guard: block at most once per
-  mail batch (the delivered stamp / re-nudge window already bounds it),
-  so an agent that ignores mail is never trapped. `StopFailure` is
-  inert. Build when wanted; Cursor already has the equivalent.
+- **Claude Stop hook (post-turn wake): LANDED (Sep 15), live test
+  pending.** `chat-notify` now serves both hosts, discriminating by
+  payload shape (Claude sends `session_id`, Cursor `conversation_id`).
+  Claude's wake is `hookSpecificOutput.additionalContext` on Stop - the
+  turn continues so the model reads its mail, rendered as hook feedback
+  rather than a hook error (chosen over `decision: "block"`, which
+  renders as a hook error for the same effect). Guards: emit nothing
+  when `stop_hook_active` is set (a continuation is already in flight),
+  when `background_tasks` is non-empty (the session is paused on
+  background work; the wake lands when that work's turn ends - avoids
+  the mid-turn injection incident class), and the delivered stamp bounds
+  repeats within the re-nudge window. `setup --claude` writes the Stop
+  hook. `SessionStart` needed no new code: the reminder already announces
+  mail on startup and resume (live-verified).
 
 ## Step 5: close out
 

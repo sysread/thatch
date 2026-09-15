@@ -1066,33 +1066,58 @@ switch (command) {
   }
 
   case "chat-notify": {
-    // Cursor stop hook: the post-turn chat wake. Fires when the agent loop
-    // ends; when the conversation has unread chat mail, emits
-    // { followup_message }, which Cursor auto-submits as the next user
-    // message - the MCP analog of opencode's poller wake. Pointer-only:
+    // Stop hook for BOTH MCP hosts; the payload shape tells them apart:
+    // Claude Code sends session_id (+ stop_hook_active, background_tasks),
+    // Cursor sends conversation_id (+ status, loop_count).
+    //
+    // Output shapes: Cursor consumes { followup_message } (auto-submitted
+    // as the next user message); Claude Code consumes hookSpecificOutput.
+    // additionalContext on Stop - a reminder that continues the turn,
+    // rendered as hook feedback rather than a hook error. Pointer-only:
     // sender names and a count, never bodies (bodies flow only through
-    // the framed chat_read). The follow-up text carries the system-
-    // notification framing because Cursor submits it as user input.
-    // Only fires on status "completed": auto-continuing an aborted or
-    // errored turn would fight the user's stop key.
+    // the framed chat_read). The nudge text carries the system-
+    // notification framing because a follow-up arrives as user input.
     try {
       const hookInput = await readHookInput("chat-notify");
       if (!chatEnabled(loadConfig(dbPath).config)) {
         console.log("{}");
         break;
       }
-      const status = hookInput?.status as string | undefined;
-      const sessionID =
-        (hookInput?.conversation_id as string | undefined) ?? (hookInput?.session_id as string | undefined);
-      if (!sessionID || status !== "completed") {
+      const claudeID = typeof hookInput?.session_id === "string" && hookInput.session_id ? String(hookInput.session_id) : null;
+      const cursorID = typeof hookInput?.conversation_id === "string" && hookInput.conversation_id ? String(hookInput.conversation_id) : null;
+
+      // Host-specific loop guards.
+      if (claudeID) {
+        // Never fight the host's loop protections: a stop-hook continuation
+        // already in flight ends the turn, and a session paused on
+        // background work gets its wake when that work's turn ends -
+        // injecting now would interject mid-flight (the mid-turn injection
+        // incident class).
+        if (hookInput?.stop_hook_active === true) {
+          console.log("{}");
+          break;
+        }
+        if (Array.isArray(hookInput?.background_tasks) && hookInput.background_tasks.length > 0) {
+          console.log("{}");
+          break;
+        }
+      } else if (cursorID) {
+        // Cursor: never auto-continue an aborted or errored turn (the
+        // user's stop key wins).
+        if (hookInput?.status !== "completed") {
+          console.log("{}");
+          break;
+        }
+      } else {
         console.log("{}");
         break;
       }
+
       // Lookup, not ensure-register: registration exists by the time stop
       // fires (the prompt hooks anchored the conversation), and minting
       // rows from contexts we do not understand is how the throwaway
       // sessionStart identities happened.
-      const anchor = mcpSessionID(sessionID);
+      const anchor = mcpSessionID(claudeID ?? cursorID!);
       if (!db.findChatSession(anchor)) {
         console.log("{}");
         break;
@@ -1107,8 +1132,17 @@ switch (command) {
       const senders = [
         ...new Set(pending.map((m) => renderChatParticipant(m.from_name, m.from_session))),
       ];
+      // Stamp before emitting: the re-nudge window (not the model's
+      // obedience) bounds repeats when the mail goes ignored.
       db.markChatDelivered(pending.map((m) => m.id));
-      console.log(JSON.stringify({ followup_message: chatNotificationNudge(senders, pending.length) }));
+      const nudge = chatNotificationNudge(senders, pending.length);
+      console.log(
+        JSON.stringify(
+          claudeID
+            ? { hookSpecificOutput: { hookEventName: "Stop", additionalContext: nudge } }
+            : { followup_message: nudge },
+        ),
+      );
     } catch (err) {
       console.error(`[thatch chat-notify] failed: ${err}`);
       console.log("{}");

@@ -317,7 +317,7 @@ wake analog is the existing hook channel.
 | Host        | Send/receive | New-mail signal                                        | Echo bubbles |
 |-------------|--------------|--------------------------------------------------------|--------------|
 | opencode    | yes          | promptAsync wake (idle-gated)                          | yes          |
-| claude code | yes          | flush-tools hook line                                  | no           |
+| claude code | yes          | Stop-hook reminder at turn end + flush-tools hook line | no           |
 | cursor      | yes          | flush-tools hook line + chat-notify follow-up at turn end | no        |
 
 MCP identity is anchored by the host hook: `chatHookLine(sessionID)` in

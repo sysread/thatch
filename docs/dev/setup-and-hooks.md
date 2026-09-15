@@ -63,7 +63,8 @@ project and every contributor gets them).
   "hooks": {
     "SessionStart":     { "hooks": [{ "type": "command", "command": "<bin> reminder" }] },
     "PostToolBatch":    { "hooks": [{ "type": "command", "command": "<bin> buffer-batch" }] },
-    "UserPromptSubmit": { "hooks": [{ "type": "command", "command": "<bin> flush-tools" }] }
+    "UserPromptSubmit": { "hooks": [{ "type": "command", "command": "<bin> flush-tools" }] },
+    "Stop":             { "hooks": [{ "type": "command", "command": "<bin> chat-notify" }] }
   }
 }
 ```
@@ -73,6 +74,7 @@ project and every contributor gets them).
 | `SessionStart` | `thatch reminder` | plain text to stdout (becomes context) | Recall instructions + hygiene heartbeat + chat identity/mail line (reads the hook's stdin `session_id`) |
 | `PostToolBatch` | `thatch buffer-batch` | **silent** (no stdout) | Appends a batch of tool calls to the file-backed JSONL queue |
 | `UserPromptSubmit` | `thatch flush-tools` | nudge text to stdout | Peeks queue (extraction nudge), else fires recall, prediction, and behavior nudges via sideband in parallel, else write nudge |
+| `Stop` | `thatch chat-notify` | `{ hookSpecificOutput: { additionalContext } }` when chat mail is unread, else `{}` | Post-turn chat wake: the turn continues so the model reads its mail (Claude Code's analog of opencode's poller wake); host loop protections (`stop_hook_active`, 8-consecutive cap) plus the delivered stamp bound repeats |
 
 `PostToolBatch` is silent so the agent loop is not delayed; the buffered
 content is invisible until `UserPromptSubmit` peeks it.
