@@ -245,6 +245,11 @@ export const server: Plugin = async ({ client, worktree }) => {
   if (chatOn && chatAutoRegister(loadConfig(dbPath).config)) {
     void (async () => {
       try {
+        // Feature-detect: an older opencode client may not expose
+        // session.list. The sweep is best-effort (idle registration still
+        // covers those sessions), so an absent method skips silently
+        // instead of logging an error on every startup.
+        if (typeof client.session?.list !== "function") return;
         const { data } = await client.session.list();
         const cutoff = Date.now() - 48 * 3_600_000;
         for (const s of data ?? []) {

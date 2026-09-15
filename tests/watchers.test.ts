@@ -1072,12 +1072,14 @@ describe("poll resilience", () => {
       const line = out.split("\n").find((l) => l.startsWith("{"));
       expect(line).toBeDefined();
       const parsed = JSON.parse(line!);
-      // The abandonment path fires before the exit-code branch - the orphaned
-      // sleeper holds the pipe, so the message is the timeout, not "exit 1".
-      expect(parsed.msg).toMatch(/timed out/);
-      expect(parsed.msg).toMatch(/orphaned child holding the output pipe/);
-      // 500ms kill + 2s grace; generous slack for CI.
+      // The load-bearing contract: the call rejects PROMPTLY instead of
+      // hanging until the sleeper exits 30s later. Which error lands is
+      // Bun's coin flip - the drain may see EOF right after the kill
+      // (Bun closes the pipe: "failed (exit 137)") or the abandonment
+      // deadline may win (the orphaned-child timeout message) - both
+      // reject cleanly and neither is a hang.
       expect(parsed.ms).toBeLessThan(15_000);
+      expect(parsed.msg).toMatch(/timed out|failed \(exit/);
     } finally {
       rmSync(binDir, { recursive: true, force: true });
     }
