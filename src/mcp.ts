@@ -6,6 +6,8 @@ import { BgeEmbeddingModel } from "./embeddings";
 import { detectRepo } from "./git";
 import { checkSetup, setupClaudeCode, setupCursor } from "./setup";
 import { TOOL_DEFS, type CoreContext, type ToolDef } from "./tool-defs";
+import { actionDefs, type ActionDef } from "./commands";
+import { mcpToolName } from "./prompts";
 import { SidebandServer, sidebandSocketPath } from "./sideband";
 import { peekQueue, consumeQueue, resetMissedCount } from "./extract-queue";
 import { buildExtractionPayload } from "./extraction";
@@ -44,11 +46,13 @@ const SERVER_NAME = "thatch";
 const SERVER_VERSION = pkg.version;
 
 /**
- * MCP capabilities declared in the initialize response. Thatch is a tools-only
- * server - no resources, prompts, or subscriptions.
+ * MCP capabilities declared in the initialize response. Tools plus the
+ * prompts that Cursor surfaces as slash commands; no resources or
+ * subscriptions.
  */
 const CAPABILITIES = {
   tools: { listChanged: false },
+  prompts: { listChanged: false },
 };
 
 // ---------------------------------------------------------------------------
@@ -73,6 +77,25 @@ export function compileTools(): Map<string, CompiledTool> {
       validator: (input: unknown) => schema.parse(input) as Record<string, unknown>,
       inputSchema: z.toJSONSchema(schema) as Record<string, unknown>,
     });
+  }
+  return map;
+}
+
+// ---------------------------------------------------------------------------
+// Prompt index - the on-demand actions Cursor surfaces as slash commands
+// ---------------------------------------------------------------------------
+
+/**
+ * The prompts the MCP server exposes: the shared actions minus the
+ * opencode-only ones. Prompts render the same instruction bodies as the
+ * command files (src/commands.ts) without the $ARGUMENTS section - the
+ * optional focus argument stands in for it.
+ */
+export function compilePrompts(): Map<string, ActionDef> {
+  const map = new Map<string, ActionDef>();
+  for (const def of actionDefs(mcpToolName)) {
+    if (def.opencodeOnly) continue;
+    map.set(def.name, def);
   }
   return map;
 }
@@ -152,6 +175,7 @@ export async function runMcpServer(): Promise<void> {
     },
   };
   const tools = compileTools();
+  const prompts = compilePrompts();
 
   // Check whether `thatch setup` was run for the current host. If not, or if
   // markers are broken, surface a warning on the first tools/call response so
@@ -248,7 +272,7 @@ export async function runMcpServer(): Promise<void> {
 
       // Notifications (no id) are fire-and-forget - no response expected.
       const isNotification = req.id === null || req.id === undefined;
-      const res = await dispatch(req, tools, ctx);
+      const res = await dispatch(req, tools, prompts, ctx);
       if (res === null || isNotification) continue;
 
       // Surface the setup warning on the first tools/call response so the
@@ -290,6 +314,7 @@ export async function runMcpServer(): Promise<void> {
 async function dispatch(
   req: JsonRpcRequest,
   tools: Map<string, CompiledTool>,
+  prompts: Map<string, ActionDef>,
   ctx: CoreContext,
 ): Promise<JsonRpcResponse | null> {
   const { id, method } = req;
@@ -353,6 +378,40 @@ async function dispatch(
             content: [{ type: "text", text: `Tool error: ${err?.message ?? err}` }],
           });
         }
+      }
+
+      case "prompts/list":
+        return ok(id, {
+          prompts: [...prompts.values()].map((p) => ({
+            name: p.name,
+            description: p.description,
+            arguments: [
+              {
+                name: "focus",
+                description: "Optional scope for the action, e.g. which store to work on",
+                required: false,
+              },
+            ],
+          })),
+        });
+
+      case "prompts/get": {
+        const prompt = prompts.get(req.params?.name);
+        if (!prompt) {
+          return {
+            jsonrpc: "2.0",
+            id,
+            error: { code: METHOD_NOT_FOUND, message: `Unknown prompt: ${req.params?.name}` },
+          };
+        }
+        const focus = req.params?.arguments?.focus;
+        const text = focus
+          ? `${prompt.body}\n\nFocus: ${focus}`
+          : prompt.body;
+        return ok(id, {
+          description: prompt.description,
+          messages: [{ role: "user", content: { type: "text", text } }],
+        });
       }
 
       case "ping":

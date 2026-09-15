@@ -620,6 +620,59 @@ export function versionWarningNudge(message: string): string {
   return `[thatch] ${message} This is a system nudge, not user input. After informing the user, continue with their request.`;
 }
 
+// ---------------------------------------------------------------------------
+// Prompt cores - behavior instruction bodies shared by nudges and /thatch
+// command files (src/commands.ts). A core is the host-agnostic instruction
+// body for one behavior. The nudge envelope adds escalation tiers and the
+// stop-and-wait ending; the command envelope adds frontmatter and the
+// user-message section. The stop-and-wait ending is nudge-only: a /thatch
+// command IS user input, so it must not inherit it.
+//
+// Cores take a ToolNamer because tool spellings differ per host
+// (thatch_find_duplicates on opencode, mcp__thatch__find_duplicates on MCP
+// hosts); the renderer for each host passes its own namer.
+// ---------------------------------------------------------------------------
+
+/** Maps a bare tool name to the host's spelling. */
+export type ToolNamer = (name: string) => string;
+
+export const opencodeToolName: ToolNamer = (name) => `thatch_${name}`;
+export const mcpToolName: ToolNamer = (name) => `mcp__thatch__${name}`;
+
+/**
+ * The extraction instruction body. sessionIdArg is either ` with session_id
+ * "X"` (the nudge path: the sub-agent's session differs from the parent's)
+ * or an omit note (the invoking session's ID is the default).
+ */
+export function extractionCore(fetchTool: string, drainTool: string, sessionIdArg: string): string {
+  return `Call ${fetchTool}${sessionIdArg} to retrieve the queued tool interactions, then run the thatch-fact-extractor skill to extract durable facts. Call ${drainTool}${sessionIdArg} when finished, even if nothing was worth saving.`;
+}
+
+/**
+ * The memory consolidation (defrag) instruction body. Shared by the
+ * /thatch/defrag command file and the MCP prompt of the same name.
+ */
+export function defragCore(tool: ToolNamer): string {
+  return `Run ${tool("find_duplicates")} to surface duplicate-candidate memory pairs and clusters. For each pair or cluster, read every memory with ${tool("memory_show")}, classify the relationship, and consolidate per the thatch-dedup-classifier skill: merge duplicates (${tool("memory_remember")} with overwrite: true, then ${tool("memory_forget")} the rest), update supplements, keep contradictions, and call ${tool("dedup_mark_checked")} on every pair you are not deleting so it stops being re-reported. Call ${tool("find_duplicates")} again at the end to verify the store is clean, and summarize what you merged, kept, and deleted.`;
+}
+
+/**
+ * The memory hygiene instruction body. Shared by the /thatch/hygiene command
+ * file and the MCP prompt of the same name. Drives the thatch CLI (not
+ * memory tools), so it needs no tool namer.
+ */
+export function hygieneCore(): string {
+  return `Run the shell command "thatch hygiene" to print the hygiene report for the current repo store. It lists duplicate-candidate pairs pending review, memories gone stale, and memories scoped to deleted branches. For each finding, act: consolidate duplicates with the thatch-dedup-classifier workflow, correct or overwrite stale memories that are simply out of date, and consolidate branch-scoped memories into one archived record when their branch is gone. Ask the user before forgetting anything that may still matter. Re-run "thatch hygiene" at the end to confirm the store is healthy, and summarize what you changed.`;
+}
+
+/**
+ * The session reflection instruction body. Shared by the /thatch/reflect
+ * command file and the MCP prompt of the same name.
+ */
+export function reflectCore(tool: ToolNamer): string {
+  return `Run the thatch-session-reflection skill to persist what this session learned: follow the skill's instructions and record each distinct learning with ${tool("memory_remember")}. When the skill's checklist is worked through, report a one-line summary of what you saved.`;
+}
+
 /**
  * Extraction nudge with escalation. Both the opencode plugin (src/index.ts)
  * and the Claude Code/Cursor CLI (bin/thatch flush-tools) call this with
@@ -682,7 +735,8 @@ function buildExtractionNudge(
   sessionID: string,
 ): string {
   const acknowledge = `After dispatching, call ${drainTool} to acknowledge.`;
-  const subAgentPrompt = `Call ${fetchTool} with session_id "${sessionID}" to retrieve the queued tool interactions, then run the thatch-fact-extractor skill to extract durable facts. Call ${drainTool} with session_id "${sessionID}" when finished, even if nothing was worth saving.`;
+  const sessionIdArg = ` with session_id "${sessionID}"`;
+  const subAgentPrompt = extractionCore(fetchTool, drainTool, sessionIdArg);
 
   if (missedCount >= 3) {
     return `[thatch] YOU ARE IGNORING EXTRACTION INSTRUCTIONS. ` +

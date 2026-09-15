@@ -84,8 +84,11 @@ goal; format differences are documented, not hidden.
   (project scope), with the same `$ARGUMENTS` substitution. The sync lives in
   `setup.ts` alongside the existing installers and follows their patterns:
   idempotent content-compare like `installSkills`, both global and local
-  scopes, and a `checkSetup` entry so a missing or stale command file shows up
-  in the MCP server's startup warning. Differences: no plugin, so no
+  scopes, reported in the setup output next to the skills report.
+  (Deviation from the draft below: no `checkSetup` entry. That function
+  answers one question - "is thatch set up at all" - and command files
+  self-heal on every setup run, so flagging their absence as a startup
+  warning would be noise.) Differences: no plugin, so no
   `command.execute.before` arming -- greenlight-token wrap-up commands do not
   ship to Claude Code; and tool names use the `mcp__thatch__` prefix. MCP
   hosts do have hooks now (session-start reminders, chat-wake stop hooks), so

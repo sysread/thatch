@@ -19,6 +19,7 @@ This README is the overview. Each feature has its own guide:
 - [default-behaviors.md](default-behaviors.md): what ships automatically
 - [hygiene.md](hygiene.md): store maintenance signals
 - [deduplication.md](deduplication.md): duplicate detection and resolution
+- [commands.md](commands.md): `/thatch/*` slash commands (on-demand actions and wrap-ups)
 - [skills.md](skills.md): structured workflow skills
 - [code-review.md](code-review.md): multi-agent code review pipeline
 - [setup.md](setup.md): installation and configuration
@@ -242,7 +243,10 @@ Beyond the tools, thatch hooks into opencode itself:
   agent listed, and you re-run the command once they're handled. Text typed
   after the command reaches the agent first, labeled as a `User Message`
   section ahead of the checklist (say goodbye or hand off context:
-  `/thatch/exit Good work - see you tomorrow`).
+  `/thatch/exit Good work - see you tomorrow`). Alongside the wrap-ups,
+  on-demand actions (`/thatch/defrag`, `/thatch/extract`, `/thatch/hygiene`,
+  `/thatch/reflect`) run the memory-maintenance behaviors whenever you want,
+  not just when a nudge fires -- see [commands.md](commands.md).
   A greenlit `/thatch/exit` also unregisters the session from the chat
   directory, so other sessions stop sending it mail. The commands
   self-install into `~/.config/opencode/command/thatch/` at plugin startup;

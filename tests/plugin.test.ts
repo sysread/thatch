@@ -2121,17 +2121,16 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
 });
 
 describe("installOpencodeCommands", () => {
-  test("writes both command files and is idempotent", async () => {
+  test("writes the wrap-up and action command files and is idempotent", async () => {
     const { installOpencodeCommands } = await import("../src/commands");
     const home = mkdtempSync(join(tmpdir(), "thatch-cmds-"));
     try {
       const first = installOpencodeCommands(home);
-      expect(first).toHaveLength(2);
+      const names = first.map((p) => p.split("/").pop()!.replace(/\.md$/, "")).sort();
+      expect(names).toEqual(["compact", "defrag", "exit", "extract", "hygiene", "reflect"]);
       const compact = readFileSync(join(first[0]!), "utf8");
       expect(compact).toContain("description:");
       expect(compact).toContain("THATCH_COMPACT_READY");
-      const exit = readFileSync(join(first[1]!), "utf8");
-      expect(exit).toContain("THATCH_EXIT_READY");
       // Re-run: everything current, nothing rewritten.
       expect(installOpencodeCommands(home)).toEqual([]);
     } finally {
@@ -2147,22 +2146,24 @@ describe("installOpencodeCommands", () => {
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, "compact.md"), "stale content");
       const written = installOpencodeCommands(home);
-      // compact.md was stale (rewritten) and exit.md was missing (created).
-      expect(written).toEqual([join(dir, "compact.md"), join(dir, "exit.md")]);
+      // compact.md was stale (rewritten); everything else was missing (created).
+      expect(written).toContain(join(dir, "compact.md"));
+      expect(written).toContain(join(dir, "defrag.md"));
       expect(readFileSync(join(dir, "compact.md"), "utf8")).toContain("THATCH_COMPACT_READY");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });
 
-  test("command bodies label the sections: user text first, then the checklist", async () => {
+  test("wrap-up command bodies label the sections: user text first, then the checklist", async () => {
     // opencode replaces $ARGUMENTS with the text typed after the command
     // (/thatch/exit thanks! -> "thanks!" in the User Message section), and
     // with no argument the section renders empty. The header labels are
     // load-bearing: without them the user's text dangles after the
     // checklist and reads like a sign-off addressed at the instructions.
     const { opencodeCommandDefs } = await import("../src/commands");
-    for (const def of opencodeCommandDefs()) {
+    const wrapUps = opencodeCommandDefs().filter((d) => d.name === "compact" || d.name === "exit");
+    for (const def of wrapUps) {
       const body = def.content.slice(def.content.indexOf("---", 3) + 3);
       expect(body.trimStart()).toMatch(/^# User Message\n\n\$ARGUMENTS\n\n\(That section carries/);
       expect(body).toContain(`# Pre-${def.name === "compact" ? "compact" : "exit"} wrap-up`);
@@ -2170,5 +2171,70 @@ describe("installOpencodeCommands", () => {
     }
     const exit = opencodeCommandDefs().find((d) => d.name === "exit")!;
     expect(exit.content).toContain("chat_unregister");
+  });
+});
+
+describe("action commands", () => {
+  test("each action file carries its core body and the user message section", async () => {
+    const { opencodeCommandDefs, actionDefs } = await import("../src/commands");
+    const defs = opencodeCommandDefs().filter((d) => !["compact", "exit"].includes(d.name));
+    const actions = actionDefs((n) => `thatch_${n}`);
+    expect(defs.map((d) => d.name)).toEqual(actions.map((a) => a.name));
+    for (const def of defs) {
+      expect(def.content).toContain("description:");
+      expect(def.content).toContain("$ARGUMENTS");
+      // The core body must survive rendering verbatim, so a wording change
+      // in prompts.ts cannot silently miss the command file.
+      const action = actions.find((a) => a.name === def.name)!;
+      expect(def.content).toContain(action.body);
+    }
+  });
+
+  test("extract action fetches by explicit session id learned from get_session_info", async () => {
+    const { opencodeCommandDefs } = await import("../src/commands");
+    const extract = opencodeCommandDefs().find((d) => d.name === "extract")!;
+    expect(extract.content).toContain("thatch_get_session_info");
+    expect(extract.content).toContain('session_id \\"SESSION_ID\\"');
+    expect(extract.content).toContain("thatch_extraction_done");
+  });
+
+  test("Claude Code command set drops wrap-ups and the opencode-only extract action", async () => {
+    const { claudeCommandDefs } = await import("../src/commands");
+    const names = claudeCommandDefs().map((d) => d.name).sort();
+    expect(names).toEqual(["defrag", "hygiene", "reflect"]);
+    for (const def of claudeCommandDefs()) {
+      // Tool spelling follows the host. Hygiene drives the thatch CLI and
+      // names no memory tools, so it is exempt from the MCP spelling check.
+      if (def.name !== "hygiene") {
+        expect(def.content).toMatch(/mcp__thatch__/);
+        expect(def.content).not.toContain("thatch_find_duplicates");
+      }
+    }
+  });
+
+  test("installClaudeCommands writes under commands/thatch and is idempotent", async () => {
+    const { installClaudeCommands } = await import("../src/commands");
+    const claudeDir = mkdtempSync(join(tmpdir(), "thatch-claude-cmds-"));
+    try {
+      const first = installClaudeCommands(claudeDir);
+      expect(first).toHaveLength(3);
+      expect(first[0]).toContain(join("commands", "thatch"));
+      expect(installClaudeCommands(claudeDir)).toEqual([]);
+    } finally {
+      rmSync(claudeDir, { recursive: true, force: true });
+    }
+  });
+
+  test("host command sets are the same actions minus documented exclusions", async () => {
+    const { opencodeCommandDefs, claudeCommandDefs } = await import("../src/commands");
+    const { compilePrompts } = await import("../src/mcp");
+    const opencodeNames = opencodeCommandDefs().map((d) => d.name).sort();
+    const claudeNames = claudeCommandDefs().map((d) => d.name).sort();
+    const promptNames = [...compilePrompts().keys()].sort();
+    // Claude Code gets the shared actions only; opencode adds the wrap-ups
+    // (needs plugin arming) and extract (needs session identity).
+    expect(opencodeNames.sort()).toEqual([...claudeNames, "compact", "exit", "extract"].sort());
+    // MCP prompts match Claude Code's set: same shared actions, same bodies.
+    expect(promptNames).toEqual(claudeNames);
   });
 });

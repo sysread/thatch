@@ -197,6 +197,11 @@ continues working while the child extracts.
 - **opencode**: peeks accepted + pending interactions, builds JSON via
   `buildExtractionPayload`
 - **MCP**: peeks the file-backed queue, builds the same JSON payload
+- `session_id` is optional: omitted, it resolves to the invoking session
+  via `HostToolContext.sessionID` (opencode path). On MCP hosts there is no
+  session context, so an omitted `session_id` returns a "pass the parent
+  session's session_id" error. Explicit IDs always win - that is how a
+  sub-agent drains the parent's queue
 - Returns `null` when no interactions are queued
 - Read-only — it peeks the queue; it does not consume it. Consumption is
   `extraction_done`'s job

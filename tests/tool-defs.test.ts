@@ -1047,3 +1047,39 @@ describe("chat config toggle", () => {
     expect(read).toContain("autoRegister:");
   });
 });
+
+describe("get_extraction_payload session_id", () => {
+  // ctx is rebuilt per test in beforeEach, so the payload provider must be
+  // attached inside each test rather than captured at module load.
+  const providerCalls: string[] = [];
+  const payloadCtx = (): CoreContext => ({
+    ...ctx,
+    extractionPayloadProvider: (sessionID: string) => {
+      providerCalls.push(sessionID);
+      return "payload-json";
+    },
+  });
+  const def = TOOL_DEFS.find((t) => t.name === "get_extraction_payload")!;
+
+  test("an omitted session_id falls back to the invoking session's host context", async () => {
+    providerCalls.length = 0;
+    const out = await def.execute({}, payloadCtx(), { sessionID: "ses_current", agent: "build" });
+    expect(out).toBe("payload-json");
+    expect(providerCalls).toEqual(["ses_current"]);
+  });
+
+  test("an explicit session_id wins over the host context (sub-agent drains the parent's queue)", async () => {
+    providerCalls.length = 0;
+    const out = await def.execute({ session_id: "ses_parent" }, payloadCtx(), { sessionID: "ses_current", agent: "build" });
+    expect(out).toBe("payload-json");
+    expect(providerCalls).toEqual(["ses_parent"]);
+  });
+
+  test("an omitted session_id without host context returns the pass-the-parent-id rule", async () => {
+    // MCP hosts have no session concept, so there is nothing to fall back
+    // to. The message must tell the model what to do, not just fail.
+    const out = await def.execute({}, payloadCtx(), undefined);
+    expect(out).toContain("session_id is required");
+    expect(out).toContain("parent");
+  });
+});

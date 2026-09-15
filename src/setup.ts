@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { claudeInstructions, cursorInstructions } from "./prompts";
 import { installSkills, type InstallReport } from "./skills";
+import { installClaudeCommands } from "./commands";
 
 // ---------------------------------------------------------------------------
 // Path resolution
@@ -320,6 +321,8 @@ export interface SetupResult {
   settings: string;
   /** Skill install report for the directory this run wrote to. */
   skills: InstallReport;
+  /** Command files (the /thatch/* actions) written by this run, if any. */
+  commands: string[];
   /** Thatch skills in the opposite scope's dir, if any; never written by this run. */
   otherScopeSkills: OtherScopeSkills | null;
   global: boolean;
@@ -360,6 +363,11 @@ export function setupClaudeCode(
   writeHooks(paths.settingsPath, thatchBin);
   const skills = installSkills(paths.skillsDir);
 
+  // Command files (the /thatch/* actions Claude Code reads as slash
+  // commands) live beside skills under the .claude dir, same scope rules.
+  const claudeDir = global ? claudeConfigDir(home) : join(projectDir, ".claude");
+  const commands = installClaudeCommands(claudeDir);
+
   // The scope this run did NOT write to. Local runs leave user-scope copies
   // behind (pre-existing global installs); global runs leave project-local
   // copies in the repo. Either way the user should hear about them.
@@ -372,6 +380,7 @@ export function setupClaudeCode(
     claudeMd: paths.claudeMdPath,
     settings: paths.settingsPath,
     skills,
+    commands,
     otherScopeSkills: otherScopeInfo(otherDir),
     global,
     mcpAddCommand: global

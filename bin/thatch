@@ -863,6 +863,9 @@ switch (command) {
       console.log(`  Instructions:  ${result.claudeMd}`);
       console.log(`  Hooks:         ${result.settings}`);
       printSkills(result);
+      if (result.commands.length > 0) {
+        console.log(`  Commands:      ${result.commands.length} written (${result.commands.map((p) => p.split("/").pop()).join(", ")})`);
+      }
       console.log();
       if (result.mcpAddCommand) {
         // Global setup cannot write ~/.claude.json directly, so run the

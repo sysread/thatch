@@ -108,13 +108,17 @@ Thatch gives your agent:
   hostile message cannot impersonate your instructions. Disable the whole
   feature with `chat.enabled: false` in the thatch config (or just the
   auto-joining with `chat.autoRegister: false`).
-- **Wrap-up commands** (opencode only) -- `/thatch/compact` and `/thatch/exit`
-  run a pre-flight checklist before a compaction or an exit: the agent flushes
-  pending fact extraction, finishes promised memory writes, and surfaces
-  todos or follow-ups it never addressed. It ends its response with a
-  greenlight token only when the checklist is clean; thatch then triggers the
-  compaction or quits opencode. With items outstanding, the agent lists them
-  and nothing fires -- you decide when to retry.
+- **Slash commands** -- `/thatch/defrag` (consolidate duplicate memories),
+  `/thatch/extract` (drain the extraction queue now), `/thatch/hygiene`
+  (tend stale and orphaned memories), and `/thatch/reflect` (persist what
+  the session learned) run on demand the same behaviors the nudges run on
+  their own schedule. Plus the opencode-only wrap-ups: `/thatch/compact` and
+  `/thatch/exit` run a pre-flight checklist before a compaction or an exit:
+  the agent flushes pending fact extraction, finishes promised memory
+  writes, and surfaces todos or follow-ups it never addressed. It ends its
+  response with a greenlight token only when the checklist is clean; thatch
+  then triggers the compaction or quits opencode. With items outstanding,
+  the agent lists them and nothing fires -- you decide when to retry.
 - **Notifications + user config** -- the agent can ping you out-of-band when a
   long-running outcome lands: a desktop banner, a spoken voice
   announcement, or both (macOS and Linux). Preferences live in a
@@ -130,6 +134,24 @@ knowledge export, and writing tasks
 See the [user guide](docs/user/README.md) for the full tool list, CLI
 commands, configuration, environment variables, and detailed setup for each
 host.
+
+## What works in Claude Code
+
+The memory tools, prediction and behavior engines, conversation search via
+the `thatch session` CLI, cross-session chat (with stop-hook wake), skills,
+and the on-demand actions `/thatch/defrag`, `/thatch/hygiene`, and
+`/thatch/reflect` (synced by `thatch setup --claude`). Not available: the
+wrap-up commands and `/thatch/extract` (they need the opencode plugin's
+session identity and TUI control routes), live recall/prediction nudges
+beyond the hook-based flow, and toast notifications.
+
+## What works in Cursor
+
+The same core set as Claude Code (memory, predictions, behaviors, chat with
+stop-hook wake, skills, and the `defrag`/`hygiene`/`reflect` actions). Cursor
+has no file-based slash commands, so the actions surface through MCP prompts
+instead. Not available: the wrap-up commands, `/thatch/extract`, and toast
+notifications.
 
 ## Privacy
 

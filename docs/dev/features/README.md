@@ -23,6 +23,7 @@ system, see [../skills.md](../skills.md). For non-obvious invariants, see
 | [behavior-engine.md](behavior-engine.md) | Behavior engine (LLM self-discipline rules, ham/spam, auto-fire) |
 | [hygiene.md](hygiene.md) | Hygiene system (duplicate, stale, orphaned branch signals) |
 | [deduplication.md](deduplication.md) | Deduplication system (find pairs, verdict lifecycle) |
+| [commands.md](commands.md) | Slash commands (on-demand actions from shared prompt cores, wrap-ups, host sync) |
 | [sideband.md](sideband.md) | Sideband IPC (Unix socket for MCP host hook processes) |
 | [compaction-recovery.md](compaction-recovery.md) | Compaction recovery (opencode compaction hooks) |
 | [session-lifecycle.md](session-lifecycle.md) | Session lifecycle management (opencode events, child tracking, wrap-up commands) |

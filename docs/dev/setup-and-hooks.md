@@ -50,10 +50,12 @@ the TUI is not connected (headless mode).
 | Instructions | `CLAUDE.md` (idempotent `appendBlock`) | `$CLAUDE_CONFIG_DIR/CLAUDE.md` |
 | Hooks | `.claude/settings.json` | `$CLAUDE_CONFIG_DIR/settings.json` |
 | Skills | `.claude/skills/` (in the repo) | `$CLAUDE_CONFIG_DIR/skills/` |
+| Commands | `.claude/commands/thatch/` (in the repo) | `$CLAUDE_CONFIG_DIR/commands/thatch/` |
 
 `CLAUDE_CONFIG_DIR` overrides the default `~/.claude` for all user-scoped
 paths. Project-local keeps everything in the repo: `.mcp.json`, `CLAUDE.md`,
-`.claude/settings.json`, and `.claude/skills/` (so skills version with the
+`.claude/settings.json`, `.claude/skills/`, and `.claude/commands/thatch/`
+(so skills and commands version with the
 project and every contributor gets them).
 
 ### Hook events (nested `settings.json`)

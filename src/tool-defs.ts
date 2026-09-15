@@ -452,18 +452,29 @@ const getExtractionPayloadDef: ToolDef = {
     "Retrieve the queued tool interactions for extraction. Call this with " +
     "the session_id from the extraction nudge to get the JSON payload " +
     "(interactions, projectStore, globalStore). Then run the " +
-    "thatch-fact-extractor skill on the returned payload.",
+    "thatch-fact-extractor skill on the returned payload. Omit session_id " +
+    "when acting on the session you are running in.",
   args: {
-    session_id: z.string().describe(
-      "The session ID from the extraction nudge. This is the parent session " +
-      "whose tool interactions are queued for extraction.",
+    session_id: z.string().optional().describe(
+      "The session whose tool interactions are queued for extraction. " +
+      "Omit when acting on the session you are running in - the invoking " +
+      "session's ID is used. Pass the parent session's ID when running " +
+      "inside a sub-agent dispatched to process another session's queue.",
     ),
   },
-  async execute(args, ctx) {
+  async execute(args, ctx, host) {
     if (!ctx.extractionPayloadProvider) {
       return "Extraction payload retrieval is not available in this host.";
     }
-    const payload = ctx.extractionPayloadProvider(args.session_id as string);
+    // The zod shape is shared across hosts, so optionality cannot be
+    // per-host at the schema level: MCP hosts have no session context to
+    // fall back on, so an omitted session_id only resolves on the
+    // opencode path, where the wrapper supplies the invoking session.
+    const sessionID = (args.session_id as string | undefined) ?? host?.sessionID;
+    if (!sessionID) {
+      return 'session_id is required on this host (it has no session context). Pass the parent session\'s session_id from the extraction nudge.';
+    }
+    const payload = ctx.extractionPayloadProvider(sessionID);
     if (!payload) {
       return "No queued tool interactions found for this session.";
     }

@@ -87,3 +87,4 @@ import "./uc-102-chat-hook-identity";
 import "./uc-103-wrapup-commands";
 import "./uc-104-session-start-identity";
 import "./uc-105-chat-stop-notify";
+import "./uc-106-thatch-actions";
