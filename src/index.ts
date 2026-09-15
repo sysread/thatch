@@ -89,18 +89,34 @@ export function startupSessionIdFromArgv(argv: string[]): string | null {
 // flags. The thread still shares the process's pid, so the OS-level command
 // line for our own pid is the real `opencode -s ses_...` invocation. Read it
 // from /proc on Linux or via ps on macOS. Returns [] when unavailable;
-// callers treat that as "no session flag".
-export function osProcessArgs(): string[] {
+// callers treat that as "no session flag". The readers are injectable so
+// tests can drive each branch without a real /proc or ps.
+export interface OsArgsDeps {
+  /** Reads a file as UTF-8, throwing when it does not exist. */
+  readFile: (path: string) => string;
+  /** Runs `ps -p <pid> -o args=`; returns its exit code and stdout. */
+  ps: (pid: number) => { exitCode: number; stdout: string };
+}
+
+const defaultOsArgsDeps: OsArgsDeps = {
+  readFile: (path) => readFileSync(path, "utf8"),
+  ps: (pid) => {
+    const res = Bun.spawnSync(["ps", "-p", String(pid), "-o", "args="]);
+    return { exitCode: res.exitCode, stdout: res.stdout.toString() };
+  },
+};
+
+export function osProcessArgs(deps: OsArgsDeps = defaultOsArgsDeps, pid = process.pid): string[] {
   try {
     // Linux: cmdline is NUL-separated argv, exact and cheap.
-    return readFileSync("/proc/self/cmdline", "utf8").split("\0").filter(Boolean);
+    return deps.readFile("/proc/self/cmdline").split("\0").filter(Boolean);
   } catch {
     // macOS has no /proc; ask ps for this pid's full command. Splitting on
     // whitespace is safe for our purpose: session ids never contain spaces.
     try {
-      const res = Bun.spawnSync(["ps", "-p", String(process.pid), "-o", "args="]);
+      const res = deps.ps(pid);
       if (res.exitCode !== 0) return [];
-      return res.stdout.toString().trim().split(/\s+/).filter(Boolean);
+      return res.stdout.trim().split(/\s+/).filter(Boolean);
     } catch {
       return [];
     }

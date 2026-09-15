@@ -157,6 +157,8 @@ const useCase: UseCase = {
       console.log(`  FAIL: --limit tail exited ${limited.exitCode}`);
       return "FAIL";
     }
+    // The note counts messages, not lines: the last 3 messages are unread
+    // fillers, so 3 sent events and a note that agrees with them.
     if (limited.stderr.toString().includes("showing last 3 of 28 messages") === false) {
       console.log(`  FAIL: missing elision note on stderr:\n${limited.stderr.toString()}`);
       return "FAIL";

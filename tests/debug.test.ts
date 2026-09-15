@@ -25,6 +25,15 @@ describe("debugEnabled", () => {
     expect(debugEnabled("chat", "watch:poll")).toBe(false);
   });
 
+  test("a bare feature tag and a trailing-colon spec follow the feature-part rule", () => {
+    // A tag with no aspect matches its own name; "chat:" as a spec is the
+    // literal tag "chat:", which nothing is named, and its feature part is
+    // "chat:" too (split happens on the tag, not the spec).
+    expect(debugEnabled("chat", "chat")).toBe(true);
+    expect(debugEnabled("chat:", "chat:startup")).toBe(false);
+    expect(debugEnabled("chat:", "chat")).toBe(false);
+  });
+
   test("comma-separated filters are OR'd and whitespace-tolerant", () => {
     expect(debugEnabled("watch, chat:startup", "chat:startup")).toBe(true);
     expect(debugEnabled("watch, chat:startup", "watch:poll")).toBe(true);

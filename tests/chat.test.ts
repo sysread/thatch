@@ -1077,6 +1077,18 @@ describe("chat tail backlog", () => {
     expect(limited.events.map((e) => `${e.event}:${e.id}`)).toEqual(["sent:3", "read:3"]);
     expect(limited.shown).toBe(1);
     expect(limited.elided).toBe(2);
+    // Same-second tie: a message read within the second it was sent, and
+    // another message sent in that same second. Sent lines come first so
+    // a read never precedes the send it refers to.
+    const tied = chatTailBacklog(
+      [
+        row({ id: 1, created_at: "2026-09-12T10:00:00Z", read_at: "2026-09-12T10:00:00Z" }),
+        row({ id: 2, created_at: "2026-09-12T10:00:00Z" }),
+      ],
+      noFilter(),
+      null,
+    );
+    expect(tied.events.map((e) => `${e.event}:${e.id}`)).toEqual(["sent:1", "sent:2", "read:1"]);
   });
 
   test("filters shrink the feed before the limit applies", () => {

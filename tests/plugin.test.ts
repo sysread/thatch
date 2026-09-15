@@ -33,7 +33,7 @@ mock.module("@huggingface/transformers", () => ({
   },
 }));
 
-import { server, osProcessArgs, startupSessionIdFromArgv } from "../src/index";
+import { server, osProcessArgs, startupSessionId, startupSessionIdFromArgv } from "../src/index";
 import {
   sessionStartReminder,
   recallNudge,
@@ -1790,12 +1790,48 @@ describe("chat auto-registration on idle", () => {
   test("osProcessArgs reads this process's real command line", () => {
     // The plugin loads in a worker thread whose argv is just the worker
     // script - the real CLI flags are only visible on the OS-level command
-    // line for our own pid. The helper must return that command line here
-    // (the bun test invocation) and the parser must accept its shape.
+    // line for our own pid. With the real readers, the helper must return
+    // that command line here (the bun test invocation), which carries no
+    // session flag.
     const args = osProcessArgs();
     expect(args.length).toBeGreaterThan(0);
-    expect(startupSessionIdFromArgv(["opencode", "-s", "ses_from_os"])).toBe("ses_from_os");
     expect(startupSessionIdFromArgv(args)).toBeNull();
+  });
+
+  test("osProcessArgs: /proc cmdline is NUL-split; ps is the fallback; failures yield []", () => {
+    const noProc = () => {
+      throw new Error("ENOENT");
+    };
+    // Linux: NUL-separated, trailing NUL dropped, ps never consulted.
+    expect(
+      osProcessArgs({ readFile: () => "opencode\0-s\0ses_linux\0", ps: () => { throw new Error("must not run"); } }),
+    ).toEqual(["opencode", "-s", "ses_linux"]);
+    // macOS: no /proc, ps output is whitespace-split.
+    expect(osProcessArgs({ readFile: noProc, ps: () => ({ exitCode: 0, stdout: "  opencode -s ses_mac\n" }) }, 4242)).toEqual([
+      "opencode", "-s", "ses_mac",
+    ]);
+    // ps failing (nonzero exit, or throwing when the binary is missing)
+    // reads as "no command line", never as an exception at plugin init.
+    expect(osProcessArgs({ readFile: noProc, ps: () => ({ exitCode: 1, stdout: "" }) })).toEqual([]);
+    expect(osProcessArgs({ readFile: noProc, ps: () => { throw new Error("spawn failed"); } })).toEqual([]);
+    // ps receives the pid it was asked about.
+    let asked = -1;
+    osProcessArgs({ readFile: noProc, ps: (pid) => { asked = pid; return { exitCode: 0, stdout: "" }; } }, 777);
+    expect(asked).toBe(777);
+  });
+
+  test("startupSessionId prefers thread-local argv, then the OS command line", () => {
+    // The real harness path: the worker's argv has no -s, the OS command
+    // line does. Under test the thread argv is bun's, so the OS list wins.
+    expect(startupSessionId(["opencode", "-s", "ses_from_os"])).toBe("ses_from_os");
+    expect(startupSessionId([])).toBeNull();
+    const argvSave = process.argv;
+    process.argv = [...argvSave, "--session=ses_thread"];
+    try {
+      expect(startupSessionId(["opencode", "-s", "ses_from_os"])).toBe("ses_thread");
+    } finally {
+      process.argv = argvSave;
+    }
   });
 
   test("chat.autoRegister: false suppresses auto-registration but not chat_register", async () => {
@@ -1870,6 +1906,50 @@ describe("chat auto-registration on idle", () => {
     } finally {
       process.argv = argvSave;
       resumeHooks?.dispose?.();
+    }
+  });
+
+  test("-s startup registration honors chat.autoRegister: false", async () => {
+    const configPath = join(dirname(process.env.THATCH_DB_PATH!), "config.json");
+    saveConfig({ chat: { autoRegister: false } });
+    const argvSave = process.argv;
+    process.argv = [...argvSave, "-s", "ses_noauto"];
+    let hooks: Awaited<ReturnType<typeof server>> | undefined;
+    try {
+      hooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-noauto" } as any);
+      await settle();
+      const db = new ThatchDB(process.env.THATCH_DB_PATH!);
+      expect(db.listChatSessions().find((r) => r.session_id === "ses_noauto")).toBeUndefined();
+      db.close();
+    } finally {
+      process.argv = argvSave;
+      hooks?.dispose?.();
+      rmSync(configPath);
+    }
+  });
+
+  test("-s startup registration honors a leave tombstone", async () => {
+    // The session left explicitly (chat_unregister or TUI delete) in a
+    // previous harness; resuming it must not drag it back into the
+    // directory. Only an explicit chat_register clears the tombstone.
+    const seedDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    seedDb.registerChatSession("ses_left", "thatch-left", null, "opencode", "leaver");
+    seedDb.unregisterChatSession("ses_left");
+    expect(seedDb.hasChatLeaveTombstone("ses_left")).toBe(true);
+    seedDb.close();
+    const argvSave = process.argv;
+    process.argv = [...argvSave, "-s", "ses_left"];
+    let hooks: Awaited<ReturnType<typeof server>> | undefined;
+    try {
+      hooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-left" } as any);
+      await settle();
+      const db = new ThatchDB(process.env.THATCH_DB_PATH!);
+      expect(db.listChatSessions().find((r) => r.session_id === "ses_left")).toBeUndefined();
+      expect(db.hasChatLeaveTombstone("ses_left")).toBe(true);
+      db.close();
+    } finally {
+      process.argv = argvSave;
+      hooks?.dispose?.();
     }
   });
 });

@@ -721,6 +721,8 @@ describe("migration", () => {
     const migrated = new ThatchDB(oldPath);
     expect(migrated.listChatSessions().find((r) => r.session_id === "ses_pid")).toBeDefined();
     migrated.close();
+    // Idempotent: a second open finds no column and must not error.
+    new ThatchDB(oldPath).close();
     const check = new Database(oldPath);
     const cols = (check.query("PRAGMA table_info(chat_sessions)").all() as any[]).map((r) => r.name);
     expect(cols).not.toContain("host_pid");
