@@ -304,6 +304,20 @@ export function chatLiveness(row: ChatSessionRow, now = Date.now()): "fresh" | "
   return stale ? "stale" : "fresh";
 }
 
+/** Orders roster rows for display: project first (so a shared-tree reader
+ *  sees each repo's sessions together; rows with no project sort last),
+ *  then by heartbeat, most recently seen first, so the recoverable rows
+ *  lead and the long-dead trail at the bottom. Pure ordering - it never
+ *  drops rows; the stale display cap is splitChatRoster's job. */
+export function sortChatRoster(rows: ChatSessionRow[]): ChatSessionRow[] {
+  return [...rows].sort((a, b) => {
+    const projectA = a.project ?? "\uffff";
+    const projectB = b.project ?? "\uffff";
+    if (projectA !== projectB) return projectA.localeCompare(projectB);
+    return Date.parse(b.last_seen) - Date.parse(a.last_seen);
+  });
+}
+
 /** Splits the roster for the two-section display: Active (wake-able or
  *  reachable - fresh opencode rows and every MCP row, which read mail at
  *  their next prompt) and Stale (opencode rows whose harness has stopped

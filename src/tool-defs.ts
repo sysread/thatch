@@ -20,7 +20,7 @@ import { sendNotification, defaultSpawner, type NotifyChannel, type Spawner } fr
 import { predictionVerb, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, type WatcherRegistry, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
-import { CHAT_STALE_MS, chatLiveness, humanAge, renderChatParticipant, splitChatRoster, type ChatHostKind } from "./chat";
+import { CHAT_STALE_MS, chatLiveness, humanAge, renderChatParticipant, sortChatRoster, splitChatRoster, type ChatHostKind } from "./chat";
 import { detectWorktreeKind } from "./git";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
@@ -1733,7 +1733,7 @@ const chatListDef: ToolDef = {
       return "No sessions registered. Sessions join the directory automatically on their first idle (opencode), or via chat_register - you would be the first.";
     }
     const unread = ctx.db.unreadChatCount(identity.sessionID);
-    const { active, stale } = splitChatRoster(sessions);
+    const { active, stale } = splitChatRoster(sortChatRoster(sessions));
     const line = (s: (typeof sessions)[number]) => {
       const self = s.session_id === identity.sessionID;
       const liveness = chatLiveness(s);

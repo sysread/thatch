@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { ChatPoller, isStale, nowIso, CHAT_STALE_MS, CHAT_POLL_INTERVAL_MS, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailJsonl, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, slugifyTitle, isDefaultSessionTitle, humanAge, chatLiveness, splitChatRoster, createWakeGate, continuedInTarget, scanPredecessorTranscript, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailRow, type ChatTailFilter } from "../src/chat";
+import { ChatPoller, isStale, nowIso, CHAT_STALE_MS, CHAT_POLL_INTERVAL_MS, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailJsonl, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, slugifyTitle, isDefaultSessionTitle, humanAge, chatLiveness, splitChatRoster, sortChatRoster, createWakeGate, continuedInTarget, scanPredecessorTranscript, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailRow, type ChatTailFilter } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
 import { TOOL_DEFS } from "../src/tool-defs";
@@ -368,6 +368,18 @@ describe("chatLiveness and roster split", () => {
     const { active, stale } = splitChatRoster([fresh, dead, mcp], NOW);
     expect(active.map((r) => r.session_id)).toEqual(["ses_f", "ses_m"]);
     expect(stale.map((r) => r.session_id)).toEqual(["ses_d"]);
+  });
+
+  test("sortChatRoster orders by project, then most recently seen; unknown project last", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const zeta = row({ session_id: "ses_z", name: "z-00001", project: "zeta/app", last_seen: ago(2 * DAY) });
+    const alphaOld = row({ session_id: "ses_a2", name: "a2-00001", project: "alpha/app", last_seen: ago(DAY) });
+    const alphaNew = row({ session_id: "ses_a1", name: "a1-00001", project: "alpha/app", last_seen: ago(60_000) });
+    const orphan = row({ session_id: "ses_o", name: "o-00001", project: null, last_seen: ago(60_000) });
+    const sorted = sortChatRoster([zeta, orphan, alphaOld, alphaNew]);
+    expect(sorted.map((r) => r.session_id)).toEqual(["ses_a1", "ses_a2", "ses_z", "ses_o"]);
+    // Pure ordering: the input array itself is untouched.
+    expect(zeta.session_id).toBe("ses_z");
   });
 
   test("splitChatRoster staleCapMs hides stale rows older than the cap and reports the count", () => {

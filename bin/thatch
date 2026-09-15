@@ -10,7 +10,7 @@ import { hygieneReport } from "../src/hygiene";
 import { claudeSessionStartReminder } from "../src/prompts";
 import { setupClaudeCode, setupCursor, registerClaudeMcpServer } from "../src/setup";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
-import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, chatLiveness, humanAge, splitChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
+import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
 import { chatNotificationNudge } from "../src/prompts";
 import { createDebugLog } from "../src/debug";
@@ -425,7 +425,7 @@ const CHAT_ROSTER_HEADER = ["NAME", "AGE", "STATUS", "PROJECT", "TOPIC"];
 function formatChatRoster(sessions: ChatSessionRow[], staleCapMs: number | null = null): string {
   const colored = process.stdout.isTTY === true && !process.env.NO_COLOR;
   const paint = (code: string, s: string) => (colored ? `\x1b[${code}m${s}\x1b[0m` : s);
-  const { active, stale, staleHidden } = splitChatRoster(sessions, Date.now(), staleCapMs);
+  const { active, stale, staleHidden } = splitChatRoster(sortChatRoster(sessions), Date.now(), staleCapMs);
   const renderTable = (rows: ChatSessionRow[]) => {
     const cells = (r: ChatSessionRow) => [
       r.name,

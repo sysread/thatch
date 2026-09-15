@@ -10,7 +10,8 @@ import { ThatchDB } from "../../../src/db";
  * CLI reads over a controlled DB. Seeds registered sessions with topics
  * (fresh and stale), a direct message, a broadcast, and a departed sender,
  * then verifies the roster and the tail's JSONL events, including the
- * broadcast flag and the departed-sender fallback. The roster's default
+ * broadcast flag and the departed-sender fallback. The roster's project
+ * grouping order is probed with two sibling-project seeds, and the default
  * one-day stale window is verified against the long-stale ghost, plus
  * the --stale all escape hatch. A second seed
  * batch (numbered fillers) exercises the tail's --limit elision note,
@@ -26,7 +27,7 @@ const useCase: UseCase = {
     "- A DB with registered sessions and seeded messages",
   ].join("\n"),
   steps: [
-    "1. Seed a DB: three registered sessions (alpha with a topic, beta, ghost aged long stale), a direct message, a broadcast, and a message from a sender that then unregisters.",
+    "1. Seed a DB: three registered sessions (alpha with a topic, beta, ghost aged long stale), two ordering probes in sibling projects, a direct message, a broadcast, and a message from a sender that then unregisters.",
     "2. Run `thatch chat list` and verify the roster renders two sections - Active and Stale (with a missed-heartbeat explainer) - each an aligned header row plus name, human age, status, project, and topic columns.",
     "3. Verify the default one-day stale window hides the long-stale ghost behind a hidden-count note, and `--stale all` shows it again.",
     "4. Run `thatch chat tail --once` and verify every stdout line is one JSON object with event/at/id/from/to/body fields, broadcast copies carry broadcast: true with their real recipient, and already-read messages have a read event linked by id.",
@@ -35,6 +36,7 @@ const useCase: UseCase = {
   ].join("\n"),
   expected: [
     "- The roster shows every registered session with a human-readable age, its project, and its topic when set, grouped into Active and Stale sections by liveness.",
+    "- Rows are ordered by project (alphabetical; no-project rows last), most recently seen first within each project.",
     "- The default stale window is one day: stale rows older than that are hidden and counted in a note; --stale all displays every stale row.",
     "- The tail is JSONL: one sent event per line with the body verbatim and each participant's topic; via_broadcast rows are one sent event per recipient with broadcast: true.",
     "- A sender whose directory row is gone renders as 'unknown (id, departed)'.",
@@ -69,6 +71,15 @@ const useCase: UseCase = {
       seeded.sendChatMessage("ses_mortal", "ses_beta", "my last words");
       seeded.unregisterChatSession("ses_mortal");
       seeded.readChatMessages("ses_beta");
+      // Ordering probes: sibling projects bracketing acme/widgets so the
+      // roster's project grouping is observable end to end. Registered
+      // after the traffic so the broadcast still has exactly one live
+      // recipient (beta) and its fan-out assertions stay intact.
+      if (!seeded.registerChatSession("ses_early", "acme/alpha", null, "opencode", "early").ok
+        || !seeded.registerChatSession("ses_late", "acme/zulu", null, "opencode", "late").ok) {
+        console.log("  FAIL: ordering probe seeding failed");
+        return "FAIL";
+      }
     } finally {
       seeded.close();
     }
@@ -116,6 +127,15 @@ const useCase: UseCase = {
     }
     if (!unbounded.stdout.toString().includes("missed their heartbeat")) {
       console.log(`  FAIL: --stale all should show the missed-heartbeat explainer:\n${unbounded.stdout.toString()}`);
+      return "FAIL";
+    }
+    // Roster ordering: project groups sort alphabetically (acme/alpha,
+    // then acme/widgets, then acme/zulu), so the probe rows bracket the
+    // original trio. Within-project recency ordering is unit-tested;
+    // seeds registered microseconds apart cannot pin it here.
+    const at = (needle: string) => listText.indexOf(needle);
+    if (at("early-00001") === -1 || at("early-00001") > at("alpha-00001") || at("alpha-00001") > at("late-00001")) {
+      console.log(`  FAIL: roster rows not ordered by project:\n${listText}`);
       return "FAIL";
     }
 

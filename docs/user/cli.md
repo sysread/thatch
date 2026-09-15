@@ -60,7 +60,9 @@ Stale, each as aligned columns under a header row: how long since its
 last heartbeat, its status (`fresh` or `stale` for opencode sessions;
 `active` or `idle` for Claude Code and Cursor sessions, which only beat
 when a prompt runs), its project, and its topic (the session's title) -
-the fastest way to answer "which session should I talk to about X?" A
+the fastest way to answer "which session should I talk to about X?"
+Rows are grouped by project (alphabetical; sessions with no project
+last), most recently seen first within each project. A
 stale session has missed two heartbeats, about a minute: the opencode
 process hosting it has probably stopped. The stale section shows rows
 up to one day old by default; older ones collapse into a hidden-count
