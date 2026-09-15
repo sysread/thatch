@@ -327,6 +327,33 @@ and prints the assigned name plus unread count, so the
 identity is stable across the ephemeral conversations those harnesses run
 (and a conversation without the hook gets a fresh per-conversation
 identity from `chat_register`). `chat_status` is the quiet check
+
+**Anti-spoofing layer (Claude Code).** MCP tool calls carry no session
+context, so without help the caller-claimed `as` would be the only
+identity source. On Claude Code the hooks record `(parent pid -> session)`
+into `chat_host_pids` from payloads the model cannot influence, and the
+MCP server - a child of the same Claude Code process - resolves its own
+parent pid against that table (`chatDerivedIdentity` on CoreContext,
+freshness-capped at 600s to bound pid reuse). A second model-proof layer
+is `CLAUDE_CODE_SESSION_ID`, which the host sets in the stdio server's
+environment at spawn. `resolveChatIdentity` priority: opencode host
+context > ppid mapping > env id > claimed `as`. Cursor's hooks and MCP
+servers share one workspace process (ambiguous ppid, no per-session env),
+so Cursor keeps the claimed-`as` path, documented in the user doc's
+security model.
+
+**Continuation adoption (Claude Code).** Claude Code forks the session id
+on resume - and has been observed to fork spontaneously (agent-team
+conversion, self-update, config reload) - which would strand the old
+identity and mailbox. When a hook registers an UNKNOWN session id,
+`resolveRegisteredPredecessor` reads the hook's `transcript_path` and
+scans sibling transcripts' tails for a `continued-in` record naming the
+new id (the chain walk adopts the nearest registered ancestor, bounded at
+10 hops); `ChatStore.continueSession` then migrates the old row's key to
+the new session id - name, mail (sender and recipient columns),
+host-pid anchors, and leave tombstones all follow.
+
+`chat_status` is the quiet check
 (registered flag + pending/total); the flush-tools hook line names the
 caller's identity and mailbox, and is absent entirely when chat is
 disabled - absence is silent by construction.
