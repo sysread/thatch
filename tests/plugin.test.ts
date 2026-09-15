@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll, mock } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { tmpdir } from "node:os";
@@ -1818,16 +1819,29 @@ describe("chat auto-registration on idle", () => {
     }
   });
 
-  test("startup sweep registers all top-level sessions and adopts orphans", async () => {
+  test("startup sweep registers all top-level sessions, adopts orphans, delivers asleep-mail", async () => {
     // An orphan: registered by a harness that no longer exists (dead pid),
     // same project as the test worktree (detectRepo of /tmp/thatch-sweep
     // falls back to the directory basename) - the sweep must adopt it
-    // (re-stamp pid + beat fresh).
+    // (re-stamp pid + beat fresh). Mail queued to it while its harness was
+    // down must wake it at init.
     const orphanDb = new ThatchDB(process.env.THATCH_DB_PATH!);
     orphanDb.registerChatSession("ses_orphan", "thatch-sweep", "Old review round", "opencode", null, null, 999999999);
+    orphanDb.registerChatSession("ses_sender", "thatch-sweep", null, "opencode", "sender");
+    orphanDb.sendChatMessage("ses_sender", "ses_orphan", "while you were asleep");
     orphanDb.close();
 
     const now = Date.now();
+    const promptAsyncs: any[] = [];
+    const clientWithSweep = {
+      ...autoRegisterClient(),
+      session: {
+        ...autoRegisterClient().session,
+        promptAsync: async (args: any) => {
+          promptAsyncs.push(args);
+        },
+      },
+    };
     sweepSessions = [
       // Top-level with a real title: swept, topic set. Age is irrelevant -
       // membership tracks the live harness, not recency.
@@ -1837,7 +1851,7 @@ describe("chat auto-registration on idle", () => {
       // Placeholder title: swept, but no topic from it.
       { id: "ses_sweep_ph", title: `New session - ${new Date(now).toISOString()}`, time: { created: now, updated: now } },
     ];
-    const arHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-sweep" } as any);
+    const arHooks = await server({ client: clientWithSweep, worktree: "/tmp/thatch-sweep" } as any);
     await settle();
     const swDb = new ThatchDB(process.env.THATCH_DB_PATH!);
     try {
@@ -1852,11 +1866,21 @@ describe("chat auto-registration on idle", () => {
       expect(placeholderRow).toBeDefined();
       expect(placeholderRow!.topic).toBeNull();
       // The orphan was adopted: same row, now owned (and beaten fresh) by
-      // this harness.
+      // this harness...
       const adopted = rows.find((r) => r.session_id === "ses_orphan");
       expect(adopted).toBeDefined();
       expect(adopted!.host_pid).toBe(process.pid);
-      expect(adopted!.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
+      // ...and its asleep-mail woke it at init: the wake nudge went out
+      // (the nudge is a pointer naming the sender and count, not the body)
+      // and the mail is stamped delivered (unread until the woken turn
+      // calls chat_read, which is expected - the mock does not run one).
+      const wake = promptAsyncs.find((p) => p.path.id === "ses_orphan");
+      expect(wake).toBeDefined();
+      expect(JSON.stringify(wake.body)).toContain("1 unread message from sender-00001");
+      const stamp = new Database(process.env.THATCH_DB_PATH!)
+        .query("SELECT delivered_at FROM chat_messages WHERE to_session = 'ses_orphan'")
+        .get() as any;
+      expect(stamp?.delivered_at).not.toBeNull();
     } finally {
       swDb.close();
       arHooks.dispose?.();

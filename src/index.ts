@@ -245,7 +245,6 @@ export const server: Plugin = async ({ client, worktree }) => {
     // instead of logging an error on every startup.
     if (typeof client.session?.list !== "function") return;
     const { data } = await client.session.list();
-    const live = new Set(data?.map((s) => s.id) ?? []);
     for (const s of data ?? []) {
       if ((s as any).parentID) continue; // top-level sessions only
       const title = s.title ?? "";
@@ -259,18 +258,24 @@ export const server: Plugin = async ({ client, worktree }) => {
     }
     // Adopt the dead: opencode rows of this project whose owning pid no
     // longer exists. Their harness is gone; this one is alive and takes
-    // over the beating and delivery. MCP rows are turn-driven and have no
-    // pid - never touched. register() is idempotent for the row (and
-    // respects leave tombstones - a session the user left stays gone);
-    // the heartbeat then re-stamps ownership and freshness, which the
-    // register-existing path deliberately does not.
+    // over the beating and delivery - listed or not, a dead-owner row is
+    // claimable. MCP rows are turn-driven and have no pid - never touched.
+    // register() is idempotent for the row (and respects leave tombstones
+    // - a session the user left stays gone); the heartbeat then re-stamps
+    // ownership and freshness, which the register-existing path
+    // deliberately does not.
     for (const row of db.listChatSessions()) {
       if (row.project !== repo || row.host_kind !== "opencode") continue;
-      if (live.has(row.session_id)) continue; // handled by the loop above
-      if (row.host_pid != null && isPidAlive(row.host_pid)) continue; // another live harness owns it
+      if (row.host_pid != null && isPidAlive(row.host_pid)) continue; // a live harness owns it
       const res = db.registerChatSession(row.session_id, repo, row.topic, "opencode", null, row.worktree, process.pid);
       if (res.ok) db.heartbeatChatSessions([row.session_id]);
     }
+    // Asleep-mail: a restarted harness may hold sessions with unread mail
+    // that queued while they were down. Deliver now through the normal
+    // path (gate, nudge, toast, stamps) instead of making the session wait
+    // out the first poll cycle - the restarted session learns what it
+    // missed at startup, which is the whole point of the sweep.
+    await chatPoller.deliverPending();
   };
   if (chatOn && chatAutoRegister(loadConfig(dbPath).config)) {
     void chatSweep().catch((err) => {
