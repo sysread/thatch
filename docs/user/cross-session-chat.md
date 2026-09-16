@@ -66,8 +66,9 @@ directory when its first user message arrives, and a session continued
 with `opencode -c` or `opencode -s <id>` is registered again the moment
 its harness starts - same session id, same name, reclaimed. The agent
 gets a quiet toast with
-its assigned name when it first registers. To introduce two sessions,
-just tell each one who to talk to:
+its assigned name when it first registers, and a resumed session
+announces its reclaimed name on its first prompt. To introduce two
+sessions, just tell each one who to talk to:
 
 > Ask the other session whether the release has shipped; answer its
 > questions directly.

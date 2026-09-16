@@ -292,6 +292,12 @@ export const server: Plugin = async ({ client, worktree }) => {
   // user's first prompt.
   let resumedSession: string | null = null;
 
+  // Chat names assigned by the startup resume paths (-s and -c) wait here
+  // until the session's first message or idle event, which toast them. At
+  // plugin-init time the TUI is not yet connected, so an immediate toast
+  // would be dropped silently.
+  const chatStartupNames = new Map<string, string>();
+
   const chatPoller = new ChatPoller({
     store: db,
     hostedSessions: () => {
@@ -371,7 +377,10 @@ export const server: Plugin = async ({ client, worktree }) => {
     resumedSession = startupSession;
     const res = db.registerChatSession(startupSession, repo, null, "opencode", null, detectWorktreeKind(worktree));
     debug("chat:startup", `registration for ${startupSession}: ok=${res.ok} name=${res.ok ? res.name : res.error}`);
-    if (res.ok) reclaimTail(startupSession);
+    if (res.ok) {
+      chatStartupNames.set(startupSession, res.name);
+      reclaimTail(startupSession);
+    }
   } else if (chatOn && autoRegisterOn && continueLast) {
     void (async () => {
       try {
@@ -382,7 +391,10 @@ export const server: Plugin = async ({ client, worktree }) => {
         resumedSession = target;
         const res = db.registerChatSession(target, repo, null, "opencode", null, detectWorktreeKind(worktree));
         debug("chat:startup", `registration for ${target}: ok=${res.ok} name=${res.ok ? res.name : res.error}`);
-        if (res.ok) reclaimTail(target);
+        if (res.ok) {
+          chatStartupNames.set(target, res.name);
+          reclaimTail(target);
+        }
       } catch (err) {
         console.error(`[thatch] chat -c startup registration failed: ${err}`);
       }
@@ -769,11 +781,14 @@ export const server: Plugin = async ({ client, worktree }) => {
       ) {
         try {
           const res = db.registerChatSession(input.sessionID, repo, null, "opencode", null, detectWorktreeKind(worktree));
-          if (res.ok && res.created) {
-            // First registration is the one moment the user should
-            // notice: a quiet toast, not a conversation message.
+          // First registration - or a startup resume reclaiming its name,
+          // announced here because the TUI was not connected at init - is
+          // the one moment the user should notice: a quiet toast, not a
+          // conversation message.
+          if (res.ok && (res.created || chatStartupNames.has(input.sessionID))) {
+            chatStartupNames.delete(input.sessionID);
             try {
-              await client.tui.showToast({ body: { message: `registered in chat as ${res.name}`, variant: "info", duration: 4000 } });
+              await client.tui.showToast({ body: { message: res.created ? `registered in chat as ${res.name}` : `rejoined chat as ${res.name}`, variant: "info", duration: 4000 } });
             } catch {
               // Headless or disconnected TUI - registration stands.
             }
@@ -1176,11 +1191,14 @@ export const server: Plugin = async ({ client, worktree }) => {
               // registration is once-per-session, so later idles must
               // refresh it explicitly.
               if (res.ok && topic) db.refreshChatTopic(sessionID, topic);
-              if (res.ok && res.created) {
-                // First registration is the one moment the user should
-                // notice: a quiet toast, not a conversation message.
+              // First registration - or a startup resume reclaiming its
+              // name, announced here because the TUI was not connected at
+              // init - is the one moment the user should notice: a quiet
+              // toast, not a conversation message.
+              if (res.ok && (res.created || chatStartupNames.has(sessionID))) {
+                chatStartupNames.delete(sessionID);
                 try {
-                  await client.tui.showToast({ body: { message: `registered in chat as ${res.name}`, variant: "info", duration: 4000 } });
+                  await client.tui.showToast({ body: { message: res.created ? `registered in chat as ${res.name}` : `rejoined chat as ${res.name}`, variant: "info", duration: 4000 } });
                 } catch {
                   // Headless or disconnected TUI - registration stands.
                 }

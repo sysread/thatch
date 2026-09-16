@@ -1933,6 +1933,13 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
         .query("SELECT delivered_at FROM chat_messages WHERE to_session = 'ses_resume'")
         .get() as any;
       expect(stamp?.delivered_at).not.toBeNull();
+      // The reclaim announcement waits for the first prompt - the TUI is
+      // not connected at init, so an immediate toast would drop silently.
+      expect(toastCalls.some((t) => t.body.message.includes("rejoined chat as"))).toBe(false);
+      await resumeHooks["chat.message"]!({ sessionID: "ses_resume", messageID: "msg_resume" } as any, promptOutput("msg_resume"));
+      const rejoin = toastCalls.find((t) => t.body.message.includes("rejoined chat as"));
+      expect(rejoin).toBeDefined();
+      expect(rejoin!.body.message).toContain(row!.name);
     } finally {
       process.argv = argvSave;
       resumeHooks?.dispose?.();
