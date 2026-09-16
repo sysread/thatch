@@ -1,4 +1,6 @@
 import { Database } from "bun:sqlite";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { blobToVector, cosineSimilarity } from "./vector-math";
 import {
   PredictionEngine,
@@ -58,6 +60,13 @@ export class ThatchDB {
   #chat: ChatStore;
 
   constructor(path: string) {
+    // bun:sqlite creates the file but not its parent directory. On a fresh
+    // machine the default path (~/.config/thatch/thatch.db) has no dir yet, so
+    // create it here - otherwise every command fails with SQLITE_CANTOPEN.
+    // `:memory:` and other special paths have no meaningful parent to create.
+    if (path !== ":memory:" && !path.startsWith("file:")) {
+      mkdirSync(dirname(path), { recursive: true });
+    }
     this.#db = new Database(path, { create: true });
     this.#db.run("PRAGMA journal_mode = WAL");
     this.#db.run("PRAGMA busy_timeout = 5000");

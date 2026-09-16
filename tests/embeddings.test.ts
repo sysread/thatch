@@ -1,9 +1,12 @@
 import { describe, test, expect } from "bun:test";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { MockEmbeddingModel } from "./mocks/embeddings";
 import {
   BgeEmbeddingModel,
   backendMode,
   configureBackend,
+  modelCacheDir,
   resetBackendForTests,
   type PipelineFactory,
 } from "../src/embeddings";
@@ -74,6 +77,92 @@ describe("MockEmbeddingModel", () => {
     expect(model.disposed).toBe(false);
     await model.dispose();
     expect(model.disposed).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// modelCacheDir
+// ---------------------------------------------------------------------------
+
+describe("modelCacheDir", () => {
+  const KEYS = ["THATCH_MODEL_CACHE", "XDG_CACHE_HOME", "LOCALAPPDATA"] as const;
+  const saved: Record<string, string | undefined> = {};
+
+  function isolate(fn: () => void) {
+    for (const k of KEYS) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+    try {
+      fn();
+    } finally {
+      for (const k of KEYS) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
+    }
+  }
+
+  test("prefers THATCH_MODEL_CACHE when set", () => {
+    isolate(() => {
+      process.env.THATCH_MODEL_CACHE = "/tmp/custom-models";
+      expect(modelCacheDir()).toBe("/tmp/custom-models");
+    });
+  });
+
+  test("honors XDG_CACHE_HOME on any platform, even macOS", () => {
+    isolate(() => {
+      process.env.XDG_CACHE_HOME = "/tmp/xdg";
+      expect(modelCacheDir("darwin", "/home/u")).toBe(
+        join("/tmp/xdg", "thatch", "models"),
+      );
+    });
+  });
+
+  test("uses ~/Library/Caches on macOS", () => {
+    isolate(() => {
+      expect(modelCacheDir("darwin", "/Users/u")).toBe(
+        join("/Users/u", "Library", "Caches", "thatch", "models"),
+      );
+    });
+  });
+
+  test("uses %LOCALAPPDATA% on Windows", () => {
+    isolate(() => {
+      process.env.LOCALAPPDATA = "C:\\Users\\u\\AppData\\Local";
+      expect(modelCacheDir("win32", "C:\\Users\\u")).toBe(
+        join("C:\\Users\\u\\AppData\\Local", "thatch", "models"),
+      );
+    });
+  });
+
+  test("falls back to ~/AppData/Local on Windows when LOCALAPPDATA is unset", () => {
+    isolate(() => {
+      expect(modelCacheDir("win32", "C:\\Users\\u")).toBe(
+        join("C:\\Users\\u", "AppData", "Local", "thatch", "models"),
+      );
+    });
+  });
+
+  test("uses ~/.cache on Linux", () => {
+    isolate(() => {
+      expect(modelCacheDir("linux", "/home/u")).toBe(
+        join("/home/u", ".cache", "thatch", "models"),
+      );
+    });
+  });
+
+  test("defaults to the real platform and home dir", () => {
+    isolate(() => {
+      expect(modelCacheDir()).toContain(homedir());
+      expect(modelCacheDir()).toContain(join("thatch", "models"));
+    });
+  });
+
+  test("never points inside the read-only node_modules tree", () => {
+    isolate(() => {
+      expect(modelCacheDir()).not.toContain("node_modules");
+    });
   });
 });
 

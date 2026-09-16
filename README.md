@@ -51,6 +51,12 @@ thatch setup --claude --global  # or --cursor --global
 Restart your editor and thatch's tools are available as `mcp__thatch__*`.
 Requires [Bun] on PATH.
 
+The embedding model downloads once at first use. It is cached in the
+platform's per-user cache dir: `~/Library/Caches/thatch/models` on macOS,
+`$XDG_CACHE_HOME/thatch/models` (default `~/.cache/thatch/models`) elsewhere.
+Set `THATCH_MODEL_CACHE` to override the location. The cache survives
+upgrades and works from read-only installs.
+
 ### Other MCP-compatible harnesses
 
 ```json
