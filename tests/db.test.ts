@@ -21,6 +21,27 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
+// constructor
+// ---------------------------------------------------------------------------
+
+describe("ThatchDB constructor", () => {
+  test("creates the database's parent directory if it does not exist", () => {
+    const root = mkdtempSync(join(tmpdir(), "thatch-fresh-"));
+    // Nested, not-yet-created path — mirrors a fresh ~/.config/thatch install.
+    const nestedPath = join(root, "config", "thatch", "thatch.db");
+    // Construction must not throw with SQLITE_CANTOPEN; a fresh DB is usable
+    // and seeded with the global store.
+    const fresh = new ThatchDB(nestedPath);
+    try {
+      expect(fresh.listStores()).toContain("global");
+    } finally {
+      fresh.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // cosineSimilarity
 // ---------------------------------------------------------------------------
 
