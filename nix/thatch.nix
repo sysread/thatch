@@ -2,12 +2,12 @@
   lib,
   stdenv,
   bun,
-  makeWrapper,
+  makeBinaryWrapper,
   autoPatchelfHook,
   # Per-system hash of the vendored node_modules produced by `bun install`.
   # Regenerate with: nix build .#thatch.deps  (read the "got:" hash from the error)
   depsHash ? {
-    x86_64-linux = "sha256-37uHLZYLfniOM1w6nQvfNadGCks9hJ+pmeVM13V0Wvg=";
+    x86_64-linux = "sha256-FETtq7n3Q/e2bD0belKNpzSvsmVXcuefBV456axlLpo=";
     aarch64-linux = lib.fakeHash;
     x86_64-darwin = lib.fakeHash;
     aarch64-darwin = "sha256-sP5xzzyuAWHH4ZBdmQ2aEJBaRJDMqSRLiHTULd7Dr/c=";
@@ -18,8 +18,11 @@ let
   pkg = lib.importJSON ../package.json;
   system = stdenv.hostPlatform.system;
 
-  # Only the files that affect the runtime artifact. Keeps the store path (and
-  # its hash) stable when tests, docs plans, CI config, etc. change.
+  # The files shipped in the runtime artifact, mirroring package.json `files`.
+  # Excludes tests, CI config, dev plans, etc., so their churn never changes the
+  # store path. `docs` is shipped for parity with the npm package even though
+  # nothing under src/ or bin/ reads it at runtime, so docs edits do bump the
+  # hash.
   runtimeSrc = lib.fileset.toSource {
     root = ../.;
     fileset = lib.fileset.unions [
@@ -83,7 +86,10 @@ stdenv.mkDerivation {
 
   # ELF patching is Linux-only; on Darwin the prebuilt .node binaries are
   # Mach-O and load as-is, and autoPatchelfHook would choke on them.
-  nativeBuildInputs = [ makeWrapper ]
+  # makeBinaryWrapper (over makeWrapper) builds a compiled wrapper instead of a
+  # shell script - the shebang form can break under execve on Darwin, which
+  # this flake targets.
+  nativeBuildInputs = [ makeBinaryWrapper ]
     ++ lib.optionals stdenv.hostPlatform.isLinux [ autoPatchelfHook ];
   # onnxruntime-node's prebuilt .node needs the C++ runtime; sharp/msgpackr
   # ship optional native deps thatch never loads, so ignore their missing libs.
@@ -113,7 +119,7 @@ stdenv.mkDerivation {
     rm -rf "$dest"/node_modules/@img/*musl* \
            "$dest"/node_modules/sharp/vendor 2>/dev/null || true
 
-    makeWrapper ${bun}/bin/bun $out/bin/thatch \
+    makeBinaryWrapper ${bun}/bin/bun $out/bin/thatch \
       --add-flags "$dest/bin/thatch"
 
     runHook postInstall
@@ -128,6 +134,9 @@ stdenv.mkDerivation {
     homepage = "https://github.com/sysread/thatch";
     license = lib.licenses.mit;
     mainProgram = "thatch";
-    platforms = lib.platforms.unix;
+    # Only the systems with a real depsHash above build today. aarch64-linux
+    # and x86_64-darwin still carry placeholder hashes; add them here as their
+    # hashes land so users never hit a hash mismatch on the first command.
+    platforms = [ "x86_64-linux" "aarch64-darwin" ];
   };
 }
