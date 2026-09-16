@@ -81,11 +81,14 @@ stdenv.mkDerivation {
 
   src = runtimeSrc;
 
-  nativeBuildInputs = [ makeWrapper autoPatchelfHook ];
+  # ELF patching is Linux-only; on Darwin the prebuilt .node binaries are
+  # Mach-O and load as-is, and autoPatchelfHook would choke on them.
+  nativeBuildInputs = [ makeWrapper ]
+    ++ lib.optionals stdenv.hostPlatform.isLinux [ autoPatchelfHook ];
   # onnxruntime-node's prebuilt .node needs the C++ runtime; sharp/msgpackr
   # ship optional native deps thatch never loads, so ignore their missing libs.
-  buildInputs = [ stdenv.cc.cc.lib ];
-  autoPatchelfIgnoreMissingDeps = true;
+  buildInputs = lib.optionals stdenv.hostPlatform.isLinux [ stdenv.cc.cc.lib ];
+  autoPatchelfIgnoreMissingDeps = [ "*" ];
 
   dontConfigure = true;
   dontBuild = true;
