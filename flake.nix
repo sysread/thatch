@@ -60,9 +60,13 @@
           options.programs.thatch.enable =
             lib.mkEnableOption "the thatch memory CLI (MCP server for AI coding agents)";
 
+          # Pull the package straight from this flake's outputs rather than
+          # injecting `self.overlays.default` into `nixpkgs.overlays`. Forcing
+          # an overlay from a module collides with configs that manage their
+          # own overlay list; a direct package reference sidesteps that.
           config = lib.mkIf cfg.enable {
-            nixpkgs.overlays = [ self.overlays.default ];
-            environment.systemPackages = [ pkgs.thatch ];
+            environment.systemPackages =
+              [ self.packages.${pkgs.stdenv.hostPlatform.system}.default ];
           };
         };
     };
