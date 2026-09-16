@@ -14,18 +14,33 @@ const QUERY_PREFIX =
  * its own package directory (`node_modules/@huggingface/transformers/.cache`).
  * That breaks any read-only install - a global `bun install -g`, and Nix store
  * paths in particular - and gets wiped on every reinstall. Anchor the cache in
- * the user's XDG cache instead so it survives upgrades and works from an
- * immutable store path.
+ * the platform's per-user cache location instead so it survives upgrades and
+ * works from an immutable store path.
  *
  *   THATCH_MODEL_CACHE  explicit override (highest priority)
- *   XDG_CACHE_HOME      standard base dir -> $XDG_CACHE_HOME/thatch/models
- *   default             ~/.cache/thatch/models
+ *   XDG_CACHE_HOME      explicit base dir -> $XDG_CACHE_HOME/thatch/models
+ *   macOS              ~/Library/Caches/thatch/models
+ *   Windows            %LOCALAPPDATA%\thatch\models
+ *   Linux / other      ~/.cache/thatch/models
+ *
+ * `platform` and `home` are injectable for testing; they default to the real
+ * runtime values.
  */
-export function modelCacheDir(): string {
-  const explicit = process.env.THATCH_MODEL_CACHE;
-  if (explicit) return explicit;
-  const cacheHome = process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache");
-  return join(cacheHome, "thatch", "models");
+export function modelCacheDir(
+  platform: NodeJS.Platform = process.platform,
+  home: string = homedir(),
+): string {
+  const env = process.env;
+  if (env.THATCH_MODEL_CACHE) return env.THATCH_MODEL_CACHE;
+  // Respect an explicit XDG override on any platform (some macOS users set it).
+  if (env.XDG_CACHE_HOME) return join(env.XDG_CACHE_HOME, "thatch", "models");
+  const base =
+    platform === "darwin"
+      ? join(home, "Library", "Caches")
+      : platform === "win32"
+        ? (env.LOCALAPPDATA ?? join(home, "AppData", "Local"))
+        : join(home, ".cache");
+  return join(base, "thatch", "models");
 }
 
 /**

@@ -85,7 +85,7 @@ describe("MockEmbeddingModel", () => {
 // ---------------------------------------------------------------------------
 
 describe("modelCacheDir", () => {
-  const KEYS = ["THATCH_MODEL_CACHE", "XDG_CACHE_HOME"] as const;
+  const KEYS = ["THATCH_MODEL_CACHE", "XDG_CACHE_HOME", "LOCALAPPDATA"] as const;
   const saved: Record<string, string | undefined> = {};
 
   function isolate(fn: () => void) {
@@ -110,16 +110,52 @@ describe("modelCacheDir", () => {
     });
   });
 
-  test("falls back to XDG_CACHE_HOME/thatch/models", () => {
+  test("honors XDG_CACHE_HOME on any platform, even macOS", () => {
     isolate(() => {
       process.env.XDG_CACHE_HOME = "/tmp/xdg";
-      expect(modelCacheDir()).toBe(join("/tmp/xdg", "thatch", "models"));
+      expect(modelCacheDir("darwin", "/home/u")).toBe(
+        join("/tmp/xdg", "thatch", "models"),
+      );
     });
   });
 
-  test("falls back to ~/.cache/thatch/models by default", () => {
+  test("uses ~/Library/Caches on macOS", () => {
     isolate(() => {
-      expect(modelCacheDir()).toBe(join(homedir(), ".cache", "thatch", "models"));
+      expect(modelCacheDir("darwin", "/Users/u")).toBe(
+        join("/Users/u", "Library", "Caches", "thatch", "models"),
+      );
+    });
+  });
+
+  test("uses %LOCALAPPDATA% on Windows", () => {
+    isolate(() => {
+      process.env.LOCALAPPDATA = "C:\\Users\\u\\AppData\\Local";
+      expect(modelCacheDir("win32", "C:\\Users\\u")).toBe(
+        join("C:\\Users\\u\\AppData\\Local", "thatch", "models"),
+      );
+    });
+  });
+
+  test("falls back to ~/AppData/Local on Windows when LOCALAPPDATA is unset", () => {
+    isolate(() => {
+      expect(modelCacheDir("win32", "C:\\Users\\u")).toBe(
+        join("C:\\Users\\u", "AppData", "Local", "thatch", "models"),
+      );
+    });
+  });
+
+  test("uses ~/.cache on Linux", () => {
+    isolate(() => {
+      expect(modelCacheDir("linux", "/home/u")).toBe(
+        join("/home/u", ".cache", "thatch", "models"),
+      );
+    });
+  });
+
+  test("defaults to the real platform and home dir", () => {
+    isolate(() => {
+      expect(modelCacheDir()).toContain(homedir());
+      expect(modelCacheDir()).toContain(join("thatch", "models"));
     });
   });
 
