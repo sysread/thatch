@@ -1,8 +1,32 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 // BGE-small-en-v1.5 requires a query prefix for asymmetric search.
 // Passage (memory content) gets no prefix - the model was trained
 // to encode passages without instruction.
 const QUERY_PREFIX =
   "Represent this sentence for searching relevant passages: ";
+
+/**
+ * Writable directory for the downloaded model files.
+ *
+ * transformers.js defaults its filesystem cache to a `.cache` folder *inside*
+ * its own package directory (`node_modules/@huggingface/transformers/.cache`).
+ * That breaks any read-only install - a global `bun install -g`, and Nix store
+ * paths in particular - and gets wiped on every reinstall. Anchor the cache in
+ * the user's XDG cache instead so it survives upgrades and works from an
+ * immutable store path.
+ *
+ *   THATCH_MODEL_CACHE  explicit override (highest priority)
+ *   XDG_CACHE_HOME      standard base dir -> $XDG_CACHE_HOME/thatch/models
+ *   default             ~/.cache/thatch/models
+ */
+export function modelCacheDir(): string {
+  const explicit = process.env.THATCH_MODEL_CACHE;
+  if (explicit) return explicit;
+  const cacheHome = process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache");
+  return join(cacheHome, "thatch", "models");
+}
 
 /**
  * Interface for an embedding model so tests can supply a mock.
@@ -90,7 +114,9 @@ export function resetBackendForTests(): void {
 
 const defaultPipelineFactory: PipelineFactory = async (modelName) => {
   const mode = await configureBackend();
-  const { pipeline } = await import("@huggingface/transformers");
+  const { pipeline, env } = await import("@huggingface/transformers");
+  // Redirect the model cache out of the (possibly read-only) package tree.
+  env.cacheDir = modelCacheDir();
   if (mode === "native") {
     return pipeline("feature-extraction", modelName);
   }
