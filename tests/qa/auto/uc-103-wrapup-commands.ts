@@ -27,6 +27,10 @@ mock.module("@huggingface/transformers", () => ({
     }
     return { data: vec };
   },
+  // BgeEmbeddingModel's default factory sets env.cacheDir before building the
+  // pipeline, so the mock must expose a writable env object (same contract as
+  // tests/plugin.test.ts).
+  env: {},
 }));
 
 import { server } from "../../../src/index";
