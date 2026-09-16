@@ -13,6 +13,9 @@ import { ThatchDB } from "../src/db";
 // embeddings for the same text produce identical vectors.
 const QUERY_PREFIX = "Represent this sentence for searching relevant passages: ";
 mock.module("@huggingface/transformers", () => ({
+  // BgeEmbeddingModel's default factory sets env.cacheDir before building the
+  // pipeline, so the mock must expose a writable env object.
+  env: {},
   pipeline: async () => async (text: string, _opts: any) => {
     const clean = text.startsWith(QUERY_PREFIX) ? text.slice(QUERY_PREFIX.length) : text;
     let h = 0;
