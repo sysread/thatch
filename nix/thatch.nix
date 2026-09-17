@@ -5,6 +5,10 @@
   makeBinaryWrapper,
   autoPatchelfHook,
   # Per-system hash of the vendored node_modules produced by `bun install`.
+  # The tree (and so the hash) depends on the bun version doing the install;
+  # bun comes from nixpkgs (unstable), so an nixpkgs bun bump can change the
+  # hash with no repo-side change (the npm release flow pins its own bun in
+  # .github/workflows/publish.yml, so the two release paths can disagree).
   # Regenerate with: nix build .#thatch.deps  (read the "got:" hash from the error)
   depsHash ? {
     x86_64-linux = "sha256-FETtq7n3Q/e2bD0belKNpzSvsmVXcuefBV456axlLpo=";
