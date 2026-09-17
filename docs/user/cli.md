@@ -167,7 +167,9 @@ thatch setup --claude [--cursor] [--global]  # install config + hooks + skills
 
 ## Limitations
 
-- Requires `bun` on PATH. Thatch does not bundle its own runtime.
+- For non-Nix installs, `bun` must be installed and on PATH. Thatch does
+  not bundle its own runtime (the Nix package bundles it; see the
+  README's Nix section).
 - `search` is limited to 10 results. There is no pagination.
 - `prime` requires an external CLI (`opencode`, `agent`, or `claude`)
   on PATH. If none is found, it exits with an error.

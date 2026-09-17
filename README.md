@@ -76,15 +76,15 @@ Install system-wide via the NixOS module (in your flake `configuration.nix`):
   inputs.thatch.url = "github:sysread/thatch";
 
   # in your NixOS system's modules:
-  imports = [ thatch.nixosModules.default ];
+  imports = [ inputs.thatch.nixosModules.default ];
   programs.thatch.enable = true;   # puts `thatch` on PATH for every user
 }
 ```
 
 Or add the package yourself with the overlay
-(`nixpkgs.overlays = [ thatch.overlays.default ];` then
+(`nixpkgs.overlays = [ inputs.thatch.overlays.default ];` then
 `environment.systemPackages = [ pkgs.thatch ];`), or drop
-`thatch.packages.${system}.default` into a `home.packages` /
+`inputs.thatch.packages.${system}.default` into a `home.packages` /
 `environment.systemPackages` list directly.
 
 Once `thatch` is on PATH, wire it into your editor as usual:
@@ -94,9 +94,10 @@ cd /path/to/your/project
 thatch setup --claude --global   # or --cursor
 ```
 
-The embedding model still downloads once at first use; it is cached under
-`$XDG_CACHE_HOME/thatch/models` (override with `THATCH_MODEL_CACHE`) so it
-survives upgrades and works from the read-only Nix store.
+The embedding model still downloads once at first use and is cached in the
+platform's per-user cache dir (the per-platform paths above; override with
+`THATCH_MODEL_CACHE`), so it survives upgrades and works from the read-only
+Nix store.
 
 ### Other MCP-compatible harnesses
 
