@@ -52,10 +52,52 @@ Restart your editor and thatch's tools are available as `mcp__thatch__*`.
 Requires [Bun] on PATH.
 
 The embedding model downloads once at first use. It is cached in the
-platform's per-user cache dir: `~/Library/Caches/thatch/models` on macOS,
+platform's per-user cache dir: `~/Library/Caches/thatch/models` on macOS (or
+`$XDG_CACHE_HOME/thatch/models` when `XDG_CACHE_HOME` is set),
 `$XDG_CACHE_HOME/thatch/models` (default `~/.cache/thatch/models`) elsewhere.
 Set `THATCH_MODEL_CACHE` to override the location. The cache survives
 upgrades and works from read-only installs.
+
+### NixOS / Nix
+
+This repo is a flake. Bun and the native embedding runtime are bundled, so no
+global `npm install` or `bun` on PATH is required.
+
+Try it without installing:
+
+```bash
+nix run github:sysread/thatch -- --version
+```
+
+Install system-wide via the NixOS module (in your flake `configuration.nix`):
+
+```nix
+{
+  inputs.thatch.url = "github:sysread/thatch";
+
+  # in your NixOS system's modules:
+  imports = [ inputs.thatch.nixosModules.default ];
+  programs.thatch.enable = true;   # puts `thatch` on PATH for every user
+}
+```
+
+Or add the package yourself with the overlay
+(`nixpkgs.overlays = [ inputs.thatch.overlays.default ];` then
+`environment.systemPackages = [ pkgs.thatch ];`), or drop
+`inputs.thatch.packages.${system}.default` into a `home.packages` /
+`environment.systemPackages` list directly.
+
+Once `thatch` is on PATH, wire it into your editor as usual:
+
+```bash
+cd /path/to/your/project
+thatch setup --claude --global   # or --cursor
+```
+
+The embedding model still downloads once at first use and is cached in the
+platform's per-user cache dir (the per-platform paths above; override with
+`THATCH_MODEL_CACHE`), so it survives upgrades and works from the read-only
+Nix store.
 
 ### Other MCP-compatible harnesses
 
@@ -179,6 +221,9 @@ unless the agent fetches it.
 bun install
 mise run check     # typecheck + bun test + markdownlint (the CI gate)
 ```
+
+On Nix, `nix develop` drops you into a shell with bun, mise, and node already
+on PATH -- no system install needed.
 
 Tests never reach outside the sandbox: temp-directory SQLite files, mock
 embeddings, no network.

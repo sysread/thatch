@@ -18,3 +18,7 @@ scratch/
 scratchpad/
 /thatch
 .DS_Store
+
+# Nix
+result
+result-*

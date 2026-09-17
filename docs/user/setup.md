@@ -111,12 +111,15 @@ instructions are deployed without requiring you to manually re-run
 
 ## Limitations
 
-- `bun` must be installed and on PATH. Thatch does not bundle its
-  own runtime.
+- For non-Nix installs, `bun` must be installed and on PATH. Thatch does
+  not bundle its own runtime (the Nix package bundles it; see the
+  README's Nix section).
 - The embedding model (~34 MB) is downloaded once on first use and
   cached in the platform's per-user cache dir
-  (`~/Library/Caches/thatch/models` on macOS, `$XDG_CACHE_HOME/thatch/models`
-  elsewhere). Override with `THATCH_MODEL_CACHE`.
+  (`~/Library/Caches/thatch/models` on macOS (or
+  `$XDG_CACHE_HOME/thatch/models` when `XDG_CACHE_HOME` is set),
+  `$XDG_CACHE_HOME/thatch/models` elsewhere). Override with
+  `THATCH_MODEL_CACHE`.
 - There is no web UI or dashboard. All interaction is through the
   agent's tool calls and the `thatch` CLI.
 - The MCP server is a long-lived process that keeps the embedding model
