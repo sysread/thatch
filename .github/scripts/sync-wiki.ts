@@ -16,11 +16,11 @@ import path from "node:path";
 
 const EXCLUDED_DIRS = ["docs/plans", "docs/in-progress"];
 
-// The tier READMEs get human-facing landing names instead of "User README".
+// The tier READMEs get human-facing landing names instead of "README".
 const SPECIAL_PAGE_NAMES: Record<string, string> = {
-  "docs/user/README.md": "User Guide",
+  "docs/user/README.md": "Guide: Overview",
   "docs/dev/README.md": "Developer Guide",
-  "docs/dev/features/README.md": "Feature Architecture",
+  "docs/dev/features/README.md": "Feature: Overview",
 };
 
 interface DocFile {
@@ -43,9 +43,9 @@ function pageNameFor(relPath: string): string {
   const dir = path.posix.dirname(relPath); // docs, docs/user, docs/dev, docs/dev/features
   const stem = path.posix.basename(relPath).replace(/\.md$/, "");
   const topic = titleCase(stem);
-  if (dir === "docs/user") return `User ${topic}`;
-  if (dir === "docs/dev") return `Dev ${topic}`;
-  return `Dev Features ${topic}`;
+  if (dir === "docs/user") return `Guide: ${topic}`;
+  if (dir === "docs/dev") return topic;
+  return `Feature: ${topic}`;
 }
 
 function isExcluded(relPath: string): boolean {
@@ -81,9 +81,20 @@ function collectDocs(repoRoot: string): DocFile[] {
   return files.sort((a, b) => a.relPath.localeCompare(b.relPath));
 }
 
-// Rewrite relative markdown links between doc files into wiki [[Page]] links.
-// Links with no page match (external URLs, in-page anchors, links into the
-// excluded plan dirs) are left untouched.
+// URL slug for a wiki page name: GitHub renders wiki URLs with spaces as
+// hyphens and colons percent-encoded, and markdown links must use exactly
+// that form to resolve (a bare colon in the href does not).
+function slugFor(pageName: string): string {
+  return pageName.replaceAll(" ", "-").replaceAll(":", "%3A");
+}
+
+// Rewrite relative markdown links between doc files into wiki links.
+// Two link forms are used because Gollum (the wiki renderer) mangles the
+// pipe-label syntax when the page name contains a colon prefix
+// ([[Guide: X|label]] links to a page named "label"): exact-name matches use
+// [[Page]] links, everything else uses a markdown link with the page's URL
+// slug. Targets with no page match (external URLs, in-page anchors, links
+// into the excluded plan dirs) are left untouched.
 function rewriteLinks(doc: DocFile, pagesByPath: Map<string, string>): string {
   return doc.body.replace(
     /\[([^\]]*)\]\(([^)\s]+)\)/g,
@@ -96,8 +107,9 @@ function rewriteLinks(doc: DocFile, pagesByPath: Map<string, string>): string {
       );
       const pageName = pagesByPath.get(resolved);
       if (!pageName) return full;
-      const wikiTarget = anchor ? `${pageName}#${anchor}` : pageName;
-      return text === pageName ? `[[${wikiTarget}]]` : `[[${wikiTarget}|${text}]]`;
+      const anchorSuffix = anchor ? `#${anchor}` : "";
+      if (text === pageName && !anchor) return `[[${pageName}]]`;
+      return `[${text}](${slugFor(pageName)}${anchorSuffix})`;
     },
   );
 }
@@ -110,6 +122,15 @@ function groupFor(doc: DocFile): string {
 
 const GROUP_ORDER = ["User", "Developer", "Features"] as const;
 
+// Section headers on Home and in the sidebar. "Features" carries the "Dev"
+// because its pages are the dev/features tier and the header is the only
+// place that context exists.
+const GROUP_HEADERS: Record<(typeof GROUP_ORDER)[number], string> = {
+  User: "User",
+  Developer: "Developer",
+  Features: "Dev Feature Guides",
+};
+
 function renderIndex(grouped: Map<string, DocFile[]>): string {
   const lines = [
     "# thatch",
@@ -121,7 +142,7 @@ function renderIndex(grouped: Map<string, DocFile[]>): string {
   for (const group of GROUP_ORDER) {
     const docs = grouped.get(group);
     if (!docs) continue;
-    lines.push(`## ${group}`, "");
+    lines.push(`## ${GROUP_HEADERS[group]}`, "");
     for (const doc of docs) lines.push(`- [[${doc.pageName}]]`);
     lines.push("");
   }
@@ -133,7 +154,7 @@ function renderSidebar(grouped: Map<string, DocFile[]>): string {
   for (const group of GROUP_ORDER) {
     const docs = grouped.get(group);
     if (!docs) continue;
-    lines.push(`**${group}**`, "");
+    lines.push(`**${GROUP_HEADERS[group]}**`, "");
     for (const doc of docs) lines.push(`- [[${doc.pageName}]]`);
     lines.push("");
   }
@@ -149,6 +170,19 @@ if (!outDir) {
 const rootDir = path.resolve(import.meta.dir, "../..");
 const docs = collectDocs(rootDir);
 const pagesByPath = new Map(docs.map((d) => [d.relPath, d.pageName]));
+
+// The wiki namespace is flat, so two docs mapping to the same page name would
+// silently overwrite each other. Reserved generated names are part of the
+// namespace too.
+const RESERVED = new Set(["Home", "_Sidebar"]);
+const nameCounts = new Map<string, number>();
+for (const doc of docs) nameCounts.set(doc.pageName, (nameCounts.get(doc.pageName) ?? 0) + 1);
+const dupes = [...nameCounts.entries()].filter(([name, n]) => n > 1 || RESERVED.has(name));
+if (dupes.length > 0) {
+  console.error(`Duplicate or reserved wiki page names: ${dupes.map(([n]) => n).join(", ")}`);
+  process.exit(1);
+}
+
 const grouped = new Map<string, DocFile[]>();
 for (const doc of docs) {
   const group = groupFor(doc);

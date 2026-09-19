@@ -110,7 +110,7 @@ Nix store.
 ```
 
 Include thatch's instructions in your agent's system prompt manually; see
-[docs/dev/mcp-parity.md](docs/dev/mcp-parity.md) for the prompt text.
+[MCP parity](https://github.com/sysread/thatch/wiki/Mcp-Parity) for the prompt text.
 
 ## What's inside
 
@@ -179,7 +179,7 @@ review, review response, change and feature walkthroughs, memory verification,
 knowledge export, and writing tasks
 (PR descriptions, tickets, PR splitting).
 
-See the [user guide](docs/user/README.md) for the full tool list, CLI
+See the [user guide](https://github.com/sysread/thatch/wiki/Guide%3A-Overview) for the full tool list, CLI
 commands, configuration, environment variables, and detailed setup for each
 host.
 
@@ -230,11 +230,11 @@ embeddings, no network.
 
 ## Docs
 
-- [User guide](docs/user/README.md) -- setup, tools, configuration, CLI
-- [Development](docs/dev/README.md) -- architecture, module responsibilities
-- [MCP parity](docs/dev/mcp-parity.md) -- OpenCode plugin vs MCP feature comparison
-- [QA tests](tests/qa/) -- executable use cases (auto/ and live/ subdirs)
-- [Design docs](docs/plans/) -- design-decision snapshots and in-progress plans
+- [User guide](https://github.com/sysread/thatch/wiki/Guide%3A-Overview) -- setup, tools, configuration, CLI
+- [Development](https://github.com/sysread/thatch/wiki/Developer-Guide) -- architecture, module responsibilities
+- [MCP parity](https://github.com/sysread/thatch/wiki/Mcp-Parity) -- OpenCode plugin vs MCP feature comparison
+- [QA tests](https://github.com/sysread/thatch/tree/main/tests/qa) -- executable use cases (auto/ and live/ subdirs)
+- [Design docs](https://github.com/sysread/thatch/tree/main/docs/plans) -- design-decision snapshots and in-progress plans
 
 ## License
 
