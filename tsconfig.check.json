@@ -6,6 +6,6 @@
     "declaration": false,
     "declarationMap": false
   },
-  "include": ["src", "tests"],
+  "include": ["src", "tests", ".github/scripts"],
   "exclude": ["node_modules", "dist"]
 }

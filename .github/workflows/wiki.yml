@@ -1,0 +1,51 @@
+name: Wiki
+
+# One-way mirror of docs/ into the GitHub wiki. The wiki is never edited by
+# hand; every run wipes and rewrites the generated pages, so removed docs do
+# not linger.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/wiki.yml"
+      - ".github/scripts/sync-wiki.ts"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wiki-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Render wiki pages
+        run: bun .github/scripts/sync-wiki.ts wiki-out
+
+      # The built-in GITHUB_TOKEN cannot push to wiki repos, so this uses the
+      # WIKI_TOKEN secret (classic PAT, public_repo scope) Jeff configured.
+      - name: Push to wiki
+        env:
+          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git clone "https://x-access-token:${WIKI_TOKEN}@github.com/sysread/thatch.wiki.git" wiki
+          find wiki -maxdepth 1 \( -name '*.md' -o -name '*.markdown' \) -delete
+          cp wiki-out/*.md wiki/
+          cd wiki
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki already up to date"
+          else
+            git commit -m "Sync wiki from docs/ at ${GITHUB_SHA}"
+            git push
+          fi
