@@ -9,7 +9,9 @@
 // docs/plans/ and docs/in-progress/ are excluded: they are ephemeral design
 // snapshots per the plan graduation convention, not shipped documentation.
 //
-// Usage: bun .github/scripts/sync-wiki.ts <output-dir>
+// Usage: bun .github/scripts/sync-wiki.ts <output-dir> [repo-root]
+// repo-root defaults to the repo this script lives in; tests pass a fixture
+// tree instead.
 
 import { readdirSync, readFileSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
@@ -161,13 +163,15 @@ function renderSidebar(grouped: Map<string, DocFile[]>): string {
   return lines.join("\n") + "\n";
 }
 
-const [outDir] = process.argv.slice(2);
+const [outDir, repoRootArg] = process.argv.slice(2);
 if (!outDir) {
-  console.error("usage: bun .github/scripts/sync-wiki.ts <output-dir>");
+  console.error("usage: bun .github/scripts/sync-wiki.ts <output-dir> [repo-root]");
   process.exit(1);
 }
 
-const rootDir = path.resolve(import.meta.dir, "../..");
+const rootDir = repoRootArg
+  ? path.resolve(repoRootArg)
+  : path.resolve(import.meta.dir, "../..");
 const docs = collectDocs(rootDir);
 const pagesByPath = new Map(docs.map((d) => [d.relPath, d.pageName]));
 

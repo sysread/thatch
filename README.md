@@ -60,8 +60,8 @@ upgrades and works from read-only installs.
 
 ### NixOS / Nix
 
-This repo is a flake. Bun and the native embedding runtime are bundled, so no
-global `npm install` or `bun` on PATH is required.
+This repo is a flake. The package bundles Bun and the native embedding
+runtime, so you need no global `npm install` and no `bun` on PATH.
 
 Try it without installing:
 
@@ -69,23 +69,24 @@ Try it without installing:
 nix run github:sysread/thatch -- --version
 ```
 
-Install system-wide via the NixOS module (in your flake `configuration.nix`):
+Install options:
 
-```nix
-{
-  inputs.thatch.url = "github:sysread/thatch";
+- **NixOS module** (system-wide, all users):
 
-  # in your NixOS system's modules:
-  imports = [ inputs.thatch.nixosModules.default ];
-  programs.thatch.enable = true;   # puts `thatch` on PATH for every user
-}
-```
+  ```nix
+  {
+    inputs.thatch.url = "github:sysread/thatch";
 
-Or add the package yourself with the overlay
-(`nixpkgs.overlays = [ inputs.thatch.overlays.default ];` then
-`environment.systemPackages = [ pkgs.thatch ];`), or drop
-`inputs.thatch.packages.${system}.default` into a `home.packages` /
-`environment.systemPackages` list directly.
+    # in your NixOS system's modules:
+    imports = [ inputs.thatch.nixosModules.default ];
+    programs.thatch.enable = true;   # puts `thatch` on PATH for every user
+  }
+  ```
+
+- **Overlay**: add `nixpkgs.overlays = [ inputs.thatch.overlays.default ];`,
+  then `environment.systemPackages = [ pkgs.thatch ];`
+- **Package directly**: add `inputs.thatch.packages.${system}.default` to a
+  `home.packages` or `environment.systemPackages` list
 
 Once `thatch` is on PATH, wire it into your editor as usual:
 
@@ -94,10 +95,9 @@ cd /path/to/your/project
 thatch setup --claude --global   # or --cursor
 ```
 
-The embedding model still downloads once at first use and is cached in the
-platform's per-user cache dir (the per-platform paths above; override with
-`THATCH_MODEL_CACHE`), so it survives upgrades and works from the read-only
-Nix store.
+The embedding model still downloads once at first use. Its cache lives in the
+per-user cache dir described above, outside the read-only Nix store, so it
+survives upgrades. `THATCH_MODEL_CACHE` overrides the location.
 
 ### Other MCP-compatible harnesses
 
