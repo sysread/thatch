@@ -5,7 +5,7 @@ Thatch uses GitHub Actions for CI and publishing, plus a local release helper sc
 ## CI pipeline (.github/workflows/ci.yml)
 
 Runs on every push/PR to main. Three jobs:
-1. **Typecheck** — `bunx tsc -p tsconfig.check.json` (includes test files that the build's `tsconfig.json` excludes)
+1. **Typecheck** — `bunx tsc -p tsconfig.check.json` (includes src, tests, and the CI scripts in `.github/scripts`; the build's `tsconfig.json` includes only src)
 2. **Tests** — `bun test` (bun:test framework, no network, `:memory:` DB or temp dirs)
 3. **Markdownlint** — `bunx markdownlint-cli2` on `README.md` and `docs/**/*.md` (excluding `docs/plans/**`)
 
@@ -21,6 +21,14 @@ Key details:
 - npm >= 11.5.1 required (OIDC exchange needs it). The workflow installs setup-node@v4 (node 24) and `npm install -g npm@11`
 - npm 12 shipped a sigstore bug that broke OIDC publishing; the pin prevents it
 - The workflow deliberately sets NO `registry-url`, which would write a token-expecting `.npmrc` that preempts the OIDC exchange
+
+## Wiki pipeline (.github/workflows/wiki.yml)
+
+Triggered by pushes to main that touch `docs/**`, the workflow file, or the render script. One-way mirror of `docs/` into the GitHub wiki: renders each doc to a flat wiki page (tiered prefixes `Guide:`, bare, `Feature:`; see `.github/scripts/sync-wiki.ts`), rewrites relative md links, generates `Home.md` + `_Sidebar.md`, wipes and rewrites all wiki pages, then pushes to `sysread/thatch.wiki.git`.
+
+- Uses the `WIKI_TOKEN` Actions secret (classic PAT, `public_repo` scope) because the built-in `GITHUB_TOKEN` cannot push to wiki repos
+- Precondition: the wiki must be initialized once via the UI (GitHub does not auto-create `.wiki.git` repos)
+- `docs/plans/` and `docs/in-progress/` are excluded; duplicate or reserved page names fail the render script
 
 ## Release helper (bin/release)
 
@@ -45,7 +53,7 @@ Steps:
 | `test` | Run the test suite (`bun test`) |
 | `test-watch` | Run tests in watch mode |
 | `coverage` | Run tests with coverage report |
-| `typecheck` | Typecheck src + tests (`bunx tsc -p tsconfig.check.json`) |
+| `typecheck` | Typecheck src + tests + `.github/scripts` (`bunx tsc -p tsconfig.check.json`) |
 | `lint-md` | Lint markdown docs (`bunx markdownlint-cli2`) |
 | `check` | The CI gate: typecheck + tests + markdownlint |
 | `release` | Bump version, commit, tag, push (args: `patch\|minor\|major`) |
@@ -60,7 +68,7 @@ Steps:
 ## Development tooling
 
 - **Bun 1.3.14** (pinned via mise)
-- **TypeScript** with `tsconfig.check.json` for typecheck (includes test files; build's `tsconfig.json` excludes them)
+- **TypeScript** with `tsconfig.check.json` for typecheck (includes src, tests, and `.github/scripts`; build's `tsconfig.json` includes only src)
 - **bun:test** framework (no network, `:memory:` DB or temp dirs, mock embeddings)
 - **markdownlint-cli2** with custom config (`.markdownlint-cli2.jsonc`): disables MD013 (line length), MD032 (blanks around lists), MD036 (emphasis as heading), MD060 (table alignment). Keeps MD040 (code-block language), MD047 (trailing newline), heading hierarchy.
 - **Zod** for tool schema validation and JSON Schema generation (`src/tool-defs.ts`)
@@ -74,10 +82,11 @@ Steps:
 
 - `.github/workflows/ci.yml` — CI pipeline
 - `.github/workflows/publish.yml` — publish pipeline (OIDC)
+- `.github/workflows/wiki.yml` + `.github/scripts/sync-wiki.ts` — wiki mirror pipeline
 - `bin/release` — release helper script
 - `mise.toml` — task definitions, tool pins, env vars
 - `.markdownlint-cli2.jsonc` — markdownlint config
-- `tsconfig.check.json` — typecheck config (includes tests)
+- `tsconfig.check.json` — typecheck config (includes src, tests, `.github/scripts`)
 
 ## Key invariants
 
@@ -86,4 +95,4 @@ Steps:
 - npm is pinned to 11.x. npm 12 shipped a sigstore bug that broke OIDC publishing.
 - The release helper checks for tagged-but-not-published state (tag exists, npm returns E404) and refuses to proceed with recovery instructions.
 - CI runs on push/PR to main. Publish runs only on `v*` tags. The release helper bridges them: tag + push triggers publish.
-- `tsconfig.check.json` includes test files for typecheck. The build's `tsconfig.json` excludes them.
+- `tsconfig.check.json` includes src, tests, and `.github/scripts` for typecheck. The build's `tsconfig.json` includes only src.

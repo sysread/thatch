@@ -47,7 +47,10 @@ function pageNameFor(relPath: string): string {
   const topic = titleCase(stem);
   if (dir === "docs/user") return `Guide: ${topic}`;
   if (dir === "docs/dev") return topic;
-  return `Feature: ${topic}`;
+  if (dir === "docs/dev/features") return `Feature: ${topic}`;
+  // A future docs tier must name its wiki prefix explicitly; silently
+  // assigning the Feature prefix would mislabel it.
+  throw new Error(`No wiki naming rule for docs tier ${dir} (${relPath})`);
 }
 
 function isExcluded(relPath: string): boolean {

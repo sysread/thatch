@@ -32,6 +32,10 @@ jobs:
 
       # The built-in GITHUB_TOKEN cannot push to wiki repos, so this uses the
       # WIKI_TOKEN secret (classic PAT, public_repo scope) Jeff configured.
+      # Precondition: the wiki repo must already exist -- GitHub does not
+      # auto-create .wiki.git repos on push. One-time setup: enable the wiki
+      # in repo settings and create one page via the UI. Without it, the
+      # clone fails with "Repository not found".
       - name: Push to wiki
         env:
           WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
