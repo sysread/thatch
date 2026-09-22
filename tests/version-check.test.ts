@@ -17,6 +17,7 @@ import {
   compareSemver,
   _resetForTesting,
 } from "../src/version-check";
+import { skewWarningText } from "../src/prompts";
 import pkg from "../package.json";
 
 let dir: string;
@@ -141,6 +142,16 @@ describe("readOnDiskVersion", () => {
     expect(version).toBe(pkg.version);
   });
 });
+
+describe("skewWarningText", () => {
+  test("names both versions and the remedy", () => {
+    const text = skewWarningText("1.2.0", "1.1.0");
+    expect(text).toContain("v1.2.0");
+    expect(text).toContain("v1.1.0");
+    expect(text).toContain("Restart opencode");
+  });
+});
+
 
 describe("NpmVersionChecker lifecycle", () => {
   test("startVersionChecker creates and starts a checker", () => {
