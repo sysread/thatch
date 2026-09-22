@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { createTools } from "../src/tools";
+import { buildCoreContext, createTools } from "../src/tools";
 
 let dbPath: string;
 let dbDir: string;
@@ -15,7 +15,7 @@ const defaultStore = "test-owner/test-repo";
 type ExecuteFn = (args: Record<string, unknown>) => Promise<string>;
 
 function makeTools(db: ThatchDB, model: MockEmbeddingModel, store: string): Record<string, { execute: ExecuteFn }> {
-  const map = createTools(db, model, store);
+  const map = createTools(buildCoreContext(db, model, store));
   const out: Record<string, { execute: ExecuteFn }> = {};
   for (const [name, def] of Object.entries(map)) {
     out[name] = { execute: (args) => def.execute(args as any, undefined as any) as Promise<string> };
@@ -372,7 +372,7 @@ describe("thatch_dedup_mark_checked", () => {
 
 describe("thatch_get_session_info", () => {
   test("passes opencode's ToolContext through to the shared execute", async () => {
-    const map = createTools(db, model, defaultStore);
+    const map = createTools(buildCoreContext(db, model, defaultStore));
     const sessionTool = map.thatch_get_session_info;
     const fakeContext = {
       sessionID: "ses_wrapper_test",

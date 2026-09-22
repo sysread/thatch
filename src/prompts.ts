@@ -622,6 +622,17 @@ export function versionWarningNudge(message: string): string {
   return `[thatch] ${message} This is a system nudge, not user input. After informing the user, continue with their request.`;
 }
 
+/**
+ * The version-skew message: the on-disk package version is newer than the
+ * running one (the user upgraded but the host kept the old plugin loaded).
+ * Extracted from the chat.message handler so the wording is testable; the
+ * v2 host's remedy differs (plugin update, not restart) and is appended by
+ * callers that know their host.
+ */
+export function skewWarningText(onDisk: string, running: string): string {
+  return `thatch was upgraded to v${onDisk} but this session is running v${running}. Restart opencode to apply the update.`;
+}
+
 // ---------------------------------------------------------------------------
 // Prompt cores - behavior instruction bodies shared by nudges and /thatch
 // command files (src/commands.ts). A core is the host-agnostic instruction

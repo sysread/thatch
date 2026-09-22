@@ -152,8 +152,11 @@ async function doEnsureMaster(): Promise<void> {
       // plugin file's own directory (.opencode/plugins/), not the project
       // root, so "./src/index" never loads - the plugin silently fails to
       // import and every in-session thatch tool/poller is missing. Same
-      // pattern as the real global config's plugin file.
-      `export { server } from ${JSON.stringify(join(masterDir, "src", "index"))};\n`,
+      // pattern as the real global config's plugin file. Dual-shape: the
+      // named export serves v1 hosts; the default re-export (merged
+      // {id, setup, server}) serves v2 hosts, which validate only the
+      // default export of the module they load.
+      `export { server } from ${JSON.stringify(join(masterDir, "src", "index"))};\nexport { default } from ${JSON.stringify(join(masterDir, "src", "index"))};\n`,
     );
     return Promise.resolve();
   });
