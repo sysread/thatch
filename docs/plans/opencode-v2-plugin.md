@@ -305,6 +305,24 @@ plugins update via `opencode plugin update` on v2.
   path; document the same single-path rule.
 - tests/qa/runner.ts keeps its shim pointed at `src/index` (the dual entry);
   only the shim CONTENT changes (Design 1).
+
+**User setup compatibility (no backward-incompatible config change).** The
+plan moves no file and changes no format. Every path thatch reads or writes
+stays put and stays shared across hosts: the SQLite DB
+(`~/.config/thatch/thatch.db`, `THATCH_DB_PATH` override), the embedding
+model cache, the version-check temp files (keyed by a hash of the db path),
+the skills install dirs (`~/.config/opencode/skills/`, `~/.claude/skills/`,
+`~/.cursor/skills/`), and the Claude/Cursor MCP configs. opencode's own
+config key (`plugin` vs `plugins`) is auto-migrated by v2 (fact 9), and
+thatch never reads that file. The only user-owned file whose content changes
+is the dev-session shim, and the new dual-shape content loads under BOTH
+opencode lines -- same location, same discovery mechanism. A user switching
+between opencode v1 and v2 binaries (or swapping the brew formulas, which
+conflict on the binary name and so cannot coexist) needs zero setup changes
+in either direction. The one caveat: a user who never updates their old
+named-only shim gets silent non-loading under v2 -- hence the shim-shape
+reminder in the version-check nudge (Design 1), which is a warning, not a
+migration step.
 - Closure-scoped extraction state (`childToParent`, `parentSnapshots`,
   `extracting`, `extractionChildren`, `childMetrics` -- closure-scoped inside
   `server()`, not module-scoped) moves behind the seam as one unit; its
