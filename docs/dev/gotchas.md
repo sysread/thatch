@@ -196,3 +196,17 @@ prose end marker stopped matching, and setup could never update the block
 again while `checkSetup` reported `markers-broken` on every session. Rule:
 never use file content as its own delimiter; agents will reword it. The
 legacy-prose detection constants exist only to migrate old installs.
+
+## The dual-shape plugin entry: named `server` + v2 default export silently breaks v1
+
+opencode v1's plugin loader (`readV1Plugin`, identical across 1.18.x) reads
+ONLY `mod.default`. A module that exports a named `server` plus a v2-shaped
+default `{ id, setup }` (no `server` inside the default) makes v1 throw on
+load - and the host swallows the error and SKIPS the plugin with no visible
+message. The failure looks like "thatch tools disappeared", not like a load
+error. This is why the dual entry exports a MERGED default object
+(`{ id, setup, server }`) and why every shim (the user's
+`~/.config/opencode/plugins/thatch.ts` and the QA runner's generated one)
+must re-export the default as well as the name. A named-only shim loads on
+v1 and silently disables thatch on v2 - same invisible failure, opposite
+host.

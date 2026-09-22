@@ -68,8 +68,8 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     });
 
     // System prompt: re-familiarization on every model request.
-    const registerSystem = await context.session.hook("context", (request: { system: unknown[] }) => {
-      void runtime.onSystemTransform({ system: request.system as string[] });
+    const registerSystem = await context.session.hook("context", async (request: { system: unknown[] }) => {
+      await runtime.onSystemTransform({ system: request.system as string[] });
     });
 
     // Per-message nudges: the runtime handler reads the user's text from the
@@ -105,7 +105,9 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
       try {
         for await (const event of context.event.subscribe({ signal: controller.signal })) {
           const located = event as { type: string; properties?: any; location?: { directory?: string } };
-          if (located.location?.directory && located.location.directory !== directory) continue;
+          // Location-less events drop with the foreign ones: v1's server-side
+          // filter (event.location?.directory !== plugin.directory) drops both.
+          if (located.location?.directory !== directory) continue;
           await runtime.onEvent(located.properties ? located : { type: located.type, properties: located });
         }
       } catch (err) {
