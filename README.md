@@ -20,6 +20,12 @@ everything runs on your machine.
 { "plugin": ["@jeffober/thatch"] }
 ```
 
+> **OpenCode 2.0 is not yet supported.** OpenCode 2.0 replaced the plugin API
+> (plugins now need a default export with `id`/`setup` instead of the v1
+> `server` hook object). Thatch currently targets the 1.18.x plugin API and
+> will fail to load on 2.0. Upgrade to 2.0 only after a thatch release adds
+> v2 support.
+
 On next start, OpenCode npm-installs thatch and its tools are available
 immediately. Works with both opencode 1.x and 2.x (the same package supports
 both plugin APIs). For async extraction (child sessions run in the
