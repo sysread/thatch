@@ -21,7 +21,9 @@ everything runs on your machine.
 ```
 
 On next start, OpenCode npm-installs thatch and its tools are available
-immediately. For async extraction (child sessions run in the background):
+immediately. Works with both opencode 1.x and 2.x (the same package supports
+both plugin APIs). For async extraction (child sessions run in the
+background):
 
 ```bash
 export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true

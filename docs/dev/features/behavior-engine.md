@@ -128,8 +128,9 @@ Parameters: `behavior` (statement, semantic match at cosine >= 0.85),
 
 ### Default behavior seeding (`src/seed-behaviors.ts`)
 
-Runs at startup in both the opencode plugin (`src/index.ts`) and the MCP
-server (`src/mcp.ts`), after DB and model initialization.
+Runs at startup in both the opencode plugin (`src/runtime.ts`, shared by
+the v1 and v2 adapters) and the MCP server (`src/mcp.ts`), after DB and
+model initialization.
 
 Seeds multiple default behaviors into the global store — session wrap-up
 (check for uncommitted changes, untracked files, stale artifacts), work

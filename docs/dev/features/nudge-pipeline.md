@@ -35,7 +35,7 @@ opencode path runs in-process with direct event hooks. The MCP path runs via
 external CLI hook processes that communicate with the long-lived MCP server
 through the sideband socket.
 
-### opencode path (`src/index.ts`, `chat.message` hook)
+### opencode path (`src/runtime.ts`, `onChatMessage` - v1 `chat.message` hook, v2 `session.hook("prompt")`)
 
 #### Compaction guard
 
@@ -265,7 +265,7 @@ TUI display. The opencode framework's history serializer filters on
 
 | File | Role |
 |------|------|
-| `src/index.ts` | opencode: `chat.message` hook (all 4 tiers), compaction guard, extraction fallback |
+| `src/runtime.ts` | opencode: per-message nudges (all 4 tiers), compaction guard, extraction fallback |
 | `bin/thatch` | MCP: `flush-tools` and `flush-predictions` subcommands |
 | `src/sideband.ts` | MCP: sideband client helpers (`sidebandMatch`, `sidebandPredictions`, `sidebandBehaviors`) |
 | `src/prompts.ts` | All nudge formatting functions (`recallNudge`, `claudeRecallNudge`, `predictionNudge`, `behaviorNudge`, `extractionNudge`, `claudeWriteNudge`) |

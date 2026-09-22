@@ -104,7 +104,7 @@ are per-worktree -- so git reads are equivalent from either. Consumers:
 
 - `src/git.ts` -- resolution chain, cache validation, spawn-cwd fallback
 - `src/db.ts` -- `repo_paths` table, accessors, `repoPathCache` adapter
-- `src/index.ts` -- plugin init order (DB before detection), identity from
+- `src/runtime.ts` -- plugin init order (DB before detection), identity from
   the session directory, watcher runner wrapper
 - `src/mcp.ts` -- MCP server init order
 - `bin/thatch` -- CLI `defaultStore()` and hook-line identity resolution

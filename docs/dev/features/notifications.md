@@ -87,7 +87,7 @@ Details that matter:
   a short "Notifications" section: when to notify, the source-label rule, and
   the config_get-before-config_set instruction.
 - `notify_user` is not `opencodeOnly`: it needs no host capabilities, so MCP
-  hosts get it too. Nothing was added to `src/tools.ts` or `src/index.ts`.
+  hosts get it too. Nothing was added to `src/tools.ts` or the plugin runtime.
 
 ## Tests
 

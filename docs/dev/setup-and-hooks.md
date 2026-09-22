@@ -12,7 +12,12 @@ No `setup` command — opencode loads the plugin from `opencode.json`:
 { "plugin": ["@jeffober/thatch"] }
 ```
 
-The plugin entry (`src/index.ts`) registers these hooks in code:
+The plugin supports both opencode lines: v1 (1.18.x) via the `experimental.*`
+hook surface below, and v2 (2.x) via the promise-context domains
+(`session.hook("prompt"/"context"/"compaction")`, `tool.transform`). Both
+adapters delegate to the shared runtime (`src/runtime.ts`); the hooks below
+describe the v1 shape the v2 mappings mirror. The v1 hooks, registered in
+code (`src/opencode/v1.ts`):
 
 | Hook | Input | Output | Behavior |
 |------|-------|--------|----------|

@@ -15,7 +15,7 @@ opencode emits bus events for session lifecycle changes. Thatch subscribes to th
 
 ## How it works
 
-### Event handler (`src/index.ts`, event hook)
+### Event handler (`src/runtime.ts`, shared by both adapters)
 
 Subscribes to all session bus events. Dispatches based on `event.type`.
 
@@ -122,7 +122,8 @@ first-ever install is invisible until the next server start.
 
 ## Source files
 
-- `src/index.ts` -- event handler (all session events), `triggerExtraction`, `cleanupChild`, internal state maps
+- `src/runtime.ts` -- event handler (all session events), `triggerExtraction`, `cleanupChild`, internal state maps
+- `src/opencode/v1.ts`, `src/opencode/v2.ts` -- host adapters wiring the runtime into each opencode plugin API
 
 ## Key invariants
 

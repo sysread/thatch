@@ -37,7 +37,7 @@ During summary generation, tools are blocked. A nudge that instructs the agent t
 
 ## Source files
 
-- `src/index.ts` -- all four hooks/events (experimental.session.compacting, experimental.compaction.autocontinue, session.compacted event, chat.message compaction guard)
+- `src/runtime.ts` -- all four hooks/events (experimental.session.compacting, experimental.compaction.autocontinue, session.compacted event, chat.message compaction guard on v1; session.hook("compaction")/("prompt") on v2), shared by both adapters
 - `src/prompts.ts` -- compactionContext function
 
 ## Key invariants

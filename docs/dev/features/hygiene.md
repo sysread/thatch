@@ -52,7 +52,7 @@ instructions for the agent to tend the store when convenient.
 
 `hygieneReport(db, repo, worktree)` in `src/hygiene.ts` is shared by:
 
-- The opencode plugin's session-start hook (`src/index.ts`)
+- The opencode plugin's session-start hook (`src/runtime.ts`)
 - The CLI's `thatch reminder` and `thatch hygiene` subcommands (`bin/thatch`)
 
 ## Interactions with other features

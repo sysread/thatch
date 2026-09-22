@@ -221,7 +221,7 @@ src/watchers.ts, test-enforced); command watchers register the single
 - `src/watchers.ts` - registry, poller, gh CLI runner, command runner,
   diff functions
 - `src/tool-defs.ts` - the watch tool definitions (see `TOOL_DEFS`)
-- `src/index.ts` - registry construction, delivery closure,
+- `src/runtime.ts` - registry construction, delivery closure,
   session.status tracking, session.deleted cleanup, dispose
 - `src/prompts.ts` - `watcherNotificationNudge()`, system prompt
   Watchers section

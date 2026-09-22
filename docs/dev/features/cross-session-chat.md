@@ -394,8 +394,8 @@ them the way `THATCH_WATCH_POLL_SECONDS` works if a user needs them.
   chat_name_counters and the auto column), the NOCASE collation migration
   and topic column migration, delegated methods
 - `src/tool-defs.ts` - the chat tool definitions
-- `src/index.ts` - poller construction, delivery closure, `-s` startup
-  registration (`osProcessArgs`, `startupSessionId`), idle
+- `src/runtime.ts` - poller construction, delivery closure, `-s` startup
+  registration (`osProcessArgs`, `startupSessionId` from `src/os-args.ts`), idle
   auto-registration + topic refresh, idle flush,
   session.deleted unregister, dispose, transcript echo in
   tool.execute.after

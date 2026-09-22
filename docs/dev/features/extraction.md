@@ -36,7 +36,7 @@ directly for conversation-derived knowledge.
 After every tool execution, non-`thatch_*`, non-`skill`, non-`task` tool
 calls are buffered for later extraction.
 
-**opencode** — `tool.execute.after` hook in `src/index.ts`:
+**opencode** — `tool.execute.after` hook (v1) / `tool.hook` (v2) in `src/runtime.ts`:
 
 - In-memory ring buffer per session (`ExtractionPipeline` in
   `src/extraction.ts`)
@@ -234,7 +234,7 @@ continues working while the child extracts.
 |------|----------------|
 | `src/extraction.ts` | In-memory ring buffer (`ExtractionPipeline`), shared payload builders (`buildExtractionPayload`, `deriveTitle`, `summarizeArgs`) |
 | `src/extract-queue.ts` | File-backed JSONL queue for MCP hosts |
-| `src/index.ts` | opencode hooks: `tool.execute.after`, `session.status` idle, `session.created`, `session.error`, `session.deleted`, `chat.message` (nudge tier 1) |
+| `src/runtime.ts` | opencode hooks: `tool.execute.after`, `session.status` idle, `session.created`, `session.error`, `session.deleted`, `chat.message` (nudge tier 1) -- shared by the v1/v2 adapters |
 | `bin/thatch` | `buffer-batch`, `buffer-tool`, `flush-tools` subcommands |
 | `src/prompts.ts` | `extractionNudge` (with escalation), `extractionDirectPrompt` |
 
