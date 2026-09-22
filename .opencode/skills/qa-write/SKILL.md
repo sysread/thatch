@@ -1,5 +1,5 @@
 ---
-name: thatch-qa-write
+name: qa-write
 description: Write or update QA use-case test files for the thatch project. Use when adding a new use case after a feature ships, or when converting a live-session use case to automatable.
 ---
 

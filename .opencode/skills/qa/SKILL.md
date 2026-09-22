@@ -1,5 +1,5 @@
 ---
-name: thatch-qa
+name: qa
 description: Execute a single thatch QA use case in an isolated environment. Use when the QA test runner (tests/qa/runner.ts) dispatches you to verify one use case.
 ---
 

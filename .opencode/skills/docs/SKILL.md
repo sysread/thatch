@@ -1,5 +1,5 @@
 ---
-name: thatch-docs
+name: docs
 description: Documentation conventions for the thatch project. Use when writing or updating docs in docs/dev, docs/user, docs/plans, or the root README.
 ---
 

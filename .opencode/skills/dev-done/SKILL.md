@@ -1,5 +1,5 @@
 ---
-name: thatch-dev-done
+name: dev-done
 description: Definition-of-done checklist for coding tasks in the thatch repo. Use when starting a coding task in this repo, so the checklist shapes the work, and again when you believe the task is complete, before committing or claiming done. Covers the quality gate, QA use case coverage and maintenance, unit tests, and the two-tier docs.
 ---
 
@@ -53,7 +53,7 @@ yourself; it is fast and catches what the gate cannot.
 
 Doc-code drift is part of the changeset, not scope creep. A doc describing
 removed symbols or old behavior is actively misleading. Follow the
-thatch-docs skill for style; the surface checklist:
+docs skill for style; the surface checklist:
 
 - Features change the **two tiers together**: `docs/user/<feature>.md`
   (product guide) and `docs/dev/features/<feature>.md` (architecture).

@@ -297,7 +297,7 @@ export async function runViaOpencode(uc: UseCase, ctx: QaContext): Promise<UseCa
     }
   }
 
-  const prompt = `Load the thatch-qa skill. Then execute this use case and report results:
+  const prompt = `Load the qa skill. Then execute this use case and report results:
 
 # ${uc.name}
 

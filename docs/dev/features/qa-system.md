@@ -126,7 +126,7 @@ with isolated `HOME`, `XDG_CONFIG_HOME`, `THATCH_DB_PATH`, and
 `THATCH_QUEUE_DIR` environment variables. The repo is read-only during QA —
 sessions run inside `/tmp/thatch-qa/<uc-name>/` copies.
 
-The `thatch-qa` skill (`.opencode/skills/thatch-qa/SKILL.md`) instructs the
+The `qa` skill (`.opencode/skills/qa/SKILL.md`) instructs the
 LLM on how to execute a single use case in the isolated directory. The skill's
 safety contract is intentionally fixed text — do not paraphrase it.
 
