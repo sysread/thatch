@@ -13,7 +13,23 @@ permissions:
   issues: write
 
 jobs:
+  # Mirror CI's dual-runtime matrix: a release must not ship on a runtime
+  # the plugin will actually run under (opencode v2 embeds Bun 1.4.2).
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        bun-version: ["1.3.14", "1.4.2"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun-version }}
+      - run: bun install
+      - run: bun test tests/*.test.ts
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

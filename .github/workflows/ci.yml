@@ -9,11 +9,16 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      # opencode v1 embeds Bun 1.3.14; v2 embeds 1.4.2. The plugin runs
+      # inside the host's embedded runtime, so both must pass.
+      matrix:
+        bun-version: ["1.3.14", "1.4.2"]
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.14"
+          bun-version: ${{ matrix.bun-version }}
       - run: bun install
       - run: bunx tsc -p tsconfig.check.json
       - run: bun test tests/*.test.ts
