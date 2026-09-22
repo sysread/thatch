@@ -175,8 +175,8 @@ Thatch gives your agent:
   or quiet notifications entirely.
 
 Plus **skills** for memory workflows, structured multi-specialist code
-review, review response, change and feature walkthroughs, memory verification,
-knowledge export, and writing tasks
+review, review response, plan refinement, change and feature walkthroughs,
+memory verification, knowledge export, and writing tasks
 (PR descriptions, tickets, PR splitting).
 
 See the [user guide](https://github.com/sysread/thatch/wiki/Guide%3A-Overview) for the full tool list, CLI

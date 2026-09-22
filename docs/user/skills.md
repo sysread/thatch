@@ -75,6 +75,7 @@ Skills are split into shared (all hosts) and opencode-only:
 | Skill | Purpose |
 |-------|---------|
 | `thatch-coding-workflow` | Plans and executes code changes with a task-list-driven workflow: complexity triage, milestone planning, research before coding, post-coding verification. Pairs with `thatch-code-archaeology` (research first, then plan). |
+| `thatch-plan-refinement` | Refines a plan before it is implemented: a fresh-context reviewer subagent re-checks the plan each round until consensus; deep mode adds specialist lenses (reuse, alternatives, hidden problems, safe-to-modify, intent archaeology). |
 
 ## Stale skill cleanup
 

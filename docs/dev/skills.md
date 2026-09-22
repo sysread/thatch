@@ -55,6 +55,7 @@ description: Extract durable project facts ... Use when ...
 | `thatch-code-walkthrough` | Explain a feature, module, or workflow to the user as a teaching walkthrough: identify the code area (optionally from a branch or PR), research how it works, teach it with file:line citations and analogies, list the key files. |
 | `thatch-session-reflection` | End-of-session memory recording (project, user, tools, self). |
 | `thatch-coding-workflow` | Plan and execute code changes with a task-list-driven workflow. Use when implementing features, fixing bugs, or making multi-file changes. |
+| `thatch-plan-refinement` | Refine a plan before implementing it: fresh-context reviewer rounds until consensus, with an optional deep-mode lens fan-out (reuse, alternatives, hidden problems, safe-to-modify, archaeology). |
 | `thatch-pr-description` | Draft PR descriptions with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, project-context research, clarity checks, and bold+italic emphasis for scanning. |
 | `thatch-ticket-description` | Draft ticket/issue descriptions with clear sections, project-context research, clarity checks, and bold+italic emphasis for scanning. |
 | `thatch-split-overlarge-pr` | Split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main. |

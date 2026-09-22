@@ -31,14 +31,14 @@ const useCase: UseCase = {
     "  appends a thatch block to `CLAUDE.md` bracketed by start/end markers (replaced, not",
     "  duplicated, on re-run), writes `.claude/settings.json` hooks (`SessionStart` -> `thatch reminder`,",
     "  `PostToolBatch` -> `thatch buffer-batch`, `UserPromptSubmit` -> `thatch flush-tools`), and installs",
-    "  **27 shared skills** (no code-review coordinator) to the repo's `.claude/skills/`.",
+    "  **28 shared skills** (no code-review coordinator) to the repo's `.claude/skills/`.",
     "- `--cursor` project-local writes `.cursor/mcp.json`, appends to `AGENTS.md`, writes",
     "  `.cursor/hooks.json` in the **flat format** (`{version:1, hooks:{...}}`): `sessionStart` ->",
     "  `thatch reminder --json`, `postToolUse` -> `thatch buffer-tool`, `beforeSubmitPrompt` ->",
-    "  `thatch flush-tools --json`; and installs 27 shared skills to the repo's `.cursor/skills/`.",
+    "  `thatch flush-tools --json`; and installs 28 shared skills to the repo's `.cursor/skills/`.",
     "- Setup reports where skills were installed plus per-run counts",
-    "  (added / updated / removed / unchanged). A fresh install prints `27 added`; a re-run",
-    "  prints `27 unchanged` and identical file contents.",
+    "  (added / updated / removed / unchanged). A fresh install prints `28 added`; a re-run",
+    "  prints `28 unchanged` and identical file contents.",
     "- When the opposite scope holds thatch skills (e.g. user-scope copies left over from an",
     "  older setup), setup prints a note naming that directory and leaves the copies alone.",
     "- Re-run is idempotent: instructions are not duplicated, thatch hooks are replaced (not appended),",
@@ -119,7 +119,7 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // Claude skills: 27 shared, no coordinator, in the repo's .claude/skills/
+    // Claude skills: 28 shared, no coordinator, in the repo's .claude/skills/
     const claudeSkillsDir = join(dir, ".claude", "skills");
     if (!existsSync(claudeSkillsDir)) {
       console.log("  FAIL: Claude skills dir not created in the repo");
@@ -129,8 +129,8 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (claudeSkillNames.length !== 27) {
-      console.log(`  FAIL: Claude skills count is ${claudeSkillNames.length}, expected 27`);
+    if (claudeSkillNames.length !== 28) {
+      console.log(`  FAIL: Claude skills count is ${claudeSkillNames.length}, expected 28`);
       return "FAIL";
     }
     if (claudeSkillNames.includes("thatch-code-review")) {
@@ -144,8 +144,8 @@ const useCase: UseCase = {
       console.log("  FAIL: setup stdout does not name the Claude skills dir");
       return "FAIL";
     }
-    if (!out1.includes("27 added")) {
-      console.log("  FAIL: setup stdout does not report '27 added' on fresh install");
+    if (!out1.includes("28 added")) {
+      console.log("  FAIL: setup stdout does not report '28 added' on fresh install");
       return "FAIL";
     }
     // A project-local run must not create user-scoped skills.
@@ -211,7 +211,7 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // Cursor skills: 27 shared, no coordinator, in the repo's .cursor/skills/
+    // Cursor skills: 28 shared, no coordinator, in the repo's .cursor/skills/
     const cursorSkillsDir = join(dir, ".cursor", "skills");
     if (!existsSync(cursorSkillsDir)) {
       console.log("  FAIL: Cursor skills dir not created in the repo");
@@ -221,8 +221,8 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (cursorSkillNames.length !== 27) {
-      console.log(`  FAIL: Cursor skills count is ${cursorSkillNames.length}, expected 27`);
+    if (cursorSkillNames.length !== 28) {
+      console.log(`  FAIL: Cursor skills count is ${cursorSkillNames.length}, expected 28`);
       return "FAIL";
     }
     if (cursorSkillNames.includes("thatch-code-review")) {
@@ -234,8 +234,8 @@ const useCase: UseCase = {
       console.log("  FAIL: setup stdout does not name the Cursor skills dir");
       return "FAIL";
     }
-    if (!out2.includes("27 added")) {
-      console.log("  FAIL: setup stdout does not report '27 added' on fresh install");
+    if (!out2.includes("28 added")) {
+      console.log("  FAIL: setup stdout does not report '28 added' on fresh install");
       return "FAIL";
     }
     // A project-local run must not create user-scoped skills.
@@ -272,11 +272,11 @@ const useCase: UseCase = {
     }
 
     // Reporting: a no-op re-run reports every skill as unchanged.
-    if (!r3c.stdout.toString().includes("27 unchanged")) {
+    if (!r3c.stdout.toString().includes("28 unchanged")) {
       console.log("  FAIL: re-run stdout does not report '27 unchanged' for Claude");
       return "FAIL";
     }
-    if (!r3x.stdout.toString().includes("27 unchanged")) {
+    if (!r3x.stdout.toString().includes("28 unchanged")) {
       console.log("  FAIL: re-run stdout does not report '27 unchanged' for Cursor");
       return "FAIL";
     }
