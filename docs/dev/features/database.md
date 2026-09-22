@@ -18,6 +18,7 @@ The tables fall into these groups:
 | Prediction engine | `prediction_matchers`, `predictions`, `prediction_edges`, `prediction_provenance` | User decision model |
 | Behavior engine | `behavior_matchers`, `behaviors`, `behavior_edges`, `behavior_provenance` | LLM self-discipline rules |
 | Cross-session chat | `chat_sessions`, `chat_messages` | Session directory + message inbox (shared across opencode processes) |
+| Repo identity | `repo_paths` | Worktree-to-main-checkout cache for identity recovery after deletion |
 
 The prediction and behavior engines share the same four-table shape (matchers, items, edges, provenance) with different table names. They are separate because the semantics differ: predictions model what the user wants; behaviors model what the LLM should do.
 
@@ -263,6 +264,30 @@ chat_messages(
   name in the reader's view.
 
 See [cross-session-chat.md](cross-session-chat.md) for the delivery model.
+
+### repo_paths
+
+```sql
+repo_paths(
+  worktree_path TEXT PRIMARY KEY,
+  main_path     TEXT NOT NULL,
+  repo_slug     TEXT NOT NULL,
+  resolved_at   INTEGER NOT NULL
+)
+```
+
+- Records, per worktree directory (realpath-canonicalized key), the main
+  checkout path and the repo identity that `detectRepo` resolved while the
+  directory was alive. Read after the directory is deleted -- the recovery
+  and validation rules live in [repo-identity.md](repo-identity.md).
+- Written by `detectRepo` on successful remote or common-dir resolution,
+  never from the basename fallback. Rows are evicted only on definitive
+  invalidation (the main checkout exists but is no longer the recorded
+  repo); a missing main checkout keeps the row, since a re-clone may be in
+  progress.
+
+See [repo-identity.md](repo-identity.md) for the resolution and eviction
+rules.
 
 ## Schema migration
 

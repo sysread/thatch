@@ -73,9 +73,14 @@ notification carries the exit code and duration only. The command's
 stdout and stderr are discarded - command output can be external
 content (a curl response, a build log), so it never rides a
 notification. The agent re-runs the command or reads logs itself when
-it acts. The command runs in the project directory as the local user;
+it acts. The command runs in the project directory (or the `cd` path you
+pass to `watch_command_create`) as the local user;
 each run is killed at a 30-second timeout
-(`THATCH_WATCH_COMMAND_TIMEOUT_SECONDS` overrides it).
+(`THATCH_WATCH_COMMAND_TIMEOUT_SECONDS` overrides it). If the project
+directory is a git worktree that gets deleted while a watch is active
+(the branch merged and was cleaned up), the command keeps running from
+the repo's main checkout instead of failing - branch lists and git state
+are shared across worktrees, so the checks stay equivalent.
 
 ## How to use it
 

@@ -31,7 +31,7 @@ The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection, M
 - Unknown command or missing required arg calls `usage()` and exits 1.
 - Args are positional, parsed by hand from `process.argv.slice(2)`. No arg-parsing library.
 - DB opened once at startup, closed at end (except `mcp` which closes early).
-- Stores default to git remote detected by `detectRepo()`; "unknown" on failure. "global" is the shared store. "all" (search only) means project + global.
+- Stores default to git remote detected by `detectRepo()`; "unknown" (no git repo, or a deleted project directory with no cache entry) degrades to "global". "global" is the shared store. "all" (search only) means project + global.
 
 ## prime
 

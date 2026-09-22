@@ -22,7 +22,7 @@ Shared core
   ├── tool-defs.ts    → single source of truth: zod schemas + execute logic
   ├── db.ts           → SQLite CRUD, cosine search (recall + search), dedup verdicts
   ├── embeddings.ts   → embedding model via transformers.js
-  ├── git.ts          → detect repo identity (store name)
+  ├── git.ts          → detect repo identity (store name) + worktree-deletion recovery (repo_paths cache)
   ├── hygiene.ts      → hygiene report (pending dedups, stale, orphaned branches)
   ├── prompts.ts      → system prompt, compaction, reminders, recall/prediction/behavior nudges, prompt cores, CLAUDE.md instructions
   ├── commands.ts     → /thatch slash-command registry: actions from prompt cores + wrap-ups, per-host sync
@@ -72,7 +72,7 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `index.ts` | OpenCode plugin entry. Wires DB, model, extraction; registers tools and hooks; installs skills. Internal state beyond the extraction pipeline: `extracting` set (parent IDs with an active direct-extraction child), `childMetrics` map (new/updated/deleted counts per child session), and `triggerExtraction(parentID)` (creates a child session via the SDK client and prompts it with the extraction payload). |
 | `setup.ts` | `thatch setup --claude` / `--cursor` installer. Writes MCP config (`.mcp.json` / `.cursor/mcp.json`), appends to CLAUDE.md / AGENTS.md (idempotent), installs hooks in settings.json / hooks.json, installs skills. |
 | `hygiene.ts` | Hygiene report: pending dedup pairs, stale count, orphaned branch memories. Shared by the plugin's session-start hook and the CLI's `thatch reminder` command. |
-| `git.ts` | Parse `owner/repo` from git remote. Worktree-safe fallback chain. |
+| `git.ts` | Parse `owner/repo` from git remote. Worktree-safe fallback chain, plus recovery from the `repo_paths` cache when the directory is deleted, and the spawn-cwd fallback. See [features/repo-identity.md](features/repo-identity.md). |
 | `db.ts` | SQLite schema, CRUD for entries/stores, brute-force cosine search (`search` = pure scoring, `recall` = search + telemetry stamping), dedup-pair verdict tracking. Prediction tables: matchers, predictions, edges, provenance. `scorePredictionNudge` is the shared auto-fire entry point for both host paths. Behavior tables: same four-table shape (matchers, behaviors, edges, provenance) with `scoreBehaviorNudge` as the shared entry point. |
 | `embeddings.ts` | Lazy-load the embedding model. Expose `queryEmbed`/`passageEmbed` and the model `name` (stored as an informational tag). `MockEmbeddingModel` for tests. |
 | `extraction.ts` | Per-session in-memory ring buffer (cap 20) that buffers non-thatch tool interactions and serializes them into the JSON payload the `get_extraction_payload` tool returns. The in-memory pipeline is opencode-only, but the payload builders (`buildExtractionPayload`, `deriveTitle`) are shared by both paths — `extract-queue.ts` imports `deriveTitle`, `mcp.ts` imports `buildExtractionPayload` for the extraction payload provider. `summarizeArgs` is used internally by `buildExtractionPayload`. |

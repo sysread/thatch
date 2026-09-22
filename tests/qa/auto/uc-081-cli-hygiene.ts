@@ -126,18 +126,22 @@ const useCase: UseCase = {
     }
 
     // --- All-zero case: "Store is healthy." ---
-    // Use a clean store with a single fresh, non-duplicate memory
+    // Use a clean store with a single fresh, non-duplicate memory.
+    // The clean dir must be OUTSIDE any git repo: the fixture root is one
+    // (createFixture git-inits it), and detectRepo resolves a git subdir to
+    // the repo's own identity - which here is the seeded store with signals.
+    // Under a non-git cwd, detectRepo falls back to the dir basename.
     const cleanStore = "clean-store-081";
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const cleanParent = mkdtempSync(join(tmpdir(), "thatch-qa-clean-081-"));
+    const cleanDir = join(cleanParent, cleanStore);
+    mkdirSync(cleanDir, { recursive: true });
+
     const db5 = new ThatchDB(dbPath);
     const cleanEmb = await model.passageEmbed("a completely unique fresh memory for health check");
     db5.remember(cleanStore, "clean-entry", "a completely unique fresh memory for health check", cleanEmb, "mock");
     db5.close();
-
-    // The CLI auto-detects store from cwd. In a non-git dir, detectRepo
-    // returns the dir basename. We need to run from a dir whose basename
-    // matches our clean store. Create a subdir with that name.
-    const cleanDir = join(ctx.dir, cleanStore);
-    mkdirSync(cleanDir, { recursive: true });
 
     const result4 = await $`${bin} hygiene`.env(env).cwd(cleanDir).quiet().nothrow();
     if (result4.exitCode !== 0) {

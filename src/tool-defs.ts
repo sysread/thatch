@@ -1432,8 +1432,9 @@ const watchCommandCreateDef: ToolDef = {
     "per-run timeout kills a blocking command each cycle, wasting up to " +
     "30s of the shared poll cycle on a check that can never succeed). " +
     "Use this for long or unknown-duration waits on any local condition " +
-    "instead of sleep-polling. The command runs in this project directory " +
-    "via bash -c about every 60s, killed at a 30s per-run timeout " +
+    "instead of sleep-polling. The command runs in the project directory " +
+    "(or the cd path) via bash -c about every 60s, killed at a 30s " +
+    "per-run timeout " +
     "(THATCH_WATCH_COMMAND_TIMEOUT_SECONDS overrides; a timed-out run " +
     "means not-done-yet). One-shot by design: it fires once on the first " +
     "exit 0, auto-cancels, and the notification carries only the exit code " +
@@ -1448,6 +1449,11 @@ const watchCommandCreateDef: ToolDef = {
       "The shell command to run as a condition: a fast, idempotent status " +
       "check that exits 0 when the wait is over. Its output is discarded.",
     ),
+    cd: z.string().optional().describe(
+      "Directory the command runs in (the bash cwd). Defaults to the " +
+      "project directory. Use only when the condition must be checked " +
+      "somewhere else; a nonexistent path is rejected at registration.",
+    ),
   },
   opencodeOnly: true,
   async execute(args, ctx, host) {
@@ -1457,11 +1463,12 @@ const watchCommandCreateDef: ToolDef = {
     if (!ctx.watchers) {
       return "Watching is unavailable: no watcher registry was wired by this host.";
     }
-    if (!ctx.projectDir) {
+    const dir = (args.cd as string | undefined) ?? ctx.projectDir;
+    if (!dir) {
       return "Watching is unavailable: no project directory was wired by this host.";
     }
     const command = args.command as string;
-    const result = await ctx.watchers.createCommand(host.sessionID, command, ctx.projectDir);
+    const result = await ctx.watchers.createCommand(host.sessionID, command, dir);
     if (!result.ok) return `Watcher not created: ${result.error}`;
     const w = result.watcher;
     return (

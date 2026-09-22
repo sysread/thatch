@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { z } from "zod";
-import { ThatchDB } from "./db";
+import { ThatchDB, repoPathCache } from "./db";
 import { mcpSessionID } from "./chat";
 import { BgeEmbeddingModel } from "./embeddings";
 import { detectRepo } from "./git";
@@ -121,14 +121,16 @@ export function compilePrompts(): Map<string, ActionDef> {
  */
 export async function runMcpServer(): Promise<void> {
   const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
-  const repo = await detectRepo(projectDir);
 
   const home = process.env.HOME ?? "/tmp";
   const configHome = process.env.XDG_CONFIG_HOME ?? `${home}/.config`;
   const dbPath = process.env.THATCH_DB_PATH ?? `${configHome}/thatch/thatch.db`;
   const modelName = process.env.THATCH_MODEL ?? "Xenova/bge-small-en-v1.5";
 
+  // The DB must exist before identity detection: detectRepo consults the
+  // repo_paths cache when the project directory is gone (deleted worktree).
   const db = new ThatchDB(dbPath);
+  const repo = await detectRepo(projectDir, repoPathCache(db));
   const model = new BgeEmbeddingModel(modelName);
 
   await seedDefaultBehaviors(db, model);

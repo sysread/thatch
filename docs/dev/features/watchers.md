@@ -138,6 +138,14 @@ The command source stretches the fetch/diff recipe in two ways:
    holding the pipe write-ends past the kill - without the race, the
    drains never resolve and the shared poll cycle stalls forever.
 
+The spawn cwd is resolved per poll by the plugin's command runner
+(`withCwdFallback`): the watcher's directory when it still exists, else
+the cached main checkout (see [repo-identity.md](repo-identity.md)), so a
+watcher whose worktree is deleted mid-watch recovers instead of spinning
+ENOENT errors until the TTL. `watch_command_create` also accepts a `cd`
+override for conditions that must be checked somewhere other than the
+project directory; it is validated by the registration-time baseline run.
+
 `createCommand()` runs the command once at registration as baseline
 validation, like `createPr()`'s baseline fetch: exit 0 at baseline
 means the condition is already met (refused, so the caller proceeds

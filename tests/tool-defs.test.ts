@@ -843,6 +843,26 @@ describe("watch_command_create", () => {
     expect(result).toContain("spawn gone");
   });
 
+  test("cd overrides the project directory as the watch cwd", async () => {
+    const registry = registryWith();
+    const watchCtx = { ...ctx, watchers: registry, projectDir: "/tmp/project" };
+    const result = await findTool().execute({ command: "test -f /tmp/marker", cd: "/elsewhere" }, watchCtx, host);
+    expect(result).toContain("[watching] cmd:");
+    const watcher = registry.listForSession(host.sessionID)[0];
+    if (watcher.source !== "command") throw new Error("expected a command watcher");
+    expect(watcher.cwd).toBe("/elsewhere");
+  });
+
+  test("cd works even when the host wired no project directory", async () => {
+    const registry = registryWith();
+    const watchCtx = { ...ctx, watchers: registry };
+    const result = await findTool().execute({ command: "test -f /tmp/marker", cd: "/elsewhere" }, watchCtx, host);
+    expect(result).toContain("[watching] cmd:");
+    const watcher = registry.listForSession(host.sessionID)[0];
+    if (watcher.source !== "command") throw new Error("expected a command watcher");
+    expect(watcher.cwd).toBe("/elsewhere");
+  });
+
   test("explains unavailability without a wired project directory", async () => {
     const registry = registryWith();
     const watchCtx = { ...ctx, watchers: registry };

@@ -233,6 +233,32 @@ export interface CommandRunResult {
 
 export type CommandRunner = (command: string, cwd: string, timeoutMs: number) => Promise<CommandRunResult>;
 
+/**
+ * Wraps a CommandRunner so the spawn cwd is resolved per poll: the given
+ * resolver returns the directory to run in (the project dir when alive, or
+ * the cached main checkout when the worktree was deleted mid-watch), or null
+ * to keep the original cwd (which then fails as before). A fallback fires
+ * at most once per dead directory - onFallback, when given, reports it so
+ * the host can log; per-cycle logging is the poll loop's existing failure
+ * mode and it spams. Exported for the fallback unit tests; the plugin wires
+ * the production instance.
+ */
+export function withCwdFallback(
+  base: CommandRunner,
+  resolve: (cwd: string) => Promise<string | null>,
+  onFallback?: (from: string, to: string) => void,
+): CommandRunner {
+  const logged = new Set<string>();
+  return async (command, cwd, timeoutMs) => {
+    const resolved = await resolve(cwd);
+    if (resolved && resolved !== cwd && !logged.has(cwd)) {
+      logged.add(cwd);
+      onFallback?.(cwd, resolved);
+    }
+    return base(command, resolved ?? cwd, timeoutMs);
+  };
+}
+
 export interface WatcherRegistryOptions {
   /** Delivers a batch of events for a session. Injected so tests never spawn. */
   deliver: (sessionID: string, events: WatcherEvent[]) => Promise<void>;

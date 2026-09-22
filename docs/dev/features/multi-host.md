@@ -42,7 +42,9 @@ startup.
 `experimental.chat.system.transform` hook. The hook calls `systemPrompt(repo)`
 and pushes the result into `output.system` every turn. No files are written.
 The repo name is baked in at runtime, so the prompt always reflects the current
-worktree.
+worktree. Identity detection reads the session's own directory (not just the
+framework worktree) and recovers from the `repo_paths` cache when that
+directory was deleted - see [repo-identity.md](repo-identity.md).
 
 **Tools**: registered through opencode's `tool()` wrapper in `src/tools.ts`,
 which adds the `thatch_` prefix. The agent sees `thatch_memory_remember`,

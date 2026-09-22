@@ -3,7 +3,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import pkg from "../package.json" with { type: "json" };
-import { ThatchDB } from "../src/db";
+import { ThatchDB, repoPathCache } from "../src/db";
 import { detectRepo } from "../src/git";
 import { BgeEmbeddingModel } from "../src/embeddings";
 import { hygieneReport } from "../src/hygiene";
@@ -75,9 +75,13 @@ global store. Use "all" with search to search project + global together.`);
 
 async function defaultStore(): Promise<string> {
   try {
-    return await detectRepo();
+    // The cache recovers identity when the project directory is gone
+    // (deleted worktree). Same unknown-to-global mapping the tool layer
+    // applies, so the CLI never lands on a literal "unknown" store.
+    const repo = await detectRepo(undefined, repoPathCache(db));
+    return repo === "unknown" ? "global" : repo;
   } catch {
-    return "unknown";
+    return "global";
   }
 }
 
@@ -97,7 +101,10 @@ async function chatHookLine(hookSessionID?: string, transcriptPath?: string): Pr
   if (!chatEnabled(loadConfig(dbPath).config)) return "";
   let repo: string | null = null;
   try {
-    repo = await detectRepo();
+    const detected = await detectRepo(undefined, repoPathCache(db));
+    // unknown-to-global: chat registration must follow the same store the
+    // tools would read, even when the project directory is gone.
+    repo = detected === "unknown" ? "global" : detected;
   } catch {
     return "";
   }
@@ -730,7 +737,7 @@ switch (command) {
     const worktree = projectDir();
     let hygiene: string | null = null;
     try {
-      hygiene = await hygieneReport(db, repo, worktree);
+      hygiene = await hygieneReport(db, repo, worktree, repoPathCache(db));
     } catch (err) {
       console.error(`[thatch] hygiene report failed: ${err}`);
     }
@@ -768,7 +775,7 @@ switch (command) {
   case "hygiene": {
     const repo = await defaultStore();
     const worktree = projectDir();
-    const hygiene = await hygieneReport(db, repo, worktree);
+    const hygiene = await hygieneReport(db, repo, worktree, repoPathCache(db));
     console.log(hygiene ?? "Store is healthy.");
     break;
   }
@@ -1003,7 +1010,8 @@ switch (command) {
       const { detectSkew, readNpmCacheForUpdate } = await import("../src/version-check");
 
       let repo = "unknown";
-      try { repo = await detectRepo(); } catch {}
+      try { repo = await detectRepo(undefined, repoPathCache(db)); } catch {}
+      if (repo === "unknown") repo = "global";
 
       // Version checks (best-effort, no network, instant):
       //   - Skew: the running MCP server's version file differs from this
@@ -1214,7 +1222,8 @@ switch (command) {
       }
 
       let repo = "unknown";
-      try { repo = await detectRepo(); } catch {}
+      try { repo = await detectRepo(undefined, repoPathCache(db)); } catch {}
+      if (repo === "unknown") repo = "global";
 
       const { sidebandPredictions, sidebandSocketPath } = await import("../src/sideband");
       const { predictionNudge } = await import("../src/prompts");

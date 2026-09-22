@@ -8,6 +8,7 @@ import {
 import { BehaviorEngine } from "./behavior";
 import { ChatStore, type ChatHostKind, type ChatWorktreeKind } from "./chat";
 import { PREDICTION_K, PREDICTION_P0, PREDICTION_W_SOFT } from "./scoring-engine";
+import type { RepoPathCache, RepoPathRow } from "./git";
 
 export { cosineSimilarity } from "./vector-math";
 export type { PredictionNudgeItem, MatcherRow, PredictionRow, ScoredPrediction } from "./prediction";
@@ -90,6 +91,20 @@ export class ThatchDB {
     this.#db.run(`
       CREATE TABLE IF NOT EXISTS stores (
         name TEXT PRIMARY KEY
+      )
+    `);
+
+    // Cache mapping worktree directories to their main checkout and repo
+    // identity, recorded by detectRepo while the directory is alive. When the
+    // worktree is deleted (merged and cleaned up), identity recovery and the
+    // watcher cwd fallback read this instead of failing. Never delete the
+    // table on upgrade - the whole point is surviving restarts.
+    this.#db.run(`
+      CREATE TABLE IF NOT EXISTS repo_paths (
+        worktree_path TEXT PRIMARY KEY,
+        main_path     TEXT NOT NULL,
+        repo_slug     TEXT NOT NULL,
+        resolved_at   INTEGER NOT NULL
       )
     `);
 
@@ -994,6 +1009,35 @@ export class ThatchDB {
   }
 
   // ---------------------------------------------------------------------------
+  // Repo path cache - worktree dir to main checkout + identity, written by
+  // detectRepo while the directory is alive and read after it is deleted.
+  // ---------------------------------------------------------------------------
+
+  repoPathGet(worktreePath: string): RepoPathRow | null {
+    const row = this.#db
+      .query("SELECT worktree_path, main_path, repo_slug FROM repo_paths WHERE worktree_path = ?")
+      .get(worktreePath) as any;
+    if (!row) return null;
+    return { worktreePath: row.worktree_path, mainPath: row.main_path, repoSlug: row.repo_slug };
+  }
+
+  repoPathPut(row: RepoPathRow): void {
+    this.#db.run(
+      `INSERT INTO repo_paths (worktree_path, main_path, repo_slug, resolved_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(worktree_path) DO UPDATE SET
+         main_path = excluded.main_path,
+         repo_slug = excluded.repo_slug,
+         resolved_at = excluded.resolved_at`,
+      [row.worktreePath, row.mainPath, row.repoSlug, Date.now()],
+    );
+  }
+
+  repoPathEvict(worktreePath: string): void {
+    this.#db.run("DELETE FROM repo_paths WHERE worktree_path = ?", [worktreePath]);
+  }
+
+  // ---------------------------------------------------------------------------
   // Hygiene - signals for the session-start heartbeat. Staleness means
   // neither written nor recalled since the cutoff; recall telemetry keeps
   // actively-used old memories out of the count.
@@ -1047,4 +1091,17 @@ export class ThatchDB {
   close(): void {
     this.#db.close();
   }
+}
+
+/**
+ * Adapts ThatchDB to the RepoPathCache interface src/git.ts consumes, so
+ * git.ts never imports the database. Callers pass this into detectRepo /
+ * resolveSpawnCwd / listBranches.
+ */
+export function repoPathCache(db: ThatchDB): RepoPathCache {
+  return {
+    get: (p) => db.repoPathGet(p),
+    put: (row) => db.repoPathPut(row),
+    evict: (p) => db.repoPathEvict(p),
+  };
 }

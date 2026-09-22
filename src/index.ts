@@ -2,9 +2,9 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { createDebugLog } from "./debug";
 import type { Plugin } from "@opencode-ai/plugin";
-import { ThatchDB } from "./db";
+import { ThatchDB, repoPathCache } from "./db";
 import { BgeEmbeddingModel } from "./embeddings";
-import { detectRepo, detectWorktreeKind } from "./git";
+import { detectRepo, detectWorktreeKind, resolveSpawnCwd } from "./git";
 import { createTools } from "./tools";
 import {
   systemPrompt,
@@ -24,7 +24,7 @@ import { installOpencodeCommands, COMPACT_READY_TOKEN, EXIT_READY_TOKEN } from "
 import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
-import { WatcherRegistry, ghApiRun, ghAvailable } from "./watchers";
+import { WatcherRegistry, ghApiRun, ghAvailable, runWatchedCommand, withCwdFallback } from "./watchers";
 import { watcherNotificationNudge, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
 import { ChatPoller, createWakeGate, isDefaultSessionTitle } from "./chat";
 import { chatEnabled, chatAutoRegister, loadConfig } from "./config";
@@ -162,14 +162,24 @@ export function startupSessionId(osArgs: string[]): string | null {
   return startupSessionIdFromArgv(process.argv) ?? startupSessionIdFromArgv(osArgs);
 }
 
-export const server: Plugin = async ({ client, worktree }) => {
+export const server: Plugin = async ({ client, worktree, directory }) => {
   // The opencode server's cwd is wherever the server happened to start;
   // `worktree` is the project this plugin instance actually serves.
-  const repo = await detectRepo(worktree);
+  // `directory` is the session's own directory - on resume after the
+  // worktree was deleted, opencode reassigns worktree to "/" (it walks up
+  // from the missing dir, finds no .git, and boots the global project) but
+  // still forwards the original path as directory, which is the only input
+  // the repo_paths cache can recover identity from.
   const home = process.env.HOME ?? "/tmp";
   const configHome = process.env.XDG_CONFIG_HOME ?? join(home, ".config");
   const dbPath = process.env.THATCH_DB_PATH ?? join(configHome, "thatch", "thatch.db");
   const modelName = process.env.THATCH_MODEL ?? "Xenova/bge-small-en-v1.5";
+
+  // The DB must exist before identity detection: detectRepo consults the
+  // repo_paths cache when the session directory is gone.
+  const db = new ThatchDB(dbPath);
+  const repoCache = repoPathCache(db);
+  const repo = await detectRepo(directory ?? worktree, repoCache);
 
   // Whether cross-session chat is on (chat.enabled, default on). Read once
   // at init: it gates the chat poller and the prompt's chat section. The
@@ -177,9 +187,6 @@ export const server: Plugin = async ({ client, worktree }) => {
   // without a restart.
   const chatOn = chatEnabled(loadConfig(dbPath).config);
 
-  const db = new ThatchDB(dbPath);
-  // Opt-in diagnostics (THATCH_DEBUG), written to debug.log beside the db.
-  // See debug.ts for the tag filter semantics.
   const debug = createDebugLog(dbPath);
   const model = new BgeEmbeddingModel(modelName);
   const extraction = new ExtractionPipeline();
@@ -244,6 +251,16 @@ export const server: Plugin = async ({ client, worktree }) => {
   // triggers a model turn even when the user is away. Events carry pointer
   // data plus machine status (check conclusions, exit codes); the model
   // fetches logs and further details itself with gh.
+  // Watched-command runner: resolves the spawn cwd per poll. When the
+  // project directory is deleted mid-watch (worktree merged and cleaned up),
+  // the poll falls back to the repo_paths cache's main checkout instead of
+  // spinning ENOENT errors until the TTL. The wrapper logs the fallback
+  // once per dead directory - per-cycle error logging is the existing
+  // failure mode and it spams.
+  const watchedCommandRunner = withCwdFallback(runWatchedCommand, (cwd) => resolveSpawnCwd(cwd, repoCache), (from, to) => {
+    console.error(`[thatch] project directory ${from} deleted; watcher falling back to main checkout ${to}`);
+  });
+
   const watchers = new WatcherRegistry({
     deliver: async (sessionID, events) => {
       // Events carry their watch's target label from the registry, so the
@@ -276,6 +293,7 @@ export const server: Plugin = async ({ client, worktree }) => {
     },
     canDeliver: canPromptSession,
     ghRunner: ghApiRun,
+    commandRunner: watchedCommandRunner,
   });
   // gh presence decides whether watch_create and watch_branch_create work;
   // checked lazily by the tools, but log once at startup so misconfiguration
@@ -1298,7 +1316,7 @@ export const server: Plugin = async ({ client, worktree }) => {
 
       let hygiene: string | null = null;
       try {
-        hygiene = await hygieneReport(db, repo, worktree);
+        hygiene = await hygieneReport(db, repo, worktree, repoCache);
       } catch (err) {
         console.error(`[thatch] hygiene report failed: ${err}`);
       }

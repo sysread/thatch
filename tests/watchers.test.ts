@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { watcherNotificationNudge } from "../src/prompts";
-import { runWatchedCommand, drainStreamOutput } from "../src/watchers";
+import { runWatchedCommand, drainStreamOutput, withCwdFallback, type CommandRunResult } from "../src/watchers";
 import {
   WatcherRegistry,
   diffPrState,
@@ -1118,5 +1118,70 @@ describe("watcherNotificationNudge", () => {
     expect(text).not.toMatch(/1\.2s\s+$/m);
     expect(text).toContain("re-run it or read logs yourself");
     expect(text).not.toContain("conclusions are in the summaries above");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// withCwdFallback: per-poll cwd resolution for the watcher runner
+// ---------------------------------------------------------------------------
+
+describe("withCwdFallback", () => {
+  const base = async (command: string, cwd: string): Promise<CommandRunResult> => ({
+    exitCode: 0,
+    timedOut: false,
+    stderr: `ran-in:${cwd}:${command}`,
+    durationMs: 10,
+  });
+
+  test("a live directory resolves to itself - the base runner gets the original cwd", async () => {
+    const seen: string[] = [];
+    const runner = withCwdFallback(
+      async (command, cwd) => {
+        seen.push(cwd);
+        return base(command, cwd);
+      },
+      async (cwd) => cwd,
+    );
+    await runner("check", "/live/dir", 1000);
+    expect(seen).toEqual(["/live/dir"]);
+  });
+
+  test("a dead directory falls back to the resolver's path", async () => {
+    const fallbacks: [string, string][] = [];
+    const runner = withCwdFallback(
+      async (command, cwd) => base(command, cwd),
+      async (cwd) => (cwd === "/dead/wt" ? "/main/checkout" : cwd),
+      (from, to) => fallbacks.push([from, to]),
+    );
+    const result = await runner("check", "/dead/wt", 1000);
+    expect(result.stderr).toBe("ran-in:/main/checkout:check");
+    expect(fallbacks).toEqual([["/dead/wt", "/main/checkout"]]);
+  });
+
+  test("the fallback logs once per dead directory, not per poll", async () => {
+    const fallbacks: [string, string][] = [];
+    const runner = withCwdFallback(
+      async (command, cwd) => base(command, cwd),
+      async (cwd) => (cwd === "/dead/wt" ? "/main/checkout" : cwd),
+      (from, to) => fallbacks.push([from, to]),
+    );
+    for (let i = 0; i < 5; i++) await runner("check", "/dead/wt", 1000);
+    expect(fallbacks).toHaveLength(1);
+  });
+
+  test("a null resolution keeps the original cwd, which then fails as before", async () => {
+    const seen: string[] = [];
+    const runner = withCwdFallback(
+      async (command, cwd) => {
+        seen.push(cwd);
+        return base(command, cwd);
+      },
+      async () => null,
+      () => {
+        throw new Error("must not report a fallback that did not happen");
+      },
+    );
+    await runner("check", "/dead/wt", 1000);
+    expect(seen).toEqual(["/dead/wt"]);
   });
 });
