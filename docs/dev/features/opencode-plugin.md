@@ -76,13 +76,16 @@ the shared runtime needs. It is the lifecycle-level sibling of `CoreContext`
 ## Smoke-test-gated unknowns
 
 The v2 adapter was written against tagged source (v2.0.9) without a live
-binary. Items marked SMOKE TEST in src/opencode/v2.ts need one real
-`opencode serve` (v2) run to verify: exact SDK call shapes for
-`session.create/get/prompt`, event payload shape (`{type, properties}` +
-`location`), prompt-hook injection rendering, echo re-entry behavior, and the
-compaction context surface. Install opencode-v2 (brew formula
-`anomalyco/tap/opencode-v2`; conflicts with the v1 formula's binary name, so
-it cannot coexist) and re-run the QA live suite against it.
+binary. Items marked SMOKE TEST in src/opencode/v2.ts were verified against
+a real v2.0.15 binary on 2026-09-23: merged-default loading, tool schemas
+(via pre-converted JSON Schema - see the gotcha), event shapes, the
+execution-lifecycle idle signal, synthetic wake delivery, and command
+registration all work. The app-exit gap (no server-side publish surface for
+`tui.command.execute`) is upstream:
+[anomalyco/opencode#50984](https://github.com/anomalyco/opencode/issues/50984).
+Install opencode-v2 (brew formula `anomalyco/tap/opencode-v2`; conflicts
+with the v1 formula's binary name, so it cannot coexist) and re-run the QA
+live suite against it.
 
 ## User setup compatibility
 
