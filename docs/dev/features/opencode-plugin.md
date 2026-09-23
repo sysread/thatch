@@ -61,10 +61,11 @@ the shared runtime needs. It is the lifecycle-level sibling of `CoreContext`
 | incoming message | `chat.message` hook | `session.hook("prompt")` | the hook awaits the runtime; injections append to `prompt.text` (v2 has no synthetic parts) |
 | system prompt | `experimental.chat.system.transform` | `session.hook("context")` | mutates the request's system array; the runtime pushes a raw string where v2 types SystemPart (smoke-test-gated) |
 | compaction | `experimental.session.compacting` + `.autocontinue` + `session.compacted` | `session.hook("compaction")` | flag lands; context-injection surface unverified |
-| wrap-up commands | `command.execute.before` | none | degrade |
+| wrap-up commands | `command.execute.before` + command files | `command.transform` + `CommandEditor.add` | registered in code: `execute` arms the greenlight check (`armWrapUp`) and delivers the same prompt body the v1 file carries; the runtime installs only ACTION command files on v2 (a file and a registered command with the same name would collide) |
 | tools | `hooks.tool` map via `tool()` | `tool.transform` + `ToolEditor.add` | zod shapes pass as Standard Schema; results wrap as `{ content }` |
 | tool buffering | `tool.execute.after` hook | `tool.hook("execute.after")` | wired: feeds the same extraction buffer; result shape smoke-test-gated |
 | noReply deliveries | `promptAsync` with `noReply` | none | gated off via `HostCapabilities.noReplyDelivery` -- chat echoes and the session-start reminder are skipped on v2 (delivering them would start real model turns: a feedback loop) |
+| synthetic wake deliveries | `promptAsync` with `synthetic` parts | `session.synthetic` endpoint | watcher + chat wake nudges route to v2's synthetic endpoint (TUI-hidden), matching v1 |
 | child sessions | `client.session.create/promptAsync/prompt/delete` | `session.create/prompt` | create+prompt supported (shapes smoke-test-gated; a missing id throws into the extraction fallback); delete degrades (extraction children are not cleaned up on v2) |
 | session status | `client.session.status` | none | returns `{}`; the wake gate treats unknown as idle and the event-fed status map does the gating |
 | session list/messages | `client.session.list/messages` | none | degrade (`-c` resume listing + wrap-up greenlight lose their data source) |

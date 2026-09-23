@@ -20,7 +20,7 @@ import {
 import { ExtractionPipeline, type ToolInteraction } from "./extraction";
 import type { CoreContext } from "./tool-defs";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
-import { installOpencodeCommands, COMPACT_READY_TOKEN, EXIT_READY_TOKEN } from "./commands";
+import { installOpencodeCommands, opencodeActionCommandDefs, COMPACT_READY_TOKEN, EXIT_READY_TOKEN } from "./commands";
 import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
@@ -81,6 +81,14 @@ export interface ThatchRuntime {
     output: { title: string; output: string },
   ): Promise<void>;
   onCommandExecuteBefore(input: { command: string; sessionID: string }): Promise<void>;
+  /**
+   * Arms the wrap-up greenlight check for hosts whose command registration
+   * runs plugin code (v2 CommandEditor): the command's execute hook calls
+   * this, then delivers wrapUpCommandContent(kind) as the session prompt -
+   * the same arm-plus-prompt pair the v1 command file plus
+   * command.execute.before hook produce.
+   */
+  armWrapUp(sessionID: string, kind: "compact" | "exit"): void;
   onChatMessage(
     input: { sessionID: string; messageID?: string },
     output: { parts: any[]; message: { id: string } },
@@ -433,8 +441,11 @@ export async function createRuntime(input: {
   // Same for the wrap-up slash commands: synced into the global config dir on
   // every load so template updates self-heal. Config is loaded before plugins
   // during server startup, so a first-ever install lands on the next start.
+  // Hosts that register commands natively (v2) get the action commands as
+  // files only - the wrap-ups register in code (armWrapUp), and a file with
+  // the same name as a registered command would collide.
   try {
-    installOpencodeCommands(configHome);
+    installOpencodeCommands(configHome, caps.nativeCommands ? opencodeActionCommandDefs() : undefined);
   } catch (err) {
     console.error(`[thatch] command install failed: ${err}`);
   }
@@ -471,6 +482,14 @@ export async function createRuntime(input: {
     // have not called accept).
     const childId = result.id;
     extractionChildren.add(childId);
+    // v2's session API cannot create a CHILD session (no parentID in its
+    // create input), so the adapter returns a top-level session and no
+    // session.created event carries the parent mapping. Set both here
+    // eagerly; on v1 the event sets the same values (idempotent).
+    if (!childToParent.has(childId)) {
+      childToParent.set(childId, parentID);
+      parentSnapshots.set(childId, [...extraction.peek(parentID)]);
+    }
 
     // Clean up the child session and all map entries if prompting fails.
     // Without this, the child exists on the server but was never prompted,
@@ -710,6 +729,11 @@ export async function createRuntime(input: {
     onCommandExecuteBefore: async (input) => {
       const wrapUp = WRAPUP_COMMANDS[input.command];
       if (wrapUp) pendingWrapUp.set(input.sessionID, wrapUp);
+    },
+
+    armWrapUp: (sessionID, kind) => {
+      const wrapUp = WRAPUP_COMMANDS[`thatch/${kind}`];
+      if (wrapUp) pendingWrapUp.set(sessionID, wrapUp);
     },
 
     onChatMessage: async (input, output) => {

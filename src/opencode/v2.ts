@@ -3,6 +3,7 @@ import type { Tool } from "@opencode/schema/tool";
 import type { ToolContext as V2ToolContext } from "@opencode/plugin/promise/tool";
 import type { HostCapabilities, PromptPart, ToastInput } from "../capabilities";
 import { createRuntime } from "../runtime";
+import { wrapUpCommandContent } from "../commands";
 import { trimHostContext } from "../tools";
 import { TOOL_DEFS, type HostToolContext } from "../tool-defs";
 
@@ -60,7 +61,7 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   const directory = location.directory;
   const worktree = location.project.directory;
 
-  const capabilities = buildCapabilities(context);
+  const capabilities = buildCapabilities(context, worktree);
   const runtime = await createRuntime({ capabilities, directory, worktree });
 
   // Tool registration: the same CoreContext the v1 adapter feeds to
@@ -109,9 +110,16 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     }
   });
 
-  // Per-message nudges: the runtime handler reads the user's text from the
-  // seeded non-synthetic part and pushes synthetic parts onto the array;
-  // anything pushed is an injection, appended to the prompt's text.
+  // Per-message nudges: the runtime computes injections once per user
+  // message (here, on the prompt clone) and the generate hook appends them
+  // to the OUTBOUND request's last user message. The stored user message
+  // stays clean: v1 delivered nudges as TUI-hidden synthetic parts, and
+  // v2's prompt text IS the stored message, so injecting there would echo
+  // the nudges into the visible transcript. The generate hook instead
+  // mutates only the wire request - invisible to the TUI and message list,
+  // visible to the model on every call of the turn, matching v1's
+  // persistent synthetic part.
+  const pendingInjections = new Map<string, string[]>();
   const registerPrompt = await context.session.hook(
     "prompt",
     async (request: { sessionID: string; messageID: string; prompt: { text: string } }) => {
@@ -126,9 +134,20 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
         return;
       }
       const injections = parts.slice(1).map((part) => part.text);
-      if (injections.length > 0) request.prompt.text = `${request.prompt.text}\n\n${injections.join("\n\n")}`;
+      if (injections.length > 0) pendingInjections.set(request.sessionID, injections);
+      else pendingInjections.delete(request.sessionID);
     },
   );
+
+  // Inject the turn's nudges into the outbound request. A user message is
+  // always present (the prompt hook ran before the loop's first generate).
+  const registerGenerate = await context.session.hook("generate", (request: { sessionID: string; messages: any[] }) => {
+    const injections = pendingInjections.get(request.sessionID);
+    if (!injections?.length) return;
+    const lastUser = [...request.messages].reverse().find((m) => m?.role === "user");
+    if (!lastUser) return;
+    for (const text of injections) (lastUser.parts ??= []).push({ type: "text", text });
+  });
 
   // Compaction: the nudge-suppression flag is the only surface verified to
   // exist; the context-injection surface is unverified. SMOKE TEST.
@@ -136,7 +155,32 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     await runtime.onSessionCompacting({ sessionID: request.sessionID }, { context: [] });
   });
 
-  // Bus events: raw SSE subscription, not directory-scoped. Filter
+    // Wrap-up slash commands register in code (v2 CommandEditor): execute
+    // arms the greenlight check and delivers the same prompt body the v1
+    // command file carries. The runtime skips installing the wrap-up FILES
+    // on v2 (a file and a registered command with the same name collide).
+    // SMOKE TEST: registration shadows/discovery of plugin commands.
+    const registerCommands = await context.command.transform((editor) => {
+      for (const kind of ["compact", "exit"] as const) {
+        editor.add({
+          name: `thatch/${kind}`,
+          description:
+            kind === "compact"
+              ? "Flush thatch persistence, check for loose ends, then compact if clear"
+              : "Flush thatch persistence, check for loose ends, then exit opencode if clear",
+          execute: async ({ sessionID }: { sessionID: string }) => {
+            runtime.armWrapUp(sessionID, kind);
+            await capabilities.promptSession(
+              sessionID,
+              { parts: [{ type: "text", text: wrapUpCommandContent(kind) }] },
+              "sync",
+            );
+          },
+        });
+      }
+    });
+
+    // Bus events: raw SSE subscription, not directory-scoped. Filter
   // client-side: drop events located elsewhere; location-less events drop
   // with them (matches the v1 host's server-side filter).
   const controller = new AbortController();
@@ -170,7 +214,9 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     registerToolHook.dispose();
     registerSystem.dispose();
     registerPrompt.dispose();
+    registerGenerate.dispose();
     registerCompaction.dispose();
+    registerCommands.dispose();
     await runtime.dispose();
   };
 }
@@ -178,24 +224,29 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
 // The HostCapabilities implementation over the v2 promise context. Every
 // operation the v2 surface lacks degrades as a no-op or null - the shared
 // runtime's callers treat those results as best-effort and log, never crash.
-function buildCapabilities(context: V2Context): HostCapabilities {
+function buildCapabilities(context: V2Context, worktree: string): HostCapabilities {
   // SMOKE TEST: exact v2 SDK shapes for create/get/prompt. The promise
   // context's domain types are structural here; the generated client's
   // wrappers (data fields, path vs flat args) get reconciled against the
   // real binary.
   const session = context.session as unknown as {
-    create(input: { parentID: string; title: string }): Promise<any>;
+    create(input: { location: { directory: string }; title: string }): Promise<any>;
     get(input: { id: string }): Promise<any>;
     prompt(input: { sessionID: string; text: string }): Promise<unknown>;
+    synthetic(input: { sessionID: string; text: string }): Promise<unknown>;
   };
 
   return {
     noReplyDelivery: false,
+    nativeCommands: true,
     // The wake gate treats an unknown session as idle; the runtime's
     // event-fed status map does the busy/retry gating on v2.
     fetchStatuses: async () => ({}),
     sessionCreate: async (input) => {
-      const result = await session.create({ parentID: input.parentID, title: input.title });
+      // v2's session API has no parentID: create a TOP-LEVEL session in the
+      // parent's project directory (the runtime sets the child mapping
+      // eagerly - no session.created event carries it on v2).
+      const result = await session.create({ location: { directory: worktree }, title: input.title });
       const id = result?.data?.id ?? result?.id;
       // A shape mismatch must fail into the runtime's extraction fallback
       // (the nudge path), not silently corrupt the child-session maps.
@@ -208,11 +259,18 @@ function buildCapabilities(context: V2Context): HostCapabilities {
     sessionDelete: async () => {},
     promptSession: async (sessionID, body, _mode) => {
       // v2's prompt endpoint takes text, not parts, and has no synthetic /
-      // noReply semantics. Nudge injections ride the prompt hook; this
-      // carries the direct child-session prompts. mode is v1-only (async =
-      // promptAsync vs sync = prompt); v2 has one blocking endpoint, so the
-      // extraction background flag degrades to a blocking call.
+      // noReply semantics. Nudge injections ride the prompt hook.
+      //
+      // Synthetic deliveries (watcher + chat wake nudges) route to v2's
+      // session.synthetic endpoint: a TUI-hidden message, matching v1's
+      // synthetic part. mode is v1-only (async = promptAsync vs sync =
+      // prompt); v2 has one blocking endpoint, so the extraction background
+      // flag degrades to a blocking call.
       const text = body.parts.map((part) => part.text).join("\n\n");
+      if (!body.noReply && body.parts.length > 0 && body.parts.every((part) => part.synthetic)) {
+        await session.synthetic({ sessionID, text });
+        return;
+      }
       await session.prompt({ sessionID, text });
     },
     sessionGet: async (id) => {

@@ -38,6 +38,14 @@ export interface HostCapabilities {
    * model-turn feedback loop.
    */
   readonly noReplyDelivery: boolean;
+  /**
+   * The host lets plugins register slash commands programmatically (v2's
+   * CommandEditor). When true the runtime installs only the action command
+   * FILES and the adapter registers the wrap-up commands in code (arming
+   * the greenlight check via ThatchRuntime.armWrapUp) - a registered
+   * command and an installed file with the same name would collide.
+   */
+  readonly nativeCommands: boolean;
   /** Live session statuses, as client.session.status() returns. */
   fetchStatuses(): Promise<Record<string, { type: string }> | null>;
   /**
@@ -83,6 +91,7 @@ export interface HostCapabilities {
 export function capabilitiesFromClient(client: PluginInput["client"]): HostCapabilities {
   return {
     noReplyDelivery: true,
+    nativeCommands: false,
     fetchStatuses: async () => {
       const { data } = await client.session.status();
       return data ?? {};

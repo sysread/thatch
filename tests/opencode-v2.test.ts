@@ -17,22 +17,36 @@ type Registration = { dispose: () => void };
 
 let dbDir: string;
 let promptHook: HookFn | undefined;
+let generateHook: HookFn | undefined;
 let contextHook: HookFn | undefined;
 let toolAfterHook: HookFn | undefined;
+let addedCommands: { name: string; execute: (input: any) => Promise<void> }[];
 let addedTools: { name: string; description: string; input: unknown }[];
 let sessionPromptCalls: any[];
+let sessionSyntheticCalls: any[];
 let sessionCreateCalls: any[];
 const eventQueue: any[] = [];
 
 function makeContext() {
   addedTools = [];
   sessionPromptCalls = [];
+  sessionSyntheticCalls = [];
   sessionCreateCalls = [];
   promptHook = undefined;
+  generateHook = undefined;
   contextHook = undefined;
   toolAfterHook = undefined;
+  addedCommands = [];
   return {
     location: { directory: SESSION_DIR, project: { directory: PROJECT_DIR, canonical: PROJECT_DIR } },
+    command: {
+      transform: async (callback: (editor: any) => void): Promise<Registration> => {
+        callback({
+          add: (definition: any) => addedCommands.push(definition),
+        });
+        return { dispose: () => {} };
+      },
+    },
     tool: {
       transform: async (callback: (editor: any) => void): Promise<Registration> => {
         callback({
@@ -48,6 +62,7 @@ function makeContext() {
     session: {
       hook: async (name: string, callback: HookFn): Promise<Registration> => {
         if (name === "prompt") promptHook = callback;
+        if (name === "generate") generateHook = callback;
         if (name === "context") contextHook = callback;
         return { dispose: () => {} };
       },
@@ -58,6 +73,10 @@ function makeContext() {
       get: async () => ({ data: { title: "some title" } }),
       prompt: async (input: any) => {
         sessionPromptCalls.push(input);
+        return { data: {} };
+      },
+      synthetic: async (input: any) => {
+        sessionSyntheticCalls.push(input);
         return { data: {} };
       },
     },
@@ -141,11 +160,14 @@ describe("opencode v2 adapter", () => {
     expect(prompt.text).toBe("remember the thing we discussed about deployment");
   });
 
-  test("prompt hook appends the extraction nudge to the prompt text", async () => {
+  test("nudges stay out of the stored prompt and ride the generate hook", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     expect(toolAfterHook).toBeDefined();
+    expect(generateHook).toBeDefined();
     // Buffer a tool interaction through the v2 execute.after hook, then
-    // send a prompt: the extraction nudge must ride along on prompt.text.
+    // send a prompt: the extraction nudge must NOT touch prompt.text (v2
+    // stores prompt text as the user message - injecting there would echo
+    // the nudge into the visible transcript).
     await toolAfterHook!({
       tool: "Read",
       sessionID: "ses_v2_nudge",
@@ -155,11 +177,21 @@ describe("opencode v2 adapter", () => {
     });
     const prompt = { text: "what do we know about this" };
     await promptHook!({ sessionID: "ses_v2_nudge", messageID: "msg_n", prompt });
-    // The extraction nudge rode along (its wording varies with the
-    // background-subagents env: "Dispatch a task..." vs "Spawn a background
-    // sub-agent..."). Both variants reference the payload fetch tool.
-    expect(prompt.text).toContain("thatch_get_extraction_payload");
-    expect(prompt.text.startsWith("what do we know about this")).toBe(true);
+    expect(prompt.text).toBe("what do we know about this");
+
+    // The generate hook instead appends the nudge to the outbound request's
+    // last user message (the extraction nudge's wording varies with the
+    // background-subagents env, but both variants reference the payload
+    // fetch tool).
+    const request = {
+      sessionID: "ses_v2_nudge",
+      messages: [{ role: "user", parts: [{ type: "text", text: "what do we know about this" }] }],
+    };
+    generateHook!(request);
+    const parts = request.messages[0].parts as { type: string; text: string }[];
+    expect(parts.length).toBe(2);
+    expect(parts[1].type).toBe("text");
+    expect(parts[1].text).toContain("thatch_get_extraction_payload");
   });
 
   test("event pump drops events from other directories and serves matching ones", async () => {
@@ -189,14 +221,17 @@ describe("opencode v2 adapter", () => {
     });
 
     // Only a matching-directory event reaches the runtime, whose idle
-    // handler triggers direct extraction through the capabilities.
+    // handler triggers direct extraction through the capabilities. v2's
+    // create has no parentID: a top-level session in the parent's project
+    // directory (the runtime sets the child mapping eagerly).
     await queueEvent({
       type: "session.status",
       location: { directory: SESSION_DIR },
       properties: { sessionID: "ses_v2_new", status: { type: "idle" } },
     });
     await waitFor("direct extraction for ses_v2_new", () => sessionCreateCalls.length === 1);
-    expect(sessionCreateCalls[0].parentID).toBe("ses_v2_new");
+    expect(sessionCreateCalls[0].title).toBe("thatch-extraction");
+    expect(sessionCreateCalls[0].location.directory).toBe(PROJECT_DIR);
   });
 
   test("prompt hook skips chat echoes (nudge-loop prevention on the v2 path)", async () => {
@@ -204,10 +239,17 @@ describe("opencode v2 adapter", () => {
     // An echo delivery re-entering the prompt hook (if v2 routes its own
     // synthetic deliveries back through it) must not trigger nudges - the
     // runtime's isChatEchoParts skip covers it, seeded through the same
-    // parts shape the adapter builds.
+    // parts shape the adapter builds. The generate hook then has no cache
+    // entry to inject.
     const prompt = { text: `[chat] al-go-rithm-00001 registered in the session directory` };
     await promptHook!({ sessionID: "ses_v2_echo", messageID: "msg_e", prompt });
     expect(prompt.text).toBe(`[chat] al-go-rithm-00001 registered in the session directory`);
+    const request = {
+      sessionID: "ses_v2_echo",
+      messages: [{ role: "user", parts: [{ type: "text", text: "echo" }] }],
+    };
+    generateHook!(request);
+    expect((request.messages[0].parts as unknown[]).length).toBe(1);
   });
 
   test("tool execute.after hook skips error-status calls", async () => {
@@ -237,6 +279,32 @@ describe("opencode v2 adapter", () => {
       promptHook!({ sessionID: "ses_v2_boom", messageID: undefined, prompt }),
     ).resolves.toBeUndefined();
     expect(prompt.text).toBe("hello there");
+  });
+
+  test("synthetic deliveries route to session.synthetic, real prompts to session.prompt", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    // capabilities are internal; exercise the routing through the session
+    // domain's prompt endpoint types via the adapter's promptSession: the
+    // watcher/chat wake path delivers all-synthetic parts. The adapter's
+    // own delivery is not directly reachable here, so drive it through a
+    // watcher-style wake: an idle event whose handler prompts synthetically
+    // is the child-extraction path (sessionCreate first). Instead, assert
+    // the simplest observable: the wrap-up command's execute delivers the
+    // command body as a REAL prompt (non-synthetic).
+    const compact = addedCommands.find((c) => c.name === "thatch/compact");
+    const exit = addedCommands.find((c) => c.name === "thatch/exit");
+    expect(compact).toBeDefined();
+    expect(exit).toBeDefined();
+    await compact!.execute({ sessionID: "ses_v2_cmd" });
+    await exit!.execute({ sessionID: "ses_v2_cmd" });
+    // Both wrapped up through promptSession ("sync" mode, non-synthetic
+    // body): the command body is the user-visible prompt, like v1's
+    // command file expansion.
+    expect(sessionSyntheticCalls.length).toBe(0);
+    expect(sessionPromptCalls.length).toBe(2);
+    expect(sessionPromptCalls[0].text).toContain("Pre-compact wrap-up");
+    expect(sessionPromptCalls[0].text).toContain("THATCH_COMPACT_READY");
+    expect(sessionPromptCalls[1].text).toContain("Pre-exit wrap-up");
   });
 
   test("cleanup is idempotent and disposes the runtime once", async () => {

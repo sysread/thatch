@@ -218,11 +218,12 @@ the tagged promise API):
 | incoming-message signal | `chat.message` hook (:776) | `session.hook("prompt", ...)` | implemented: the hook AWAITS the runtime and appends injections to prompt.text; echo/synthetic re-entry semantics verified at milestone 2 |
 | system prompt injection | `experimental.chat.system.transform` (:604) | `session.hook("context", ...)` mutates `system: Array<SystemPart>` | implemented; the runtime pushes a raw string (smoke-test the SystemPart typing) |
 | compaction guard | `experimental.session.compacting` (:611), `experimental.compaction.autocontinue` (:618), `session.compacted` event (:1309) | `session.hook("compaction", ...)` + bus | flag implemented; context-injection surface verified at milestone 2 |
-| wrap-up commands | `command.execute.before` (:771) | NONE (CommandDomain is list + transform only) | DEGRADE on v2; record in release notes |
+| wrap-up commands | `command.execute.before` (:771) + command files | `command.transform` + `CommandEditor.add` | UPGRADED from degrade: v2 registers the wrap-up commands in code (`armWrapUp` + the same prompt body); the runtime installs only ACTION command files on v2 |
 | register tools | `hooks.tool` map via `tool()` helper | `context.tool.transform(editor => ...)` | implemented (fact 6) |
 | tool execute.before/after | hook entries (:650) | `context.tool.hook` | implemented: feeds the same extraction buffer; result shape verified at milestone 2 |
 | create child session | `client.session.create` | `context.session.create` | implemented; a missing id throws into the extraction fallback |
 | prompt child (async) | `client.session.promptAsync` / `prompt` | `context.session.prompt` | implemented; background variant (delivery?) verified at milestone 2 |
+| synthetic wake deliveries | `promptAsync` with `synthetic` parts | `session.synthetic` endpoint | UPGRADED from degrade: watcher + chat wake nudges route to v2's synthetic endpoint (TUI-hidden) |
 | noReply deliveries (echo + reminder) | `promptAsync` with `noReply` | none | GATED OFF via `HostCapabilities.noReplyDelivery: false` on v2 -- delivering them would start real model turns (echo feedback loop); re-enable if v2 grows a noReply surface |
 | session delete | `client.session.delete` (:552, :1104) | NOT in SessionDomain | DEGRADE: child-session cleanup degrades on v2 -- extraction children leak. Mitigation: title-based sweep where the API allows, else record as known gap and keep the bookkeeping maps consistent so the nudge path still works |
 | session status (wake gate) | `client.session.status` (:236) | NOT in SessionDomain | fetchStatuses returns {}; the wake gate treats unknown as idle and the event-fed map gates |
@@ -457,3 +458,23 @@ the move is checkable as zero-churn:
   stale src/index.ts citations repointed at src/runtime.ts (QA comments,
   gotchas, source comments), and cosmetic fixes (indentation, import type,
   double blank line, test name).
+- Round 6 (live-binary smoke + v2-surface audit, Jeff's session): three
+  smoke findings fixed and two degrades UPGRADED after auditing every v2
+  domain for a better surface. Smoke fixes: (1) system-prompt parts must be
+  v2 SystemPart OBJECTS ({type: "text", text}) - the runtime's raw string
+  failed v2's schema on the first model request ("session failed"); (2) the
+  nudge injection via prompt.text ECHOED into the visible transcript (v2
+  stores prompt text as the user message) - injections now ride
+  session.hook("generate") into the OUTBOUND request's last user message
+  (computed once per prompt, stored per-session, invisible in the TUI and
+  message list - v1 parity). Surface upgrades: (3) synthetic wake
+  deliveries (watcher + chat nudges) route to v2's session.synthetic
+  endpoint (TUI-hidden) instead of real prompts; (4) wrap-up commands
+  register in code via command.transform + CommandEditor (execute arms
+  armWrapUp and delivers the same prompt body), so the runtime installs
+  only ACTION command files on v2 (nativeCommands capability) - wrap-ups
+  went from degraded to full. Audited and left as-is: skill files (v2
+  supports them unchanged; embedded Skill registration saves nothing real),
+  agent registration (nice-to-have; the task-tool path works), storage/RPC
+  domains (no thatch use - the sideband serves external processes the RPC
+  domain cannot reach).

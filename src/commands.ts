@@ -161,12 +161,26 @@ export interface CommandDef {
   content: string;
 }
 
+/**
+ * The wrap-up command's prompt body, for hosts that register commands in
+ * code (opencode v2 CommandEditor): the execute hook arms the greenlight
+ * check and delivers this same text as the session prompt.
+ */
+export function wrapUpCommandContent(kind: "compact" | "exit"): string {
+  return kind === "compact" ? COMPACT_TEMPLATE : EXIT_TEMPLATE;
+}
+
+/** The action commands only - no wrap-ups (used where wrap-ups register in code). */
+export function opencodeActionCommandDefs(): CommandDef[] {
+  return actionDefs(opencodeToolName).map((a) => ({ name: a.name, content: renderActionCommand(a) }));
+}
+
 /** The opencode command set: wrap-ups plus every action, as full file contents. */
 export function opencodeCommandDefs(): CommandDef[] {
   return [
     { name: "compact", content: COMPACT_TEMPLATE },
     { name: "exit", content: EXIT_TEMPLATE },
-    ...actionDefs(opencodeToolName).map((a) => ({ name: a.name, content: renderActionCommand(a) })),
+    ...opencodeActionCommandDefs(),
   ];
 }
 
@@ -205,9 +219,14 @@ function syncCommandFiles(dir: string, defs: CommandDef[]): string[] {
   return written;
 }
 
-/** Sync opencode's commands into <configHome>/opencode/command/thatch/. */
-export function installOpencodeCommands(configHome: string): string[] {
-  return syncCommandFiles(join(configHome, "opencode", "command", "thatch"), opencodeCommandDefs());
+/**
+ * Sync opencode's commands into <configHome>/opencode/command/thatch/.
+ * defs overrides the set (hosts whose plugin API registers wrap-up commands
+ * in code pass the action-only set - a registered command and a file with
+ * the same name would collide).
+ */
+export function installOpencodeCommands(configHome: string, defs: CommandDef[] = opencodeCommandDefs()): string[] {
+  return syncCommandFiles(join(configHome, "opencode", "command", "thatch"), defs);
 }
 
 /** Sync Claude Code's commands into <claudeDir>/commands/thatch/ (claudeDir is ~/.claude or <project>/.claude). */
