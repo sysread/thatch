@@ -281,6 +281,10 @@ export async function createFixture(name: string): Promise<QaContext> {
       OPENCODE_DISABLE_CLAUDE_CODE: "1",
       OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
       OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
+      // opencode v2's serve always runs password-protected (random when
+      // unset); a fixed one lets the runner's client authenticate. v1
+      // ignores both the env var and the header.
+      OPENCODE_SERVER_PASSWORD: SERVE_PASSWORD,
       VENICE_API_KEY: process.env.VENICE_API_KEY ?? "",
       PATH: process.env.PATH ?? "",
     },
@@ -434,6 +438,44 @@ export function printCleanupNotice(): void {
 // --- Serve-mode plumbing (multi-session use cases) ---------------------------
 
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
+import { OpenCode as OpenCodeV2 } from "@opencode/client/promise";
+
+/** Fixed serve credential: v2's serve requires basic auth; v1 ignores it. */
+const SERVE_PASSWORD = "thatch-qa-password";
+
+/**
+ * The serve-mode client, version-matched to the `opencode` binary on PATH:
+ * v2 declared a breaking server-API change (v1's SDK client gets 405s from
+ * a v2 server), so a v2 binary gets the v2 SDK client wrapped in the v1
+ * method/response shapes the use cases are written against. The wrap-up
+ * call sites only use session.create/prompt/messages/delete.
+ */
+function v2ClientAsV1(client: ReturnType<typeof OpenCodeV2.make>, directory: string): OpencodeClient {
+  const textOf = (body: any) => (body?.parts ?? []).map((p: any) => p?.text ?? "").join("\n\n");
+  const partsOf = (message: any) =>
+    message.type === "assistant"
+      ? (message.content ?? [])
+          .filter((c: any) => c.type === "text")
+          .map((c: any) => ({ type: "text", text: c.text ?? "" }))
+      : [{ type: "text", text: message.text ?? "" }];
+  return {
+    session: {
+      create: async (input: any) => ({ data: await client.session.create({ ...input?.body, location: { directory } }) }),
+      prompt: async (input: any) => ({ data: await client.session.prompt({ sessionID: input.path.id, text: textOf(input.body) }) }),
+      messages: async (input: any) => {
+        const result = await client.message.list({ sessionID: input.path.id });
+        return { data: result.data.map((m: any) => ({ info: { role: m.type }, parts: partsOf(m) })) };
+      },
+      delete: async (input: any) => ({ data: await client.session.remove({ sessionID: input.path.id }) }),
+    },
+  } as unknown as OpencodeClient;
+}
+
+function serveMajorVersion(): number {
+  const result = Bun.spawnSync(["opencode", "--version"]);
+  // Output: "opencode v2.0.15" — the first dotted number is the major.
+  return Number.parseInt(result.stdout.toString().match(/(\d+)\.\d+/)?.[1] ?? "1", 10);
+}
 
 export interface ServeHandle {
   /** Base URL the serve process listens on. */
@@ -485,6 +527,22 @@ export async function startServe(ctx: QaContext): Promise<ServeHandle> {
     }
     await new Promise((r) => setTimeout(r, 1_000));
   }
-  const client = createOpencodeClient({ baseUrl: url, directory: ctx.dir });
+  const client =
+    serveMajorVersion() >= 2
+      ? v2ClientAsV1(
+          OpenCodeV2.make({
+            baseUrl: url,
+            headers: {
+              Authorization: `Basic ${btoa(`opencode:${SERVE_PASSWORD}`)}`,
+              "x-opencode-directory": ctx.dir,
+            },
+          }),
+          ctx.dir,
+        )
+      : createOpencodeClient({
+          baseUrl: url,
+          directory: ctx.dir,
+          headers: { Authorization: `Basic ${btoa(`opencode:${SERVE_PASSWORD}`)}` },
+        });
   return { url, client, stop: () => { try { proc.kill(); } catch { /* already dead */ } } };
 }

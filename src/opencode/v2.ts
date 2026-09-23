@@ -190,6 +190,7 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
         const located = event as { type: string; properties?: any; location?: { directory?: string } };
         // Location-less events drop with the foreign ones: v1's server-side
         // filter (event.location?.directory !== plugin.directory) drops both.
+        runtime.debug("v2:pump", `event ${located.type} location=${JSON.stringify(located.location)} dir=${directory}`);
         if (located.location?.directory !== directory) continue;
         // The properties guard keeps the runtime's event.properties.info
         // access from throwing on a malformed event; it is not a reshaping.

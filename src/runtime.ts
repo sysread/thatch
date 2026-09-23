@@ -73,6 +73,8 @@ const WRAPUP_COMMANDS: Record<string, { token: string; kind: "compact" | "exit" 
 export interface ThatchRuntime {
   /** The shared per-call context both adapters register TOOL_DEFS with. */
   coreContext: CoreContext;
+  /** The host-agnostic diagnostic log (THATCH_DEBUG; no-op when unset). */
+  debug(tag: string, message: string): void;
   onSystemTransform(output: { system: string[] }): Promise<void>;
   onSessionCompacting(input: { sessionID: string }, output: { context: string[] }): Promise<void>;
   onCompactionAutocontinue(input: { sessionID: string }): Promise<void>;
@@ -552,6 +554,7 @@ export async function createRuntime(input: {
       watcherRegistry: watchers,
       projectDir: worktree,
     }),
+    debug,
 
     // 1. System prompt - always in context.
     onSystemTransform: async (output) => {
