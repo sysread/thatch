@@ -1243,6 +1243,13 @@ export async function createRuntime(input: {
       if (event.type !== "session.created") return;
       const id = event.properties.info.id;
 
+      // noReply hosts only: a host without noReply delivery would turn the
+      // reminder into a real model turn replying to itself. The system
+      // prompt (onSystemTransform) still carries the essentials everywhere.
+      // The gate precedes the hygiene scan so v2 sessions (and any other
+      // noReply-less host) do not pay a DB + repo scan for a skipped report.
+      if (!caps.noReplyDelivery) return;
+
       let hygiene: string | null = null;
       try {
         hygiene = await hygieneReport(db, repo, worktree, repoCache);
@@ -1250,10 +1257,6 @@ export async function createRuntime(input: {
         console.error(`[thatch] hygiene report failed: ${err}`);
       }
 
-      // noReply hosts only: a host without noReply delivery would turn the
-      // reminder into a real model turn replying to itself. The system
-      // prompt (onSystemTransform) still carries the essentials everywhere.
-      if (!caps.noReplyDelivery) return;
       try {
         await caps.promptSession(
           id,

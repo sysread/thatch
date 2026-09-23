@@ -206,6 +206,35 @@ describe("opencode v2 adapter", () => {
     expect(prompt.text).toBe(`[chat] al-go-rithm-00001 registered in the session directory`);
   });
 
+  test("tool execute.after hook skips error-status calls", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    // An errored tool call must not feed the extraction buffer: the next
+    // prompt must fire no extraction nudge (matching v1, whose hook only
+    // fired on completed calls).
+    await toolAfterHook!({
+      tool: "Read",
+      sessionID: "ses_v2_err",
+      input: { file_path: "/src/app.ts" },
+      status: "error",
+      error: { message: "boom" },
+    });
+    const prompt = { text: "what do we know about this" };
+    await promptHook!({ sessionID: "ses_v2_err", messageID: "msg_e2", prompt });
+    expect(prompt.text).toBe("what do we know about this");
+  });
+
+  test("prompt hook swallows runtime failures instead of rejecting", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    // A runtime failure (here: a tool name collision inside the buffer via
+    // a broken payload) must not reject the host's hook. Drive it with a
+    // hook input whose shape the runtime does not expect.
+    const prompt = { text: "hello there" };
+    await expect(
+      promptHook!({ sessionID: "ses_v2_boom", messageID: undefined, prompt }),
+    ).resolves.toBeUndefined();
+    expect(prompt.text).toBe("hello there");
+  });
+
   test("cleanup is idempotent and disposes the runtime once", async () => {
     const context = makeContext();
     const dispose = (await setup(context as any)) as () => Promise<void>;

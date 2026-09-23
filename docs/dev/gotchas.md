@@ -80,7 +80,7 @@ here first. These are the things that have already cost time.
   is active. The peek-not-drain semantics still hold for the fallback nudge
   path (MCP hosts and any `triggerExtraction` failure).
 - **A child sub-agent's `thatch_memory_remember` drains the parent's buffer**
-  via the `childToParent` Map (`src/runtime.ts:376` declaration, `src/runtime.ts:592` lookup
+  via the `childToParent` Map (`src/runtime.ts:377` declaration, `src/runtime.ts:592` lookup
   lookup). Two paths reach this machinery: (a) the **plugin-initiated child
   session** — `triggerExtraction` calls `client.session.create` with a
   `parentID`, the primary opencode path; (b) the **agent-initiated background
