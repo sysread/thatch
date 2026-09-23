@@ -208,16 +208,18 @@ describe("opencode v2 adapter", () => {
       result: { content: "const x = 1;" },
     });
 
+    // v2 bus shape: payload in `data`; the pump translates the execution
+    // lifecycle into the runtime's v1-shaped events.
     // Foreign-directory event: the pump must drop it.
     await queueEvent({
-      type: "session.status",
+      type: "session.execution.started",
       location: { directory: "/some/other/dir" },
-      properties: { sessionID: "ses_v2_new", status: { type: "idle" } },
+      data: { sessionID: "ses_v2_new" },
     });
     // Location-less event: dropped with it (v1's server-side filter shape).
     await queueEvent({
-      type: "session.status",
-      properties: { sessionID: "ses_v2_new", status: { type: "idle" } },
+      type: "session.execution.started",
+      data: { sessionID: "ses_v2_new" },
     });
 
     // Only a matching-directory event reaches the runtime, whose idle
@@ -225,9 +227,9 @@ describe("opencode v2 adapter", () => {
     // create has no parentID: a top-level session in the parent's project
     // directory (the runtime sets the child mapping eagerly).
     await queueEvent({
-      type: "session.status",
+      type: "session.execution.succeeded",
       location: { directory: SESSION_DIR },
-      properties: { sessionID: "ses_v2_new", status: { type: "idle" } },
+      data: { sessionID: "ses_v2_new" },
     });
     await waitFor("direct extraction for ses_v2_new", () => sessionCreateCalls.length === 1);
     expect(sessionCreateCalls[0].title).toBe("thatch-extraction");

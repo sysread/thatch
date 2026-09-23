@@ -187,14 +187,13 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   const pump = (async () => {
     try {
       for await (const event of context.event.subscribe({ signal: controller.signal })) {
-        const located = event as { type: string; properties?: any; location?: { directory?: string } };
+        const located = event as { type: string; data?: any; location?: { directory?: string } };
         // Location-less events drop with the foreign ones: v1's server-side
         // filter (event.location?.directory !== plugin.directory) drops both.
         runtime.debug("v2:pump", `event ${located.type} location=${JSON.stringify(located.location)} dir=${directory}`);
         if (located.location?.directory !== directory) continue;
-        // The properties guard keeps the runtime's event.properties.info
-        // access from throwing on a malformed event; it is not a reshaping.
-        await runtime.onEvent(located.properties ? located : { type: located.type, properties: located });
+        const translated = translateEvent(located);
+        if (translated) await runtime.onEvent(translated);
       }
     } catch (err) {
       if (!controller.signal.aborted) console.error(`[thatch] event subscription failed: ${err}`);
@@ -220,6 +219,36 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     registerCommands.dispose();
     await runtime.dispose();
   };
+}
+
+// Translate a v2 bus event into the v1-shaped event the runtime consumes.
+// v2's envelope is {type, data, location?} (payload in `data`); v1's was
+// {type, properties}. The runtime's session event taxonomy also moved:
+// - the idle signal is the execution lifecycle (session.execution.*);
+//   session.status exists in v2's schema but nothing publishes it
+// - child-session errors surface as session.execution.failed, which v1
+//   called session.error
+// - compaction completion is session.compaction.ended (v1: session.compacted)
+// Events the runtime does not consume return null and are dropped.
+function translateEvent(located: { type: string; data?: any }): { type: string; properties: any } | null {
+  const data = located.data ?? {};
+  switch (located.type) {
+    case "session.created":
+      return { type: "session.created", properties: { info: { id: data.sessionID, parentID: data.parentID } } };
+    case "session.deleted":
+      return { type: "session.deleted", properties: { info: { id: data.sessionID } } };
+    case "session.execution.started":
+      return { type: "session.status", properties: { sessionID: data.sessionID, status: { type: "busy" } } };
+    case "session.execution.succeeded":
+    case "session.execution.interrupted":
+      return { type: "session.status", properties: { sessionID: data.sessionID, status: { type: "idle" } } };
+    case "session.execution.failed":
+      return { type: "session.error", properties: { sessionID: data.sessionID } };
+    case "session.compaction.ended":
+      return { type: "session.compacted", properties: { sessionID: data.sessionID } };
+    default:
+      return null;
+  }
 }
 
 // The HostCapabilities implementation over the v2 promise context. Every
