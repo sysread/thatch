@@ -1,4 +1,5 @@
 import type { Plugin } from "@opencode/plugin";
+import { z } from "zod";
 import type { Tool } from "@opencode/schema/tool";
 import type { ToolContext as V2ToolContext } from "@opencode/plugin/promise/tool";
 import type { HostCapabilities, PromptPart, ToastInput } from "../capabilities";
@@ -66,12 +67,19 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
 
   // Tool registration: the same CoreContext the v1 adapter feeds to
   // createTools, registered through the v2 ToolEditor instead.
+  //
+  // The input schema is pre-converted to JSON Schema with our own zod:
+  // v2's converter detects zod via `instanceof $ZodType` against ITS bundled
+  // zod copy, which fails for ours and leaves the tool parameterless (the
+  // LLM then guesses argument names and the tools crash on undefined args).
+  // A plain JSON Schema object flows through v2's inputJsonSchema untouched
+  // and validates through v2's JSON-schema codec cache.
   const registerTools = await context.tool.transform((editor) => {
     for (const def of TOOL_DEFS) {
       editor.add({
         name: `thatch_${def.name}`,
         description: def.description,
-        input: def.args,
+        input: z.toJSONSchema(z.object(def.args)),
         execute: async (input: unknown, toolContext: V2ToolContext) => {
           const host: HostToolContext | undefined = trimHostContext(toolContext);
           const result: string = await def.execute(input as Record<string, unknown>, runtime.coreContext, host);
