@@ -214,6 +214,14 @@ export async function createFixture(name: string): Promise<QaContext> {
     throw new Error(`createFixture: cpSync failed — ${dir}/src/index.ts missing`);
   }
 
+  // Remove the copied mise.toml: it serves nothing here (the runner passes
+  // env explicitly; no mise task ever runs via real mise inside a fixture)
+  // and modern mise fail-closes on UNTRUSTED config files - every fixture
+  // lives in a fresh tmpdir, so the copied mise.toml is always untrusted,
+  // and every mise-shimmed node/bun invocation inside the fixture (bin/release's
+  // `node -p`, etc.) dies on the trust check before doing anything.
+  rmSync(join(dir, "mise.toml"));
+
   // Write a per-fixture opencode.json that scopes external_directory
   // permission to ONLY this fixture's directory. The master's opencode.json
   // has "/tmp/**": "allow" which lets a confused model in one session
