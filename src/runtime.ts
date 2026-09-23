@@ -1115,7 +1115,7 @@ export async function createRuntime(input: {
                 // executeCommand only accepts legacy alias names;
                 // "session_compact" maps to the TUI's session.compact action,
                 // the same thing the built-in /compact command runs.
-                await caps.tuiExecuteCommand("session_compact");
+                await caps.tuiExecuteCommand("session_compact", sessionID);
               } else {
                 // No exit alias exists, so publish the TUI keymap command
                 // directly - the same dispatch as the /exit slash command.

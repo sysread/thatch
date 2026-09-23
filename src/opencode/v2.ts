@@ -333,12 +333,34 @@ function buildCapabilities(context: V2Context, worktree: string): HostCapabiliti
       return result?.data ?? result ?? null;
     },
     sessionList: async () => null,
-    sessionMessages: async () => null,
+    sessionMessages: async (id) => {
+      // v2 stores messages as a typed event list (user/assistant/... with
+      // text or content parts), not v1's {info, parts}; map into the v1
+      // shape the runtime's wrap-up greenlight check reads.
+      const result = await (session as any).message.list({ sessionID: id });
+      return (result?.data ?? []).map((m: any) => ({
+        info: { role: m.type },
+        parts:
+          m.type === "assistant"
+            ? (m.content ?? [])
+                .filter((c: any) => c.type === "text")
+                .map((c: any) => ({ type: "text", text: c.text ?? "" }))
+            : [{ type: "text", text: m.text ?? "" }],
+      }));
+    },
     showToast: async (_toast: ToastInput) => {
       // No toast publish path reachable from the promise context (the
       // tui.toast.show event has no producer surface here). Degrades.
     },
-    tuiExecuteCommand: async () => {},
+    tuiExecuteCommand: async (command, sessionID) => {
+      // No TUI surface on v2, but the compact action has a server endpoint:
+      // trigger the session's compaction directly (the greenlight already
+      // ran - the runtime only dispatches this after the ready token).
+      if (command === "session_compact" && sessionID) {
+        await (session as any).compact({ sessionID });
+        return;
+      }
+    },
     tuiPublish: async () => {},
   };
 }

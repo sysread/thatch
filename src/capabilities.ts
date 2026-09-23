@@ -77,8 +77,13 @@ export interface HostCapabilities {
   sessionMessages(id: string): Promise<{ info: { role: string }; parts?: { type: string; text?: string }[] }[] | null>;
   /** TUI toast. The runtime's call sites catch-and-ignore; the adapter just delivers. */
   showToast(toast: ToastInput): Promise<void>;
-  /** TUI command dispatch (wrap-up compact). Degrades on v2. */
-  tuiExecuteCommand(command: string): Promise<void>;
+  /**
+   * TUI command dispatch (the wrap-up compact action). sessionID carries the
+   * requesting session: the v2 adapter maps "session_compact" to the server's
+   * session.compact endpoint (no TUI surface exists on v2); v1 dispatches the
+   * TUI command and ignores the id.
+   */
+  tuiExecuteCommand(command: string, sessionID?: string): Promise<void>;
   /** Raw TUI event publish (wrap-up exit). Degrades on v2. */
   tuiPublish(body: unknown): Promise<void>;
 }
