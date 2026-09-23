@@ -181,17 +181,34 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     });
 
     // Bus events: raw SSE subscription, not directory-scoped. Filter
-  // client-side: drop events located elsewhere; location-less events drop
-  // with them (matches the v1 host's server-side filter).
+  // client-side: drop events located elsewhere. v2's execution lifecycle
+  // events (the idle signal) carry NO location, so the session's project is
+  // resolved and cached: first from any event that does carry one, then
+  // via the session API. A session whose directory cannot be resolved
+  // drops (same invisible-to-this-instance contract as v1's server filter).
+  const sessionDirs = new Map<string, string>();
+  const resolveSessionDir = async (sessionID: string): Promise<string | undefined> => {
+    try {
+      const result = await (context.session as any).get({ id: sessionID });
+      const dir = (result?.data ?? result)?.location?.directory;
+      if (dir) sessionDirs.set(sessionID, dir);
+      return dir;
+    } catch {
+      return undefined;
+    }
+  };
   const controller = new AbortController();
   const pump = (async () => {
     try {
       for await (const event of context.event.subscribe({ signal: controller.signal })) {
         const located = event as { type: string; data?: any; location?: { directory?: string } };
-        // Location-less events drop with the foreign ones: v1's server-side
-        // filter (event.location?.directory !== plugin.directory) drops both.
-        runtime.debug("v2:pump", `event ${located.type} location=${JSON.stringify(located.location)} dir=${directory}`);
-        if (located.location?.directory !== directory) continue;
+        const data = located.data ?? {};
+        if (data.sessionID && located.location?.directory) sessionDirs.set(data.sessionID, located.location.directory);
+        if (data.sessionID && data.location?.directory) sessionDirs.set(data.sessionID, data.location.directory);
+        let eventDir = located.location?.directory ?? (data.sessionID ? sessionDirs.get(data.sessionID) : undefined);
+        if (!eventDir && data.sessionID) eventDir = await resolveSessionDir(data.sessionID);
+        runtime.debug("v2:pump", `event ${located.type} dir=${eventDir} self=${directory}`);
+        if (eventDir !== directory) continue;
         const translated = translateEvent(located);
         if (translated) await runtime.onEvent(translated);
       }
