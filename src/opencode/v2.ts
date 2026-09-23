@@ -98,9 +98,15 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     );
   });
 
-  // System prompt: re-familiarization on every model request.
+  // System prompt: re-familiarization on every model request. The runtime
+  // pushes plain strings (the v1 contract); v2's system parts are
+  // { type: "text", text } objects, so convert at the boundary.
   const registerSystem = await context.session.hook("context", async (request: { system: unknown[] }) => {
-    await runtime.onSystemTransform({ system: request.system as string[] });
+    const pushed: string[] = [];
+    await runtime.onSystemTransform({ system: pushed });
+    for (const part of pushed) {
+      request.system.push(typeof part === "string" ? { type: "text", text: part } : part);
+    }
   });
 
   // Per-message nudges: the runtime handler reads the user's text from the

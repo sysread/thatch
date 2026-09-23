@@ -120,11 +120,15 @@ describe("opencode v2 adapter", () => {
   test("system prompt hook injects the thatch system prompt", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     expect(contextHook).toBeDefined();
-    const system: string[] = [];
+    // v2 system parts are {type: "text", text} objects; the adapter must
+    // convert the runtime's plain strings before pushing.
+    const system: unknown[] = [];
     await contextHook!({ system });
     expect(system.length).toBe(1);
-    expect(system[0]).toContain("Persistence");
-    expect(system[0]).toContain("thatch_memory_remember");
+    const part = system[0] as { type: string; text: string };
+    expect(part.type).toBe("text");
+    expect(part.text).toContain("Persistence");
+    expect(part.text).toContain("thatch_memory_remember");
   });
 
   test("prompt hook preserves the user's text when nothing fires", async () => {
