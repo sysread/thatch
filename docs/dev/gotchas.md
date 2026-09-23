@@ -70,7 +70,7 @@ here first. These are the things that have already cost time.
 - **`chat.message` has two priority tiers**: extraction nudge first (returns
   early), then the prompt-aware recall nudge. Don't run both in one turn.
 - **The extraction nudge peeks, never flushes.** The buffer is NOT drained
-  on nudge delivery (`index.ts:366` — `peek()` call). It persists until the
+  on nudge delivery (`src/runtime.ts:462` - the `peek()` call). It persists until the
   agent writes a memory or calls `thatch_extraction_done`. Ignored nudges
   accumulate; the `missedNudges` counter escalates the tone (polite at 0-1
   misses, insistent at 2, ALL-CAPS at 3+). The counter resets when the
@@ -80,7 +80,7 @@ here first. These are the things that have already cost time.
   is active. The peek-not-drain semantics still hold for the fallback nudge
   path (MCP hosts and any `triggerExtraction` failure).
 - **A child sub-agent's `thatch_memory_remember` drains the parent's buffer**
-  via the `childToParent` Map (`index.ts:79` declaration, `index.ts:272`
+  via the `childToParent` Map (`src/runtime.ts:376` declaration, `src/runtime.ts:592` lookup
   lookup). Two paths reach this machinery: (a) the **plugin-initiated child
   session** — `triggerExtraction` calls `client.session.create` with a
   `parentID`, the primary opencode path; (b) the **agent-initiated background

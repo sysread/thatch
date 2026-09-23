@@ -58,12 +58,14 @@ the shared runtime needs. It is the lifecycle-level sibling of `CoreContext`
 | Capability | v1 source | v2 source | v2 strategy |
 |---|---|---|---|
 | bus events | `event` hook | `event.subscribe` (raw SSE) | client-side location filter; location-less events drop (mirrors v1's server-side filter) |
-| incoming message | `chat.message` hook | `session.hook("prompt")` | runtime injections append to `prompt.text` (v2 has no synthetic parts) |
-| system prompt | `experimental.chat.system.transform` | `session.hook("context")` | mutates the request's system array -- full support |
+| incoming message | `chat.message` hook | `session.hook("prompt")` | the hook awaits the runtime; injections append to `prompt.text` (v2 has no synthetic parts) |
+| system prompt | `experimental.chat.system.transform` | `session.hook("context")` | mutates the request's system array; the runtime pushes a raw string where v2 types SystemPart (smoke-test-gated) |
 | compaction | `experimental.session.compacting` + `.autocontinue` + `session.compacted` | `session.hook("compaction")` | flag lands; context-injection surface unverified |
 | wrap-up commands | `command.execute.before` | none | degrade |
 | tools | `hooks.tool` map via `tool()` | `tool.transform` + `ToolEditor.add` | zod shapes pass as Standard Schema; results wrap as `{ content }` |
-| child sessions | `client.session.create/promptAsync/prompt/delete` | `session.create/prompt` | create+prompt supported (shapes smoke-test-gated); delete degrades (extraction children are not cleaned up on v2) |
+| tool buffering | `tool.execute.after` hook | `tool.hook("execute.after")` | wired: feeds the same extraction buffer; result shape smoke-test-gated |
+| noReply deliveries | `promptAsync` with `noReply` | none | gated off via `HostCapabilities.noReplyDelivery` -- chat echoes and the session-start reminder are skipped on v2 (delivering them would start real model turns: a feedback loop) |
+| child sessions | `client.session.create/promptAsync/prompt/delete` | `session.create/prompt` | create+prompt supported (shapes smoke-test-gated; a missing id throws into the extraction fallback); delete degrades (extraction children are not cleaned up on v2) |
 | session status | `client.session.status` | none | returns `{}`; the wake gate treats unknown as idle and the event-fed status map does the gating |
 | session list/messages | `client.session.list/messages` | none | degrade (`-c` resume listing + wrap-up greenlight lose their data source) |
 | toasts | `client.tui.showToast` | none reachable | degrade (the `tui.toast.show` event has no producer surface from the promise context) |

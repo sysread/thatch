@@ -135,7 +135,7 @@ const useCase: UseCase = {
     }
 
     // THATCH_MODEL: not read by bin/thatch (it uses BgeEmbeddingModel
-    // directly). THATCH_MODEL is consumed by the plugin (src/index.ts:46)
+    // directly). THATCH_MODEL is consumed by the plugin (src/runtime.ts:108)
     // and MCP server (src/mcp.ts:97). We verify the CLI still works when
     // it is set, confirming it does not interfere with CLI operations.
     {

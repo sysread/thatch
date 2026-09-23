@@ -5,11 +5,14 @@
 // under either host, so no runtime version detection is needed and a single
 // shim file serves both.
 //
-// ISOLATION RULE: this module's static import graph must stay SDK-free.
-// Each adapter imports its host's SDK (@opencode-ai/plugin vs @opencode/plugin),
-// and the SDKs resolve only under their own host's install, so both adapters
-// are reached exclusively through dynamic import below. The pure helpers
-// re-exported here live in SDK-free modules for the same reason.
+// ISOLATION RULE: this module's RUNTIME import graph must stay SDK-free
+// (type-only imports are fine - they erase). Each adapter imports its host's
+// SDK (@opencode-ai/plugin vs @opencode/plugin), and the SDKs resolve only
+// under their own host's install, so both adapters are reached exclusively
+// through dynamic import below. The same rule applies to src/runtime.ts: it
+// is reachable from both adapters, so it too must never runtime-import an
+// SDK. The pure helpers re-exported here live in SDK-free modules for the
+// same reason.
 
 import type { Plugin } from "@opencode-ai/plugin";
 import type { Plugin as V2Plugin } from "@opencode/plugin";

@@ -78,7 +78,7 @@ beforeAll(async () => {
   // Redirect skill installation away from the real ~/.config.
   process.env.XDG_CONFIG_HOME = join(dbDir, "config");
   // The shared mock client below has no session.get, so every chat.event
-  // hook fires the auto-register degrade path in index.ts, which logs each
+  // hook fires the auto-register degrade path in runtime.ts, which logs each
   // failure fire-and-forget. Such a log can land after the triggering test
   // has ended, so a per-test silence cannot trap it reliably. Filter the
   // known phrase for the whole file instead; every other error still logs.
@@ -90,7 +90,7 @@ beforeAll(async () => {
   };
   fileConsoleError = realConsoleError;
   // RECALL_THRESHOLD is a module-level constant (0.55 default), read when
-  // index.ts is first imported. Setting the env var here can't change it,
+  // runtime.ts is first imported. Setting the env var here can't change it,
   // but 0.55 works: the hash-based mock scores ~1.0 for identical texts and
   // near-orthogonal for different texts.
   const mockClient = {

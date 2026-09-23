@@ -655,7 +655,11 @@ export async function createRuntime(input: {
           (input.args ?? {}) as Record<string, unknown>,
           typeof output.output === "string" ? output.output : "",
         );
-        if (echo) {
+        // noReply hosts only: on a host whose prompt endpoint starts a real
+        // model turn, delivering the echo would create a turn that calls
+        // chat tools, which echoes again - the loop the noReply flag exists
+        // to prevent.
+        if (echo && caps.noReplyDelivery) {
           void caps
             .promptSession(
               input.sessionID,
@@ -1246,6 +1250,10 @@ export async function createRuntime(input: {
         console.error(`[thatch] hygiene report failed: ${err}`);
       }
 
+      // noReply hosts only: a host without noReply delivery would turn the
+      // reminder into a real model turn replying to itself. The system
+      // prompt (onSystemTransform) still carries the essentials everywhere.
+      if (!caps.noReplyDelivery) return;
       try {
         await caps.promptSession(
           id,

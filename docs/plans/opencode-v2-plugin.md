@@ -215,20 +215,21 @@ the tagged promise API):
 | Capability | v1 source | v2 source | Strategy |
 |---|---|---|---|
 | subscribe to bus events | `event` hook (:1018) | `context.event.subscribe` | v2 is NOT directory-scoped (raw SSE); adapter filters client-side on `event.location?.directory`, dropping location-less events -- mirrors v1's server-side filter |
-| incoming-message signal | `chat.message` hook (:776) | `session.hook("prompt", ...)` | timing + synthetic/echo re-entry semantics verified in milestone 2; echo filtering (isChatEchoParts path) is a PORTED behavior with its own test |
-| system prompt injection | `experimental.chat.system.transform` (:604) | `session.hook("context", ...)` mutates `system: Array<SystemPart>` | resolved -- same injection shape |
-| compaction guard | `experimental.session.compacting` (:611), `experimental.compaction.autocontinue` (:618), `session.compacted` event (:1309) | `session.hook("compaction", ...)` + bus | verify flag-lifecycle shape at milestone 2 (no same-named autocontinue hook) |
+| incoming-message signal | `chat.message` hook (:776) | `session.hook("prompt", ...)` | implemented: the hook AWAITS the runtime and appends injections to prompt.text; echo/synthetic re-entry semantics verified at milestone 2 |
+| system prompt injection | `experimental.chat.system.transform` (:604) | `session.hook("context", ...)` mutates `system: Array<SystemPart>` | implemented; the runtime pushes a raw string (smoke-test the SystemPart typing) |
+| compaction guard | `experimental.session.compacting` (:611), `experimental.compaction.autocontinue` (:618), `session.compacted` event (:1309) | `session.hook("compaction", ...)` + bus | flag implemented; context-injection surface verified at milestone 2 |
 | wrap-up commands | `command.execute.before` (:771) | NONE (CommandDomain is list + transform only) | DEGRADE on v2; record in release notes |
-| register tools | `hooks.tool` map via `tool()` helper | `context.tool.transform(editor => ...)` | low risk (fact 7) |
-| tool execute.before/after | hook entries (:650) | `context.tool.hook` | Tool.Context has sessionID/agent/messageID/progress (fact 7); the `:650` line is `tool.execute.after` |
-| create child session | `client.session.create` | `context.session.create` | new `delivery` field |
-| prompt child (async) | `client.session.promptAsync` / `prompt` | `context.session.prompt` | verify background variant (delivery?) at milestone 2 |
-| session delete | `client.session.delete` (:552, :1104) | NOT in SessionDomain | STRATEGY: child-session cleanup degrades on v2 -- extraction children leak. Mitigation: title-based sweep where the API allows, else record as known gap and keep the bookkeeping maps consistent so the nudge path still works |
-| session status (wake gate) | `client.session.status` (:236) | NOT in SessionDomain | STRATEGY: ChatPoller moves from client polling to bus-driven state (`session.status` events via subscribe), with payload verification at milestone 2 |
-| session list / messages | `client.session.list` (:405), `client.session.messages` (:1128) | NOT in SessionDomain | DEGRADE: `-c` resume listing and wrap-up greenlight check lose their data source on v2; feature-flag the affected code paths |
-| session get (title/topic) | `client.session.get` (:371, :1202) | `context.session.get` (in domain) | low |
+| register tools | `hooks.tool` map via `tool()` helper | `context.tool.transform(editor => ...)` | implemented (fact 6) |
+| tool execute.before/after | hook entries (:650) | `context.tool.hook` | implemented: feeds the same extraction buffer; result shape verified at milestone 2 |
+| create child session | `client.session.create` | `context.session.create` | implemented; a missing id throws into the extraction fallback |
+| prompt child (async) | `client.session.promptAsync` / `prompt` | `context.session.prompt` | implemented; background variant (delivery?) verified at milestone 2 |
+| noReply deliveries (echo + reminder) | `promptAsync` with `noReply` | none | GATED OFF via `HostCapabilities.noReplyDelivery: false` on v2 -- delivering them would start real model turns (echo feedback loop); re-enable if v2 grows a noReply surface |
+| session delete | `client.session.delete` (:552, :1104) | NOT in SessionDomain | DEGRADE: child-session cleanup degrades on v2 -- extraction children leak. Mitigation: title-based sweep where the API allows, else record as known gap and keep the bookkeeping maps consistent so the nudge path still works |
+| session status (wake gate) | `client.session.status` (:236) | NOT in SessionDomain | fetchStatuses returns {}; the wake gate treats unknown as idle and the event-fed map gates |
+| session list / messages | `client.session.list` (:405), `client.session.messages` (:1128) | NOT in SessionDomain | DEGRADE: `-c` resume listing and wrap-up greenlight check lose their data source on v2 |
+| session get (title/topic) | `client.session.get` (:371, :1202) | `context.session.get` (in domain) | implemented |
 | tui executeCommand/publish | `client.tui.*` (:1158, :1162) | NONE reachable | DEGRADE catch-and-ignore (matches today's headless behavior) |
-| toast | `client.tui.showToast` | `tui.toast.show` event, no publish path found (fact 8) | DEGRADE catch-and-ignore; re-check at milestone 2 |
+| toast | `client.tui.showToast` | `tui.toast.show` publish (fact 7) | DEGRADE catch-and-ignore; re-check at milestone 2 |
 | dispose | `dispose` hook (:1337) | cleanup returned from `setup` | CORRECTNESS under v2 auto-reload: cleanup must be idempotent and reload-safe (duplicate pollers/watchers/nudges are the failure mode); test the double-setup path |
 | directory / worktree | `PluginInput` | `context.location` | low |
 
@@ -440,3 +441,19 @@ the move is checkable as zero-churn:
   citation reproduced from tagged source. No blockers, no should-fixes.
   Consensus. Two cosmetic nits folded in (fact 3 throw-site sentence, helper
   line range).
+- Round 5 (implementation code review, 9-lens multi-agent pass over the
+  branch diff): 2 confirmed HIGH fixed -- (1) the v2 prompt hook now AWAITS
+  the runtime before mutating prompt.text (the fire-and-forget version raced
+  the host's prompt serialization and produced unhandled rejections);
+  (2) the v2 tool.hook("execute.after") feeder was missing entirely, leaving
+  the extraction buffer unfed on v2. 3 confirmed MEDIUM fixed -- (3) a
+  `HostCapabilities.noReplyDelivery` gate now skips chat echoes and the
+  session-start reminder on v2, where a noReply delivery would start real
+  model turns (the echo feedback loop); (4) the README compatibility claim
+  carries a release-timing note; (5) the skewWarningText docstring now says
+  the v2 wording is planned, not implemented. Plus: cleanup awaits the pump
+  (the Promise.race was a no-op), sessionCreate throws on a missing id into
+  the extraction fallback, the v2 event-pump null-guard documented, ~10
+  stale src/index.ts citations repointed at src/runtime.ts (QA comments,
+  gotchas, source comments), and cosmetic fixes (indentation, import type,
+  double blank line, test name).

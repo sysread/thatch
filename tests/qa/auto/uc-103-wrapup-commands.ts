@@ -3,7 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 
-// Mock @huggingface/transformers before src/index loads BgeEmbeddingModel
+// Mock @huggingface/transformers before src/index's lazy server() loads
+// BgeEmbeddingModel (in src/runtime.ts)
 // (same pattern as tests/plugin.test.ts): hash-based vectors, no download.
 // This is the only UC in the barrel that imports src/index, so this mock is
 // the first resolution of the transformers module in the QA process.
@@ -50,7 +51,7 @@ import { installOpencodeCommands } from "../../../src/commands";
 const useCase: UseCase = {
   name: "UC-103-wrapup-commands",
   preconditions: [
-    "- The opencode plugin installed (src/index.ts server export)",
+    "- The opencode plugin installed (src/index.ts dual-shape entry export)",
     "- An isolated fixture with THATCH_DB_PATH and XDG_CONFIG_HOME set",
   ].join("\n"),
   steps: [

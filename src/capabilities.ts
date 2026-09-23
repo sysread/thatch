@@ -28,6 +28,16 @@ export interface ToastInput {
 }
 
 export interface HostCapabilities {
+  /**
+   * Whether promptSession honors noReply (deliver without starting a model
+   * turn). v1: true (promptAsync with noReply renders a visible bubble and
+   * starts nothing). v2: false - the prompt endpoint has no noReply
+   * semantics, so a noReply delivery would start a real model turn. The
+   * runtime gates its noReply callers (chat echoes, session-start
+   * reminder) on this; turning it on for a host without support creates a
+   * model-turn feedback loop.
+   */
+  readonly noReplyDelivery: boolean;
   /** Live session statuses, as client.session.status() returns. */
   fetchStatuses(): Promise<Record<string, { type: string }> | null>;
   /**
@@ -35,7 +45,7 @@ export interface HostCapabilities {
    * session domain; the parentID/title body is shared behavior.
    */
   sessionCreate(input: { parentID: string; title: string }): Promise<{ id: string }>;
-  /** Delete a session (child-session cleanup). Degrades to a no-op reject on v2. */
+  /** Delete a session (child-session cleanup). Degrades to a no-op resolve on v2. */
   sessionDelete(id: string): Promise<void>;
   /**
    * Prompt a session with text parts. `sync` mode blocks until the child
@@ -57,7 +67,7 @@ export interface HostCapabilities {
    * unavailable (v2 has no equivalent - wrap-up degrades).
    */
   sessionMessages(id: string): Promise<{ info: { role: string }; parts?: { type: string; text?: string }[] }[] | null>;
-  /** TUI toast. Best-effort everywhere: adapters catch-and-ignore. */
+  /** TUI toast. The runtime's call sites catch-and-ignore; the adapter just delivers. */
   showToast(toast: ToastInput): Promise<void>;
   /** TUI command dispatch (wrap-up compact). Degrades on v2. */
   tuiExecuteCommand(command: string): Promise<void>;
@@ -72,6 +82,7 @@ export interface HostCapabilities {
  */
 export function capabilitiesFromClient(client: PluginInput["client"]): HostCapabilities {
   return {
+    noReplyDelivery: true,
     fetchStatuses: async () => {
       const { data } = await client.session.status();
       return data ?? {};

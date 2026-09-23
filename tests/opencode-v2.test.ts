@@ -18,16 +18,19 @@ type Registration = { dispose: () => void };
 let dbDir: string;
 let promptHook: HookFn | undefined;
 let contextHook: HookFn | undefined;
-
+let toolAfterHook: HookFn | undefined;
 let addedTools: { name: string; description: string; input: unknown }[];
 let sessionPromptCalls: any[];
+let sessionCreateCalls: any[];
 const eventQueue: any[] = [];
 
 function makeContext() {
   addedTools = [];
   sessionPromptCalls = [];
+  sessionCreateCalls = [];
   promptHook = undefined;
   contextHook = undefined;
+  toolAfterHook = undefined;
   return {
     location: { directory: SESSION_DIR, project: { directory: PROJECT_DIR, canonical: PROJECT_DIR } },
     tool: {
@@ -37,6 +40,10 @@ function makeContext() {
         });
         return { dispose: () => {} };
       },
+      hook: async (name: string, callback: HookFn): Promise<Registration> => {
+        if (name === "execute.after") toolAfterHook = callback;
+        return { dispose: () => {} };
+      },
     },
     session: {
       hook: async (name: string, callback: HookFn): Promise<Registration> => {
@@ -44,7 +51,10 @@ function makeContext() {
         if (name === "context") contextHook = callback;
         return { dispose: () => {} };
       },
-      create: async () => ({ data: { id: "v2-test-child" } }),
+      create: async (input: any) => {
+        sessionCreateCalls.push(input);
+        return { data: { id: "v2-test-child" } };
+      },
       get: async () => ({ data: { title: "some title" } }),
       prompt: async (input: any) => {
         sessionPromptCalls.push(input);
@@ -117,43 +127,72 @@ describe("opencode v2 adapter", () => {
     expect(system[0]).toContain("thatch_memory_remember");
   });
 
-  test("prompt hook appends nudge injections to the prompt text", async () => {
+  test("prompt hook preserves the user's text when nothing fires", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     expect(promptHook).toBeDefined();
     const prompt = { text: "remember the thing we discussed about deployment" };
     await promptHook!({ sessionID: "ses_v2_a", messageID: "msg_1", prompt });
     // The runtime buffered no tool interactions, so no extraction nudge
-    // fires; the recall path may or may not match. Assert only that the
-    // user's text is preserved (the seeded part is not re-appended).
-    expect(prompt.text.startsWith("remember the thing we discussed about deployment")).toBe(true);
+    // fires and no injection appends.
+    expect(prompt.text).toBe("remember the thing we discussed about deployment");
+  });
+
+  test("prompt hook appends the extraction nudge to the prompt text", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    expect(toolAfterHook).toBeDefined();
+    // Buffer a tool interaction through the v2 execute.after hook, then
+    // send a prompt: the extraction nudge must ride along on prompt.text.
+    await toolAfterHook!({
+      tool: "Read",
+      sessionID: "ses_v2_nudge",
+      input: { file_path: "/src/app.ts" },
+      status: "completed",
+      result: { content: "const x = 1;" },
+    });
+    const prompt = { text: "what do we know about this" };
+    await promptHook!({ sessionID: "ses_v2_nudge", messageID: "msg_n", prompt });
+    // The extraction nudge rode along (its wording varies with the
+    // background-subagents env: "Dispatch a task..." vs "Spawn a background
+    // sub-agent..."). Both variants reference the payload fetch tool.
+    expect(prompt.text).toContain("thatch_get_extraction_payload");
+    expect(prompt.text.startsWith("what do we know about this")).toBe(true);
   });
 
   test("event pump drops events from other directories and serves matching ones", async () => {
     const context = makeContext();
     cleanup = (await setup(context as any)) as () => Promise<void>;
 
-    // Foreign-directory event: the pump must drop it (no session-start
-    // prompt for its session).
-    await queueEvent({
-      type: "session.created",
-      location: { directory: "/some/other/dir" },
-      properties: { info: { id: "ses_foreign" } },
-    });
-    // Location-less event: dropped with it (v1's server-side filter shape).
-    await queueEvent({ type: "session.created", properties: { info: { id: "ses_bare" } } });
-    // Matching-directory event: the runtime's session-start reminder fires
-    // through the capabilities (sessionGet, then promptSession).
-    await queueEvent({
-      type: "session.created",
-      location: { directory: SESSION_DIR },
-      properties: { info: { id: "ses_v2_new" } },
+    // Buffer an interaction so the matching idle event triggers direct
+    // extraction (session.create) - the observable for "the runtime got it".
+    await toolAfterHook!({
+      tool: "Read",
+      sessionID: "ses_v2_new",
+      input: { file_path: "/src/app.ts" },
+      status: "completed",
+      result: { content: "const x = 1;" },
     });
 
-    // Foreign/bare events produced no prompts; the matching one produced
-    // exactly one (the session-start reminder, sync mode).
-    await waitFor("session-start reminder for ses_v2_new", () => sessionPromptCalls.length === 1);
-    expect(sessionPromptCalls.length).toBe(1);
-    expect(sessionPromptCalls[0].sessionID).toBe("ses_v2_new");
+    // Foreign-directory event: the pump must drop it.
+    await queueEvent({
+      type: "session.status",
+      location: { directory: "/some/other/dir" },
+      properties: { sessionID: "ses_v2_new", status: { type: "idle" } },
+    });
+    // Location-less event: dropped with it (v1's server-side filter shape).
+    await queueEvent({
+      type: "session.status",
+      properties: { sessionID: "ses_v2_new", status: { type: "idle" } },
+    });
+
+    // Only a matching-directory event reaches the runtime, whose idle
+    // handler triggers direct extraction through the capabilities.
+    await queueEvent({
+      type: "session.status",
+      location: { directory: SESSION_DIR },
+      properties: { sessionID: "ses_v2_new", status: { type: "idle" } },
+    });
+    await waitFor("direct extraction for ses_v2_new", () => sessionCreateCalls.length === 1);
+    expect(sessionCreateCalls[0].parentID).toBe("ses_v2_new");
   });
 
   test("prompt hook skips chat echoes (nudge-loop prevention on the v2 path)", async () => {

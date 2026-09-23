@@ -14,10 +14,12 @@ export interface CoreContextExtensions {
 
 /**
  * Builds the host-agnostic CoreContext both adapters share: the opencode
- * plugin path and the MCP server construct this once per plugin/MCP init
- * and reuse it for every tool call. Lives apart from the v1 `tool()` wrapper
- * so the v2 adapter can register TOOL_DEFS through the v2 ToolEditor without
- * pulling the v1 SDK into its import graph.
+ * plugin path and the MCP server each construct a CoreContext once per
+ * init and reuse it for every tool call. This helper is the plugin-side
+ * constructor; the MCP server builds its own inline (src/mcp.ts). Lives
+ * apart from the v1 `tool()` wrapper so the v2 adapter can register
+ * TOOL_DEFS through the v2 ToolEditor without pulling the v1 SDK into its
+ * import graph.
  */
 export function buildCoreContext(
   db: ThatchDB,

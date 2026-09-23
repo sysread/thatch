@@ -625,9 +625,9 @@ export function versionWarningNudge(message: string): string {
 /**
  * The version-skew message: the on-disk package version is newer than the
  * running one (the user upgraded but the host kept the old plugin loaded).
- * Extracted from the chat.message handler so the wording is testable; the
- * v2 host's remedy differs (plugin update, not restart) and is appended by
- * callers that know their host.
+ * Standalone so the wording is testable. Host-specific remedies (v2's
+ * "opencode plugin update", a shim-shape reminder) are planned but not yet
+ * appended by any caller - see docs/plans/opencode-v2-plugin.md.
  */
 export function skewWarningText(onDisk: string, running: string): string {
   return `thatch was upgraded to v${onDisk} but this session is running v${running}. Restart opencode to apply the update.`;
@@ -687,7 +687,7 @@ export function reflectCore(tool: ToolNamer): string {
 }
 
 /**
- * Extraction nudge with escalation. Both the opencode plugin (src/index.ts)
+ * Extraction nudge with escalation. Both the opencode plugin (src/runtime.ts)
  * and the Claude Code/Cursor CLI (bin/thatch flush-tools) call this with
  * their respective tool name prefix. The missedCount parameter tracks
  * consecutive nudges delivered without any memory_remember call in between,

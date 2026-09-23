@@ -152,7 +152,6 @@ describe("skewWarningText", () => {
   });
 });
 
-
 describe("NpmVersionChecker lifecycle", () => {
   test("startVersionChecker creates and starts a checker", () => {
     const dbPath = join(dir, "test.db");

@@ -30,7 +30,7 @@ interface DefaultBehavior {
  * (2) a user-codified behavior that happens to match a seed situation
  * would be found and silently deleted.
  *
- * Called by both the opencode plugin (src/index.ts) and the MCP server
+ * Called by both the opencode plugin (src/runtime.ts) and the MCP server
  * (src/mcp.ts) at startup, after DB and model initialization.
  */
 const DEFAULT_BEHAVIORS: DefaultBehavior[] = [
