@@ -1192,6 +1192,7 @@ export async function createRuntime(input: {
             await triggerExtraction(sessionID);
           } catch (err) {
             console.error(`[thatch] direct extraction trigger failed: ${err}`);
+            debug("extraction", `direct extraction trigger failed for ${sessionID}: ${err}`);
             extracting.delete(sessionID);
           }
         }

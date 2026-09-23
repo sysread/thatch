@@ -267,6 +267,10 @@ export async function createFixture(name: string): Promise<QaContext> {
     env: {
       THATCH_DB_PATH: join(dir, "thatch.db"),
       THATCH_QUEUE_DIR: join(dir, "queue"),
+      // Full plugin debug log into the fixture (debug.log beside the db):
+      // the serve process's stdout/stderr pipes are never drained, so this
+      // is the only window into plugin-side failures during a run.
+      THATCH_DEBUG: "1",
       CLAUDE_CONFIG_DIR: join(dir, "claude"),
       XDG_CONFIG_HOME: join(dir, "config"),
       XDG_DATA_HOME: join(dir, "home", ".local", "share"),
