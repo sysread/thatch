@@ -146,6 +146,7 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   const registerPrompt = await context.session.hook(
     "prompt",
     async (request: { sessionID: string; messageID: string; prompt: { text: string } }) => {
+      runtime.debug("v2:hook:prompt", `session=${request.sessionID} text=${JSON.stringify(request.prompt.text?.slice(0, 60))}`);
       const parts: PromptPart[] = [{ type: "text", text: request.prompt.text }];
       try {
         await runtime.onChatMessage(
@@ -157,6 +158,7 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
         return;
       }
       const injections = parts.slice(1).map((part) => part.text);
+      if (injections.length > 0) runtime.debug("v2:hook:prompt", `session=${request.sessionID} injections=${injections.length}`);
       if (injections.length > 0) pendingInjections.set(request.sessionID, injections);
       else pendingInjections.delete(request.sessionID);
     },
@@ -174,6 +176,11 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     if (!lastUser) return;
     const content = Array.isArray(lastUser.content) ? lastUser.content : (lastUser.content = []);
     for (const text of injections) content.push({ type: "text", text });
+    // Probe telemetry (unknown 2): messages.length per call + whether the
+    // last user message already carries the injection (same array across
+    // the turn's model round trips would show duplicates piling up).
+    const injected = content.filter((c: any) => injections.includes(c?.text)).length;
+    runtime.debug("v2:hook:generate", `session=${request.sessionID} messages=${request.messages.length} injectionsTotal=${injected}/${injections.length}`);
   });
 
   // Compaction: the nudge-suppression flag is the only surface verified to
