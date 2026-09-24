@@ -199,7 +199,7 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
         execute: async ({ sessionID, prompt }: { sessionID: string; prompt?: { text?: string } }) => {
           // Same arm the v1 command.execute.before hook runs - the wrap-up
           // resolution happens on the session's next idle event.
-          runtime.onCommandExecuteBefore({ command: `thatch/${kind}`, sessionID });
+          await runtime.onCommandExecuteBefore({ command: `thatch/${kind}`, sessionID });
           const args = typeof prompt?.text === "string" ? prompt.text : "";
           await capabilities.promptSession(
             sessionID,

@@ -73,7 +73,7 @@ the shared runtime needs. It is the lifecycle-level sibling of `CoreContext`
 | compaction trigger | `client.tui.executeCommand("session_compact")` | none | degrade (no `session.compact` on the promise domain's Pick, and the built-in `/compact` is a TUI palette action calling the server endpoint directly - the server command registry only knows config/plugin-registered names; the wrap-up checklist and flush still run, the automatic compaction is skipped) |
 | toasts | `client.tui.showToast` | none reachable | degrade (the `tui.toast.show` event has no producer surface from the promise context) |
 | TUI app exit | `client.tui.publish` | none | degrade (the wrap-up exit's checklist and flush run; the process exit does not - upstream [anomalyco/opencode#50984](https://github.com/anomalyco/opencode/issues/50984)) |
-| dispose | `dispose` hook | cleanup returned from `setup` | must be idempotent: v2 auto-reloads plugins on file change, and a non-idempotent cleanup doubles pollers/pumps/nudges |
+| dispose | `dispose` hook | cleanup returned from `setup` | must be idempotent: v2 auto-reloads plugins on file change, and a non-idempotent cleanup doubles pollers/pumps/nudges. A reload also re-runs `setup()` from scratch and discards the in-memory state: the watcher registry, extraction buffer, pending wrap-up arms, `pendingInjections`, and `sessionDirs`. Dev-shim users hit this on every plugin file save; npm users on `opencode plugin update`. Persistence of that state is a planned fix (see scratch/main-repo-bugs.md) |
 
 ## Live verification and remaining unknowns
 
