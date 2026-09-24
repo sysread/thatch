@@ -11,9 +11,10 @@ import { ThatchDB } from "../../../src/db";
  * (fresh and stale), a direct message, a broadcast, and a departed sender,
  * then verifies the roster and the tail's JSONL events, including the
  * broadcast flag and the departed-sender fallback. The roster's project
- * grouping order is probed with two sibling-project seeds, and the default
- * one-day stale window is verified against the long-stale ghost, plus
- * the --stale all escape hatch. A second seed
+ * grouping order is probed with two sibling-project seeds, the active-only
+ * default is verified against the long-stale ghost, bare --stale adds the
+ * stale section under the one-day display cap (hidden-count note), and
+ * --stale all is the unbounded escape hatch. A second seed
  * batch (numbered fillers) exercises the tail's --limit elision note,
  * ANDed --match body filters, --from name matching, and the --since/
  * --until window. The follow mode (no --once) is a live loop and is
@@ -28,16 +29,15 @@ const useCase: UseCase = {
   ].join("\n"),
   steps: [
     "1. Seed a DB: three registered sessions (alpha with a topic, beta, ghost aged long stale), two ordering probes in sibling projects, a direct message, a broadcast, and a message from a sender that then unregisters.",
-    "2. Run `thatch chat list` and verify the roster renders two sections - Active and Stale (with a missed-heartbeat explainer) - each an aligned header row plus name, human age, status, project, and topic columns.",
-    "3. Verify the default one-day stale window hides the long-stale ghost behind a hidden-count note, and `--stale all` shows it again.",
+    "2. Run `thatch chat list` and verify the default active-only roster: one Active section (aligned header row plus name, human age, status, project, and topic columns) with no Stale section.",
+    "3. Verify bare `--stale` adds the Stale section but still hides the long-stale ghost behind the default one-day display cap (hidden-count note), and `--stale all` shows it unbounded.",
     "4. Run `thatch chat tail --once` and verify every stdout line is one JSON object with event/at/id/from/to/body fields, broadcast copies carry broadcast: true with their real recipient, and already-read messages have a read event linked by id.",
     "5. Verify a departed sender renders as unknown in the tail.",
     "6. Seed 25 numbered filler messages, then run filtered tails: verify --limit line counts and the stderr elision note, ANDed --match, --from name matching, and the --since/--until window.",
   ].join("\n"),
   expected: [
-    "- The roster shows every registered session with a human-readable age, its project, and its topic when set, grouped into Active and Stale sections by liveness.",
-    "- Rows are ordered by project (alphabetical; no-project rows last), most recently seen first within each project.",
-    "- The default stale window is one day: stale rows older than that are hidden and counted in a note; --stale all displays every stale row.",
+    "- The default roster is active-only: fresh sessions with a human-readable age, project, and topic; no Stale section.",
+    "- Bare `--stale` adds a Stale section; rows older than the one-day default cap are hidden and counted in a note; `--stale all` displays every stale row.",
     "- The tail is JSONL: one sent event per line with the body verbatim and each participant's topic; via_broadcast rows are one sent event per recipient with broadcast: true.",
     "- A sender whose directory row is gone renders as 'unknown (id, departed)'.",
     "- --limit caps the backlog with an elision note on stderr; --match ANDs; --from/--to match names; --since/--until bound the window.",
@@ -90,13 +90,11 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const listText = list.stdout.toString();
-    // The roster renders two sections - Active and Stale - each an aligned
-    // header row plus session rows with name, age, status, project, and
-    // topic. Piped output carries no ANSI. The stale-row explainer only
-    // prints when stale rows are displayed, so it is asserted on the
-    // unbounded run below.
+    // The default roster is active-only: the Active section renders with
+    // its aligned header row plus session rows (name, age, status, project,
+    // topic) - and no Stale section at all. Piped output carries no ANSI.
     for (const needle of [
-      "# Active Sessions", "# Stale Sessions",
+      "# Active Sessions",
       "NAME", "AGE", "STATUS", "PROJECT", "TOPIC",
       "alpha-00001", "beta-00001", "watching CI", "acme/widgets", "ago",
     ]) {
@@ -105,15 +103,28 @@ const useCase: UseCase = {
         return "FAIL";
       }
     }
-    // The one-day default stale window hides long-dead rows: the ghost
-    // (aged to 2020) is out of the stale section, and the hidden-count
-    // note says so. --stale all restores the unbounded view.
-    if (listText.includes("ghost-00001")) {
-      console.log(`  FAIL: default roster should hide the long-stale ghost:\n${listText}`);
+    // The default hides stale rows entirely - section, note, and all.
+    if (listText.includes("# Stale Sessions") || listText.includes("ghost-00001") || listText.includes("older stale session")) {
+      console.log(`  FAIL: default roster should be active-only:\n${listText}`);
       return "FAIL";
     }
-    if (!listText.includes("older stale session")) {
-      console.log(`  FAIL: default roster should carry the hidden-stale note:\n${listText}`);
+    // Bare --stale opts into the stale section under the one-day display
+    // cap: the ghost (aged to 2020) stays hidden, and the hidden-count note
+    // says so.
+    const capped = await run(["chat", "list", "--stale"]);
+    if (capped.exitCode !== 0) {
+      console.log(`  FAIL: chat list --stale exited ${capped.exitCode}`);
+      return "FAIL";
+    }
+    const cappedText = capped.stdout.toString();
+    for (const needle of ["# Active Sessions", "# Stale Sessions", "older stale session"]) {
+      if (!cappedText.includes(needle)) {
+        console.log(`  FAIL: --stale roster missing "${needle}":\n${cappedText}`);
+        return "FAIL";
+      }
+    }
+    if (cappedText.includes("ghost-00001")) {
+      console.log(`  FAIL: --stale should keep the one-day cap over the long-stale ghost:\n${cappedText}`);
       return "FAIL";
     }
     const unbounded = await run(["chat", "list", "--stale", "all"]);
