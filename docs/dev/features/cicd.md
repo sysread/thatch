@@ -13,7 +13,7 @@ The CI gate is the never-merge-broken guard before a release. All three must pas
 
 ## Publish pipeline (.github/workflows/publish.yml)
 
-Triggered by pushing a `v*` tag. Publishes to npm via OIDC trusted publishing — no stored npm token.
+Triggered by pushing a `v*` tag. Publishes to npm via OIDC trusted publishing — no stored npm token. The tag push does not trigger ci.yml, so the publish workflow re-runs the full CI gate (typecheck, tests, markdownlint) across the same dual-Bun matrix as its own release gate.
 
 Key details:
 - `id-token: write` permission lets npm authenticate through GitHub's OIDC exchange

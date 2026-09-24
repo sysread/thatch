@@ -15,7 +15,7 @@ import { registerUseCase, type UseCase, type QaContext } from "../runner";
 const useCase: UseCase = {
   name: "UC-106-thatch-actions",
   preconditions: [
-    "- The opencode plugin installed (src/index.ts server export)",
+    "- The opencode plugin installed (src/index.ts dual-shape entry export)",
     "- An isolated fixture with THATCH_DB_PATH and XDG_CONFIG_HOME set",
   ].join("\n"),
   steps: [

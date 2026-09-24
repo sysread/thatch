@@ -40,6 +40,10 @@ Before publishing, use a file path:
 { "plugin": ["./path/to/thatch/src/index.ts"] }
 ```
 
+The same file loads on both opencode lines: opencode 1.x reads its `server`
+export, opencode 2.x reads its default export (the merged plugin
+definition). No path change when you switch opencode versions.
+
 Or place the thatch repo in `.opencode/plugins/` for auto-loading.
 
 ## Claude Code

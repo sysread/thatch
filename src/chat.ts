@@ -229,7 +229,7 @@ const MAX_TOPIC_LEN = 80;
 // many days are pruned from the directory. Counters never decrement, so a
 // pruned session's name is never reissued - pruning cannot create identity
 // confusion, only roster silence.
-const CHAT_AUTO_TTL_DAYS = 7;
+export const CHAT_AUTO_TTL_DAYS = 7;
 
 /**
  * Slugifies a session title into a name base: lowercase, letter/number runs
@@ -398,6 +398,9 @@ export class ChatStore {
    * random pool name (chat-names.ts) and the per-base counter only ever
    * increments - so a name is minted exactly once, machine-wide, and
    * pruning an old session can never reissue its name to someone else. The
+   * one exception is the session itself: a reaped row leaves a claim, and
+   * the same session id re-registering reclaims its old name (crash-and-
+   * resume keeps its identity). The
    * session title never feeds the name; it rides along as the topic, so a
    * placeholder or later-edited title cannot leave a misleading name
    * behind. Idempotent for an already-registered session: it keeps its
@@ -438,6 +441,21 @@ export class ChatStore {
     const gate = this.#tombstoneGate(sessionID, kind);
     if (gate) return gate;
     const cleanTopic = this.#cleanTopic(topic);
+    // A reaped row leaves a name claim: this session owned that name before
+    // its harness died, so reclaim it instead of minting a new one. The
+    // claim is cleared on success (a later reap re-records it); if the name
+    // is somehow taken, fall through to the counter draw.
+    const claim = this.#db
+      .query("SELECT name FROM chat_name_claims WHERE session_id = ?")
+      .get(sessionID) as { name: string } | undefined;
+    if (claim) {
+      const reclaimed = this.#insertSession(sessionID, claim.name, project, cleanTopic, kind, worktree);
+      if (reclaimed.ok) {
+        this.#db.run("DELETE FROM chat_name_claims WHERE name = ?", [claim.name]);
+        return { ok: true, name: claim.name, topic: cleanTopic, created: true };
+      }
+      this.#db.run("DELETE FROM chat_name_claims WHERE name = ?", [claim.name]);
+    }
     const base =
       nameBase ??
       slugifyTitle(CHAT_NAME_POOL[Math.floor(Math.random() * CHAT_NAME_POOL.length)]) ??
@@ -551,7 +569,19 @@ export class ChatStore {
    * Returns the number of directory rows pruned.
    */
   pruneStaleAuto(cutoff: string): number {
+    // Record the name bindings of the rows about to be reaped, so the same
+    // session can reclaim its name when it re-registers (a crash-and-resume
+    // keeps its identity instead of churning to a fresh counter draw).
+    const dying = this.#db
+      .query("SELECT session_id, name FROM chat_sessions WHERE auto = 1 AND last_seen < ?")
+      .all(cutoff) as any[];
     const result = this.#db.run("DELETE FROM chat_sessions WHERE auto = 1 AND last_seen < ?", [cutoff]);
+    for (const row of dying) {
+      this.#db.run(
+        "INSERT INTO chat_name_claims (name, session_id) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET session_id = excluded.session_id",
+        [row.name, row.session_id],
+      );
+    }
     this.#db.run(
       "DELETE FROM chat_messages WHERE read_at IS NULL AND to_session NOT IN (SELECT session_id FROM chat_sessions) AND created_at < ?",
       [cutoff],
@@ -1313,6 +1343,32 @@ export interface ChatPollerOptions {
  * lives in SQLite rather than memory, because the sender may be a different
  * process than the deliverer.
  */
+/**
+ * Computes the chat poller's hosted set - the sessions this plugin instance
+ * may heartbeat and deliver mail to.
+ *
+ * - Event-fed sessions (status keys): always hosted by the instance that
+ *   saw them.
+ * - Startup-resumed sessions (-s/-c): hosted by their own instance before
+ *   any event arrives.
+ * - Re-hosted sessions (a reload rehydration): the instance's own journaled
+ *   hosted set, restored so the poller can wake a session the reload left
+ *   asleep instead of waiting for the user to type.
+ *
+ * Child sessions are never hosted (heartbeating one fresh-forever burns
+ * nudge budget on undeliverable wake prompts).
+ */
+export function hostedSessionIds(options: {
+  statusKeys: Iterable<string>;
+  resumedSessions: Iterable<string>;
+  rehostedSessions: Iterable<string>;
+  exclude: Iterable<string>;
+}): string[] {
+  const hosted = [...options.statusKeys, ...options.resumedSessions, ...options.rehostedSessions];
+  const excluded = new Set(options.exclude);
+  return [...new Set(hosted)].filter((id) => !excluded.has(id));
+}
+
 export class ChatPoller {
   #opts: Required<ChatPollerOptions>;
   #timer: ReturnType<typeof setInterval> | null = null;

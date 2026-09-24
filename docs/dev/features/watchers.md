@@ -1,5 +1,7 @@
 # Watchers
 
+Unless noted, `client.*` names below are the opencode v1 mapping; the v2 equivalents and degrades are in [opencode-plugin.md](opencode-plugin.md).
+
 Watchers are the general mechanism for event-driven notifications from
 external sources: the model registers a watch on something outside the
 session, thatch polls it in the background, and the plugin prompts the
@@ -221,7 +223,7 @@ src/watchers.ts, test-enforced); command watchers register the single
 - `src/watchers.ts` - registry, poller, gh CLI runner, command runner,
   diff functions
 - `src/tool-defs.ts` - the watch tool definitions (see `TOOL_DEFS`)
-- `src/index.ts` - registry construction, delivery closure,
+- `src/runtime.ts` - registry construction, delivery closure,
   session.status tracking, session.deleted cleanup, dispose
 - `src/prompts.ts` - `watcherNotificationNudge()`, system prompt
   Watchers section

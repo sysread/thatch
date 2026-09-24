@@ -1,5 +1,7 @@
 # Hygiene System
 
+Unless noted, `client.*` names below are the opencode v1 mapping; the v2 equivalents and degrades are in [opencode-plugin.md](opencode-plugin.md).
+
 Store maintenance signals surfaced at session start. The plugin never deletes
 memories itself — it surfaces problems and lets the agent tend the store.
 
@@ -52,7 +54,7 @@ instructions for the agent to tend the store when convenient.
 
 `hygieneReport(db, repo, worktree)` in `src/hygiene.ts` is shared by:
 
-- The opencode plugin's session-start hook (`src/index.ts`)
+- The opencode plugin's session-start hook (`src/runtime.ts`)
 - The CLI's `thatch reminder` and `thatch hygiene` subcommands (`bin/thatch`)
 
 ## Interactions with other features

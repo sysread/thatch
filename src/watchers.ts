@@ -280,6 +280,8 @@ export interface WatcherRegistryOptions {
   pollIntervalMs?: number;
   ttlMinutes?: number;
   maxPerSession?: number;
+  /** Persistence hook: called after membership changes with the session's watcher list. */
+  journal?: (sessionID: string, watchers: Watcher[]) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -829,6 +831,13 @@ export class WatcherRegistry {
   #timer: ReturnType<typeof setInterval> | null = null;
   #delivering = false;
   #polling = false;
+  /**
+   * Persistence hook (optional): called after every membership change with
+   * the session's current watcher list, so the runtime can journal the
+   * definitions and re-arm them after a v2 plugin reload. Passing no hook
+   * (tests, MCP) keeps the registry in-memory only.
+   */
+  #journal?: (sessionID: string, watchers: Watcher[]) => void;
   readonly #opts: WatcherRegistryOptions & {
     pollIntervalMs: number;
     ttlMinutes: number;
@@ -846,6 +855,7 @@ export class WatcherRegistry {
       commandTimeoutMs: defaultCommandTimeoutMs(),
       ...options,
     };
+    this.#journal = options.journal;
   }
 
   // -- Lifecycle -----------------------------------------------------------
@@ -889,6 +899,19 @@ export class WatcherRegistry {
 
   // -- CRUD ----------------------------------------------------------------
 
+  /** Journal the session's current watcher list (no-op without a hook). */
+  #emit(sessionID: string): void {
+    this.#journal?.(sessionID, this.listForSession(sessionID));
+  }
+
+  /** Restore persisted watchers (same-process reload rehydration). */
+  hydrate(watchers: Watcher[]): void {
+    for (const w of watchers) {
+      // Do not clobber a watcher created after the journal was written.
+      if (!this.#watchers.has(w.id)) this.#watchers.set(w.id, w);
+    }
+  }
+
   /**
    * Registers a PR watcher and captures the baseline state immediately. The
    * baseline fetch doubles as validation: a bad repo, missing PR, or broken
@@ -929,6 +952,7 @@ export class WatcherRegistry {
       state,
     };
     this.#watchers.set(watcher.id, watcher);
+    this.#emit(sessionID);
     return { ok: true, watcher };
   }
 
@@ -973,6 +997,7 @@ export class WatcherRegistry {
       state,
     };
     this.#watchers.set(watcher.id, watcher);
+    this.#emit(sessionID);
     return { ok: true, watcher };
   }
 
@@ -1028,6 +1053,7 @@ export class WatcherRegistry {
       state: { lastExit: baseline.timedOut ? 124 : baseline.exitCode },
     };
     this.#watchers.set(watcher.id, watcher);
+    this.#emit(sessionID);
     return { ok: true, watcher };
   }
 
@@ -1051,6 +1077,7 @@ export class WatcherRegistry {
     const watcher = this.#watchers.get(id);
     if (!watcher || watcher.sessionID !== sessionID) return false;
     this.#watchers.delete(id);
+    this.#emit(sessionID);
     return true;
   }
 
@@ -1060,6 +1087,7 @@ export class WatcherRegistry {
       if (w.sessionID === sessionID) this.#watchers.delete(id);
     }
     this.#pending.delete(sessionID);
+    this.#emit(sessionID);
   }
 
   // -- Polling and delivery ------------------------------------------------
@@ -1079,6 +1107,7 @@ export class WatcherRegistry {
       for (const [id, watcher] of this.#watchers) {
         if (now > watcher.expiresAt) {
           this.#watchers.delete(id);
+          this.#emit(watcher.sessionID);
           continue;
         }
         try {
@@ -1092,7 +1121,10 @@ export class WatcherRegistry {
             // if the session is busy. Cancellation at detection time keeps
             // "wait for this run to finish" from leaving a standing watch
             // polling a target nobody is waiting on anymore.
-            if (watcher.once) this.#watchers.delete(id);
+            if (watcher.once) {
+              this.#watchers.delete(id);
+              this.#emit(watcher.sessionID);
+            }
           }
         } catch (err) {
           console.error(`[thatch] watcher ${id} poll failed: ${err}`);

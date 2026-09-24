@@ -46,7 +46,8 @@ const useCase: UseCase = {
     // (simulating compaction failure — flag is stale)
 
     // Step 3: non-compaction chat.message arrives
-    // Replicate the guard logic from src/index.ts:361-371
+    // Replicate the chat.message compaction guard logic (src/runtime.ts
+    // onChatMessage, compacting branch)
     const isCompactionMsg = false; // this is a normal user message, not compaction summary
     let flagCleared = false;
     let proceedsNormally = false;

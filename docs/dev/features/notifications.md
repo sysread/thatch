@@ -17,7 +17,7 @@ Cursor -- with no host-specific plumbing and no new npm dependencies.
 
 The config is one JSON file at `~/.config/thatch/config.json`, placed next to
 `thatch.db` by deriving the path from `THATCH_DB_PATH` (or the XDG default the
-same way `index.ts` and `mcp.ts` derive the DB path). Tests pass an explicit
+same way `runtime.ts` and `mcp.ts` derive the DB path). Tests pass an explicit
 dbPath to keep writes inside a tempdir.
 
 Key decisions:
@@ -87,7 +87,7 @@ Details that matter:
   a short "Notifications" section: when to notify, the source-label rule, and
   the config_get-before-config_set instruction.
 - `notify_user` is not `opencodeOnly`: it needs no host capabilities, so MCP
-  hosts get it too. Nothing was added to `src/tools.ts` or `src/index.ts`.
+  hosts get it too. Nothing was added to `src/tools.ts` or the plugin runtime.
 
 ## Tests
 

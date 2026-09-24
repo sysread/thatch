@@ -1,5 +1,7 @@
 # Session Lifecycle Management (opencode)
 
+Unless noted, `client.*` names below are the opencode v1 mapping; the v2 equivalents and degrades are in [opencode-plugin.md](opencode-plugin.md).
+
 opencode emits bus events for session lifecycle changes. Thatch subscribes to these events to manage the extraction pipeline, send session-start reminders, handle child session cleanup, and resolve wrap-up commands.
 
 ## What it does
@@ -15,7 +17,7 @@ opencode emits bus events for session lifecycle changes. Thatch subscribes to th
 
 ## How it works
 
-### Event handler (`src/index.ts`, event hook)
+### Event handler (`src/runtime.ts`, shared by both adapters)
 
 Subscribes to all session bus events. Dispatches based on `event.type`.
 
@@ -122,7 +124,8 @@ first-ever install is invisible until the next server start.
 
 ## Source files
 
-- `src/index.ts` -- event handler (all session events), `triggerExtraction`, `cleanupChild`, internal state maps
+- `src/runtime.ts` -- event handler (all session events), `triggerExtraction`, `cleanupChild`, internal state maps
+- `src/opencode/v1.ts`, `src/opencode/v2.ts` -- host adapters wiring the runtime into each opencode plugin API
 
 ## Key invariants
 

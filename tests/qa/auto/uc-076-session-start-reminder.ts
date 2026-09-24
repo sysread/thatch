@@ -9,7 +9,7 @@ import { hygieneReport } from "../../../src/hygiene";
  *
  * Automatable: the sessionStartReminder prompt function and the
  * parent-child mapping logic are tested directly. The plugin's
- * session.created handler is closure-local in src/index.ts, so we
+ * session.created handler is closure-local in src/runtime.ts, so we
  * replicate the key behaviors: top-level sessions get the reminder,
  * child sessions (with parentID) do not.
  */
@@ -99,7 +99,7 @@ const useCase: UseCase = {
       }
 
       // Step 6-7: child session (with parentID) does not get reminder
-      // Replicate the session.created handler logic from src/index.ts:519-528
+      // Replicate the session.created handler logic (src/runtime.ts onEvent)
       const childToParent = new Map<string, string>();
       const parentSnapshots = new Map<string, unknown[]>();
 
@@ -114,7 +114,7 @@ const useCase: UseCase = {
         childToParent.set(childSessionID, parentSessionID);
         parentSnapshots.set(childSessionID, []);
         // Handler returns early — does NOT call client.session.prompt
-        // (src/index.ts:524-528)
+        // (src/runtime.ts onEvent, session.created branch)
       } else {
         promptCalled = true;
       }

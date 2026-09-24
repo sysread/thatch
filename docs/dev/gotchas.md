@@ -70,7 +70,7 @@ here first. These are the things that have already cost time.
 - **`chat.message` has two priority tiers**: extraction nudge first (returns
   early), then the prompt-aware recall nudge. Don't run both in one turn.
 - **The extraction nudge peeks, never flushes.** The buffer is NOT drained
-  on nudge delivery (`index.ts:366` — `peek()` call). It persists until the
+  on nudge delivery (`extraction.peek()` in `triggerExtraction`, src/runtime.ts). It persists until the
   agent writes a memory or calls `thatch_extraction_done`. Ignored nudges
   accumulate; the `missedNudges` counter escalates the tone (polite at 0-1
   misses, insistent at 2, ALL-CAPS at 3+). The counter resets when the
@@ -80,8 +80,8 @@ here first. These are the things that have already cost time.
   is active. The peek-not-drain semantics still hold for the fallback nudge
   path (MCP hosts and any `triggerExtraction` failure).
 - **A child sub-agent's `thatch_memory_remember` drains the parent's buffer**
-  via the `childToParent` Map (`index.ts:79` declaration, `index.ts:272`
-  lookup). Two paths reach this machinery: (a) the **plugin-initiated child
+  via the `childToParent` Map in src/runtime.ts (declaration plus `.get()`
+  lookups in the idle and remember handlers). Two paths reach this machinery: (a) the **plugin-initiated child
   session** — `triggerExtraction` calls `client.session.create` with a
   `parentID`, the primary opencode path; (b) the **agent-initiated background
   task** — the model dispatches the fact-extractor via the `task` tool after
@@ -196,3 +196,17 @@ prose end marker stopped matching, and setup could never update the block
 again while `checkSetup` reported `markers-broken` on every session. Rule:
 never use file content as its own delimiter; agents will reword it. The
 legacy-prose detection constants exist only to migrate old installs.
+
+## The dual-shape plugin entry: named `server` + v2 default export silently breaks v1
+
+opencode v1's plugin loader (`readV1Plugin`, identical across 1.18.x) reads
+ONLY `mod.default`. A module that exports a named `server` plus a v2-shaped
+default `{ id, setup }` (no `server` inside the default) makes v1 throw on
+load - and the host swallows the error and SKIPS the plugin with no visible
+message. The failure looks like "thatch tools disappeared", not like a load
+error. This is why the dual entry exports a MERGED default object
+(`{ id, setup, server }`) and why every shim (the user's
+`~/.config/opencode/plugins/thatch.ts` and the QA runner's generated one)
+must re-export the default as well as the name. A named-only shim loads on
+v1 and silently disables thatch on v2 - same invisible failure, opposite
+host.

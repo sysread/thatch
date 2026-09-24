@@ -297,6 +297,18 @@ export class ThatchDB {
       )
     `);
 
+    // Reaped auto-registered rows leave their name-to-session binding here,
+    // so the SAME session can reclaim its name when it re-registers (a
+    // crash-and-resume must not churn the identity). Names are still never
+    // reissued to a DIFFERENT session: a claim only ever resolves for the
+    // session id it was recorded with.
+    this.#db.run(`
+      CREATE TABLE IF NOT EXISTS chat_name_claims (
+        name       TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL
+      )
+    `);
+
     // Explicit leaves (chat_unregister). Suppresses auto-registration so
     // the next idle event cannot silently re-register the session; cleared
     // when the session explicitly rejoins via chat_register. Survives the
@@ -322,6 +334,24 @@ export class ThatchDB {
       )
     `);
 
+    // Volatile plugin-runtime state, persisted so a v2 plugin reload (the
+    // host rebuilds the location graph and re-runs setup) or a process
+    // restart can rehydrate instead of silently dropping it. The writer's
+    // pid is the discriminator: a row written by the CURRENT process means
+    // "reload - keep and rehydrate"; a row from another (dead) pid means
+    // "restart - prune unless the session was resumed".
+    this.#db.exec(`
+      CREATE TABLE IF NOT EXISTS runtime_state (
+        kind       TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        directory  TEXT NOT NULL DEFAULT '',
+        value      TEXT NOT NULL,
+        pid        INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        PRIMARY KEY (kind, session_id)
+      )
+    `);
+
     this.#migrateColumns();
     this.#migrateChatNameCollation();
     this.#migrateChatTopic();
@@ -330,6 +360,14 @@ export class ThatchDB {
     this.#migrateChatAuto();
     this.#migrateChatWorktree();
     this.#migrateChatHostPid();
+    this.#migrateRuntimeStateDirectory();
+  }
+
+  #migrateRuntimeStateDirectory(): void {
+    const cols = (this.#db.query("PRAGMA table_info(runtime_state)").all() as any[]).map((r) => r.name);
+    if (cols.length > 0 && !cols.includes("directory")) {
+      this.#db.run("ALTER TABLE runtime_state ADD COLUMN directory TEXT NOT NULL DEFAULT ''");
+    }
   }
 
   // chat_sessions tables created before the auto column lack it; the ALTER
@@ -959,6 +997,48 @@ export class ThatchDB {
 
   unregisterChatSession(sessionID: string) {
     return this.#chat.unregister(sessionID);
+  }
+
+  /**
+   * Persist one runtime-state record (upsert by kind+session). `directory`
+   * is the writing instance's location: one v2 serve hosts one plugin
+   * instance per directory sharing this db, and rehydration must be
+   * instance-scoped, not process-scoped.
+   */
+  runtimeStatePut(kind: string, sessionId: string, value: unknown, directory: string, pid: number = process.pid) {
+    this.#db
+      .query(
+        `INSERT INTO runtime_state (kind, session_id, directory, value, pid) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (kind, session_id) DO UPDATE SET directory = excluded.directory, value = excluded.value, pid = excluded.pid, created_at = excluded.created_at`,
+      )
+      .run(kind, sessionId ?? "", directory ?? "", JSON.stringify(value), pid);
+  }
+
+  /** Drop one runtime-state record. */
+  runtimeStateDelete(kind: string, sessionId: string) {
+    this.#db.query(`DELETE FROM runtime_state WHERE kind = ? AND session_id = ?`).run(kind, sessionId);
+  }
+
+  /** Every runtime-state record, oldest first (rehydration source). */
+  runtimeStateAll(): { kind: string; sessionID: string; directory: string; value: unknown; pid: number }[] {
+    return this.#db
+      .query(`SELECT kind, session_id, directory, value, pid FROM runtime_state ORDER BY created_at, session_id`)
+      .all()
+      .map((row: any) => {
+        let value: unknown;
+        try {
+          value = JSON.parse(row.value);
+        } catch {
+          value = null;
+        }
+        return {
+          kind: row.kind as string,
+          sessionID: row.session_id as string,
+          directory: (row.directory ?? "") as string,
+          value,
+          pid: row.pid as number,
+        };
+      });
   }
 
   listChatSessions() {

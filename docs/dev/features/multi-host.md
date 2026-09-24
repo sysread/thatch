@@ -32,7 +32,7 @@ wrapping---prefixing, transport, session hooks---lives outside the core.
 
 ## The three paths
 
-### opencode plugin (`src/index.ts`)
+### opencode plugin (`src/opencode/v1.ts` + `src/opencode/v2.ts`)
 
 Runs inside opencode's Bun runtime as a loaded plugin. No setup command is
 needed---opencode discovers the plugin from `opencode.json` and loads it at
@@ -228,7 +228,9 @@ the opencode-only skills require sub-agent dispatch or in-process hooks.
 
 | File | Role |
 |------|------|
-| `src/index.ts` | opencode plugin entry---hooks, system prompt injection, session events |
+| `src/index.ts` | dual-shape plugin entry (merged default export loads on opencode v1 and v2) |
+| `src/opencode/v1.ts` + `src/opencode/v2.ts` | host adapters: hooks (v1) vs promise-context domains (v2) |
+| `src/runtime.ts` | shared plugin runtime: nudges, system prompt injection, session events |
 | `src/mcp.ts` | MCP server (shared by Claude Code and Cursor)---stdio JSON-RPC, tool dispatch |
 | `src/setup.ts` | Setup installer for Claude Code and Cursor---markers, hooks, skills |
 | `src/prompts.ts` | All three system prompt variants---`systemPrompt()`, `claudeInstructions()`, `cursorInstructions()` |

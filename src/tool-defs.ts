@@ -50,7 +50,7 @@ function dedupScanStores(store: string): string[] {
 }
 
 // Minimum matcher cosine to consider a prediction relevant. Matches the
-// auto-fire threshold in index.ts (PREDICTION_THRESHOLD). The query tool
+// auto-fire threshold in runtime.ts (PREDICTION_THRESHOLD). The query tool
 // should not return predictions from near-zero-similarity matchers that
 // would never fire in the auto-fire.
 const PREDICTION_QUERY_THRESHOLD = 0.60;
@@ -2006,3 +2006,50 @@ export const TOOL_DEFS: ToolDef[] = [
   chatBroadcastDef,
   chatStatusDef,
 ];
+
+/** Extensions a host adapter passes into the shared CoreContext. */
+export interface CoreContextExtensions {
+  extractionPayloadProvider?: CoreContext["extractionPayloadProvider"];
+  drainExtractionQueue?: CoreContext["drainExtractionQueue"];
+  watcherRegistry?: WatcherRegistry;
+  projectDir?: string;
+}
+
+/**
+ * Builds the host-agnostic CoreContext both adapters share: the opencode
+ * plugin path and the MCP server each construct a CoreContext once per
+ * init and reuse it for every tool call. This helper is the plugin-side
+ * constructor; the MCP server builds its own inline (src/mcp.ts).
+ *
+ * Lives in this module - NOT in tools.ts - because tools.ts imports the v1
+ * SDK at runtime, and the v2 adapter's entry graph must stay SDK-free (the
+ * v2 plugin install skips optional peers, so evaluating the v1 SDK there
+ * crashes the load).
+ */
+export function buildCoreContext(
+  db: ThatchDB,
+  model: EmbeddingModel,
+  defaultStore: string,
+  extensions?: CoreContextExtensions,
+): CoreContext {
+  return {
+    db,
+    model,
+    defaultStore,
+    extractionPayloadProvider: extensions?.extractionPayloadProvider,
+    drainExtractionQueue: extensions?.drainExtractionQueue,
+    watchers: extensions?.watcherRegistry,
+    projectDir: extensions?.projectDir,
+  };
+}
+
+/**
+ * Trim opencode's per-call ToolContext to the host-agnostic fields the
+ * shared definitions know about. Both adapters do this same two-field trim;
+ * tests and MCP paths pass no host context.
+ */
+export function trimHostContext(
+  hostContext: { sessionID: string; agent: string } | undefined,
+): HostToolContext | undefined {
+  return hostContext ? { sessionID: hostContext.sessionID, agent: hostContext.agent } : undefined;
+}

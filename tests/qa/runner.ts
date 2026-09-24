@@ -152,8 +152,11 @@ async function doEnsureMaster(): Promise<void> {
       // plugin file's own directory (.opencode/plugins/), not the project
       // root, so "./src/index" never loads - the plugin silently fails to
       // import and every in-session thatch tool/poller is missing. Same
-      // pattern as the real global config's plugin file.
-      `export { server } from ${JSON.stringify(join(masterDir, "src", "index"))};\n`,
+      // pattern as the real global config's plugin file. Dual-shape: the
+      // named export serves v1 hosts; the default re-export (merged
+      // {id, setup, server}) serves v2 hosts, which validate only the
+      // default export of the module they load.
+      `export { server } from ${JSON.stringify(join(masterDir, "src", "index"))};\nexport { default } from ${JSON.stringify(join(masterDir, "src", "index"))};\n`,
     );
     return Promise.resolve();
   });
@@ -211,6 +214,14 @@ export async function createFixture(name: string): Promise<QaContext> {
     throw new Error(`createFixture: cpSync failed — ${dir}/src/index.ts missing`);
   }
 
+  // Remove the copied mise.toml: it serves nothing here (the runner passes
+  // env explicitly; no mise task ever runs via real mise inside a fixture)
+  // and modern mise fail-closes on UNTRUSTED config files - every fixture
+  // lives in a fresh tmpdir, so the copied mise.toml is always untrusted,
+  // and every mise-shimmed node/bun invocation inside the fixture (bin/release's
+  // `node -p`, etc.) dies on the trust check before doing anything.
+  rmSync(join(dir, "mise.toml"));
+
   // Write a per-fixture opencode.json that scopes external_directory
   // permission to ONLY this fixture's directory. The master's opencode.json
   // has "/tmp/**": "allow" which lets a confused model in one session
@@ -264,6 +275,10 @@ export async function createFixture(name: string): Promise<QaContext> {
     env: {
       THATCH_DB_PATH: join(dir, "thatch.db"),
       THATCH_QUEUE_DIR: join(dir, "queue"),
+      // Full plugin debug log into the fixture (debug.log beside the db):
+      // the serve process's stdout/stderr pipes are never drained, so this
+      // is the only window into plugin-side failures during a run.
+      THATCH_DEBUG: "1",
       CLAUDE_CONFIG_DIR: join(dir, "claude"),
       XDG_CONFIG_HOME: join(dir, "config"),
       XDG_DATA_HOME: join(dir, "home", ".local", "share"),
@@ -274,6 +289,10 @@ export async function createFixture(name: string): Promise<QaContext> {
       OPENCODE_DISABLE_CLAUDE_CODE: "1",
       OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
       OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
+      // opencode v2's serve always runs password-protected (random when
+      // unset); a fixed one lets the runner's client authenticate. v1
+      // ignores both the env var and the header.
+      OPENCODE_SERVER_PASSWORD: SERVE_PASSWORD,
       VENICE_API_KEY: process.env.VENICE_API_KEY ?? "",
       PATH: process.env.PATH ?? "",
     },
@@ -427,6 +446,44 @@ export function printCleanupNotice(): void {
 // --- Serve-mode plumbing (multi-session use cases) ---------------------------
 
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
+import { OpenCode as OpenCodeV2 } from "@opencode/client/promise";
+
+/** Fixed serve credential: v2's serve requires basic auth; v1 ignores it. */
+const SERVE_PASSWORD = "thatch-qa-password";
+
+/**
+ * The serve-mode client, version-matched to the `opencode` binary on PATH:
+ * v2 declared a breaking server-API change (v1's SDK client gets 405s from
+ * a v2 server), so a v2 binary gets the v2 SDK client wrapped in the v1
+ * method/response shapes the use cases are written against. The wrap-up
+ * call sites only use session.create/prompt/messages/delete.
+ */
+function v2ClientAsV1(client: ReturnType<typeof OpenCodeV2.make>, directory: string): OpencodeClient {
+  const textOf = (body: any) => (body?.parts ?? []).map((p: any) => p?.text ?? "").join("\n\n");
+  const partsOf = (message: any) =>
+    message.type === "assistant"
+      ? (message.content ?? [])
+          .filter((c: any) => c.type === "text")
+          .map((c: any) => ({ type: "text", text: c.text ?? "" }))
+      : [{ type: "text", text: message.text ?? "" }];
+  return {
+    session: {
+      create: async (input: any) => ({ data: await client.session.create({ ...input?.body, location: { directory } }) }),
+      prompt: async (input: any) => ({ data: await client.session.prompt({ sessionID: input.path.id, text: textOf(input.body) }) }),
+      messages: async (input: any) => {
+        const result = await client.message.list({ sessionID: input.path.id });
+        return { data: result.data.map((m: any) => ({ info: { role: m.type }, parts: partsOf(m) })) };
+      },
+      delete: async (input: any) => ({ data: await client.session.remove({ sessionID: input.path.id }) }),
+    },
+  } as unknown as OpencodeClient;
+}
+
+function serveMajorVersion(): number {
+  const result = Bun.spawnSync(["opencode", "--version"]);
+  // Output: "opencode v2.0.15" - the first dotted number is the major.
+  return Number.parseInt(result.stdout.toString().match(/(\d+)\.\d+/)?.[1] ?? "1", 10);
+}
 
 export interface ServeHandle {
   /** Base URL the serve process listens on. */
@@ -478,6 +535,22 @@ export async function startServe(ctx: QaContext): Promise<ServeHandle> {
     }
     await new Promise((r) => setTimeout(r, 1_000));
   }
-  const client = createOpencodeClient({ baseUrl: url, directory: ctx.dir });
+  const client =
+    serveMajorVersion() >= 2
+      ? v2ClientAsV1(
+          OpenCodeV2.make({
+            baseUrl: url,
+            headers: {
+              Authorization: `Basic ${btoa(`opencode:${SERVE_PASSWORD}`)}`,
+              "x-opencode-directory": ctx.dir,
+            },
+          }),
+          ctx.dir,
+        )
+      : createOpencodeClient({
+          baseUrl: url,
+          directory: ctx.dir,
+          headers: { Authorization: `Basic ${btoa(`opencode:${SERVE_PASSWORD}`)}` },
+        });
   return { url, client, stop: () => { try { proc.kill(); } catch { /* already dead */ } } };
 }

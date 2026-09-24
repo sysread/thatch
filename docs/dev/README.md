@@ -1,5 +1,7 @@
 # Development
 
+Feature docs describe behavior in opencode v1 `client.*` terms; the opencode v2 equivalents and degrades are catalogued in [features/opencode-plugin.md](features/opencode-plugin.md).
+
 ## Architecture
 
 Thatch has three integration paths sharing a common core:
@@ -38,8 +40,21 @@ Shared core
   └── vector-math.ts  → blobToVector + cosineSimilarity helpers
 
 OpenCode plugin path
-  ├── index.ts        → plugin entry: wires DB/model/extraction, registers tools + hooks
-  ├── tools.ts        → thin opencode tool() wrappers over tool-defs
+  ├── index.ts        → dual-shape plugin entry: merged default export
+  │                     ({id, setup, server}) loads on opencode v1 AND v2;
+  │                     lazy-imports the adapter matching the host
+  ├── opencode/v1.ts  → v1 adapter: @opencode-ai/plugin hooks object
+  ├── opencode/v2.ts  → v2 adapter: @opencode/plugin promise-context domains
+  ├── capabilities.ts → HostCapabilities seam: the host operations the
+  │                     runtime needs; capabilitiesFromClient bridges the
+  │                     v1 SDK client
+  ├── runtime.ts      → shared plugin runtime: nudges, system prompt
+  │                     injection, session events, extraction triggers,
+  │                     child-session bookkeeping (host-agnostic)
+  ├── os-args.ts      → pure argv/OS-command-line helpers (startup session
+  │                     resolution; SDK-free)
+  ├── tools.ts        → buildCoreContext (shared per-call context) +
+  │                     thin opencode tool() wrappers over tool-defs (v1)
   ├── extraction.ts   → in-memory ring buffer + shared payload builders
   ├── watchers.ts     → in-memory watcher registry + poller (opencode-only,
   │                     event-driven PR notifications delivered as prompts)
@@ -67,9 +82,13 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | Module | Responsibility |
 |--------|---------------|
 | `tool-defs.ts` | **Single source of truth** for all tools. Each tool has a name, description, zod schema (args), and execute function. Framework-agnostic — neither opencode nor MCP specific. |
-| `tools.ts` | Thin opencode wrappers. Imports tool-defs, wraps each in opencode's `tool()` with a `thatch_` prefix. |
+| `tools.ts` | Thin opencode wrappers. `buildCoreContext` constructs the shared per-call context; `createTools` wraps each tool-def in opencode's `tool()` with a `thatch_` prefix (v1 only). |
 | `mcp.ts` | Stdio JSON-RPC 2.0 server. Compiles zod schemas to JSON Schema via `z.toJSONSchema()` for `tools/list`. Validates args via `z.object().parse()` in `tools/call`. All logging to stderr (stdout is the transport). |
-| `index.ts` | OpenCode plugin entry. Wires DB, model, extraction; registers tools and hooks; installs skills. Internal state beyond the extraction pipeline: `extracting` set (parent IDs with an active direct-extraction child), `childMetrics` map (new/updated/deleted counts per child session), and `triggerExtraction(parentID)` (creates a child session via the SDK client and prompts it with the extraction payload). |
+| `index.ts` | Dual-shape OpenCode plugin entry: the merged default export (`{ id, setup, server }`) loads on opencode v1 (reads `default.server`) and v2 (reads `default.setup`, strips excess keys). Lazy-imports the host adapter so each host's SDK resolves only under its own runtime. |
+| `opencode/v1.ts` + `opencode/v2.ts` | Host adapters. v1 builds HostCapabilities from the PluginInput client and returns the hooks object; v2 registers through the promise-context domains (ToolEditor, session.hook, event.subscribe) and degrades the surfaces v2 lacks. |
+| `capabilities.ts` | The `HostCapabilities` seam: the host operations the shared runtime needs (session create/prompt/get/list/messages/delete, toast, compaction trigger, app exit). `capabilitiesFromClient` bridges the v1 SDK client. |
+| `runtime.ts` | Shared plugin runtime: wires DB, model, extraction; the nudge tiers, system prompt injection, session event handling, child-session bookkeeping, wrap-up resolution. Host-agnostic: consumed by both adapters. |
+| `os-args.ts` | Pure argv / OS-command-line helpers for startup session resolution (`-s`/`-c`). SDK-free. |
 | `setup.ts` | `thatch setup --claude` / `--cursor` installer. Writes MCP config (`.mcp.json` / `.cursor/mcp.json`), appends to CLAUDE.md / AGENTS.md (idempotent), installs hooks in settings.json / hooks.json, installs skills. |
 | `hygiene.ts` | Hygiene report: pending dedup pairs, stale count, orphaned branch memories. Shared by the plugin's session-start hook and the CLI's `thatch reminder` command. |
 | `git.ts` | Parse `owner/repo` from git remote. Worktree-safe fallback chain, plus recovery from the `repo_paths` cache when the directory is deleted, and the spawn-cwd fallback. See [features/repo-identity.md](features/repo-identity.md). |
@@ -96,7 +115,9 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 
 ## Plugin hooks
 
-`index.ts` registers these opencode integration points:
+The v1 adapter (`src/opencode/v1.ts`) registers these opencode integration
+points; the v2 adapter routes its domain hooks into the same shared runtime
+methods. The v1 hook shapes:
 
 | Hook | What it does |
 |------|-------------|

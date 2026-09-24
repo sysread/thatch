@@ -55,7 +55,7 @@ const useCase: UseCase = {
 
     // Step 2: simulate triggerExtraction throwing.
     // In the real code, triggerExtraction adds to extracting, then tries
-    // client.session.create. If it throws, the catch at index.ts:175 does
+    // sessionCreate. If it throws, the catch in triggerExtraction does
     // extracting.delete(parentID). We simulate the post-throw state:
     // extracting is NOT set (it was cleared by the catch).
     const extracting = new Set<string>();

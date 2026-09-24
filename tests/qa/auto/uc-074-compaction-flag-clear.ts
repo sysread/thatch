@@ -5,7 +5,7 @@ import { registerUseCase, type UseCase } from "../runner";
  *
  * Automatable: the compaction flag logic (a Set<string> cleared by
  * autocontinue or session.compacted) is simulated directly. The plugin's
- * compacting set and hook handlers are closure-local in src/index.ts, so
+ * compacting set and hook handlers are closure-local in src/runtime.ts, so
  * we replicate the exact guard logic to verify both clear paths work
  * independently.
  */
@@ -34,7 +34,7 @@ const useCase: UseCase = {
   ].join("\n"),
 
   async run() {
-    // Replicate the compacting set from src/index.ts:77
+    // Replicate the plugin's `compacting` set (src/runtime.ts)
     const compacting = new Set<string>();
     const sessionID = "test-session-074";
 
@@ -84,7 +84,8 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // Simulate session.compacted event handler (src/index.ts:652-654)
+    // Mirror the plugin's session.compacted event handler (src/runtime.ts):
+    // the flag clears when compaction completes.
     compacting.delete(sessionID);
     if (compacting.has(sessionID)) {
       console.log("  FAIL: session still in compacting set after session.compacted");
