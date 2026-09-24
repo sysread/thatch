@@ -66,10 +66,12 @@ const WRAPUP_COMMANDS: Record<string, { token: string; kind: "compact" | "exit" 
   "thatch/exit": { token: EXIT_READY_TOKEN, kind: "exit" },
 };
 
-// The handler-set shape both host adapters consume. Each method maps 1:1 to
-// a v1 hook; the v2 adapter routes its domain hooks into these same methods.
-// Part and message shapes are kept structural (the v1 bodies already treat
-// parts loosely) so neither adapter has to convert host SDK types.
+// The handler-set shape both host adapters consume. The methods correspond
+// to the v1 hook surface (plus the per-call coreContext and the
+// host-agnostic debug log); the v2 adapter routes its domain hooks into
+// these same methods. Part and message shapes are kept structural (the v1
+// bodies already treat parts loosely) so neither adapter has to convert
+// host SDK types.
 export interface ThatchRuntime {
   /** The shared per-call context both adapters register TOOL_DEFS with. */
   coreContext: CoreContext;
@@ -83,14 +85,6 @@ export interface ThatchRuntime {
     output: { title: string; output: string },
   ): Promise<void>;
   onCommandExecuteBefore(input: { command: string; sessionID: string }): Promise<void>;
-  /**
-   * Arms the wrap-up greenlight check for hosts whose command registration
-   * runs plugin code (v2 CommandEditor): the command's execute hook calls
-   * this, then delivers wrapUpCommandContent(kind) as the session prompt -
-   * the same arm-plus-prompt pair the v1 command file plus
-   * command.execute.before hook produce.
-   */
-  armWrapUp(sessionID: string, kind: "compact" | "exit"): void;
   onChatMessage(
     input: { sessionID: string; messageID?: string },
     output: { parts: any[]; message: { id: string } },
@@ -395,8 +389,9 @@ export async function createRuntime(input: {
 
   // Parent sessions with an active direct-extraction child. When the parent
   // goes idle with pending tool interactions, the plugin creates a child
-  // session and prompts it directly (via the SDK client) instead of injecting
-  // a nudge into the next user message. This set suppresses the nudge path
+  // session and prompts it directly through the host's prompt capability
+  // instead of injecting a nudge into the next user message. This set
+  // suppresses the nudge path
   // while the child runs, and prevents re-triggering if the parent goes idle
   // again before the child finishes. Cleared when the child goes idle, errors,
   // or is deleted. If direct extraction fails, the set is cleared so the nudge
@@ -444,7 +439,7 @@ export async function createRuntime(input: {
   // every load so template updates self-heal. Config is loaded before plugins
   // during server startup, so a first-ever install lands on the next start.
   // Hosts that register commands natively (v2) get the action commands as
-  // files only - the wrap-ups register in code (armWrapUp), and a file with
+  // files only - the wrap-ups register in code (onCommandExecuteBefore), and a file with
   // the same name as a registered command would collide.
   try {
     if (caps.nativeCommands) removeWrapUpCommandFiles(configHome);
@@ -520,7 +515,7 @@ export async function createRuntime(input: {
           "async",
         );
       } catch (err) {
-        console.error(`[thatch] extraction promptAsync failed: ${err}`);
+        console.error(`[thatch] extraction child prompt failed: ${err}`);
         cleanupChild();
         throw err;
       }
@@ -733,11 +728,6 @@ export async function createRuntime(input: {
     onCommandExecuteBefore: async (input) => {
       const wrapUp = WRAPUP_COMMANDS[input.command];
       if (wrapUp) pendingWrapUp.set(input.sessionID, wrapUp);
-    },
-
-    armWrapUp: (sessionID, kind) => {
-      const wrapUp = WRAPUP_COMMANDS[`thatch/${kind}`];
-      if (wrapUp) pendingWrapUp.set(sessionID, wrapUp);
     },
 
     onChatMessage: async (input, output) => {
@@ -1113,14 +1103,9 @@ export async function createRuntime(input: {
             }
             try {
               if (wrapUp.kind === "compact") {
-                // executeCommand only accepts legacy alias names;
-                // "session_compact" maps to the TUI's session.compact action,
-                // the same thing the built-in /compact command runs.
-                await caps.tuiExecuteCommand("session_compact", sessionID);
+                await caps.compactSession(sessionID);
               } else {
-                // No exit alias exists, so publish the TUI keymap command
-                // directly - the same dispatch as the /exit slash command.
-                await caps.tuiPublish({ type: "tui.command.execute", properties: { command: "app.exit" } });
+                await caps.exitHost();
               }
             } catch (err) {
               console.error(`[thatch] wrap-up action failed: ${err}`);

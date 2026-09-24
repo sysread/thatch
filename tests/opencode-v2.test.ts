@@ -1,9 +1,33 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setup, eventMatchesInstance, flattenToolContent, mapSessionContextMessages } from "../src/opencode/v2";
 import { TOOL_DEFS } from "../src/tool-defs";
+
+// Mock @huggingface/transformers (same as tests/plugin.test.ts): without it,
+// every setup() builds a real BgeEmbeddingModel and the runtime's embedding
+// calls would download a model.
+mock.module("@huggingface/transformers", () => ({
+  env: {},
+  pipeline: async () => async (text: string, _opts: any) => {
+    let h = 0;
+    for (let i = 0; i < text.length; i++) {
+      h = ((h << 5) - h) + text.charCodeAt(i);
+      h |= 0;
+    }
+    h ^= 0x9e3779b9;
+    const vec = new Float32Array(384);
+    for (let i = 0; i < 384; i++) {
+      h ^= h << 13;
+      h ^= h >>> 17;
+      h ^= h << 5;
+      h |= 0;
+      vec[i] = h / 0x80000000;
+    }
+    return { data: vec };
+  },
+}));
 
 // The v2 adapter's contract test: a mocked v2 promise context (plain
 // objects, call-recording arrays - the house pattern from
@@ -21,7 +45,12 @@ let generateHook: HookFn | undefined;
 let contextHook: HookFn | undefined;
 let toolAfterHook: HookFn | undefined;
 let addedCommands: { name: string; execute: (input: any) => Promise<void> }[];
-let addedTools: { name: string; description: string; input: unknown }[];
+let addedTools: {
+  name: string;
+  description: string;
+  input: unknown;
+  execute: (input: unknown, toolContext?: { sessionID: string; agent: string }) => Promise<unknown>;
+}[];
 let sessionPromptCalls: any[];
 let sessionSyntheticCalls: any[];
 let sessionCreateCalls: any[];
@@ -54,7 +83,7 @@ function makeContext(options?: { get?: (input: any) => Promise<any>; context?: (
     tool: {
       transform: async (callback: (editor: any) => void): Promise<Registration> => {
         callback({
-          add: (tool: any) => addedTools.push({ name: tool.name, description: tool.description, input: tool.input }),
+          add: (tool: any) => addedTools.push({ name: tool.name, description: tool.description, input: tool.input, execute: tool.execute }),
         });
         return { dispose: () => {} };
       },
@@ -72,25 +101,27 @@ function makeContext(options?: { get?: (input: any) => Promise<any>; context?: (
       },
       create: async (input: any) => {
         sessionCreateCalls.push(input);
-        return { data: { id: "v2-test-child" } };
+        // The real promise client returns the created SessionInfo directly
+        // (the envelope types are `{data: X}["data"]` indexed - unwrapped).
+        return { id: "v2-test-child" };
       },
       get: async (input: any) => {
         sessionGetCalls.push(input);
         if (options?.get) return options.get(input);
-        return { data: { title: "some title" } };
+        return { title: "some title" };
       },
       context: async (input: any) => {
         sessionContextCalls.push(input);
         if (options?.context) return options.context(input);
-        return { data: [] };
+        return [];
       },
       prompt: async (input: any) => {
         sessionPromptCalls.push(input);
-        return { data: {} };
+        return {};
       },
       synthetic: async (input: any) => {
         sessionSyntheticCalls.push(input);
-        return { data: {} };
+        return {};
       },
     },
     event: {
@@ -231,7 +262,9 @@ describe("opencode v2 adapter", () => {
       location: { directory: "/some/other/dir" },
       data: { sessionID: "ses_v2_new" },
     });
-    // Location-less event: dropped with it (v1's server-side filter shape).
+    // Location-less event: dropped (v1's server-side filter shape) - the
+    // resolver runs but the mock's session.get returns no location, so the
+    // event's directory cannot be established.
     await queueEvent({
       type: "session.execution.started",
       data: { sessionID: "ses_v2_new" },
@@ -286,11 +319,34 @@ describe("opencode v2 adapter", () => {
     expect(prompt.text).toBe("what do we know about this");
   });
 
+  test("buffered tool entries get a derived title (v2 sends no title field)", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    // v2's Tool.Result has no title: `output` is the typed output value.
+    // The adapter derives the title from the tool name and args (same rule
+    // as the MCP host path); a bash call's command text becomes the title.
+    // The observable is the extraction payload the payload-fetch tool
+    // serves: it lists each buffered entry's title.
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_v2_title",
+      input: { command: "mise run check" },
+      status: "completed",
+      result: { content: [{ type: "text", text: "all green" }] },
+    });
+    const payloadTool = addedTools.find((t) => t.name === "thatch_get_extraction_payload");
+    expect(payloadTool).toBeDefined();
+    // The v2 execute wraps (input, toolContext) - the host context carries
+    // the session the buffer is keyed by.
+    const result = await payloadTool!.execute({ limit: 20 }, { sessionID: "ses_v2_title", agent: "build" });
+    const payload = typeof result === "string" ? result : JSON.stringify(result);
+    expect(payload).toContain("mise run check");
+  });
+
   test("prompt hook swallows runtime failures instead of rejecting", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
-    // A runtime failure (here: a tool name collision inside the buffer via
-    // a broken payload) must not reject the host's hook. Drive it with a
-    // hook input whose shape the runtime does not expect.
+    // A runtime failure (here: messageID undefined, which the runtime's
+    // buffer does not expect) must not reject the host's hook. Drive it
+    // with a hook input whose shape the runtime does not expect.
     const prompt = { text: "hello there" };
     await expect(
       promptHook!({ sessionID: "ses_v2_boom", messageID: undefined, prompt }),
@@ -298,16 +354,12 @@ describe("opencode v2 adapter", () => {
     expect(prompt.text).toBe("hello there");
   });
 
-  test("synthetic deliveries route to session.synthetic, real prompts to session.prompt", async () => {
+  test("wrap-up commands deliver a real (non-synthetic) prompt", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
-    // capabilities are internal; exercise the routing through the session
-    // domain's prompt endpoint types via the adapter's promptSession: the
-    // watcher/chat wake path delivers all-synthetic parts. The adapter's
-    // own delivery is not directly reachable here, so drive it through a
-    // watcher-style wake: an idle event whose handler prompts synthetically
-    // is the child-extraction path (sessionCreate first). Instead, assert
-    // the simplest observable: the wrap-up command's execute delivers the
-    // command body as a REAL prompt (non-synthetic).
+    // The wrap-up body is the user-visible prompt (like v1's command file
+    // expansion), so it must go through session.prompt, NOT the synthetic
+    // endpoint - the all-synthetic routing is exercised by the wake paths
+    // (see the chat wake use case), not here.
     const compact = addedCommands.find((c) => c.name === "thatch/compact");
     const exit = addedCommands.find((c) => c.name === "thatch/exit");
     expect(compact).toBeDefined();
@@ -322,6 +374,37 @@ describe("opencode v2 adapter", () => {
     expect(sessionPromptCalls[0].text).toContain("Pre-compact wrap-up");
     expect(sessionPromptCalls[0].text).toContain("THATCH_COMPACT_READY");
     expect(sessionPromptCalls[1].text).toContain("Pre-exit wrap-up");
+  });
+
+  test("loading the v2 adapter never evaluates the v1 SDK (isolation rule)", () => {
+    // A v2 user install skips optional peers, so @opencode-ai/plugin is
+    // ABSENT. Simulate the absence in a SUBPROCESS (module mocks are
+    // process-global, so an in-process mock would leak into the v1 adapter
+    // tests): a generated test file registers a mock that throws on
+    // require, then imports the v2 adapter. If any RUNTIME import path
+    // from src/opencode/v2.ts reached tools.ts (the v1 wrapper), the
+    // import would explode here - and on a real v2 host it would kill the
+    // whole plugin load.
+    const probe = join(dbDir, "iso-probe.test.ts");
+    writeFileSync(
+      probe,
+      [
+        `import { test, mock } from "bun:test";`,
+        `mock.module("@opencode-ai/plugin", () => {`,
+        `  throw new Error("SIMULATED ABSENCE: @opencode-ai/plugin must not load under v2");`,
+        `});`,
+        `test("v2 adapter loads without the v1 SDK", async () => {`,
+        `  await import(${JSON.stringify(join(import.meta.dir, "..", "src", "opencode", "v2.ts"))});`,
+        `});`,
+      ].join("\n"),
+    );
+    const proc = Bun.spawnSync([process.execPath, "test", probe], {
+      cwd: join(import.meta.dir, ".."),
+      env: { ...process.env, THATCH_DB_PATH: join(dbDir, "iso.db"), XDG_CONFIG_HOME: join(dbDir, "config") },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(proc.exitCode).toBe(0);
   });
 
   test("cleanup is idempotent and disposes the runtime once", async () => {
@@ -342,6 +425,15 @@ describe("opencode v2 adapter", () => {
     const delivered = sessionPromptCalls[0].text as string;
     expect(delivered).toContain("Good work - see you tomorrow");
     expect(delivered).not.toContain("$ARGUMENTS");
+
+    // $ sequences in the user's text must survive: a string replacement
+    // would interpret them ($$ -> $, $& -> the match).
+    sessionPromptCalls.length = 0;
+    await exit!.execute({ sessionID: "ses_v2_args", prompt: { text: "costs $$5 and $ARGUMENTS-ish things" } });
+    const delivered2 = sessionPromptCalls[0].text as string;
+    expect(delivered2).toContain("costs $$5 and $ARGUMENTS-ish things");
+    // The template's own placeholder (followed by the section note) is gone.
+    expect(delivered2).not.toContain("$ARGUMENTS\n\n");
 
     // A bare invocation (no prompt) still delivers a usable body.
     sessionPromptCalls.length = 0;

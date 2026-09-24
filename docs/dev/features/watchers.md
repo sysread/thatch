@@ -1,5 +1,7 @@
 # Watchers
 
+Unless noted, `client.*` names below are the opencode v1 mapping; the v2 equivalents and degrades are in [opencode-plugin.md](opencode-plugin.md).
+
 Watchers are the general mechanism for event-driven notifications from
 external sources: the model registers a watch on something outside the
 session, thatch polls it in the background, and the plugin prompts the

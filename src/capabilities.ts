@@ -6,12 +6,11 @@
 // CoreContext (src/tool-defs.ts), which is the per-tool-call seam; they stay
 // separate on purpose.
 //
-// Typed structurally - no host SDK import - so test doubles and both
-// adapters satisfy it without depending on a specific SDK package.
+// Typed structurally so test doubles and both adapters satisfy it without a
+// runtime dependency on either SDK package; the v1 bridge alone imports the
+// v1 SDK types (type-only, erased at runtime) so the compiler checks its
+// mapping against the real client.
 
-// Typed structurally where the contract is shared, but the v1 bridge uses
-// the real PluginInput client type so the mapping is checked against the
-// SDK. Type-only import: erased at runtime, safe under either host.
 import type { PluginInput } from "@opencode-ai/plugin";
 
 /** Minimal text-part shape used for session prompts and nudges. */
@@ -42,15 +41,17 @@ export interface HostCapabilities {
    * The host lets plugins register slash commands programmatically (v2's
    * CommandEditor). When true the runtime installs only the action command
    * FILES and the adapter registers the wrap-up commands in code (arming
-   * the greenlight check via ThatchRuntime.armWrapUp) - a registered
+   * the greenlight check via onCommandExecuteBefore) - a registered
    * command and an installed file with the same name would collide.
    */
   readonly nativeCommands: boolean;
   /** Live session statuses, as client.session.status() returns. */
   fetchStatuses(): Promise<Record<string, { type: string }> | null>;
   /**
-   * Create a child session. Returns its id. The v2 host has this on the
-   * session domain; the parentID/title body is shared behavior.
+   * Create a child session. Returns its id. v1 passes the parentID through
+   * (the host links the child); v2 has no parentID on its create API, so
+   * the child is a top-level session in the parent's project directory and
+   * only the title carries over.
    */
   sessionCreate(input: { parentID: string; title: string }): Promise<{ id: string }>;
   /** Delete a session (child-session cleanup). Degrades to a no-op resolve on v2. */
@@ -66,32 +67,35 @@ export interface HostCapabilities {
     body: { parts: PromptPart[]; noReply?: boolean },
     mode: "sync" | "async",
   ): Promise<void>;
-  /** Fetch one session's title/topic. Null when unavailable (v2 degrade). */
+  /** Fetch one session's info (title, location). Null when the host rejects. */
   sessionGet(id: string): Promise<{ title?: string } | null>;
   /** List sessions in this directory. Null when unavailable (v2 degrade). */
   sessionList(): Promise<{ id: string; parentID?: string; time?: { updated?: number } }[] | null>;
   /**
    * Fetch a session's message list (wrap-up greenlight check). Null when
-   * unavailable (v2 has no equivalent - wrap-up degrades).
+   * unavailable. v2 reads them via session.context, mapped into this shape.
    */
   sessionMessages(id: string): Promise<{ info: { role: string }; parts?: { type: string; text?: string }[] }[] | null>;
   /** TUI toast. The runtime's call sites catch-and-ignore; the adapter just delivers. */
   showToast(toast: ToastInput): Promise<void>;
   /**
-   * TUI command dispatch (the wrap-up compact action). sessionID carries the
-   * requesting session: the v2 adapter maps "session_compact" to the server's
-   * session.compact endpoint (no TUI surface exists on v2); v1 dispatches the
-   * TUI command and ignores the id.
+   * Trigger the host's compaction for a session (the wrap-up compact
+   * action). v1 dispatches the TUI's session_compact command (the legacy
+   * alias route; the id is ignored). v2 has no compaction trigger reachable
+   * from the promise context and degrades to a logged no-op.
    */
-  tuiExecuteCommand(command: string, sessionID?: string): Promise<void>;
-  /** Raw TUI event publish (wrap-up exit). Degrades on v2. */
-  tuiPublish(body: unknown): Promise<void>;
+  compactSession(sessionID: string): Promise<void>;
+  /**
+   * Exit the host application (the wrap-up exit action). v1 publishes the
+   * TUI's app.exit command; v2 has no TUI surface and degrades to a no-op.
+   */
+  exitHost(): Promise<void>;
 }
 
 /**
- * v1 implementation: the SDK client from PluginInput. Every operation maps
- * 1:1 to the client call the plugin body used before the seam existed, so
- * the client-mocking tests observe identical call patterns.
+ * v1 implementation: the SDK client from PluginInput. The mapping mirrors
+ * the v1 hook surface one call at a time, so the client-mocking tests
+ * observe identical call patterns.
  */
 export function capabilitiesFromClient(client: PluginInput["client"]): HostCapabilities {
   return {
@@ -128,13 +132,18 @@ export function capabilitiesFromClient(client: PluginInput["client"]): HostCapab
     showToast: async (toast) => {
       await client.tui.showToast({ body: toast });
     },
-    tuiExecuteCommand: async (command) => {
-      await client.tui.executeCommand({ body: { command } });
+    compactSession: async () => {
+      // executeCommand only accepts legacy alias names; "session_compact"
+      // maps to the TUI's session.compact action, the same thing the
+      // built-in /compact command runs.
+      await client.tui.executeCommand({ body: { command: "session_compact" } });
     },
-    tuiPublish: async (body) => {
-      // The v1 client types the body as the TUI event union; the shared
-      // runtime passes the raw publish payload structurally.
-      await client.tui.publish({ body } as Parameters<typeof client.tui.publish>[0]);
+    exitHost: async () => {
+      // No exit alias exists, so publish the TUI keymap command directly -
+      // the same dispatch as the /exit slash command.
+      await client.tui.publish({
+        body: { type: "tui.command.execute", properties: { command: "app.exit" } },
+      } as Parameters<typeof client.tui.publish>[0]);
     },
   };
 }

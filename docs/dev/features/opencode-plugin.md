@@ -59,31 +59,44 @@ the shared runtime needs. It is the lifecycle-level sibling of `CoreContext`
 |---|---|---|---|
 | bus events | `event` hook | `event.subscribe` (raw SSE) | client-side location filter; location-less events resolve via `session.get` (`{sessionID}` input) and drop unresolvable (mirrors v1's server-side filter); events for plugin-created extraction children pass by ID (they live in the project directory, which differs from the instance directory on below-root launches) |
 | incoming message | `chat.message` hook | `session.hook("prompt")` | the hook awaits the runtime; nudge injections append to the OUTBOUND request's last user message in the generate hook (v2 wire `Message` carries parts in `content`, not `parts`) |
-| system prompt | `experimental.chat.system.transform` | `session.hook("context")` | mutates the request's system array; the runtime pushes a raw string where v2 types SystemPart (smoke-test-gated) |
+| system prompt | `experimental.chat.system.transform` | `session.hook("context")` | mutates the request's system array; the runtime's plain strings convert to `{type: "text", text}` SystemPart objects at the boundary |
 | compaction | `experimental.session.compacting` + `.autocontinue` + `session.compacted` | `session.hook("compaction")` | flag lands; context-injection surface unverified |
-| wrap-up commands | `command.execute.before` + command files | `command.transform` + `CommandEditor.add` | registered in code: `execute` arms the greenlight check (`armWrapUp`) and delivers the same prompt body the v1 file carries, substituting the invocation's prompt text for `$ARGUMENTS` (v2's `session.prompt` does no template expansion); the runtime installs only ACTION command files on v2 and REMOVES stale wrap-up files from earlier v1 runs (a file and a registered command with the same name would collide) |
+| wrap-up commands | `command.execute.before` + command files | `command.transform` + `CommandEditor.add` | registered in code: `execute` arms the greenlight check (`onCommandExecuteBefore`) and delivers the same prompt body the v1 file carries, substituting the invocation's prompt text for `$ARGUMENTS` (v2's `session.prompt` does no template expansion); the runtime installs only ACTION command files on v2 and REMOVES stale wrap-up files from earlier v1 runs (a file and a registered command with the same name would collide) |
 | tools | `hooks.tool` map via `tool()` | `tool.transform` + `ToolEditor.add` | zod shapes pre-converted to JSON Schema with our own zod (v2's `instanceof $ZodType` detection fails for ours and drops the schema); results wrap as `{ content }` |
-| tool buffering | `tool.execute.after` hook | `tool.hook("execute.after")` | wired: feeds the same extraction buffer; `Tool.Result.content` is flattened (string passes through, content-part arrays contribute their text parts), title is left empty (the buffer's `deriveTitle` synthesizes one) |
+| tool buffering | `tool.execute.after` hook | `tool.hook("execute.after")` | wired: feeds the same extraction buffer; `Tool.Result.content` is flattened (string passes through, content-part arrays contribute their text parts); the title is derived from the tool name and args (`deriveTitle`), since v2's `Tool.Result.output` is a typed output value, not a title |
 | noReply deliveries | `promptAsync` with `noReply` | none | gated off via `HostCapabilities.noReplyDelivery` -- chat echoes and the session-start reminder are skipped on v2 (delivering them would start real model turns: a feedback loop) |
 | synthetic wake deliveries | `promptAsync` with `synthetic` parts | `session.synthetic` endpoint | watcher + chat wake nudges route to v2's synthetic endpoint (TUI-hidden), matching v1 |
 | child sessions | `client.session.create/promptAsync/prompt/delete` | `session.create/prompt` | create+prompt supported (a missing id throws into the extraction fallback); delete degrades (extraction children are not cleaned up on v2 -- the session picker accumulates one `thatch-extraction` entry per extraction, and `-c` "continue last session" logic that picks the newest top-level session will land in an extraction child after any session that triggered extraction) |
 | session status | `client.session.status` | none | returns `{}`; the wake gate treats unknown as idle and the event-fed status map does the gating |
 | session messages | `client.session.messages` | `session.context` | mapped into the v1 `{info: {role}, parts}` shape, so the wrap-up greenlight check works (the promise domain has no `message` accessor) |
 | session list | `client.session.list` | none | degrade (`-c` resume listing loses its data source) |
-| compaction trigger | `client.tui.executeCommand("session_compact")` | none | degrade (the promise domain's SessionDomain Pick has no `session.compact`; the wrap-up checklist and flush still run, only the automatic compaction is skipped) |
+| compaction trigger | `client.tui.executeCommand("session_compact")` | none | degrade (no `session.compact` on the promise domain's Pick, and the built-in `/compact` is a TUI palette action calling the server endpoint directly - the server command registry only knows config/plugin-registered names; the wrap-up checklist and flush still run, the automatic compaction is skipped) |
 | toasts | `client.tui.showToast` | none reachable | degrade (the `tui.toast.show` event has no producer surface from the promise context) |
-| TUI actions | `client.tui.executeCommand/publish` | none | degrade (except the compaction trigger, handled above) |
+| TUI app exit | `client.tui.publish` | none | degrade (the wrap-up exit's checklist and flush run; the process exit does not - upstream [anomalyco/opencode#50984](https://github.com/anomalyco/opencode/issues/50984)) |
 | dispose | `dispose` hook | cleanup returned from `setup` | must be idempotent: v2 auto-reloads plugins on file change, and a non-idempotent cleanup doubles pollers/pumps/nudges |
 
-## Smoke-test-gated unknowns
+## Live verification and remaining unknowns
 
-The v2 adapter was written against tagged source (v2.0.9) without a live
-binary. Items marked SMOKE TEST in src/opencode/v2.ts were verified against
-a real v2.0.15 binary on 2026-09-23: merged-default loading, tool schemas
-(via pre-converted JSON Schema - see the gotcha), event shapes, the
-execution-lifecycle idle signal, synthetic wake delivery, and command
-registration all work. The app-exit gap (no server-side publish surface for
-`tui.command.execute`) is upstream:
+The v2 adapter was written against tagged source (v2.0.9) before a live
+binary was available, then verified against a real v2.0.15 binary on
+2026-09-23: merged-default loading, tool schemas (via pre-converted JSON
+Schema - see the gotcha), event shapes, the execution-lifecycle idle signal,
+synthetic wake delivery, and command registration all work; the full QA
+suite runs green against a v2 serve.
+
+Still unverified against the live binary (static analysis only):
+
+- Whether `session.hook("prompt")` fires for `session.synthetic` inbox
+  items. If it does not, `pendingInjections` from the prior real turn gets
+  appended to the synthetic turn's outbound request.
+- Whether `SessionGenerate.messages` are fresh objects per model call within
+  a turn. If not, the generate hook pushes duplicate nudges on every tool
+  round trip.
+- An npm-installed copy (not the dev checkout, which has devDependencies
+  present) loading under v2 - the isolation rule's real-world proof.
+
+The app-exit gap (no server-side publish surface for `tui.command.execute`)
+is upstream:
 [anomalyco/opencode#50984](https://github.com/anomalyco/opencode/issues/50984).
 Install opencode-v2 (brew formula `anomalyco/tap/opencode-v2`; conflicts
 with the v1 formula's binary name, so it cannot coexist) and re-run the QA

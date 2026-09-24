@@ -1,9 +1,10 @@
 # Plan: opencode v2 plugin support (dual v1/v2 adapter)
 
-Status: CONSENSUS (round 4: deep-mode lens fan-out, two fresh-context
-verification rounds, consensus round clean -- no blockers, no should-fixes).
-Ready to implement. Remaining open questions are listed at the bottom; all
-are implementation-time verifications, not design blockers.
+Status: IMPLEMENTED on branch `opencode-v2-migration` (PR sysread/thatch#16);
+this plan graduates at merge - the architecture record is
+docs/dev/features/opencode-plugin.md. One design item was dropped during
+implementation: the shim-shape reminder (Design 1) - the shim lives in the
+user's config dir (src/prompts.ts registers the canonical content instead).
 
 ## Problem
 
@@ -472,8 +473,11 @@ the move is checkable as zero-churn:
   endpoint (TUI-hidden) instead of real prompts; (4) wrap-up commands
   register in code via command.transform + CommandEditor (execute arms
   armWrapUp and delivers the same prompt body), so the runtime installs
-  only ACTION command files on v2 (nativeCommands capability) - wrap-ups
-  went from degraded to full. Audited and left as-is: skill files (v2
+  only ACTION command files on v2 (nativeCommands capability) and removes
+  wrap-up files left by earlier v1 runs - wrap-ups are near-full: the
+  greenlight and flush work, but the compact/exit ACTIONS degrade (the
+  promise context exposes no compaction trigger or TUI publish; see
+  opencode-plugin.md). Audited and left as-is: skill files (v2
   supports them unchanged; embedded Skill registration saves nothing real),
   agent registration (nice-to-have; the task-tool path works), storage/RPC
   domains (no thatch use - the sideband serves external processes the RPC

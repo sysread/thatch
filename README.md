@@ -22,9 +22,8 @@ everything runs on your machine.
 
 On next start, OpenCode npm-installs thatch and its tools are available
 immediately. Works with both opencode 1.x and 2.x (the same package supports
-both plugin APIs). Note: the published npm release must be >= the first
-version with v2 support -- until the next release ships, npm's `latest`
-still targets 1.x only. For async extraction (child sessions run in the
+both plugin APIs). Until the next release ships, npm's `latest` still
+targets 1.x only. For async extraction (child sessions run in the
 background):
 
 ```bash
@@ -33,6 +32,25 @@ export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
 
 Without this env var, extraction still works - the child session runs
 synchronously (fire-and-forget) instead of asynchronously.
+
+### What works in opencode 2.x
+
+The v2 plugin API is missing a few surfaces the v1 API had. On 2.x:
+
+- **No toasts.** Notifications (extraction results, watcher events) land in
+  the conversation instead of the TUI's toast area.
+- **Extraction children are visible.** The fact-extractor child sessions are
+  top-level sessions the host cannot delete, so they accumulate in the
+  session picker, and "continue last session" (`-c`) can land in one after
+  any session that triggered extraction.
+- **`/thatch/compact` does not auto-compact.** The checklist and memory
+  flush run, but the compaction itself cannot be triggered from the plugin
+  API - run `/compact` yourself after the wrap-up completes. `/thatch/exit`
+  cannot auto-exit for the same reason.
+- **No `-c` session listing.** The chat resume listing degrades.
+
+Everything else - tools, memory, nudges, chat, watchers - behaves the same
+on both versions.
 
 Then **prime your project memory** by running `thatch prime` in your project directory.
 This launches an `opencode` session to build an initial map of the code base

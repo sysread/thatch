@@ -13,8 +13,9 @@ permissions:
   issues: write
 
 jobs:
-  # Mirror CI's dual-runtime matrix: a release must not ship on a runtime
-  # the plugin will actually run under (opencode v2 embeds Bun 1.4.2).
+  # Release gate: the same checks CI runs (the tag push itself does not
+  # trigger ci.yml), across the dual-runtime matrix a release must pass on
+  # (opencode v1 embeds Bun 1.3.14; v2 embeds 1.4.2).
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -26,7 +27,9 @@ jobs:
         with:
           bun-version: ${{ matrix.bun-version }}
       - run: bun install
+      - run: bunx tsc -p tsconfig.check.json
       - run: bun test tests/*.test.ts
+      - run: bunx markdownlint-cli2
 
   publish:
     needs: test
@@ -37,7 +40,6 @@ jobs:
         with:
           bun-version: "1.3.14"
       - run: bun install
-      - run: bun test tests/*.test.ts
       # OIDC publish needs npm >= 11.5.1. setup-node installs into the
       # user-writable tool cache (the runner's stock node in /usr/local is
       # root-owned, so npm can't self-upgrade there). Deliberately NO

@@ -481,7 +481,7 @@ function v2ClientAsV1(client: ReturnType<typeof OpenCodeV2.make>, directory: str
 
 function serveMajorVersion(): number {
   const result = Bun.spawnSync(["opencode", "--version"]);
-  // Output: "opencode v2.0.15" — the first dotted number is the major.
+  // Output: "opencode v2.0.15" - the first dotted number is the major.
   return Number.parseInt(result.stdout.toString().match(/(\d+)\.\d+/)?.[1] ?? "1", 10);
 }
 

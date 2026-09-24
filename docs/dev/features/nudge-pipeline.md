@@ -1,5 +1,7 @@
 # Per-Message Nudge Pipeline
 
+Unless noted, `client.*` names below are the opencode v1 mapping; the v2 equivalents and degrades are in [opencode-plugin.md](opencode-plugin.md).
+
 Runs on every user message. Four priority tiers share one embedding
 computation. The pipeline injects *synthetic parts*---text the model sees in
 the conversation but the user does not see in the TUI. This is the inverse of

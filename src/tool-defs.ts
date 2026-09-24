@@ -50,7 +50,7 @@ function dedupScanStores(store: string): string[] {
 }
 
 // Minimum matcher cosine to consider a prediction relevant. Matches the
-// auto-fire threshold in index.ts (PREDICTION_THRESHOLD). The query tool
+// auto-fire threshold in runtime.ts (PREDICTION_THRESHOLD). The query tool
 // should not return predictions from near-zero-similarity matchers that
 // would never fire in the auto-fire.
 const PREDICTION_QUERY_THRESHOLD = 0.60;

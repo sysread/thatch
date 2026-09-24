@@ -1,5 +1,7 @@
 # Hygiene System
 
+Unless noted, `client.*` names below are the opencode v1 mapping; the v2 equivalents and degrades are in [opencode-plugin.md](opencode-plugin.md).
+
 Store maintenance signals surfaced at session start. The plugin never deletes
 memories itself — it surfaces problems and lets the agent tend the store.
 

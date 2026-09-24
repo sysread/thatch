@@ -1,5 +1,7 @@
 # Cross-Session Chat
 
+Unless noted, `client.*` names below are the opencode v1 mapping; the v2 equivalents and degrades are in [opencode-plugin.md](opencode-plugin.md).
+
 Cross-session chat lets independent opencode sessions on one machine message
 each other through thatch: sessions join a shared directory (automatically,
 under assigned names), see each other in the list, and messages land in

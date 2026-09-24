@@ -5,39 +5,38 @@ import type { ToolContext as V2ToolContext } from "@opencode/plugin/promise/tool
 import type { HostCapabilities, PromptPart, ToastInput } from "../capabilities";
 import { createRuntime } from "../runtime";
 import { wrapUpCommandContent } from "../commands";
+import { deriveTitle } from "../extraction";
 import { TOOL_DEFS, trimHostContext, type HostToolContext } from "../tool-defs";
 
 // The opencode v2 adapter (opencode 2.x, plugin API @opencode/plugin 2.x).
 // Loaded only by v2 hosts - the dual entry (src/index.ts) lazy-imports this
-// module so the v2 SDK's imports never evaluate under a v1 host.
+// module so the v1 SDK's imports never evaluate under a v1 host.
 //
-// Mappings against the v1 hook surface (docs/plans/opencode-v2-plugin.md has
-// the full capability table; items marked SMOKE TEST are gated on milestone
-// 2's real-binary verification):
-// - tools: ToolEditor.add with the same thatch_ names; zod shapes pass as
-//   Standard Schema; string results wrap as { content }. The tool.hook
-//   execute.after hook feeds the same extraction buffer as v1's
-//   tool.execute.after.
-// - system prompt: session.hook("context") mutates the request's system array.
-//   SMOKE TEST: the runtime pushes a raw string where v2 types SystemPart.
-// - per-message nudges: session.hook("prompt") mutates a clone of the user
-//   prompt ({ text, files, agents, skills } - v2 has no synthetic parts).
-//   Injections the runtime pushes onto the fake parts array are appended to
-//   prompt.text. The hook awaits the runtime so the mutation lands before
-//   the host reads the prompt. SMOKE TEST: rendering, echo re-entry, and
-//   whether the host awaits hook callbacks.
+// Mappings against the v1 hook surface; the 2026-09-23 smoke run against a
+// real v2 binary plus the SDK dist types are the sources of truth
+// (docs/dev/features/opencode-plugin.md has the full capability table):
+// - tools: ToolEditor.add with the same thatch_ names. Input schemas are
+//   pre-converted to JSON Schema with our own zod, because v2's converter
+//   detects zod via `instanceof $ZodType` against ITS bundled zod copy and
+//   drops ours (leaving tools parameterless). String results wrap as
+//   { content }. The tool.hook execute.after hook feeds the same extraction
+//   buffer as v1's tool.execute.after.
+// - system prompt: session.hook("context") mutates the request's system
+//   array; the runtime's plain strings convert to {type: "text", text}
+//   parts at the boundary.
+// - per-message nudges: the prompt hook computes the turn's injections;
+//   the generate hook appends them to the outbound request's last user
+//   message `content` array (v2 wire Messages have no `parts` field).
+//   Injections stay out of the stored prompt text.
 // - noReply deliveries (chat echoes, session-start reminder): v2's prompt
 //   endpoint cannot suppress the model turn, so the runtime gates them off
-//   via capabilities.noReplyDelivery. SMOKE TEST: re-enable if v2 grows a
-//   noReply surface.
-// - compaction: session.hook("compaction") marks the session; the v2
-//   context-injection surface is unverified, so only the flag lands.
-//   SMOKE TEST: where compaction context belongs in v2.
-// - events: context.event.subscribe pump (raw SSE, NOT directory-scoped -
-//   filtered client-side the way the v1 host filters server-side).
-//   SMOKE TEST: v2 event payload shape carries {type, properties, location};
-//   if events lack location, this filter drops everything and the plugin is
-//   inert (no reminder, no extraction, no status gating).
+//   via capabilities.noReplyDelivery.
+// - compaction: session.hook("compaction") marks the session; only the
+//   flag lands (the context-injection surface is unverified).
+// - events: context.event.subscribe pump; the envelope is
+//   {type, data, location?}. Filtered client-side the way the v1 host
+//   filters server-side: events resolve to a directory (their own, the
+//   session cache, or session.get) and drop when it is not ours.
 // - toasts, tui commands, session delete/list endpoints:
 //   no v2 surface reachable from a plugin - degrades as no-op/null.
 //   fetchStatuses returns {} because the wake gate treats an unknown session
@@ -52,11 +51,11 @@ type V2Cleanup = Plugin.Cleanup;
 // Raw setup function: the dual entry (src/index.ts) owns the plugin id and
 // the merged default export; this adapter only implements the v2 setup.
 export async function setup(context: V2Context): Promise<V2Cleanup | void> {
-  // SMOKE TEST: Location.Info {directory, project: {directory, canonical}} -
-  // directory is the session dir (forwarded unchanged on deleted-worktree
-  // resume), project.directory the served project root (the v1 `worktree`).
-  // A wrong guess here corrupts repo identity, store scoping, and the event
-  // filter all at once.
+  // Verified against the live binary: Location.Info {directory, project:
+  // {directory, canonical}} - directory is the session dir (forwarded
+  // unchanged on deleted-worktree resume), project.directory the served
+  // project root (the v1 `worktree`). A wrong guess here corrupts repo
+  // identity, store scoping, and the event filter all at once.
   const location = context.location as {
     directory: string;
     project: { directory: string };
@@ -106,14 +105,14 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     // The v2 execute.after hook's result is a Tool.Result: `content` may be
     // a string or an array of content parts ({type: "text", text}, files,
     // ...), and `output` is the tool's typed output value, not a title. v1's
-    // hook delivered {title, output} strings, so flatten here: text parts
-    // joined for the extraction buffer, empty title (the buffer's
-    // deriveTitle synthesizes one from the tool name and args).
+    // hook delivered {title, output} strings; here the title is derived
+    // from the tool name and args (the runtime pushes it through verbatim)
+    // and the content is flattened to the buffer's text line.
     const result = hook.result;
     const text = flattenToolContent(result?.content);
     await runtime.onToolExecuteAfter(
       { tool: hook.tool, sessionID: hook.sessionID, args: hook.input },
-      { title: "", output: text },
+      { title: deriveTitle(hook.tool, (hook.input ?? {}) as Record<string, unknown>), output: text },
     );
   });
 
@@ -172,43 +171,47 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   });
 
   // Compaction: the nudge-suppression flag is the only surface verified to
-  // exist; the context-injection surface is unverified. SMOKE TEST.
+  // exist; the context-injection surface is unverified.
   const registerCompaction = await context.session.hook("compaction", async (request: { sessionID: string }) => {
     await runtime.onSessionCompacting({ sessionID: request.sessionID }, { context: [] });
   });
 
-    // Wrap-up slash commands register in code (v2 CommandEditor): execute
-    // arms the greenlight check and delivers the same prompt body the v1
-    // command file carries. The runtime skips installing the wrap-up FILES
-    // on v2 (a file and a registered command with the same name collide).
-    // SMOKE TEST: registration shadows/discovery of plugin commands.
-    const registerCommands = await context.command.transform((editor) => {
-      for (const kind of ["compact", "exit"] as const) {
-        editor.add({
-          name: `thatch/${kind}`,
-          description:
-            kind === "compact"
-              ? "Flush thatch persistence, check for loose ends, then compact if clear"
-              : "Flush thatch persistence, check for loose ends, then exit opencode if clear",
-          // The user's typed arguments ride invocation.prompt (a
-          // PromptInput.Prompt with a text field). v1's host expanded
-          // $ARGUMENTS from the command file; v2's session.prompt does no
-          // template expansion, so substitute here - dropping the args
-          // would store a bare template as the user message.
-          execute: async ({ sessionID, prompt }: { sessionID: string; prompt?: { text?: string } }) => {
-            runtime.armWrapUp(sessionID, kind);
-            const args = typeof prompt?.text === "string" ? prompt.text : "";
-            await capabilities.promptSession(
-              sessionID,
-              { parts: [{ type: "text", text: wrapUpCommandContent(kind).replace("$ARGUMENTS", args) }] },
-              "sync",
-            );
-          },
-        });
-      }
-    });
+  // Wrap-up slash commands register in code (v2 CommandEditor): execute
+  // arms the greenlight check and delivers the same prompt body the v1
+  // command file carries. The runtime removes stale wrap-up FILES and
+  // installs only the action files on v2 (a file and a registered command
+  // with the same name collide).
+  const registerCommands = await context.command.transform((editor) => {
+    for (const kind of ["compact", "exit"] as const) {
+      editor.add({
+        name: `thatch/${kind}`,
+        description:
+          kind === "compact"
+            ? "Flush thatch persistence, check for loose ends, then compact if clear"
+            : "Flush thatch persistence, check for loose ends, then exit opencode if clear",
+        // The user's typed arguments ride invocation.prompt (a
+        // PromptInput.Prompt with a text field). v1's host expanded
+        // $ARGUMENTS from the command file; v2's session.prompt does no
+        // template expansion, so substitute here - dropping the args
+        // would store a bare template as the user message. The function
+        // replacer keeps `$` sequences in the user's text ($$ stays $$ -
+        // a string replacement would interpret them).
+        execute: async ({ sessionID, prompt }: { sessionID: string; prompt?: { text?: string } }) => {
+          // Same arm the v1 command.execute.before hook runs - the wrap-up
+          // resolution happens on the session's next idle event.
+          runtime.onCommandExecuteBefore({ command: `thatch/${kind}`, sessionID });
+          const args = typeof prompt?.text === "string" ? prompt.text : "";
+          await capabilities.promptSession(
+            sessionID,
+            { parts: [{ type: "text", text: wrapUpCommandContent(kind).replace("$ARGUMENTS", () => args) }] },
+            "sync",
+          );
+        },
+      });
+    }
+  });
 
-    // Bus events: raw SSE subscription, not directory-scoped. Filter
+  // Bus events: raw SSE subscription, not directory-scoped. Filter
   // client-side: drop events located elsewhere. v2's execution lifecycle
   // events (the idle signal) carry NO location, so the session's project is
   // resolved and cached: first from any event that does carry one, then
@@ -217,8 +220,8 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   const sessionDirs = new Map<string, string>();
   const resolveSessionDir = async (sessionID: string): Promise<string | undefined> => {
     try {
-      const result = await (context.session as any).get({ sessionID });
-      const dir = (result?.data ?? result)?.location?.directory;
+      const result = await context.session.get({ sessionID });
+      const dir = result?.location?.directory;
       if (dir) sessionDirs.set(sessionID, dir);
       return dir;
     } catch {
@@ -235,7 +238,14 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
         // dispatched each hook invocation independently; this restores that
         // blast radius.
         try {
-          const located = event as { type: string; data?: any; location?: { directory?: string } };
+          // Narrow to the fields the pump consumes: the generated V2Event
+          // union types each payload per-variant, and the runtime's
+          // translation only needs the sessionID/location pair.
+          const located = event as {
+            type: string;
+            data?: { sessionID?: string; location?: { directory?: string } };
+            location?: { directory?: string };
+          };
           const data = located.data ?? {};
           if (data.sessionID && located.location?.directory) sessionDirs.set(data.sessionID, located.location.directory);
           if (data.sessionID && data.location?.directory) sessionDirs.set(data.sessionID, data.location.directory);
@@ -355,17 +365,11 @@ function translateEvent(located: { type: string; data?: any }): { type: string; 
 // operation the v2 surface lacks degrades as a no-op or null - the shared
 // runtime's callers treat those results as best-effort and log, never crash.
 function buildCapabilities(context: V2Context, worktree: string, childSessions: Set<string>): HostCapabilities {
-  // SMOKE TEST: exact v2 SDK shapes for create/get/prompt. The promise
-  // context's domain types are structural here; the generated client's
-  // wrappers (data fields, path vs flat args) get reconciled against the
-  // real binary.
-  const session = context.session as unknown as {
-    create(input: { location: { directory: string }; title: string }): Promise<any>;
-    get(input: { sessionID: string }): Promise<any>;
-    context(input: { sessionID: string }): Promise<any>;
-    prompt(input: { sessionID: string; text: string }): Promise<unknown>;
-    synthetic(input: { sessionID: string; text: string }): Promise<unknown>;
-  };
+  // Typed against the SDK's own SessionDomain: the shape errors the
+  // original cast (as unknown as {...}) suppressed are exactly what the
+  // review caught (message.list and compact do not exist here; get takes
+  // {sessionID}). Let the typecheck keep holding that line.
+  const session = context.session;
 
   return {
     noReplyDelivery: false,
@@ -376,9 +380,10 @@ function buildCapabilities(context: V2Context, worktree: string, childSessions: 
     sessionCreate: async (input) => {
       // v2's session API has no parentID: create a TOP-LEVEL session in the
       // parent's project directory (the runtime sets the child mapping
-      // eagerly - no session.created event carries it on v2).
+      // eagerly - no session.created event carries it on v2). The wrapper
+      // returns the created SessionInfo directly.
       const result = await session.create({ location: { directory: worktree }, title: input.title });
-      const id = result?.data?.id ?? result?.id;
+      const id = result?.id;
       // A shape mismatch must fail into the runtime's extraction fallback
       // (the nudge path), not silently corrupt the child-session maps.
       if (!id) throw new Error(`v2 session.create returned no id: ${JSON.stringify(result)?.slice(0, 200)}`);
@@ -402,8 +407,9 @@ function buildCapabilities(context: V2Context, worktree: string, childSessions: 
       // Synthetic deliveries (watcher + chat wake nudges) route to v2's
       // session.synthetic endpoint: a TUI-hidden message, matching v1's
       // synthetic part. mode is v1-only (async = promptAsync vs sync =
-      // prompt); v2 has one blocking endpoint, so the extraction background
-      // flag degrades to a blocking call.
+      // prompt); v2's prompt enqueues the message and returns while the
+      // model turn runs asynchronously, so the extraction background flag
+      // degrades: both modes enqueue the same way.
       const text = body.parts.map((part) => part.text).join("\n\n");
       if (!body.noReply && body.parts.length > 0 && body.parts.every((part) => part.synthetic)) {
         await session.synthetic({ sessionID, text });
@@ -413,9 +419,9 @@ function buildCapabilities(context: V2Context, worktree: string, childSessions: 
     },
     sessionGet: async (id) => {
       // SessionGetInput is {sessionID}, and the adapter decodes the input
-      // before the host call - any other key rejects.
-      const result = await session.get({ sessionID: id });
-      return result?.data ?? result ?? null;
+      // before the host call - any other key rejects. The wrapper returns
+      // the SessionInfo directly (the envelope is unwrapped).
+      return (await session.get({ sessionID: id })) ?? null;
     },
     sessionList: async () => null,
     sessionMessages: async (id) => {
@@ -424,22 +430,25 @@ function buildCapabilities(context: V2Context, worktree: string, childSessions: 
       // `session.context` IS exposed and returns the session's message list
       // (Array<SessionMessageInfo>); map into the v1 shape the wrap-up
       // greenlight check reads.
-      const result = await (session as any).context({ sessionID: id });
-      return mapSessionContextMessages(result?.data ?? result);
+      const result = await session.context({ sessionID: id });
+      return mapSessionContextMessages(result);
     },
     showToast: async (_toast: ToastInput) => {
       // No toast publish path reachable from the promise context (the
       // tui.toast.show event has no producer surface here). Degrades.
     },
-    tuiExecuteCommand: async (command) => {
-      // No TUI surface on v2, and the promise domain exposes no compaction
-      // trigger either (session.compact is not in the SessionDomain Pick -
-      // calling it throws). The compact wrap-up still runs its checklist and
-      // flush; only the automatic compaction itself degrades.
-      if (command === "session_compact") {
-        console.error("[thatch] v2: compaction trigger unavailable; wrap-up checklist ran, compact skipped");
-      }
+    compactSession: async () => {
+      // No compaction trigger is reachable from the promise context: the
+      // SessionDomain Pick has no session.compact, and the built-in
+      // /compact is a TUI palette action calling the server endpoint
+      // directly (the server command registry only knows config/plugin-
+      // registered names). The compact wrap-up still runs its checklist
+      // and flush; only the automatic compaction itself degrades.
+      console.error("[thatch] v2: compaction trigger unavailable; wrap-up checklist ran, compact skipped");
     },
-    tuiPublish: async () => {},
+    exitHost: async () => {
+      // No TUI surface on v2; the exit wrap-up's checklist and flush run,
+      // the process exit does not.
+    },
   };
 }
