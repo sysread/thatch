@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { createDebugLog } from "./debug";
 import { ThatchDB, repoPathCache } from "./db";
-import { BgeEmbeddingModel } from "./embeddings";
+import { SharedModelPool } from "./embeddings";
 import { detectRepo, detectWorktreeKind, resolveSpawnCwd } from "./git";
 import { buildCoreContext } from "./tool-defs";
 import {
@@ -24,7 +24,7 @@ import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommand
 import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
-import { WatcherRegistry, ghApiRun, ghAvailable, runWatchedCommand, withCwdFallback } from "./watchers";
+import { WatcherRegistry, ghApiRun, ghAvailable, runWatchedCommand, withCwdFallback, type Watcher } from "./watchers";
 import { watcherNotificationNudge, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
 import { ChatPoller, createWakeGate, isDefaultSessionTitle } from "./chat";
 import { chatEnabled, chatAutoRegister, loadConfig } from "./config";
@@ -40,6 +40,9 @@ import pkg from "../package.json";
 // findDuplicates' 0.85 (near-dupes) because "relates to" is a weaker signal
 // than "duplicate." Tunable via THATCH_RECALL_THRESHOLD.
 const RECALL_THRESHOLD = parseFloat(process.env.THATCH_RECALL_THRESHOLD ?? "0.55");
+
+/** Process-wide pool for the shared embedding models (see SharedModelPool). */
+const sharedModels = new SharedModelPool();
 
 // Prompts shorter than this skip the recall nudge - trivially short prompts
 // like "yes" or "ok" match too broadly to be useful.
@@ -124,8 +127,17 @@ export async function createRuntime(input: {
   const chatOn = chatEnabled(loadConfig(dbPath).config);
 
   const debug = createDebugLog(dbPath);
-  const model = new BgeEmbeddingModel(modelName);
-  const extraction = new ExtractionPipeline();
+
+  // Shared embedding model: refcounted per db path (see SharedModelPool).
+  const model = sharedModels.acquire(dbPath, modelName);
+  const releaseModel = () => sharedModels.release(dbPath);
+
+  // Extraction buffer, journaled to runtime_state so a v2 plugin reload
+  // (same process, graph rebuilt) can rehydrate it.
+  const extraction = new ExtractionPipeline((kind, sessionID, value) => {
+    if (value === undefined) db.runtimeStateDelete(kind, sessionID);
+    else db.runtimeStatePut(kind, sessionID, value);
+  });
 
   // Seed default behaviors into the global store on first run, and
   // update them when their content changes across releases. Idempotent:
@@ -197,6 +209,12 @@ export async function createRuntime(input: {
   });
 
   const watchers = new WatcherRegistry({
+    // Journal watcher definitions so a v2 plugin reload (same process) can
+    // re-arm them; the registry journals after every membership change.
+    journal: (sessionID, sessionWatchers) => {
+      if (sessionWatchers.length === 0) db.runtimeStateDelete("watchers", sessionID);
+      else db.runtimeStatePut("watchers", sessionID, sessionWatchers);
+    },
     deliver: async (sessionID, events) => {
       // Events carry their watch's target label from the registry, so the
       // notification header is correct for every source (PRs, branches,
@@ -244,7 +262,10 @@ export async function createRuntime(input: {
   // directory" and resolves through the SDK. Either way the poller hosts it
   // from the first beat, so the heartbeat and delivery are live before the
   // user's first prompt.
-  let resumedSession: string | null = null;
+  // Startup-resumed chat sessions. A Set (not a scalar): one plugin
+  // instance can serve several sessions - shared-server tabs in the same
+  // directory each resolve their own -c/-s target.
+  const resumedSessions = new Set<string>();
 
   // Chat names assigned by the startup resume paths (-s and -c) wait here
   // until the session's first message or idle event, which toast them. At
@@ -261,7 +282,7 @@ export async function createRuntime(input: {
       // registered child would be heartbeat-ed fresh-forever and burn
       // nudge budget on undeliverable wake prompts.
       const hosted = [...sessionStatus.keys()];
-      if (resumedSession) hosted.push(resumedSession);
+      hosted.push(...resumedSessions);
       return hosted.filter((id) => !childToParent.has(id));
     },
     deliver: async (sessionID, senders, count) => {
@@ -327,7 +348,7 @@ export async function createRuntime(input: {
   const tombstoned = startupSession ? db.hasChatLeaveTombstone(startupSession) : false;
   debug("chat:startup", `init: argv=${JSON.stringify(process.argv.slice(0, 8))} osArgs=${JSON.stringify(osArgs.slice(0, 8))} parsed=${startupSession} continue=${continueLast} chatOn=${chatOn} autoRegister=${autoRegisterOn} tombstone=${startupSession ? tombstoned : "n/a"}`);
   if (chatOn && autoRegisterOn && startupSession && !tombstoned) {
-    resumedSession = startupSession;
+    resumedSessions.add(startupSession);
     const res = db.registerChatSession(startupSession, repo, null, "opencode", null, detectWorktreeKind(worktree));
     debug("chat:startup", `registration for ${startupSession}: ok=${res.ok} name=${res.ok ? res.name : res.error}`);
     if (res.ok) {
@@ -341,7 +362,7 @@ export async function createRuntime(input: {
         const target = continuesLastSessionId(data ?? []);
         debug("chat:startup", `-c resolved: ${target ?? "none"}`);
         if (!target || db.hasChatLeaveTombstone(target)) return;
-        resumedSession = target;
+        resumedSessions.add(target);
         const res = db.registerChatSession(target, repo, null, "opencode", null, detectWorktreeKind(worktree));
         debug("chat:startup", `registration for ${target}: ok=${res.ok} name=${res.ok ? res.name : res.error}`);
         if (res.ok) {
@@ -353,6 +374,7 @@ export async function createRuntime(input: {
       }
     })();
   }
+
 
   // Sessions currently being compacted. chat.message nudges are skipped while
   // a session is in this set - the agent can't call tools during summary
@@ -414,6 +436,22 @@ export async function createRuntime(input: {
   // Keyed by child session ID. Cleaned up on child idle, error, or deletion.
   const childMetrics = new Map<string, { new: number; updated: number; deleted: number }>();
 
+  // Journal the child bookkeeping (parent link, buffer snapshot, metrics) so
+  // a v2 plugin reload can rehydrate an in-flight extraction instead of
+  // orphaning it. A child with no parent entry journals a delete.
+  const journalChild = (childId: string) => {
+    const parentID = childToParent.get(childId);
+    if (!parentID) {
+      db.runtimeStateDelete("child", childId);
+      return;
+    }
+    db.runtimeStatePut("child", childId, {
+      parentID,
+      snapshot: parentSnapshots.get(childId) ?? [],
+      metrics: childMetrics.get(childId) ?? { new: 0, updated: 0, deleted: 0 },
+    });
+  };
+
   // Wrap-up slash commands (/thatch/compact, /thatch/exit) awaiting their
   // greenlight check. command.execute.before marks the session when one of
   // these commands runs; when the session next goes idle, the plugin reads
@@ -422,6 +460,53 @@ export async function createRuntime(input: {
   // instead, so nothing fires beyond a toast. Cleared on resolution or on
   // session deletion.
   const pendingWrapUp = new Map<string, { token: string; kind: "compact" | "exit" }>();
+
+  // Rehydrate persisted runtime state (docs/plans/plugin-state-persistence.md).
+  // The writer's pid splits the journal: rows from THIS process mean a v2
+  // plugin reload (the location graph rebuilt around us - keep everything);
+  // rows from another pid mean a process restart, whose sessions died with
+  // their harness - only a startup-resumed session (-s/-c) inherits state
+  // (crash recovery), the rest is pruned. Without a chat startup target there
+  // is nothing to inherit, so a restart prunes everything.
+  const persisted = db.runtimeStateAll();
+  for (const row of persisted) {
+    const keep = row.pid === process.pid || (startupSession !== undefined && row.sessionID === startupSession);
+    if (keep) continue;
+    db.runtimeStateDelete(row.kind, row.sessionID);
+  }
+  const rehydrated = persisted.filter((row) => {
+    return row.pid === process.pid || (startupSession !== undefined && row.sessionID === startupSession);
+  });
+  if (rehydrated.length > 0) {
+    let counts = "";
+    for (const row of rehydrated) {
+      if (row.kind === "buffer") extraction.hydrate(row.value as ToolInteraction[], []);
+      else if (row.kind === "accepted") extraction.hydrate([], row.value as ToolInteraction[]);
+      else if (row.kind === "wrapup") pendingWrapUp.set(row.sessionID, row.value as { token: string; kind: "compact" | "exit" });
+      else if (row.kind === "child") {
+        const rec = row.value as { parentID?: string; snapshot?: ToolInteraction[]; metrics?: { new: number; updated: number; deleted: number } };
+        if (rec?.parentID) {
+          childToParent.set(row.sessionID, rec.parentID);
+          parentSnapshots.set(row.sessionID, rec.snapshot ?? []);
+          extractionChildren.add(row.sessionID);
+          extracting.add(rec.parentID);
+          if (rec.metrics) childMetrics.set(row.sessionID, rec.metrics);
+        } else {
+          db.runtimeStateDelete(row.kind, row.sessionID);
+        }
+      } else if (row.kind === "watchers") {
+        watchers.hydrate((row.value ?? []) as Watcher[]);
+      }
+    }
+    const byKind = rehydrated.reduce<Record<string, number>>((acc, row) => {
+      acc[row.kind] = (acc[row.kind] ?? 0) + 1;
+      return acc;
+    }, {});
+    counts = Object.entries(byKind)
+      .map(([kind, n]) => `${kind}=${n}`)
+      .join(" ");
+    debug("runtime:rehydrate", `restored ${counts}`);
+  }
 
   // Skills always install to the global opencode config - installing into the
   // worktree would mutate the user's repo (untracked files in git status).
@@ -488,6 +573,7 @@ export async function createRuntime(input: {
       childToParent.set(childId, parentID);
       parentSnapshots.set(childId, [...extraction.peek(parentID)]);
     }
+    journalChild(childId);
 
     // Clean up the child session and all map entries if prompting fails.
     // Without this, the child exists on the server but was never prompted,
@@ -498,6 +584,7 @@ export async function createRuntime(input: {
       childToParent.delete(childId);
       parentSnapshots.delete(childId);
       childMetrics.delete(childId);
+      journalChild(childId);
       try { void caps.sessionDelete(childId); } catch {}
     };
 
@@ -613,6 +700,7 @@ export async function createRuntime(input: {
           if ((input.args as any)?.overwrite) metrics.updated++;
           else metrics.new++;
           childMetrics.set(input.sessionID, metrics);
+          journalChild(input.sessionID);
           // Complete the parent's accepted entries (the extractor confirmed
           // it is alive and saving) and drain the parent's snapshot entries
           // from the pending buffer. If no snapshot was recorded (unreachable
@@ -626,6 +714,7 @@ export async function createRuntime(input: {
             extraction.consumeSnapshot(parentID, snapshot);
             parentSnapshots.delete(input.sessionID);
           }
+          journalChild(input.sessionID);
           missedNudges.delete(parentID);
         }
         return;
@@ -727,7 +816,12 @@ export async function createRuntime(input: {
     // is complete.
     onCommandExecuteBefore: async (input) => {
       const wrapUp = WRAPUP_COMMANDS[input.command];
-      if (wrapUp) pendingWrapUp.set(input.sessionID, wrapUp);
+      if (wrapUp) {
+        pendingWrapUp.set(input.sessionID, wrapUp);
+        // Journaled so a v2 plugin reload before the session's next idle
+        // does not silently drop the armed wrap-up.
+        db.runtimeStatePut("wrapup", input.sessionID, wrapUp);
+      }
     },
 
     onChatMessage: async (input, output) => {
@@ -970,6 +1064,7 @@ export async function createRuntime(input: {
         if (info.parentID) {
           childToParent.set(info.id, info.parentID);
           parentSnapshots.set(info.id, [...extraction.peek(info.parentID)]);
+          journalChild(info.id);
           // Child sessions don't need the session-start reminder - only
           // top-level sessions do. Returning here prevents extraction
           // children from receiving the hygiene report and tool overview.
@@ -986,6 +1081,7 @@ export async function createRuntime(input: {
           parentSnapshots.delete(childID);
           childMetrics.delete(childID);
           extractionChildren.delete(childID);
+          journalChild(childID);
         }
         return;
       }
@@ -1049,6 +1145,7 @@ export async function createRuntime(input: {
             parentSnapshots.delete(sessionID);
             childMetrics.delete(sessionID);
             extractionChildren.delete(sessionID);
+            journalChild(sessionID);
             extraction.consume(sessionID);
             // Delete the child session to avoid clutter.
             try {
@@ -1074,6 +1171,7 @@ export async function createRuntime(input: {
         const wrapUp = sessionID ? pendingWrapUp.get(sessionID) : undefined;
         if (wrapUp) {
           pendingWrapUp.delete(sessionID);
+          db.runtimeStateDelete("wrapup", sessionID);
           let ready = false;
           try {
             const data = await caps.sessionMessages(sessionID);
@@ -1227,7 +1325,9 @@ export async function createRuntime(input: {
         parentSnapshots.delete(id);
         childMetrics.delete(id);
         extractionChildren.delete(id);
+        journalChild(id);
         pendingWrapUp.delete(id);
+        db.runtimeStateDelete("wrapup", id);
         // A deleted parent takes its accepted entries with it, and its
         // watchers die with it - the session that would receive their
         // notifications no longer exists.
@@ -1289,10 +1389,11 @@ export async function createRuntime(input: {
       stopVersionChecker();
       watchers.dispose();
       chatPoller.dispose();
-      // Release native ONNX sessions while the worker is still healthy. Left
-      // to Bun's teardown, their NAPI finalizers panic the process (see
-      // BgeEmbeddingModel.dispose).
-      await model.dispose();
+      releaseModel();
+      // Note: the runtime_state journal is deliberately NOT cleared here.
+      // Disposal happens before every v2 plugin reload, and the reloaded
+      // setup() rehydrates from it; stale rows from dead processes are
+      // pruned by the setup-time partition instead.
       db.close();
     },
   };

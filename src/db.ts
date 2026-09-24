@@ -322,6 +322,23 @@ export class ThatchDB {
       )
     `);
 
+    // Volatile plugin-runtime state, persisted so a v2 plugin reload (the
+    // host rebuilds the location graph and re-runs setup) or a process
+    // restart can rehydrate instead of silently dropping it. The writer's
+    // pid is the discriminator: a row written by the CURRENT process means
+    // "reload - keep and rehydrate"; a row from another (dead) pid means
+    // "restart - prune unless the session was resumed".
+    this.#db.exec(`
+      CREATE TABLE IF NOT EXISTS runtime_state (
+        kind       TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        value      TEXT NOT NULL,
+        pid        INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        PRIMARY KEY (kind, session_id)
+      )
+    `);
+
     this.#migrateColumns();
     this.#migrateChatNameCollation();
     this.#migrateChatTopic();
@@ -959,6 +976,37 @@ export class ThatchDB {
 
   unregisterChatSession(sessionID: string) {
     return this.#chat.unregister(sessionID);
+  }
+
+  /** Persist one runtime-state record (upsert by kind+session). */
+  runtimeStatePut(kind: string, sessionId: string, value: unknown, pid: number = process.pid) {
+    this.#db
+      .query(
+        `INSERT INTO runtime_state (kind, session_id, value, pid) VALUES (?, ?, ?, ?)
+         ON CONFLICT (kind, session_id) DO UPDATE SET value = excluded.value, pid = excluded.pid, created_at = excluded.created_at`,
+      )
+      .run(kind, sessionId, JSON.stringify(value), pid);
+  }
+
+  /** Drop one runtime-state record. */
+  runtimeStateDelete(kind: string, sessionId: string) {
+    this.#db.query(`DELETE FROM runtime_state WHERE kind = ? AND session_id = ?`).run(kind, sessionId);
+  }
+
+  /** Every runtime-state record, oldest first (rehydration source). */
+  runtimeStateAll(): { kind: string; sessionID: string; value: unknown; pid: number }[] {
+    return this.#db
+      .query(`SELECT kind, session_id, value, pid FROM runtime_state ORDER BY created_at, session_id`)
+      .all()
+      .map((row: any) => {
+        let value: unknown;
+        try {
+          value = JSON.parse(row.value);
+        } catch {
+          value = null;
+        }
+        return { kind: row.kind as string, sessionID: row.session_id as string, value, pid: row.pid as number };
+      });
   }
 
   listChatSessions() {

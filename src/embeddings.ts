@@ -160,6 +160,44 @@ export interface BgeEmbeddingModelOptions {
 }
 
 /**
+ * Process-wide model pool, keyed by db path. A v2 serve hosts one plugin
+ * instance per location and each would otherwise keep its own ONNX model
+ * resident; the pool refcounts so N instances share one model and it is
+ * disposed only when the last holder releases (the model's ONNX sessions
+ * must be explicitly closed before process exit - Bun's NAPI finalizers
+ * panic otherwise, see BgeEmbeddingModel.dispose).
+ */
+export class SharedModelPool {
+  #entries = new Map<string, { model: BgeEmbeddingModel; refs: number }>();
+
+  acquire(dbPath: string, modelName: string): BgeEmbeddingModel {
+    const entry = this.#entries.get(dbPath);
+    if (entry) {
+      entry.refs += 1;
+      return entry.model;
+    }
+    const created = { model: new BgeEmbeddingModel(modelName), refs: 1 };
+    this.#entries.set(dbPath, created);
+    return created.model;
+  }
+
+  release(dbPath: string): void {
+    const entry = this.#entries.get(dbPath);
+    if (!entry) return;
+    entry.refs -= 1;
+    if (entry.refs <= 0) {
+      void entry.model.dispose();
+      this.#entries.delete(dbPath);
+    }
+  }
+
+  /** Test/introspection: number of live (held) models. */
+  get size(): number {
+    return this.#entries.size;
+  }
+}
+
+/**
  * Lazy-loads an embedding model via @huggingface/transformers.
  * Model files (~34 MB for the default) are downloaded once and cached by HF Hub.
  */

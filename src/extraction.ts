@@ -85,6 +85,18 @@ export function buildExtractionPayload(
 }
 
 /**
+ * Persistence hook: called after every buffer/accepted mutation with the
+ * session's current state (undefined = the list is gone - drop the record).
+ * The runtime wires this to the runtime_state journal so a v2 plugin reload
+ * or process restart can rehydrate the buffer instead of losing it.
+ */
+export type ExtractionJournal = (
+  kind: "buffer" | "accepted",
+  sessionID: string,
+  value: ToolInteraction[] | undefined,
+) => void;
+
+/**
  * Per-session in-memory ring buffer used by the opencode plugin path. Claude
  * Code's MCP server has no equivalent plugin lifecycle, so its CLI subcommands
  * use the file-backed queue in extract-queue.ts plus buildExtractionPayload.
@@ -93,12 +105,32 @@ export class ExtractionPipeline {
   #buffers = new Map<string, ToolInteraction[]>();
   #accepted = new Map<string, ToolInteraction[]>();
   #maxBuffer = 20;
+  #journal?: ExtractionJournal;
+
+  constructor(journal?: ExtractionJournal) {
+    this.#journal = journal;
+  }
+
+  /** Restore persisted state (same-process reload rehydration). */
+  hydrate(buffers: ToolInteraction[], accepted: ToolInteraction[]): void {
+    for (const ix of buffers) {
+      const buf = this.#buffers.get(ix.sessionID) ?? [];
+      buf.push(ix);
+      this.#buffers.set(ix.sessionID, buf);
+    }
+    for (const ix of accepted) {
+      const buf = this.#accepted.get(ix.sessionID) ?? [];
+      buf.push(ix);
+      this.#accepted.set(ix.sessionID, buf);
+    }
+  }
 
   /** Record a tool execution for later extraction. */
   push(interaction: ToolInteraction): void {
     const buf = this.#buffers.get(interaction.sessionID) ?? [];
     buf.push(interaction);
     this.#buffers.set(interaction.sessionID, buf.slice(-this.#maxBuffer));
+    this.#journal?.("buffer", interaction.sessionID, this.#buffers.get(interaction.sessionID));
   }
 
   /** Returns the session's buffered interactions without clearing them. */
@@ -109,6 +141,7 @@ export class ExtractionPipeline {
   /** Clears the session's buffer. Called when the agent writes a memory. */
   consume(sessionID: string): void {
     this.#buffers.delete(sessionID);
+    this.#journal?.("buffer", sessionID, undefined);
   }
 
   /**
@@ -124,11 +157,14 @@ export class ExtractionPipeline {
     this.#buffers.delete(sessionID);
     const existing = this.#accepted.get(sessionID) ?? [];
     this.#accepted.set(sessionID, [...existing, ...buf]);
+    this.#journal?.("buffer", sessionID, this.#buffers.get(sessionID));
+    this.#journal?.("accepted", sessionID, this.#accepted.get(sessionID));
   }
 
   /** Drop accepted entries: the extractor finished (save or no-save). */
   completeAccepted(sessionID: string): void {
     this.#accepted.delete(sessionID);
+    this.#journal?.("accepted", sessionID, undefined);
   }
 
   /**
@@ -144,6 +180,8 @@ export class ExtractionPipeline {
     this.#accepted.delete(sessionID);
     const buf = this.#buffers.get(sessionID) ?? [];
     this.#buffers.set(sessionID, [...accepted, ...buf]);
+    this.#journal?.("buffer", sessionID, this.#buffers.get(sessionID));
+    this.#journal?.("accepted", sessionID, undefined);
   }
 
   /** Returns the session's accepted (held) interactions. Test/introspection. */
@@ -166,8 +204,10 @@ export class ExtractionPipeline {
     const remaining = buf.filter((ix) => !old.has(ix));
     if (remaining.length === 0) {
       this.#buffers.delete(sessionID);
+      this.#journal?.("buffer", sessionID, undefined);
     } else {
       this.#buffers.set(sessionID, remaining);
+      this.#journal?.("buffer", sessionID, remaining);
     }
   }
 

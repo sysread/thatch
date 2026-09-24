@@ -41,9 +41,11 @@ The v2 plugin API is missing a few surfaces the v1 API had. On 2.x:
   model-facing nudges they accompanied - watcher and chat wake nudges -
   still arrive; the extraction-result and other TUI-only toasts have no
   replacement.
-- **Reloads drop plugin state.** Editing the plugin (or `opencode plugin
-  update`) reloads it: in-progress extraction buffers, registered watchers,
-  and armed wrap-ups are lost and watchers must be re-registered.
+- **Plugin state survives reloads.** Editing the plugin (or `opencode
+  plugin update`) reloads it, but extraction buffers, watcher
+  registrations, and armed wrap-ups are journaled and restored; a process
+  restart restores the state of a resumed (`-c`/`-s`) session and prunes
+  the rest.
 - **Extraction children are visible.** The fact-extractor child sessions are
   top-level sessions the host cannot delete, so they accumulate in the
   session picker, and "continue last session" (`-c`) can land in one after
