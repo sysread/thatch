@@ -7,6 +7,7 @@ import { ExtractionPipeline, type ToolInteraction } from "../src/extraction";
 import { WatcherRegistry } from "../src/watchers";
 import { SharedModelPool } from "../src/embeddings";
 import { server } from "../src/index";
+import { hostedSessionIds } from "../src/chat";
 
 // Persistence of volatile plugin-runtime state across v2 plugin reloads and
 // process restarts (docs/plans/plugin-state-persistence.md): the runtime
@@ -245,5 +246,51 @@ describe("runtime rehydration through server()", () => {
       if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
       else process.env.THATCH_DB_PATH = prevDbPath;
     }
+  });
+});
+
+describe("hostedSessionIds (reload re-hosting)", () => {
+  const rows = [
+    { session_id: "ses_same_project", project: "/repo", name: "a", topic: null, host_kind: "opencode" as const, registered_at: "", last_seen: "", worktree: null },
+    { session_id: "ses_other_project", project: "/other", name: "b", topic: null, host_kind: "opencode" as const, registered_at: "", last_seen: "", worktree: null },
+  ];
+
+  test("server scope re-hosts this project's registered rows (reload recovery)", () => {
+    const hosted = hostedSessionIds({
+      statusKeys: [],
+      resumedSessions: [],
+      registeredRows: rows,
+      hostScope: "server",
+      worktree: "/repo",
+      exclude: [],
+    });
+    // The reload wiped the event-fed map; the registered row of THIS
+    // project is re-hosted so the poller can wake it. Other projects' rows
+    // belong to other instances.
+    expect(hosted).toEqual(["ses_same_project"]);
+  });
+
+  test("process scope never re-hosts from the registry", () => {
+    const hosted = hostedSessionIds({
+      statusKeys: ["ses_seen"],
+      resumedSessions: ["ses_resumed"],
+      registeredRows: rows,
+      hostScope: "process",
+      worktree: "/repo",
+      exclude: [],
+    });
+    expect(hosted.sort()).toEqual(["ses_resumed", "ses_seen"]);
+  });
+
+  test("children and duplicates are excluded", () => {
+    const hosted = hostedSessionIds({
+      statusKeys: ["ses_child", "ses_seen", "ses_child"],
+      resumedSessions: [],
+      registeredRows: rows,
+      hostScope: "server",
+      worktree: "/repo",
+      exclude: ["ses_child"],
+    });
+    expect(hosted).toEqual(["ses_seen", "ses_same_project"]);
   });
 });

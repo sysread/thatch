@@ -26,7 +26,7 @@ import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
 import { WatcherRegistry, ghApiRun, ghAvailable, runWatchedCommand, withCwdFallback, type Watcher } from "./watchers";
 import { watcherNotificationNudge, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
-import { ChatPoller, createWakeGate, isDefaultSessionTitle } from "./chat";
+import { ChatPoller, createWakeGate, hostedSessionIds, isDefaultSessionTitle } from "./chat";
 import { chatEnabled, chatAutoRegister, loadConfig } from "./config";
 import { osProcessArgs, startupSessionId, continuesLastSessionFromArgv, continuesLastSessionId } from "./os-args";
 import type { HostCapabilities } from "./capabilities";
@@ -282,16 +282,15 @@ export async function createRuntime(input: {
 
   const chatPoller = new ChatPoller({
     store: db,
-    hostedSessions: () => {
-      // Hosting = the sessions this harness serves: those seen as events
-      // here (used in this TUI) plus the resumed startup session. Sub-agent
-      // children are excluded even if someone registered one - a
-      // registered child would be heartbeat-ed fresh-forever and burn
-      // nudge budget on undeliverable wake prompts.
-      const hosted = [...sessionStatus.keys()];
-      hosted.push(...resumedSessions);
-      return hosted.filter((id) => !childToParent.has(id));
-    },
+    hostedSessions: () =>
+      hostedSessionIds({
+        statusKeys: sessionStatus.keys(),
+        resumedSessions: resumedSessions,
+        registeredRows: db.listChatSessions(),
+        hostScope: caps.hostScope,
+        worktree,
+        exclude: childToParent.keys(),
+      }),
     deliver: async (sessionID, senders, count) => {
       await caps.promptSession(
         sessionID,

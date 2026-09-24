@@ -1313,6 +1313,39 @@ export interface ChatPollerOptions {
  * lives in SQLite rather than memory, because the sender may be a different
  * process than the deliverer.
  */
+/**
+ * Computes the chat poller's hosted set - the sessions this plugin instance
+ * may heartbeat and deliver mail to.
+ *
+ * - Event-fed sessions (status keys): always hosted by the instance that
+ *   saw them.
+ * - Startup-resumed sessions (-s/-c): hosted by their own instance before
+ *   any event arrives.
+ * - "server" scope (v2): one serve hosts every location instance, so the
+ *   project's registered chat rows are hostable even when a plugin reload
+ *   wiped the event-fed map - re-hosting them is what lets the poller wake
+ *   a session the reload left asleep. Child sessions are never hosted
+ *   (heartbeating one fresh-forever burns nudge budget on undeliverable
+ *   wake prompts).
+ */
+export function hostedSessionIds(options: {
+  statusKeys: Iterable<string>;
+  resumedSessions: Iterable<string>;
+  registeredRows: Pick<ChatSessionRow, "session_id" | "project">[];
+  hostScope: "process" | "server";
+  worktree: string;
+  exclude: Iterable<string>;
+}): string[] {
+  const hosted = [...options.statusKeys, ...options.resumedSessions];
+  if (options.hostScope === "server") {
+    for (const row of options.registeredRows) {
+      if (row.project === options.worktree) hosted.push(row.session_id);
+    }
+  }
+  const excluded = new Set(options.exclude);
+  return [...new Set(hosted)].filter((id) => !excluded.has(id));
+}
+
 export class ChatPoller {
   #opts: Required<ChatPollerOptions>;
   #timer: ReturnType<typeof setInterval> | null = null;
