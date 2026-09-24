@@ -999,7 +999,7 @@ export class ThatchDB {
         `INSERT INTO runtime_state (kind, session_id, directory, value, pid) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (kind, session_id) DO UPDATE SET directory = excluded.directory, value = excluded.value, pid = excluded.pid, created_at = excluded.created_at`,
       )
-      .run(kind, sessionId, directory ?? "", JSON.stringify(value), pid);
+      .run(kind, sessionId ?? "", directory ?? "", JSON.stringify(value), pid);
   }
 
   /** Drop one runtime-state record. */

@@ -282,15 +282,19 @@ export async function createRuntime(input: {
 
   const chatPoller = new ChatPoller({
     store: db,
-    hostedSessions: () =>
-      hostedSessionIds({
+    hostedSessions: () => {
+      const hosted = hostedSessionIds({
         statusKeys: sessionStatus.keys(),
         resumedSessions: resumedSessions,
-        registeredRows: db.listChatSessions(),
-        hostScope: caps.hostScope,
-        project: repo,
+        rehostedSessions: rehostedSessions,
         exclude: childToParent.keys(),
-      }),
+      });
+      // Journal the set so the NEXT reload (same pid + directory) re-hosts
+      // these sessions and the poller can wake them with pending mail
+      // instead of waiting for the user to type.
+      db.runtimeStatePut("hosted", directory, hosted, directory);
+      return hosted;
+    },
     deliver: async (sessionID, senders, count) => {
       await caps.promptSession(
         sessionID,
@@ -479,6 +483,10 @@ export async function createRuntime(input: {
   //   harness. Only a startup-resumed session (-s/-c) in this directory
   //   inherits recovery-safe state; everything else is pruned.
   const rehydratedSessions = new Set<string>();
+  // Sessions this instance hosted, restored from the journal on a reload
+  // (same pid + same directory). Written through by the poller's hosted-set
+  // read, so the next reload picks up the latest set.
+  const rehostedSessions = new Set<string>();
   const rehydrated: Record<string, number> = {};
   for (const row of db.runtimeStateAll()) {
     const samePid = row.pid === process.pid;
@@ -495,6 +503,8 @@ export async function createRuntime(input: {
       extraction.hydrate([], row.value as ToolInteraction[]);
     } else if (row.kind === "watchers") {
       watchers.hydrate((row.value ?? []) as Watcher[]);
+    } else if (row.kind === "hosted") {
+      for (const id of (row.value ?? []) as string[]) rehostedSessions.add(id);
     } else if (row.kind === "child") {
       const rec = row.value as { parentID?: string; snapshot?: ToolInteraction[]; metrics?: { new: number; updated: number; deleted: number } };
       if (samePid && rec?.parentID) {
@@ -517,6 +527,9 @@ export async function createRuntime(input: {
         db.runtimeStateDelete(row.kind, row.sessionID);
         continue;
       }
+    } else if (row.kind === "hosted") {
+      db.runtimeStateDelete(row.kind, row.sessionID);
+      continue;
     } else if (row.kind === "wrapup") {
       if (!samePid) {
         // An armed wrap-up inherited across a restart could auto-fire
@@ -539,30 +552,34 @@ export async function createRuntime(input: {
     debug("runtime:rehydrate", `restored ${counts}`);
     // Ping the restored sessions directly: the reload/restart happened
     // outside their event stream, so without this the sessions would not
-    // know the plugin is back (and the pump's hosted set would wait for
-    // their next event to re-form). Synthetic + noReply: never starts a
-    // model turn, and on v2 session.synthetic is TUI-hidden.
-    for (const sessionID of rehydratedSessions) {
-      if (!chatOn) break;
-      void caps
-        .promptSession(
-          sessionID,
-          {
-            parts: [
-              {
-                type: "text",
-                text: "[thatch] plugin reloaded - persisted state restored (extraction buffers, watchers, wrap-ups). No action needed.",
-                synthetic: true,
-              },
-            ],
-            noReply: true,
-          },
-          "async",
-        )
-        .catch(() => {
-          // The session may be gone (restart prune edge) - the poller's
-          // normal gates handle delivery; nothing to do here.
-        });
+    // know the plugin is back. Synthetic + noReply on v1 renders a visible
+    // bubble and starts no model turn. On v2 there is no turn-free delivery
+    // (a noReply body falls through to session.prompt: a real message and a
+    // model turn in every restored session on every file save), so v2 skips
+    // the notice entirely - the re-hosted poller's mail delivery is the
+    // wake there.
+    if (chatOn && caps.noReplyDelivery) {
+      for (const sessionID of rehydratedSessions) {
+        void caps
+          .promptSession(
+            sessionID,
+            {
+              parts: [
+                {
+                  type: "text",
+                  text: "[thatch] plugin reloaded - persisted state restored (extraction buffers, watchers, wrap-ups). No action needed.",
+                  synthetic: true,
+                },
+              ],
+              noReply: true,
+            },
+            "async",
+          )
+          .catch(() => {
+            // The session may be gone (restart prune edge) - the poller's
+            // normal gates handle delivery; nothing to do here.
+          });
+      }
     }
   }
 

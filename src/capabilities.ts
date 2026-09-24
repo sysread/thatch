@@ -45,17 +45,6 @@ export interface HostCapabilities {
    * command and an installed file with the same name would collide.
    */
   readonly nativeCommands: boolean;
-  /**
-   * How wide this instance may cast its hosting net. "process" (v1): the
-   * instance hosts only sessions it has seen events for (plus the startup
-   * resume) - each opencode process is a separate server, and a session it
-   * has not seen is not promptable by it. "server" (v2): one serve hosts
-   * every location instance, so the instance may also re-host the
-   * project's registered chat sessions after a plugin reload (which wipes
-   * the event-fed status map) - that re-hosting is what lets the poller
-   * deliver pending mail and wake a session the reload left asleep.
-   */
-  readonly hostScope: "process" | "server";
   /** Live session statuses, as client.session.status() returns. */
   fetchStatuses(): Promise<Record<string, { type: string }> | null>;
   /**
@@ -112,7 +101,6 @@ export function capabilitiesFromClient(client: PluginInput["client"]): HostCapab
   return {
     noReplyDelivery: true,
     nativeCommands: false,
-    hostScope: "process",
     fetchStatuses: async () => {
       const { data } = await client.session.status();
       return data ?? {};

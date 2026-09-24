@@ -55,7 +55,10 @@ them N-fold).
   child bookkeeping, pendingWrapUp - and re-arm the watchers (the registry
   rebuilds its pollers from the persisted definitions). The v2 adapter also
   re-seeds its event-forwarding child set from the runtime's rehydrated
-  child map, so below-root launches keep receiving child events.
+  child map, so below-root launches keep receiving child events. The
+  instance's chat-hosted set is journaled too and re-hosted on reload, so
+  the poller wakes sessions the reload left asleep (pending mail delivers)
+  and heartbeats their registrations (the stale reaper cannot reap them).
 - **Same pid + other directory**: a live sibling instance's rows - untouched
   (never hydrated, never pruned).
 - **Foreign pid (restart)**: sessions die with their harness. Only a
@@ -68,8 +71,11 @@ them N-fold).
   restart: an inherited wrap-up could auto-fire compact/exit on the resumed
   session's first idle.
 
-Restored sessions get a synthetic, noReply re-attach notice so they know
-the plugin is back (the reload happened outside their event stream).
+Restored sessions get a synthetic, noReply re-attach notice on hosts with
+turn-free delivery (v1). v2 has none (a noReply body would fall through to
+a real prompt and start a model turn in every restored session on every
+file save), so v2 skips the notice - the re-hosted poller's mail delivery
+is the wake there.
 
 This replaces "silent loss" with "reload = resume, restart = crash recovery
 for the resumed session".

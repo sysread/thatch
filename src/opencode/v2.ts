@@ -380,7 +380,6 @@ function buildCapabilities(context: V2Context, worktree: string, childSessions: 
   return {
     noReplyDelivery: false,
     nativeCommands: true,
-    hostScope: "server",
     // The wake gate treats an unknown session as idle; the runtime's
     // event-fed status map does the busy/retry gating on v2.
     fetchStatuses: async () => ({}),

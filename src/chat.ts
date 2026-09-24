@@ -1321,28 +1321,20 @@ export interface ChatPollerOptions {
  *   saw them.
  * - Startup-resumed sessions (-s/-c): hosted by their own instance before
  *   any event arrives.
- * - "server" scope (v2): one serve hosts every location instance, so the
- *   project's registered chat rows are hostable even when a plugin reload
- *   wiped the event-fed map - re-hosting them is what lets the poller wake
- *   a session the reload left asleep. Child sessions are never hosted
- *   (heartbeating one fresh-forever burns nudge budget on undeliverable
- *   wake prompts).
+ * - Re-hosted sessions (a reload rehydration): the instance's own journaled
+ *   hosted set, restored so the poller can wake a session the reload left
+ *   asleep instead of waiting for the user to type.
+ *
+ * Child sessions are never hosted (heartbeating one fresh-forever burns
+ * nudge budget on undeliverable wake prompts).
  */
 export function hostedSessionIds(options: {
   statusKeys: Iterable<string>;
   resumedSessions: Iterable<string>;
-  registeredRows: Pick<ChatSessionRow, "session_id" | "project">[];
-  hostScope: "process" | "server";
-  /** The project identity rows are registered under (detectRepo's slug). */
-  project: string;
+  rehostedSessions: Iterable<string>;
   exclude: Iterable<string>;
 }): string[] {
-  const hosted = [...options.statusKeys, ...options.resumedSessions];
-  if (options.hostScope === "server") {
-    for (const row of options.registeredRows) {
-      if (row.project === options.project) hosted.push(row.session_id);
-    }
-  }
+  const hosted = [...options.statusKeys, ...options.resumedSessions, ...options.rehostedSessions];
   const excluded = new Set(options.exclude);
   return [...new Set(hosted)].filter((id) => !excluded.has(id));
 }
