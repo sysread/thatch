@@ -7,11 +7,12 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  # The matrix legs carry the real gate (typecheck, tests, markdownlint) per
+  # Bun runtime: opencode v1 embeds Bun 1.3.14; v2 embeds 1.4.2. The plugin
+  # runs inside the host's embedded runtime, so both must pass.
+  test-matrix:
     runs-on: ubuntu-latest
     strategy:
-      # opencode v1 embeds Bun 1.3.14; v2 embeds 1.4.2. The plugin runs
-      # inside the host's embedded runtime, so both must pass.
       matrix:
         bun-version: ["1.3.14", "1.4.2"]
     steps:
@@ -23,3 +24,12 @@ jobs:
       - run: bunx tsc -p tsconfig.check.json
       - run: bun test tests/*.test.ts
       - run: bunx markdownlint-cli2
+
+  # Bare-named summary job: the main branch ruleset requires a status check
+  # with context "test", and matrix legs report as "test (1.3.14)" etc.,
+  # which never satisfies a bare "test" requirement.
+  test:
+    needs: test-matrix
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "matrix legs green"
