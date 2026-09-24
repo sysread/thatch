@@ -261,7 +261,7 @@ describe("hostedSessionIds (reload re-hosting)", () => {
       resumedSessions: [],
       registeredRows: rows,
       hostScope: "server",
-      worktree: "/repo",
+      project: "/repo",
       exclude: [],
     });
     // The reload wiped the event-fed map; the registered row of THIS
@@ -276,7 +276,7 @@ describe("hostedSessionIds (reload re-hosting)", () => {
       resumedSessions: ["ses_resumed"],
       registeredRows: rows,
       hostScope: "process",
-      worktree: "/repo",
+      project: "/repo",
       exclude: [],
     });
     expect(hosted.sort()).toEqual(["ses_resumed", "ses_seen"]);
@@ -288,7 +288,7 @@ describe("hostedSessionIds (reload re-hosting)", () => {
       resumedSessions: [],
       registeredRows: rows,
       hostScope: "server",
-      worktree: "/repo",
+      project: "/repo",
       exclude: ["ses_child"],
     });
     expect(hosted).toEqual(["ses_seen", "ses_same_project"]);

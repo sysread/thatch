@@ -288,7 +288,7 @@ export async function createRuntime(input: {
         resumedSessions: resumedSessions,
         registeredRows: db.listChatSessions(),
         hostScope: caps.hostScope,
-        worktree,
+        project: repo,
         exclude: childToParent.keys(),
       }),
     deliver: async (sessionID, senders, count) => {

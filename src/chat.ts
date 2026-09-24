@@ -1333,13 +1333,14 @@ export function hostedSessionIds(options: {
   resumedSessions: Iterable<string>;
   registeredRows: Pick<ChatSessionRow, "session_id" | "project">[];
   hostScope: "process" | "server";
-  worktree: string;
+  /** The project identity rows are registered under (detectRepo's slug). */
+  project: string;
   exclude: Iterable<string>;
 }): string[] {
   const hosted = [...options.statusKeys, ...options.resumedSessions];
   if (options.hostScope === "server") {
     for (const row of options.registeredRows) {
-      if (row.project === options.worktree) hosted.push(row.session_id);
+      if (row.project === options.project) hosted.push(row.session_id);
     }
   }
   const excluded = new Set(options.exclude);
