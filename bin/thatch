@@ -49,13 +49,13 @@ function usage(): never {
                                    Full conversation as OpenAI chat-completions JSONL
   thatch session search <query> [--session <id>] [--regex] [--limit N]
                                    JSONL of matching parts across sessions (decoded content)
-  thatch chat list [--active] [--stale N|all]
-                                    Registered chat sessions, grouped Active/Stale. --active
-                                    shows only fresh sessions (no stale section):
-                                    name, age, status, project, topic.
-                                    --stale N (days) hides stale sessions
-                                    older than N; default 1. --stale all
-                                    shows every stale session.
+  thatch chat list [--stale N|all]  Registered chat sessions. Default shows
+                                    only active (fresh-heartbeat) sessions:
+                                    name, session id, age, status, project,
+                                    topic. --stale adds the stale section:
+                                    N bounds it to sessions seen in the
+                                    last N days (default 1); all shows
+                                    every stale session.
   thatch chat tail [--once] [--limit N|all] [--match RE]
                    [--from NAME] [--to NAME] [--since DT] [--until DT]
                                    Follow cross-session chat as a JSONL
@@ -495,29 +495,32 @@ async function chatCommand(rest: string[]): Promise<void> {
       // sessions from burying the fresh signal. --stale all restores the
       // unbounded view. A bad value dies loudly rather than silently
       // shrinking the roster.
-      const activeOnly = restArgs.includes("--active");
-      const staleArg = flagValue(restArgs, "--stale");
+      // Default: active sessions only. --stale [N|all] opts into the
+      // stale section - bare --stale keeps the one-day display cap, N
+      // bounds it, all removes it. The value is parsed by hand (not
+      // flagValue) because bare --stale is meaningful.
+      const showStale = restArgs.includes("--stale");
+      const staleIdx = restArgs.indexOf("--stale");
+      const staleNext = showStale ? restArgs[staleIdx + 1] : undefined;
       let staleCapMs: number | null = 24 * 60 * 60 * 1000;
-      if (staleArg !== undefined) {
-        if (staleArg === "all") staleCapMs = null;
-        else if (!/^\d+(\.\d+)?$/.test(staleArg) || Number(staleArg) <= 0) {
-          console.error(`error: --stale expects a positive number of days or "all", got "${staleArg}"`);
+      if (staleNext !== undefined) {
+        if (staleNext === "all") staleCapMs = null;
+        else if (!/^\d+(\.\d+)?$/.test(staleNext) || Number(staleNext) <= 0) {
+          console.error(`error: --stale expects a positive number of days or "all", got "${staleNext}"`);
           process.exit(1);
-        } else staleCapMs = Number(staleArg) * 24 * 60 * 60 * 1000;
+        } else staleCapMs = Number(staleNext) * 24 * 60 * 60 * 1000;
       }
       let sessions = db.listChatSessions();
-      if (activeOnly) {
-        // Vetting view: only the fresh rows, no stale section. The
-        // boundary is the same heartbeat age the roster's Active section
-        // uses, so this is exactly that section with the stale header
-        // (and the --stale window) skipped.
-        sessions = sessions.filter((r) => chatLiveness(r) === "fresh");
-      }
+      if (!showStale) sessions = sessions.filter((r) => chatLiveness(r) === "fresh");
       if (sessions.length === 0) {
-        console.log(activeOnly ? "No active sessions." : "No sessions registered. Sessions join the directory automatically on their first idle (opencode), or via chat_register.");
+        console.log(
+          showStale
+            ? "No sessions registered. Sessions join the directory automatically on their first idle (opencode), or via chat_register."
+            : "No active sessions. (Stale sessions are hidden; run with --stale to include them.)",
+        );
         break;
       }
-      console.log(formatChatRoster(sessions, activeOnly ? null : staleCapMs));
+      console.log(formatChatRoster(sessions, showStale ? staleCapMs : null));
       break;
     }
 
