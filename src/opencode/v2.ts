@@ -454,7 +454,10 @@ function buildCapabilities(context: V2Context, worktree: string, childSessions: 
     },
     exitHost: async () => {
       // No TUI surface on v2; the exit wrap-up's checklist and flush run,
-      // the process exit does not.
+      // the exit itself does not. When upstream restores a publish path,
+      // the right v2 target is session.tab.close (close THIS session's
+      // tab), not app.exit - on a shared daemon app.exit would take down
+      // every tab. Tracked in anomalyco/opencode#50984.
     },
   };
 }
