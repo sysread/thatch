@@ -332,6 +332,7 @@ export class ThatchDB {
       CREATE TABLE IF NOT EXISTS runtime_state (
         kind       TEXT NOT NULL,
         session_id TEXT NOT NULL,
+        directory  TEXT NOT NULL DEFAULT '',
         value      TEXT NOT NULL,
         pid        INTEGER NOT NULL,
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
@@ -347,6 +348,14 @@ export class ThatchDB {
     this.#migrateChatAuto();
     this.#migrateChatWorktree();
     this.#migrateChatHostPid();
+    this.#migrateRuntimeStateDirectory();
+  }
+
+  #migrateRuntimeStateDirectory(): void {
+    const cols = (this.#db.query("PRAGMA table_info(runtime_state)").all() as any[]).map((r) => r.name);
+    if (cols.length > 0 && !cols.includes("directory")) {
+      this.#db.run("ALTER TABLE runtime_state ADD COLUMN directory TEXT NOT NULL DEFAULT ''");
+    }
   }
 
   // chat_sessions tables created before the auto column lack it; the ALTER
@@ -978,14 +987,19 @@ export class ThatchDB {
     return this.#chat.unregister(sessionID);
   }
 
-  /** Persist one runtime-state record (upsert by kind+session). */
-  runtimeStatePut(kind: string, sessionId: string, value: unknown, pid: number = process.pid) {
+  /**
+   * Persist one runtime-state record (upsert by kind+session). `directory`
+   * is the writing instance's location: one v2 serve hosts one plugin
+   * instance per directory sharing this db, and rehydration must be
+   * instance-scoped, not process-scoped.
+   */
+  runtimeStatePut(kind: string, sessionId: string, value: unknown, directory: string, pid: number = process.pid) {
     this.#db
       .query(
-        `INSERT INTO runtime_state (kind, session_id, value, pid) VALUES (?, ?, ?, ?)
-         ON CONFLICT (kind, session_id) DO UPDATE SET value = excluded.value, pid = excluded.pid, created_at = excluded.created_at`,
+        `INSERT INTO runtime_state (kind, session_id, directory, value, pid) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (kind, session_id) DO UPDATE SET directory = excluded.directory, value = excluded.value, pid = excluded.pid, created_at = excluded.created_at`,
       )
-      .run(kind, sessionId, JSON.stringify(value), pid);
+      .run(kind, sessionId, directory ?? "", JSON.stringify(value), pid);
   }
 
   /** Drop one runtime-state record. */
@@ -994,9 +1008,9 @@ export class ThatchDB {
   }
 
   /** Every runtime-state record, oldest first (rehydration source). */
-  runtimeStateAll(): { kind: string; sessionID: string; value: unknown; pid: number }[] {
+  runtimeStateAll(): { kind: string; sessionID: string; directory: string; value: unknown; pid: number }[] {
     return this.#db
-      .query(`SELECT kind, session_id, value, pid FROM runtime_state ORDER BY created_at, session_id`)
+      .query(`SELECT kind, session_id, directory, value, pid FROM runtime_state ORDER BY created_at, session_id`)
       .all()
       .map((row: any) => {
         let value: unknown;
@@ -1005,7 +1019,13 @@ export class ThatchDB {
         } catch {
           value = null;
         }
-        return { kind: row.kind as string, sessionID: row.session_id as string, value, pid: row.pid as number };
+        return {
+          kind: row.kind as string,
+          sessionID: row.session_id as string,
+          directory: (row.directory ?? "") as string,
+          value,
+          pid: row.pid as number,
+        };
       });
   }
 

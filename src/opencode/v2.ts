@@ -72,6 +72,12 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
 
   const capabilities = buildCapabilities(context, worktree, childSessions);
   const runtime = await createRuntime({ capabilities, directory, worktree });
+  // Seed the forwarding set from rehydrated child bookkeeping: after a
+  // reload, an in-flight extraction child's maps come back from the journal,
+  // but this NEW adapter instance's childSessions set starts empty - without
+  // the seed, the pump's directory filter drops the child's events again
+  // (the below-root launch case).
+  for (const id of runtime.childSessionIds()) childSessions.add(id);
 
   // Tool registration: the same CoreContext the v1 adapter feeds to
   // createTools, registered through the v2 ToolEditor instead.

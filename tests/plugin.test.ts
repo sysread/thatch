@@ -117,7 +117,7 @@ beforeAll(async () => {
       },
     },
   };
-  hooks = await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree" } as any);
+  hooks = await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree", directory: "/tmp/thatch-test-worktree" } as any);
 
   // Store a memory so the recall nudge has something to match. Using the
   // server's own tools ensures the embedding comes from the same (mocked)

@@ -16,6 +16,8 @@ import { server } from "../src/index";
 
 let dbDir: string;
 let dbPath: string;
+// The directory the test runtime runs in (the instance-scoping key).
+const WORK_DIR = "/tmp/thatch-state-workdir";
 
 beforeEach(() => {
   dbDir = mkdtempSync(join(tmpdir(), "thatch-state-"));
@@ -37,9 +39,9 @@ const ix = (sessionID: string, tool = "bash"): ToolInteraction => ({
 describe("runtime_state db API", () => {
   test("put/get/all/delete round-trip with JSON values", () => {
     const db = new ThatchDB(dbPath);
-    db.runtimeStatePut("buffer", "ses_a", [ix("ses_a")]);
-    db.runtimeStatePut("buffer", "ses_a", [ix("ses_a"), ix("ses_a", "read")]);
-    db.runtimeStatePut("wrapup", "ses_b", { token: "T", kind: "compact" });
+    db.runtimeStatePut("buffer", "ses_a", [ix("ses_a")], "/test/dir");
+    db.runtimeStatePut("buffer", "ses_a", [ix("ses_a"), ix("ses_a", "read")], "/test/dir");
+    db.runtimeStatePut("wrapup", "ses_b", { token: "T", kind: "compact" }, "/test/dir");
 
     const rows = db.runtimeStateAll();
     expect(rows).toHaveLength(2);
@@ -140,19 +142,18 @@ describe("runtime rehydration through server()", () => {
     const db = new ThatchDB(dbPath);
     // Reload case: written by THIS process (a v2 plugin reload re-runs
     // setup() in the same pid).
-    db.runtimeStatePut("buffer", "ses_reload", [ix("ses_reload")]);
+    db.runtimeStatePut("buffer", "ses_reload", [ix("ses_reload")], WORK_DIR);
     // Restart case: foreign pid (the api stamps the current pid by default,
     // so override), no startup resume -> pruned.
-    db.runtimeStatePut("buffer", "ses_dead", [ix("ses_dead")], process.pid + 999);
+    db.runtimeStatePut("buffer", "ses_dead", [ix("ses_dead")], WORK_DIR, process.pid + 999);
     db.close();
 
-    delete process.env.THATCH_DB_PATH; // ensure the env of other suites leaks nothing
-    process.env.THATCH_DB_PATH = dbPath;
-    const prevConfig = process.env.XDG_CONFIG_HOME;
-    process.env.XDG_CONFIG_HOME = join(dbDir, "config");
-
     let hooks: { dispose?: () => Promise<void> } | undefined;
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevDbPath = process.env.THATCH_DB_PATH;
     try {
+      process.env.THATCH_DB_PATH = dbPath;
+      process.env.XDG_CONFIG_HOME = join(dbDir, "config");
       const mockClient = {
         session: {
           prompt: async () => {},
@@ -169,7 +170,7 @@ describe("runtime rehydration through server()", () => {
           publish: async () => ({ data: true }),
         },
       };
-      hooks = (await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree" } as any)) as any;
+      hooks = (await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree", directory: WORK_DIR } as any)) as any;
       const toolMap = (hooks as any)?.tool as Record<string, { execute: (input: unknown, host?: unknown) => Promise<unknown> }>;
 
       // Reload row rehydrated: the payload tool serves the buffered entry.
@@ -187,7 +188,62 @@ describe("runtime rehydration through server()", () => {
       await hooks?.dispose?.();
       if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
       else process.env.XDG_CONFIG_HOME = prevConfig;
-      delete process.env.THATCH_DB_PATH;
+      if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+      else process.env.THATCH_DB_PATH = prevDbPath;
+    }
+  });
+
+  test("a second instance on the same db does not hydrate the first's watchers", async () => {
+    // Two location instances share one server process AND one db: instance
+    // scoping is the directory column, not the pid. Instance B must leave
+    // instance A's rows alone (a live sibling owns them) and must not arm
+    // its pollers with A's watchers.
+    const dirA = "/tmp/thatch-state-a";
+    const dirB = "/tmp/thatch-state-b";
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut("watchers", "ses_a1", [{ id: "watch_a", source: "pr", sessionID: "ses_a1", repo: "sysread/thatch", pr: 16, events: ["pr_commit"], once: false, expiresAt: Date.now() + 600_000, createdAt: Date.now(), state: { headSha: "aaaa1111" } }], dirA);
+    db.close();
+
+    process.env.THATCH_DB_PATH = dbPath;
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    let hooksA: { dispose?: () => Promise<void> } | undefined;
+    let hooksB: { dispose?: () => Promise<void> } | undefined;
+    try {
+      process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+      const mockClient = {
+        session: {
+          prompt: async () => {}, promptAsync: async () => {}, create: async () => ({ data: { id: "c" } }),
+          delete: async () => {}, messages: async () => ({ data: [] }), status: async () => ({ data: {} }), list: async () => ({ data: [] }),
+        },
+        tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
+      };
+      hooksA = (await server({ client: mockClient, worktree: dirA, directory: dirA } as any)) as any;
+      hooksB = (await server({ client: mockClient, worktree: dirB, directory: dirB } as any)) as any;
+
+      // Instance A rehydrated its watcher (same pid, same directory).
+      // Instance B must not see it in its own runtime. Observable: B's
+      // tool-level watcher list is empty. Drive through B's watch_list tool.
+      const listB = await (hooksB as any).tool.thatch_watch_list.execute({}, { sessionID: "ses_b1", agent: "build" });
+      const textB = typeof listB === "string" ? listB : JSON.stringify(listB);
+      expect(textB).not.toContain("watch_a");
+      // A still lists it.
+      const listA = await (hooksA as any).tool.thatch_watch_list.execute({}, { sessionID: "ses_a1", agent: "build" });
+      const textA = typeof listA === "string" ? listA : JSON.stringify(listA);
+      expect(textA).toContain("watch_a");
+
+      // A's journal row survived B's setup (a live sibling - not pruned).
+      const check = new ThatchDB(dbPath);
+      const rows = check.runtimeStateAll();
+      expect(rows.some((r) => r.kind === "watchers" && r.sessionID === "ses_a1")).toBe(true);
+      check.close();
+    } finally {
+      await hooksA?.dispose?.();
+      await hooksB?.dispose?.();
+      if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevConfig;
+      if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+      else process.env.THATCH_DB_PATH = prevDbPath;
     }
   });
 });

@@ -181,13 +181,18 @@ export class SharedModelPool {
     return created.model;
   }
 
-  release(dbPath: string): void {
+  /**
+   * Release one reference. Resolves when the model's ONNX sessions are
+   * released (at zero refs) - the caller MUST await it before its process
+   * can exit, or Bun's NAPI finalizers panic on teardown.
+   */
+  async release(dbPath: string): Promise<void> {
     const entry = this.#entries.get(dbPath);
     if (!entry) return;
     entry.refs -= 1;
     if (entry.refs <= 0) {
-      void entry.model.dispose();
       this.#entries.delete(dbPath);
+      await entry.model.dispose();
     }
   }
 

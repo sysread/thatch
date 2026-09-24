@@ -25,41 +25,54 @@ memory is therefore lost across both events:
 
 ## Design
 
-### 1. Runtime state journal (SQLite)
+### 1. Runtime state journal (SQLite, instance-scoped)
 
 New table in ThatchDB:
 
 ```sql
 CREATE TABLE IF NOT EXISTS runtime_state (
-  kind TEXT NOT NULL,          -- 'buffer' | 'child' | 'wrapup' | ...
+  kind       TEXT NOT NULL,   -- 'buffer' | 'accepted' | 'child' | 'wrapup' | 'watchers'
   session_id TEXT NOT NULL,
-  seq INTEGER NOT NULL,        -- ordering within kind+session
-  value TEXT NOT NULL,         -- JSON
-  pid INTEGER NOT NULL,        -- writer's process id
+  directory  TEXT NOT NULL,   -- the writing instance's location - the scoping key
+  value      TEXT NOT NULL,   -- JSON
+  pid        INTEGER NOT NULL,-- writer's process id
   created_at TEXT NOT NULL DEFAULT (strftime('%s','now'))
 );
 ```
 
-Write-through at the mutation points (buffer push/consume/completeAccepted,
-child create/adopt/clear, wrap-up arm/resolve). The `pid` column is the
-restart discriminator: v2 reload re-runs `setup()` in the same process, so a
-matching pid means "reload - keep and rehydrate"; a different pid means
-"restart - the old sessions died with their harness".
+Write-through at the mutation points (buffer push/consume/accept/complete/
+requeue, child create/adopt/clear, wrap-up arm/resolve, watcher membership).
+The pid AND directory columns together are the partition key: one v2 serve
+hosts one plugin instance PER LOCATION in one process, so pid alone cannot
+scope rehydration (instance B would hydrate instance A's watchers and poll
+them N-fold).
 
 ### 2. Rehydrate-and-prune on setup
 
-`createRuntime` loads persisted state, then partitions by pid:
+`createRuntime` partitions the journal by (pid, directory):
 
-- **Same pid (reload)**: restore everything - buffers, child maps,
-  pendingWrapUp - and re-arm the watchers (recreate their pollers from the
-  persisted definitions).
-- **Different pid (restart)**: keep only state whose session is the startup
-  session (`-s`/`-c` resolved id; the resumed conversation continues and
-  inherits its buffer and watches - this also makes crash recovery work on
-  v1). Everything else is pruned.
+- **Same pid + same directory (reload)**: restore everything - buffers,
+  child bookkeeping, pendingWrapUp - and re-arm the watchers (the registry
+  rebuilds its pollers from the persisted definitions). The v2 adapter also
+  re-seeds its event-forwarding child set from the runtime's rehydrated
+  child map, so below-root launches keep receiving child events.
+- **Same pid + other directory**: a live sibling instance's rows - untouched
+  (never hydrated, never pruned).
+- **Foreign pid (restart)**: sessions die with their harness. Only a
+  startup-resumed session (`-s`/`-c`) in this directory inherits
+  recovery-safe state: the buffer rehydrates, and a dead extraction child's
+  snapshot is requeued as plain pending entries (extraction stays available;
+  `extracting` is NOT restored - the child's events died with the process
+  and a live `extracting` entry would suppress both extraction paths
+  forever). Armed wrap-ups and child bookkeeping are dropped across a
+  restart: an inherited wrap-up could auto-fire compact/exit on the resumed
+  session's first idle.
 
-This replaces "silent loss" with "reload = resume, restart = intentional
-handoff to the resumed session".
+Restored sessions get a synthetic, noReply re-attach notice so they know
+the plugin is back (the reload happened outside their event stream).
+
+This replaces "silent loss" with "reload = resume, restart = crash recovery
+for the resumed session".
 
 ### 3. resumedSession scalar -> Set
 

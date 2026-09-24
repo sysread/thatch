@@ -80,6 +80,13 @@ export interface ThatchRuntime {
   coreContext: CoreContext;
   /** The host-agnostic diagnostic log (THATCH_DEBUG; no-op when unset). */
   debug(tag: string, message: string): void;
+  /**
+   * Session IDs with live child bookkeeping (in-flight extraction children).
+   * The v2 adapter seeds its event-forwarding set from this after a reload:
+   * the rehydrated child maps must be visible to the pump's directory
+   * filter, or a below-root launch drops the child's events again.
+   */
+  childSessionIds(): string[];
   onSystemTransform(output: { system: string[] }): Promise<void>;
   onSessionCompacting(input: { sessionID: string }, output: { context: string[] }): Promise<void>;
   onCompactionAutocontinue(input: { sessionID: string }): Promise<void>;
@@ -136,7 +143,7 @@ export async function createRuntime(input: {
   // (same process, graph rebuilt) can rehydrate it.
   const extraction = new ExtractionPipeline((kind, sessionID, value) => {
     if (value === undefined) db.runtimeStateDelete(kind, sessionID);
-    else db.runtimeStatePut(kind, sessionID, value);
+    else db.runtimeStatePut(kind, sessionID, value, directory);
   });
 
   // Seed default behaviors into the global store on first run, and
@@ -213,7 +220,7 @@ export async function createRuntime(input: {
     // re-arm them; the registry journals after every membership change.
     journal: (sessionID, sessionWatchers) => {
       if (sessionWatchers.length === 0) db.runtimeStateDelete("watchers", sessionID);
-      else db.runtimeStatePut("watchers", sessionID, sessionWatchers);
+      else db.runtimeStatePut("watchers", sessionID, sessionWatchers, directory);
     },
     deliver: async (sessionID, events) => {
       // Events carry their watch's target label from the registry, so the
@@ -449,7 +456,7 @@ export async function createRuntime(input: {
       parentID,
       snapshot: parentSnapshots.get(childId) ?? [],
       metrics: childMetrics.get(childId) ?? { new: 0, updated: 0, deleted: 0 },
-    });
+    }, directory);
   };
 
   // Wrap-up slash commands (/thatch/compact, /thatch/exit) awaiting their
@@ -462,50 +469,102 @@ export async function createRuntime(input: {
   const pendingWrapUp = new Map<string, { token: string; kind: "compact" | "exit" }>();
 
   // Rehydrate persisted runtime state (docs/plans/plugin-state-persistence.md).
-  // The writer's pid splits the journal: rows from THIS process mean a v2
-  // plugin reload (the location graph rebuilt around us - keep everything);
-  // rows from another pid mean a process restart, whose sessions died with
-  // their harness - only a startup-resumed session (-s/-c) inherits state
-  // (crash recovery), the rest is pruned. Without a chat startup target there
-  // is nothing to inherit, so a restart prunes everything.
-  const persisted = db.runtimeStateAll();
-  for (const row of persisted) {
-    const keep = row.pid === process.pid || (startupSession !== undefined && row.sessionID === startupSession);
-    if (keep) continue;
-    db.runtimeStateDelete(row.kind, row.sessionID);
-  }
-  const rehydrated = persisted.filter((row) => {
-    return row.pid === process.pid || (startupSession !== undefined && row.sessionID === startupSession);
-  });
-  if (rehydrated.length > 0) {
-    let counts = "";
-    for (const row of rehydrated) {
-      if (row.kind === "buffer") extraction.hydrate(row.value as ToolInteraction[], []);
-      else if (row.kind === "accepted") extraction.hydrate([], row.value as ToolInteraction[]);
-      else if (row.kind === "wrapup") pendingWrapUp.set(row.sessionID, row.value as { token: string; kind: "compact" | "exit" });
-      else if (row.kind === "child") {
-        const rec = row.value as { parentID?: string; snapshot?: ToolInteraction[]; metrics?: { new: number; updated: number; deleted: number } };
-        if (rec?.parentID) {
-          childToParent.set(row.sessionID, rec.parentID);
-          parentSnapshots.set(row.sessionID, rec.snapshot ?? []);
-          extractionChildren.add(row.sessionID);
-          extracting.add(rec.parentID);
-          if (rec.metrics) childMetrics.set(row.sessionID, rec.metrics);
-        } else {
-          db.runtimeStateDelete(row.kind, row.sessionID);
-        }
-      } else if (row.kind === "watchers") {
-        watchers.hydrate((row.value ?? []) as Watcher[]);
-      }
+  // Rows are instance-scoped (kind+session, tagged with the writer's pid and
+  // location directory):
+  // - same pid, same directory: a v2 plugin reload rebuilt THIS instance's
+  //   graph - rehydrate everything.
+  // - same pid, other directory: a live sibling instance's rows (one serve
+  //   hosts one instance per location) - leave them alone; hydrating them
+  //   would double-poll watchers and re-deliver another instance's state.
+  // - foreign pid: a process restart, whose sessions died with their
+  //   harness. Only a startup-resumed session (-s/-c) in this directory
+  //   inherits recovery-safe state; everything else is pruned.
+  const rehydratedSessions = new Set<string>();
+  const rehydrated: Record<string, number> = {};
+  for (const row of db.runtimeStateAll()) {
+    const samePid = row.pid === process.pid;
+    const ownDirectory = row.directory === directory;
+    const isStartup = startupSession !== undefined && row.sessionID === startupSession;
+    if (samePid && !ownDirectory) continue; // live sibling - untouched
+    if (!samePid && !(isStartup && ownDirectory)) {
+      db.runtimeStateDelete(row.kind, row.sessionID);
+      continue;
     }
-    const byKind = rehydrated.reduce<Record<string, number>>((acc, row) => {
-      acc[row.kind] = (acc[row.kind] ?? 0) + 1;
-      return acc;
-    }, {});
-    counts = Object.entries(byKind)
+    if (row.kind === "buffer") {
+      extraction.hydrate(row.value as ToolInteraction[], []);
+    } else if (row.kind === "accepted") {
+      extraction.hydrate([], row.value as ToolInteraction[]);
+    } else if (row.kind === "watchers") {
+      watchers.hydrate((row.value ?? []) as Watcher[]);
+    } else if (row.kind === "child") {
+      const rec = row.value as { parentID?: string; snapshot?: ToolInteraction[]; metrics?: { new: number; updated: number; deleted: number } };
+      if (samePid && rec?.parentID) {
+        // Reload: the child may still be running - restore its live
+        // bookkeeping so its idle event finds the maps populated.
+        childToParent.set(row.sessionID, rec.parentID);
+        parentSnapshots.set(row.sessionID, rec.snapshot ?? []);
+        extractionChildren.add(row.sessionID);
+        extracting.add(rec.parentID);
+        if (rec.metrics) childMetrics.set(row.sessionID, rec.metrics);
+      } else {
+        // Restart: the child ran in the dead process and no execution event
+        // will ever arrive for it. Recover the snapshot as plain pending
+        // entries (extraction stays available) and drop the record - never
+        // restore `extracting`, which would suppress both extraction paths
+        // for the resumed session forever.
+        if (isStartup && rec?.parentID === startupSession && Array.isArray(rec.snapshot)) {
+          for (const interaction of rec.snapshot) extraction.push(interaction);
+        }
+        db.runtimeStateDelete(row.kind, row.sessionID);
+        continue;
+      }
+    } else if (row.kind === "wrapup") {
+      if (!samePid) {
+        // An armed wrap-up inherited across a restart could auto-fire
+        // compact/exit on the resumed session's first idle if the final
+        // message already carries the token. Too dangerous to inherit.
+        db.runtimeStateDelete(row.kind, row.sessionID);
+        continue;
+      }
+      pendingWrapUp.set(row.sessionID, row.value as { token: string; kind: "compact" | "exit" });
+    } else {
+      continue; // unknown kind - leave it for a future version
+    }
+    rehydrated[row.kind] = (rehydrated[row.kind] ?? 0) + 1;
+    rehydratedSessions.add(row.sessionID);
+  }
+  if (Object.keys(rehydrated).length > 0) {
+    const counts = Object.entries(rehydrated)
       .map(([kind, n]) => `${kind}=${n}`)
       .join(" ");
     debug("runtime:rehydrate", `restored ${counts}`);
+    // Ping the restored sessions directly: the reload/restart happened
+    // outside their event stream, so without this the sessions would not
+    // know the plugin is back (and the pump's hosted set would wait for
+    // their next event to re-form). Synthetic + noReply: never starts a
+    // model turn, and on v2 session.synthetic is TUI-hidden.
+    for (const sessionID of rehydratedSessions) {
+      if (!chatOn) break;
+      void caps
+        .promptSession(
+          sessionID,
+          {
+            parts: [
+              {
+                type: "text",
+                text: "[thatch] plugin reloaded - persisted state restored (extraction buffers, watchers, wrap-ups). No action needed.",
+                synthetic: true,
+              },
+            ],
+            noReply: true,
+          },
+          "async",
+        )
+        .catch(() => {
+          // The session may be gone (restart prune edge) - the poller's
+          // normal gates handle delivery; nothing to do here.
+        });
+    }
   }
 
   // Skills always install to the global opencode config - installing into the
@@ -638,6 +697,7 @@ export async function createRuntime(input: {
       projectDir: worktree,
     }),
     debug,
+    childSessionIds: () => [...extractionChildren],
 
     // 1. System prompt - always in context.
     onSystemTransform: async (output) => {
@@ -820,7 +880,7 @@ export async function createRuntime(input: {
         pendingWrapUp.set(input.sessionID, wrapUp);
         // Journaled so a v2 plugin reload before the session's next idle
         // does not silently drop the armed wrap-up.
-        db.runtimeStatePut("wrapup", input.sessionID, wrapUp);
+        db.runtimeStatePut("wrapup", input.sessionID, wrapUp, directory);
       }
     },
 
@@ -1389,7 +1449,7 @@ export async function createRuntime(input: {
       stopVersionChecker();
       watchers.dispose();
       chatPoller.dispose();
-      releaseModel();
+      await releaseModel();
       // Note: the runtime_state journal is deliberately NOT cleared here.
       // Disposal happens before every v2 plugin reload, and the reloaded
       // setup() rehydrates from it; stale rows from dead processes are
