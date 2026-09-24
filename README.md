@@ -44,8 +44,11 @@ The v2 plugin API is missing a few surfaces the v1 API had. On 2.x:
 - **Plugin state survives reloads.** Editing the plugin (or `opencode
   plugin update`) reloads it, but extraction buffers, watcher
   registrations, and armed wrap-ups are journaled and restored; a process
-  restart restores the state of a resumed (`-c`/`-s`) session and prunes
-  the rest.
+  restart restores the state of a resumed (`-c`/`-s`) session. Other
+  sessions' watcher registrations survive as dormant definitions: resuming
+  such a session re-arms its watches on the first message (expired ones
+  are dropped and reported), and a live session in the same project gets a
+  one-line notice that a dead session's watch will re-arm if resumed.
 - **Extraction children are visible.** The fact-extractor child sessions are
   top-level sessions the host cannot delete, so they accumulate in the
   session picker, and "continue last session" (`-c`) can land in one after

@@ -252,6 +252,90 @@ describe("runtime rehydration through server()", () => {
   });
 });
 
+describe("WatcherRegistry rearm (dormant recovery)", () => {
+  const makeRegistry2 = (journal?: (sessionID: string, watchers: any[]) => void) =>
+    new WatcherRegistry({
+      deliver: async () => {},
+      canDeliver: () => false,
+      ghRunner: async () => {
+        throw new Error("no network in tests");
+      },
+      journal,
+      pollIntervalMs: 60_000,
+    });
+  const def = (id: string, sessionID: string, overrides: Record<string, unknown> = {}): any => ({
+    id,
+    source: "pr",
+    sessionID,
+    repo: "sysread/thatch",
+    pr: 16,
+    events: ["pr_commit"],
+    once: false,
+    expiresAt: Date.now() + 600_000,
+    createdAt: Date.now(),
+    state: { headSha: "aaaa1111" },
+    ...overrides,
+  });
+
+  test("rearm restores definitions and rewrites the journal under the current pid", () => {
+    const journal: { sessionID: string; watchers: any[] }[] = [];
+    const registry = makeRegistry2((sessionID, watchers) => journal.push({ sessionID, watchers }));
+    const res = registry.rearm("ses_w", [def("watch_d1", "ses_w")]);
+    expect(res.rearmed).toHaveLength(1);
+    expect(res.expired).toBe(0);
+    expect(registry.listForSession("ses_w").map((w) => w.id)).toEqual(["watch_d1"]);
+    // The journal rewrite is the point: the dormant row now belongs to this
+    // process, so the next reload rehydrates it live.
+    expect(journal.at(-1)).toEqual({ sessionID: "ses_w", watchers: res.rearmed });
+  });
+
+  test("rearm drops expired definitions and reports the count; an all-expired rearm clears the row", () => {
+    const journal: { sessionID: string; watchers: any[] }[] = [];
+    const registry = makeRegistry2((sessionID, watchers) => journal.push({ sessionID, watchers }));
+    const res = registry.rearm("ses_w", [
+      def("watch_old", "ses_w", { expiresAt: Date.now() - 1000, createdAt: Date.now() - 5000 }),
+      def("watch_fresh", "ses_w"),
+    ]);
+    expect(res.rearmed.map((w) => w.id)).toEqual(["watch_fresh"]);
+    expect(res.expired).toBe(1);
+
+    const gone = makeRegistry2((sessionID, watchers) => journal.push({ sessionID, watchers }));
+    const res2 = gone.rearm("ses_x", [def("watch_old", "ses_x", { expiresAt: Date.now() - 1000 })]);
+    expect(res2.rearmed).toHaveLength(0);
+    expect(res2.expired).toBe(1);
+    // Nothing re-armed -> the journal emits an empty list, deleting the row.
+    expect(journal.at(-1)).toEqual({ sessionID: "ses_x", watchers: [] });
+  });
+
+  test("rearm caps at the per-session limit, newest first", () => {
+    const registry = makeRegistry2();
+    registry.hydrate([
+      def("live_1", "ses_w", { createdAt: 1 }),
+      def("live_2", "ses_w", { createdAt: 2 }),
+      def("live_3", "ses_w", { createdAt: 3 }),
+      def("live_4", "ses_w", { createdAt: 4 }),
+    ]);
+    const res = registry.rearm("ses_w", [
+      def("dormant_old", "ses_w", { createdAt: 10 }),
+      def("dormant_new", "ses_w", { createdAt: 20 }),
+      def("dormant_newest", "ses_w", { createdAt: 30 }),
+    ]);
+    // Budget: 5 max - 4 live = 1 slot, filled by the newest dormant def.
+    expect(res.rearmed.map((w) => w.id)).toEqual(["dormant_newest"]);
+    expect(registry.listForSession("ses_w")).toHaveLength(5);
+  });
+
+  test("rearm does not clobber a live watcher re-registered after the restart", () => {
+    const registry = makeRegistry2();
+    const live = def("watch_x", "ses_w", { state: { headSha: "live-sha" } });
+    registry.hydrate([live]);
+    registry.rearm("ses_w", [def("watch_x", "ses_w", { state: { headSha: "stale-sha" } })]);
+    const now = registry.listForSession("ses_w").find((w) => w.id === "watch_x");
+    expect((now as any).state.headSha).toBe("live-sha");
+    expect(registry.listForSession("ses_w")).toHaveLength(1);
+  });
+});
+
 describe("hostedSessionIds (reload re-hosting)", () => {
   test("rehosted sessions join the hosted set; children and duplicates excluded", () => {
     const hosted = hostedSessionIds({
@@ -261,5 +345,149 @@ describe("hostedSessionIds (reload re-hosting)", () => {
       exclude: ["ses_child"],
     });
     expect(hosted.sort()).toEqual(["ses_rehydrated", "ses_resumed", "ses_seen"]);
+  });
+});
+
+describe("dormant watcher recovery through server()", () => {
+  const prDef = (id: string, sessionID: string, overrides: Record<string, unknown> = {}): any => ({
+    id,
+    source: "pr",
+    sessionID,
+    repo: "sysread/thatch",
+    pr: 16,
+    events: ["pr_commit"],
+    once: false,
+    expiresAt: Date.now() + 600_000,
+    createdAt: Date.now(),
+    state: { headSha: "aaaa1111" },
+    ...overrides,
+  });
+  const mockClient = {
+    session: {
+      prompt: async () => {}, promptAsync: async () => {}, create: async () => ({ data: { id: "c" } }),
+      delete: async () => {}, messages: async () => ({ data: [] }), status: async () => ({ data: {} }), list: async () => ({ data: [] }),
+    },
+    tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
+  };
+  const startServer = async () => {
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    process.env.THATCH_DB_PATH = dbPath;
+    process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+    const hooks = (await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree", directory: WORK_DIR } as any)) as any;
+    return {
+      hooks,
+      finally: async () => {
+        await hooks?.dispose?.();
+        if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+        else process.env.XDG_CONFIG_HOME = prevConfig;
+        if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+        else process.env.THATCH_DB_PATH = prevDbPath;
+      },
+    };
+  };
+  // Short prompt (< MIN_PROMPT_LEN): the recall nudge's embedding-model path
+  // stays untouched, keeping the test hermetic.
+  const sendMessage = async (hooks: any, sessionID: string): Promise<any[]> => {
+    const output: any = { parts: [{ type: "text", text: "hi" }], message: { id: `msg_${sessionID}` } };
+    await hooks["chat.message"]({ sessionID, messageID: output.message.id }, output);
+    return output.parts;
+  };
+
+  test("a restarted session's dormant watchers re-arm on its first message", async () => {
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut("watchers", "ses_w", [prDef("watch_w", "ses_w")], WORK_DIR, -1);
+    db.close();
+
+    const { hooks, finally: done } = await startServer();
+    try {
+      const parts = await sendMessage(hooks, "ses_w");
+      const rearm = parts.find((p: any) => p.synthetic && p.text.includes("re-armed"));
+      expect(rearm).toBeTruthy();
+      expect(rearm.text).toContain("sysread/thatch#16");
+
+      // The watcher is live in the registry: watch_list shows it.
+      const list = await hooks.tool.thatch_watch_list.execute({}, { sessionID: "ses_w" });
+      expect(typeof list === "string" ? list : JSON.stringify(list)).toContain("watch_w");
+
+      // The journal row now belongs to this process, so the next reload
+      // rehydrates it live instead of re-dormanting it.
+      const check = new ThatchDB(dbPath);
+      const row = check.runtimeStateAll().find((r) => r.kind === "watchers" && r.sessionID === "ses_w");
+      expect(row?.pid).toBe(process.pid);
+      check.close();
+    } finally {
+      await done();
+    }
+  });
+
+  test("a live session hears one death notice about dead sessions' watchers; the next session hears none", async () => {
+    // A process that already exited: a genuinely dead pid, not a guess.
+    const deadPid = Bun.spawnSync(["true"]).pid;
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut("watchers", "ses_d1", [prDef("watch_d1", "ses_d1")], WORK_DIR, deadPid);
+    db.close();
+
+    const { hooks, finally: done } = await startServer();
+    try {
+      const p1 = await sendMessage(hooks, "ses_live1");
+      const notice = p1.find((p: any) => p.synthetic && p.text.includes("no longer running"));
+      expect(notice).toBeTruthy();
+      expect(notice.text).toContain("sysread/thatch#16");
+      // The dormant row survives the notice - its session may still be
+      // resumed, and resuming re-arms it.
+      const mid = new ThatchDB(dbPath);
+      expect(mid.runtimeStateAll().some((r) => r.sessionID === "ses_d1")).toBe(true);
+      mid.close();
+
+      // Deduplicated per process per target: a second live session hears
+      // nothing.
+      const p2 = await sendMessage(hooks, "ses_live2");
+      expect(p2.some((p: any) => p.synthetic && p.text.includes("no longer running"))).toBe(false);
+    } finally {
+      await done();
+    }
+  });
+
+  test("a live sibling process's watcher rows are never reported dead", async () => {
+    // A v1 sibling TUI window: its own process, same project db, alive for
+    // the duration of the test.
+    const sibling = Bun.spawn(["sleep", "5"]);
+    try {
+      const db = new ThatchDB(dbPath);
+      db.runtimeStatePut("watchers", "ses_sib", [prDef("watch_s", "ses_sib")], WORK_DIR, sibling.pid);
+      db.close();
+
+      const { hooks, finally: done } = await startServer();
+      try {
+        const parts = await sendMessage(hooks, "ses_live");
+        expect(parts.some((p: any) => p.synthetic && p.text.includes("no longer running"))).toBe(false);
+      } finally {
+        await done();
+      }
+    } finally {
+      sibling.kill();
+    }
+  });
+
+  test("dormant rows age out at setup past the watcher TTL plus grace", async () => {
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut(
+      "watchers",
+      "ses_old",
+      [prDef("watch_o", "ses_old", { expiresAt: Date.now() - 25 * 60 * 60 * 1000, createdAt: Date.now() - 26 * 60 * 60 * 1000 })],
+      WORK_DIR,
+      -1,
+    );
+    db.close();
+
+    const { finally: done } = await startServer();
+    try {
+      const check = new ThatchDB(dbPath);
+      expect(check.runtimeStateAll().some((r) => r.sessionID === "ses_old")).toBe(false);
+      check.close();
+    } finally {
+      await done();
+    }
   });
 });

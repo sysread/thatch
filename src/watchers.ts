@@ -393,6 +393,17 @@ export async function ghApiRunWithTimeout(apiArgs: string[], timeoutMs: number):
   }
 }
 
+/**
+ * The stable target label a watcher reports in events, lists, and recovery
+ * notices: "owner/repo#N" for PRs, "owner/repo@branch" for branches, and a
+ * one-line clip of the command for command watches.
+ */
+export function watcherTarget(watcher: Watcher): string {
+  if (watcher.source === "pr") return `${watcher.repo}#${watcher.pr}`;
+  if (watcher.source === "branch") return `${watcher.repo}@${watcher.branch}`;
+  return commandTargetLabel(watcher.command);
+}
+
 let ghAvailability: boolean | null = null;
 
 /**
@@ -913,6 +924,29 @@ export class WatcherRegistry {
   }
 
   /**
+   * Re-arms persisted watcher definitions recovered on session resume after
+   * a restart (the dormant journal rows the runtime keeps instead of
+   * pruning). Definitions whose TTL expired while the session was away are
+   * dropped - a watch that outlived its own expiry must not fire on a stale
+   * baseline. The rest join the live registry newest-first up to the
+   * per-session limit (the session may have created watchers since the
+   * restart), and the journal is rewritten either way: with the current
+   * process's pid when anything re-arms, deleted when nothing does.
+   */
+  rearm(sessionID: string, defs: Watcher[]): { rearmed: Watcher[]; expired: number } {
+    const now = Date.now();
+    const fresh = defs.filter((w) => now <= w.expiresAt).sort((a, b) => b.createdAt - a.createdAt);
+    const budget = Math.max(0, this.#opts.maxPerSession - this.listForSession(sessionID).length);
+    const rearmed = fresh.slice(0, budget);
+    for (const w of rearmed) {
+      // Do not clobber a watcher created after the journal was written.
+      if (!this.#watchers.has(w.id)) this.#watchers.set(w.id, w);
+    }
+    this.#emit(sessionID);
+    return { rearmed, expired: defs.length - fresh.length };
+  }
+
+  /**
    * Registers a PR watcher and captures the baseline state immediately. The
    * baseline fetch doubles as validation: a bad repo, missing PR, or broken
    * gh setup fails here with a real error instead of a watcher that never
@@ -1140,7 +1174,7 @@ export class WatcherRegistry {
   async #pollOne(watcher: Watcher): Promise<WatcherEvent[]> {
     if (watcher.source === "pr") {
       const after = await fetchPrState(this.#opts.ghRunner, watcher.repo, watcher.pr);
-      const events = diffPrState(watcher.state, after, `${watcher.repo}#${watcher.pr}`, this.#prUrl(watcher))
+      const events = diffPrState(watcher.state, after, watcherTarget(watcher), this.#prUrl(watcher))
         .filter((e) => watcher.events.includes(e.type as PrWatcherEventType));
       watcher.state = after;
       return events;
@@ -1156,13 +1190,13 @@ export class WatcherRegistry {
       if (result.timedOut || result.exitCode !== 0) return [];
       return [{
         type: "command_success",
-        target: commandTargetLabel(watcher.command),
+        target: watcherTarget(watcher),
         summary: `command exited 0 (took ${(result.durationMs / 1000).toFixed(1)}s)`,
         url: "",
       }];
     }
     const after = await fetchBranchState(this.#opts.ghRunner, watcher.repo, watcher.branch);
-    const all = diffBranchState(watcher.state, after, `${watcher.repo}@${watcher.branch}`, watcher.repo);
+    const all = diffBranchState(watcher.state, after, watcherTarget(watcher), watcher.repo);
     watcher.state = after;
     // The workflow-name filter narrows branch_workflow events only -
     // commits and check runs pass through unfiltered, or a watch filtered

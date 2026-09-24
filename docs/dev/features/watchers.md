@@ -44,10 +44,15 @@ The registry lives in plugin memory, never in SQLite. Three reasons:
    in-memory; the file-backed queue exists only for the MCP path's
    separate short-lived hook processes.
 
-The cost: a restart loses watches. Accepted because the session that
-created them loses its conversational context too - a notification
-into a session that no longer knows why it is being watched is worse
-than a lost watch.
+The cost used to be "a restart loses watches", accepted because the
+session that created them loses its conversational context too - a
+notification into a session that no longer knows why it is being
+watched is worse than a lost watch. The dormant-recovery layer keeps
+the best of both: the definition survives the restart (journaled),
+nothing polls or delivers while its session is away, and resuming the
+session re-arms the watches into a session that again knows why it is
+being watched. See the `runtime_state` row in
+`docs/dev/features/opencode-plugin.md` for the journal mechanics.
 
 `session.deleted` also cancels the session's watchers and pending
 events, and `dispose` stops the poller. These are cheap insurance;

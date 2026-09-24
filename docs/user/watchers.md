@@ -111,9 +111,21 @@ Other tools:
 
 ## Lifetime
 
-Watchers are in-memory and process-scoped:
+Watchers poll from the plugin process, and their definitions survive
+restarts:
 
-- Ending the opencode process (or restarting it) drops all watchers.
+- Ending the opencode process (or restarting it) stops the polling.
+  The watch definitions are kept, though: when you resume the session
+  that created them (session picker, or reopening the tab), the
+  watches re-arm automatically on the session's first message, and a
+  notice in the conversation says what was re-armed. There is no
+  re-registration step - the policy you stated when creating the
+  watch is still there.
+- Watch definitions whose 8-hour TTL expired while the session was
+  away are not re-armed; the re-arm notice reports how many expired.
+- If a watched session is never resumed, a live session in the same
+  project hears a one-line notice that the watch died with its
+  session, so a watch that will never fire is at least explained.
 - A watcher expires after 8 hours by default.
 - Each session can hold up to 5 active watchers (all sources share
   the budget).
@@ -122,10 +134,6 @@ Watchers are in-memory and process-scoped:
   afterwards. Standing watches (the default) keep going until they
   are cancelled, expire, or the process ends. Command watches are
   always one-shot.
-
-If opencode restarts while a watch is active, re-register it - the
-session's conversation survives, so the policy you stated is still
-there.
 
 ## Requirements and limitations
 

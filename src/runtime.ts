@@ -24,8 +24,8 @@ import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommand
 import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
-import { WatcherRegistry, ghApiRun, ghAvailable, runWatchedCommand, withCwdFallback, type Watcher } from "./watchers";
-import { watcherNotificationNudge, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
+import { WatcherRegistry, ghApiRun, ghAvailable, runWatchedCommand, watcherTarget, withCwdFallback, type Watcher } from "./watchers";
+import { watcherNotificationNudge, watcherRearmNotice, watcherDeathNotice, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
 import { ChatPoller, createWakeGate, hostedSessionIds, isDefaultSessionTitle } from "./chat";
 import { chatEnabled, chatAutoRegister, loadConfig } from "./config";
 import { osProcessArgs, startupSessionId, continuesLastSessionFromArgv, continuesLastSessionId } from "./os-args";
@@ -40,6 +40,24 @@ import pkg from "../package.json";
 // findDuplicates' 0.85 (near-dupes) because "relates to" is a weaker signal
 // than "duplicate." Tunable via THATCH_RECALL_THRESHOLD.
 const RECALL_THRESHOLD = parseFloat(process.env.THATCH_RECALL_THRESHOLD ?? "0.55");
+
+// How long a dormant watcher journal row (a restart kept it because its
+// session may yet be resumed) survives past its newest definition's TTL
+// before aging out. The TTL alone would kill the row the morning after an
+// overnight watch; the grace keeps recovery possible for sessions the user
+// returns to days later.
+const DORMANT_WATCHER_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * True when every definition in a dormant watcher row is past its TTL plus
+ * the dormant grace period - the row is a corpse no resume can usefully
+ * re-arm. An empty or malformed payload counts as stale.
+ */
+function dormantWatchersStale(defs: Watcher[]): boolean {
+  if (!Array.isArray(defs) || defs.length === 0) return true;
+  const lastExpiry = Math.max(...defs.map((w) => Number((w as { expiresAt?: number })?.expiresAt ?? 0)));
+  return Date.now() > lastExpiry + DORMANT_WATCHER_GRACE_MS;
+}
 
 /** Process-wide pool for the shared embedding models (see SharedModelPool). */
 const sharedModels = new SharedModelPool();
@@ -494,6 +512,16 @@ export async function createRuntime(input: {
     const isStartup = startupSession !== undefined && row.sessionID === startupSession;
     if (samePid && !ownDirectory) continue; // live sibling - untouched
     if (!samePid && !(isStartup && ownDirectory)) {
+      // Watcher definitions survive a restart as DORMANT rows instead of
+      // being pruned: the defining session's harness died with the old
+      // process, but the session itself is resumable (session picker, v2
+      // tab reopen), and resuming it re-arms the watches through
+      // scanDormantWatchers. Rows whose every definition outlived the
+      // watcher TTL plus the dormant grace period age out here instead -
+      // corpses of sessions that will probably never return.
+      if (row.kind === "watchers" && !dormantWatchersStale((row.value as Watcher[] | null) ?? [])) {
+        continue;
+      }
       db.runtimeStateDelete(row.kind, row.sessionID);
       continue;
     }
@@ -587,6 +615,68 @@ export async function createRuntime(input: {
       }
     }
   }
+
+  // Dormant watcher recovery (watcher-continuity fast-follow). A restart
+  // keeps foreign-pid watcher journal rows instead of pruning them (see the
+  // rehydration loop): the defining session's harness died, but the session
+  // is resumable. A resumed session's first message scans the dormant rows:
+  //   - the session's own rows re-arm into the live registry (no
+  //     re-registration step, so stated watch policy survives reboots);
+  //   - rows of other still-dead sessions in THIS directory earn the live
+  //     session a one-line death notice - a watch that will never fire is
+  //     at least heard about. Deduplicated per process per target, so one
+  //     active session hears about each corpse once;
+  //   - rows past the TTL plus the dormant grace age out silently.
+  // Death notices are gated on the owning pid actually being dead: a v1
+  // sibling process (separate TUI window, shared project db, different pid,
+  // still alive) owns live watchers that must never be reported dead.
+  const dormantScanned = new Set<string>();
+  const notifiedWatcherDeaths = new Set<string>();
+  const pidAlive = (pid: number): boolean => {
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      // ESRCH: no such process. Anything else (e.g. EPERM on a foreign-user
+      // pid) means the pid exists - fail toward "alive" and stay silent.
+      return (err as NodeJS.ErrnoException).code !== "ESRCH";
+    }
+  };
+  const scanDormantWatchers = (sessionID: string): string[] => {
+    if (dormantScanned.has(sessionID)) return [];
+    dormantScanned.add(sessionID);
+    try {
+      const rows = db.runtimeStateAll().filter((r) => r.kind === "watchers" && r.pid !== process.pid);
+      const own: Watcher[] = [];
+      const deadTargets = new Set<string>();
+      for (const row of rows) {
+        const defs = Array.isArray(row.value) ? (row.value as Watcher[]) : [];
+        if (dormantWatchersStale(defs)) {
+          db.runtimeStateDelete("watchers", row.sessionID);
+          continue;
+        }
+        if (row.sessionID === sessionID) {
+          // The startup-resume case hydrated these live at setup already -
+          // re-arming is a no-op there and the notice would be redundant.
+          if (!rehydratedSessions.has(sessionID)) own.push(...defs);
+        } else if (row.directory === directory && !pidAlive(row.pid)) {
+          for (const def of defs) deadTargets.add(watcherTarget(def));
+        }
+      }
+      const freshDeaths = [...deadTargets].filter((t) => !notifiedWatcherDeaths.has(t));
+      for (const t of freshDeaths) notifiedWatcherDeaths.add(t);
+      const { rearmed, expired } = own.length > 0 ? watchers.rearm(sessionID, own) : { rearmed: [], expired: 0 };
+      const notices: string[] = [];
+      if (rearmed.length > 0) notices.push(watcherRearmNotice(rearmed.map(watcherTarget), expired));
+      if (freshDeaths.length > 0) notices.push(watcherDeathNotice(freshDeaths));
+      return notices;
+    } catch (err) {
+      // Recovery must never break the message that triggered it.
+      console.error(`[thatch] dormant watcher scan failed for ${sessionID}: ${err}`);
+      return [];
+    }
+  };
 
   // Skills always install to the global opencode config - installing into the
   // worktree would mutate the user's repo (untracked files in git status).
@@ -912,6 +1002,30 @@ export async function createRuntime(input: {
       // nothing (and fire spurious toasts when thresholds cross). Skip
       // them entirely.
       if (isChatEchoParts(output.parts)) return;
+
+      // Dormant watcher recovery: a resumed session's first message re-arms
+      // its restarted watchers and hears about dead ones (see
+      // scanDormantWatchers). Injected as synthetic parts - the same path
+      // nudges take, so the model sees them on every call of the turn -
+      // plus a best-effort toast for the human.
+      const rearmNotices = !childToParent.has(input.sessionID) ? scanDormantWatchers(input.sessionID) : [];
+      if (rearmNotices.length > 0) {
+        for (const text of rearmNotices) {
+          output.parts.push({
+            id: `prt_thatch_watch_${Math.random().toString(36).slice(2)}`,
+            sessionID: input.sessionID,
+            messageID: input.messageID ?? output.message.id,
+            type: "text",
+            text,
+            synthetic: true,
+          });
+        }
+        try {
+          await caps.showToast({ message: rearmNotices[0].split("\n")[0].replace("[thatch] ", "⏰ "), variant: "info", duration: 5000 });
+        } catch {
+          // TUI may not be connected. Best-effort.
+        }
+      }
 
       // Prompt-path registration: a brand-new session joins the chat
       // directory the moment its first real user message arrives - before

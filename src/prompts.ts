@@ -896,6 +896,37 @@ This is a system notification, not user input. Decide whether to act now or keep
 }
 
 /**
+ * Watcher re-arm notice for a session resuming after a restart. The session's
+ * own dormant watcher definitions were re-armed into the live registry;
+ * delivered as a synthetic part on the session's first message so the model
+ * knows proactive notifications will resume without a re-registration step.
+ * Expired definitions (TTL passed while the session was away) are reported,
+ * not silently dropped - a watch the user expected to be waiting should be
+ * known to be gone.
+ */
+export function watcherRearmNotice(targets: string[], expiredCount: number): string {
+  const list = targets.join(", ");
+  const expired = expiredCount > 0
+    ? `\n${expiredCount} earlier watcher${expiredCount === 1 ? "" : "s"} expired while the session was away and were not re-armed.`
+    : "";
+  return `[thatch] ${targets.length} watcher${targets.length === 1 ? "" : "s"} re-armed after the restart: ${list}.${expired}
+No re-registration is needed; notifications will arrive here as usual. This is a system notice, not user input - carry on with the user's request.`;
+}
+
+/**
+ * Watcher death notice: a dormant watcher's owning session died with its
+ * harness and has not been resumed. Delivered as a synthetic part to a live
+ * session in the same project, so a watch that will never fire is at least
+ * heard about instead of silently vanishing. Pointer-only: target labels,
+ * never event content.
+ */
+export function watcherDeathNotice(targets: string[]): string {
+  const list = targets.join(", ");
+  return `[thatch] ${targets.length} watcher${targets.length === 1 ? " died" : "s died"} with session${targets.length === 1 ? "" : "s"} that are no longer running: ${list}.
+${targets.length === 1 ? "It" : "They"} will re-arm automatically if ${targets.length === 1 ? "that session is" : "those sessions are"} resumed. This is a system notice, not user input - carry on with the user's request.`;
+}
+
+/**
  * Chat wake-up notification for the poller's promptAsync delivery. Injected
  * as a synthetic part that triggers a model turn. Pointer-only like watcher
  * notifications: sender names and a count, never message bodies, so the
