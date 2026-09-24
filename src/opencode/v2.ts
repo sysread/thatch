@@ -122,27 +122,44 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     );
   });
 
-  // System prompt: re-familiarization on every model request. The runtime
-  // pushes plain strings (the v1 contract); v2's system parts are
-  // { type: "text", text } objects, so convert at the boundary.
-  const registerSystem = await context.session.hook("context", async (request: { system: unknown[] }) => {
-    const pushed: string[] = [];
-    await runtime.onSystemTransform({ system: pushed });
-    for (const part of pushed) {
-      request.system.push(typeof part === "string" ? { type: "text", text: part } : part);
-    }
-  });
-
-  // Per-message nudges: the runtime computes injections once per user
-  // message (here, on the prompt clone) and the generate hook appends them
-  // to the OUTBOUND request's last user message. The stored user message
-  // stays clean: v1 delivered nudges as TUI-hidden synthetic parts, and
-  // v2's prompt text IS the stored message, so injecting there would echo
-  // the nudges into the visible transcript. The generate hook instead
-  // mutates only the wire request - invisible to the TUI and message list,
-  // visible to the model on every call of the turn, matching v1's
-  // persistent synthetic part.
+  // Model-request hook (kind "primary" = every normal user turn; v2 also
+  // has a "generate" hook, but it fires only for the plugin-invoked
+  // session.generate sub-request - it never fires for normal prompts,
+  // which the 2026-09-24 probe confirmed). Two jobs per model request:
+  // - system prompt: re-familiarization. The runtime pushes plain strings
+  //   (the v1 contract); v2's system parts are { type: "text", text }
+  //   objects, so convert at the boundary.
+  // - per-turn nudges: append the prompt hook's stored injections to the
+  //   OUTBOUND request's last user message. The stored user message stays
+  //   clean (v1 delivered nudges as TUI-hidden synthetic parts; v2's prompt
+  //   text IS the stored message), and the request is rebuilt per round
+  //   trip, so injecting here reproduces v1's persistent-synthetic-part
+  //   semantics: the model sees the nudges on every call of the turn.
   const pendingInjections = new Map<string, string[]>();
+  const registerSystem = await context.session.hook(
+    "context",
+    async (request: { sessionID: string; system: unknown[]; messages?: any[] }) => {
+      const pushed: string[] = [];
+      await runtime.onSystemTransform({ system: pushed });
+      for (const part of pushed) {
+        request.system.push(typeof part === "string" ? { type: "text", text: part } : part);
+      }
+      const injections = pendingInjections.get(request.sessionID);
+      if (!injections?.length) return;
+      const lastUser = [...(request.messages ?? [])].reverse().find((m) => m?.role === "user");
+      if (!lastUser) return;
+      // v2's wire Message carries parts in `content: Array<ContentPart>` -
+      // it has no `parts` field, so injecting there would write a stray
+      // property the provider formatter never reads (silent nudge loss).
+      const content = Array.isArray(lastUser.content) ? lastUser.content : (lastUser.content = []);
+      for (const text of injections) content.push({ type: "text", text });
+      runtime.debug("v2:hook:context", `session=${request.sessionID} injected=${injections.length} messages=${request.messages?.length}`);
+    },
+  );
+
+  // Per-message nudges: the prompt hook computes them once per user message
+  // (storing them per session); the context hook above injects them into
+  // every outbound model request of the turn.
   const registerPrompt = await context.session.hook(
     "prompt",
     async (request: { sessionID: string; messageID: string; prompt: { text: string } }) => {
@@ -164,25 +181,6 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     },
   );
 
-  // Inject the turn's nudges into the outbound request. A user message is
-  // always present (the prompt hook ran before the loop's first generate).
-  // v2's wire Message carries parts in `content: Array<ContentPart>` - it
-  // has no `parts` field, so injecting there would write a stray property
-  // the provider formatter never reads (silent nudge loss).
-  const registerGenerate = await context.session.hook("generate", (request: { sessionID: string; messages: any[] }) => {
-    runtime.debug("v2:hook:generate", `entry session=${request.sessionID} pending=${pendingInjections.get(request.sessionID)?.length ?? 0} messages=${request.messages?.length}`);
-    const injections = pendingInjections.get(request.sessionID);
-    if (!injections?.length) return;
-    const lastUser = [...request.messages].reverse().find((m) => m?.role === "user");
-    if (!lastUser) return;
-    const content = Array.isArray(lastUser.content) ? lastUser.content : (lastUser.content = []);
-    for (const text of injections) content.push({ type: "text", text });
-    // Probe telemetry (unknown 2): messages.length per call + whether the
-    // last user message already carries the injection (same array across
-    // the turn's model round trips would show duplicates piling up).
-    const injected = content.filter((c: any) => injections.includes(c?.text)).length;
-    runtime.debug("v2:hook:generate", `session=${request.sessionID} messages=${request.messages.length} injectionsTotal=${injected}/${injections.length}`);
-  });
 
   // Compaction: the nudge-suppression flag is the only surface verified to
   // exist; the context-injection surface is unverified.
@@ -293,7 +291,6 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     registerToolHook.dispose();
     registerSystem.dispose();
     registerPrompt.dispose();
-    registerGenerate.dispose();
     registerCompaction.dispose();
     registerCommands.dispose();
     await runtime.dispose();

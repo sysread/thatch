@@ -41,7 +41,6 @@ type Registration = { dispose: () => void };
 
 let dbDir: string;
 let promptHook: HookFn | undefined;
-let generateHook: HookFn | undefined;
 let contextHook: HookFn | undefined;
 let toolAfterHook: HookFn | undefined;
 let addedCommands: { name: string; execute: (input: any) => Promise<void> }[];
@@ -66,7 +65,6 @@ function makeContext(options?: { get?: (input: any) => Promise<any>; context?: (
   sessionGetCalls = [];
   sessionContextCalls = [];
   promptHook = undefined;
-  generateHook = undefined;
   contextHook = undefined;
   toolAfterHook = undefined;
   addedCommands = [];
@@ -95,7 +93,6 @@ function makeContext(options?: { get?: (input: any) => Promise<any>; context?: (
     session: {
       hook: async (name: string, callback: HookFn): Promise<Registration> => {
         if (name === "prompt") promptHook = callback;
-        if (name === "generate") generateHook = callback;
         if (name === "context") contextHook = callback;
         return { dispose: () => {} };
       },
@@ -204,10 +201,10 @@ describe("opencode v2 adapter", () => {
     expect(prompt.text).toBe("remember the thing we discussed about deployment");
   });
 
-  test("nudges stay out of the stored prompt and ride the generate hook", async () => {
+  test("nudges stay out of the stored prompt and ride the context hook", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     expect(toolAfterHook).toBeDefined();
-    expect(generateHook).toBeDefined();
+    expect(contextHook).toBeDefined();
     // Buffer a tool interaction through the v2 execute.after hook, then
     // send a prompt: the extraction nudge must NOT touch prompt.text (v2
     // stores prompt text as the user message - injecting there would echo
@@ -223,17 +220,19 @@ describe("opencode v2 adapter", () => {
     await promptHook!({ sessionID: "ses_v2_nudge", messageID: "msg_n", prompt });
     expect(prompt.text).toBe("what do we know about this");
 
-    // The generate hook instead appends the nudge to the outbound request's
-    // last user message - v2's wire Message carries parts in `content`
-    // (there is no `parts` field, so writing there would be a stray
-    // property the provider formatter never reads). The extraction nudge's
-    // wording varies with the background-subagents env, but both variants
-    // reference the payload fetch tool.
+    // The context hook (kind "primary": every model request of the turn)
+    // appends the nudge to the outbound request's last user message - v2's
+    // wire Message carries parts in `content` (there is no `parts` field,
+    // so writing there would be a stray property the provider formatter
+    // never reads). The extraction nudge's wording varies with the
+    // background-subagents env, but both variants reference the payload
+    // fetch tool.
     const request = {
       sessionID: "ses_v2_nudge",
+      system: [],
       messages: [{ role: "user", content: [{ type: "text", text: "what do we know about this" }] }],
     };
-    generateHook!(request);
+    await contextHook!(request);
     const parts = request.messages[0].content as { type: string; text: string }[];
     expect(parts.length).toBe(2);
     expect(parts[1].type).toBe("text");
@@ -296,9 +295,10 @@ describe("opencode v2 adapter", () => {
     expect(prompt.text).toBe(`[chat] al-go-rithm-00001 registered in the session directory`);
     const request = {
       sessionID: "ses_v2_echo",
+      system: [],
       messages: [{ role: "user", content: [{ type: "text", text: "echo" }] }],
     };
-    generateHook!(request);
+    await contextHook!(request);
     expect((request.messages[0].content as unknown[]).length).toBe(1);
   });
 
