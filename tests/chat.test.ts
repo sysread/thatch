@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { ChatPoller, isStale, nowIso, CHAT_STALE_MS, CHAT_POLL_INTERVAL_MS, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailJsonl, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, slugifyTitle, isDefaultSessionTitle, humanAge, chatLiveness, splitChatRoster, sortChatRoster, createWakeGate, continuedInTarget, scanPredecessorTranscript, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailRow, type ChatTailFilter } from "../src/chat";
+import { ChatStore, ChatPoller, isStale, nowIso, CHAT_STALE_MS, CHAT_POLL_INTERVAL_MS, CHAT_AUTO_TTL_DAYS, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailJsonl, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, slugifyTitle, isDefaultSessionTitle, humanAge, chatLiveness, splitChatRoster, sortChatRoster, createWakeGate, continuedInTarget, scanPredecessorTranscript, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailRow, type ChatTailFilter } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
 import { TOOL_DEFS } from "../src/tool-defs";
@@ -1304,5 +1304,49 @@ describe("continuation adoption", () => {
   test("continueSession with no old row is a no-op", () => {
     db.continueChatSession("ses_never_was", "ses_whatever");
     expect(db.findChatSession("ses_whatever")).toBeNull();
+  });
+});
+
+describe("chat name reclaim after reap", () => {
+  test("a reaped auto session reclaims its name; other sessions never do", () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-reclaim-"));
+    // ThatchDB owns the schema; the store shares the file (WAL, like prod).
+    const schemaDb = new ThatchDB(join(dir, "test.db"));
+    schemaDb.close();
+    const raw = new Database(join(dir, "test.db"));
+    const store = new ChatStore(raw);
+    // Backdate the row so the 7-day auto TTL sees it as prunable - the
+    // register path stamps last_seen with now. One extra day keeps the
+    // row strictly older than the cutoff (same-second equality is not
+    // < cutoff).
+    const expire = () => raw.run("UPDATE chat_sessions SET last_seen = ?", [cutoffAgo((CHAT_AUTO_TTL_DAYS + 1) * 24 * 60)]);
+    const first = store.register("ses_reap_me", "/proj", null, "opencode");
+    expect(first.ok).toBe(true);
+    const name = (first as { ok: true; name: string }).name;
+
+    // The reaper removes the row and records the claim.
+    expire();
+    store.pruneStaleAuto(cutoffAgo(CHAT_AUTO_TTL_DAYS * 24 * 60));
+    expect(store.find(name)).toBeNull();
+
+    // The SAME session id re-registers: reclaims its old name.
+    const again = store.register("ses_reap_me", "/proj", null, "opencode");
+    expect(again.ok).toBe(true);
+    expect((again as { ok: true; name: string }).name).toBe(name);
+
+    // A DIFFERENT session never receives that name: the claim was consumed,
+    // and the counter only moves forward.
+    const other = store.register("ses_other", "/proj", null, "opencode");
+    expect(other.ok).toBe(true);
+    expect((other as { ok: true; name: string }).name).not.toBe(name);
+
+    // Reap again: the claim is re-recorded for the same session, so a
+    // second crash-resume still reclaims.
+    expire();
+    store.pruneStaleAuto(cutoffAgo(CHAT_AUTO_TTL_DAYS * 24 * 60));
+    const third = store.register("ses_reap_me", "/proj", null, "opencode");
+    expect(third.ok).toBe(true);
+    expect((third as { ok: true; name: string }).name).toBe(name);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

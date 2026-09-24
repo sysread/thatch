@@ -297,6 +297,18 @@ export class ThatchDB {
       )
     `);
 
+    // Reaped auto-registered rows leave their name-to-session binding here,
+    // so the SAME session can reclaim its name when it re-registers (a
+    // crash-and-resume must not churn the identity). Names are still never
+    // reissued to a DIFFERENT session: a claim only ever resolves for the
+    // session id it was recorded with.
+    this.#db.run(`
+      CREATE TABLE IF NOT EXISTS chat_name_claims (
+        name       TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL
+      )
+    `);
+
     // Explicit leaves (chat_unregister). Suppresses auto-registration so
     // the next idle event cannot silently re-register the session; cleared
     // when the session explicitly rejoins via chat_register. Survives the
