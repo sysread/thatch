@@ -1,53 +1,12 @@
 import { tool } from "@opencode-ai/plugin";
-import type { ThatchDB } from "./db";
-import type { EmbeddingModel } from "./embeddings";
-import { TOOL_DEFS, type CoreContext, type HostToolContext } from "./tool-defs";
-import type { WatcherRegistry } from "./watchers";
+import { TOOL_DEFS, trimHostContext, type CoreContext } from "./tool-defs";
 
-/** Extensions a host adapter passes into the shared CoreContext. */
-export interface CoreContextExtensions {
-  extractionPayloadProvider?: CoreContext["extractionPayloadProvider"];
-  drainExtractionQueue?: CoreContext["drainExtractionQueue"];
-  watcherRegistry?: WatcherRegistry;
-  projectDir?: string;
-}
-
-/**
- * Builds the host-agnostic CoreContext both adapters share: the opencode
- * plugin path and the MCP server each construct a CoreContext once per
- * init and reuse it for every tool call. This helper is the plugin-side
- * constructor; the MCP server builds its own inline (src/mcp.ts). Lives
- * apart from the v1 `tool()` wrapper so the v2 adapter can register
- * TOOL_DEFS through the v2 ToolEditor without pulling the v1 SDK into its
- * import graph.
- */
-export function buildCoreContext(
-  db: ThatchDB,
-  model: EmbeddingModel,
-  defaultStore: string,
-  extensions?: CoreContextExtensions,
-): CoreContext {
-  return {
-    db,
-    model,
-    defaultStore,
-    extractionPayloadProvider: extensions?.extractionPayloadProvider,
-    drainExtractionQueue: extensions?.drainExtractionQueue,
-    watchers: extensions?.watcherRegistry,
-    projectDir: extensions?.projectDir,
-  };
-}
-
-/**
- * Trim opencode's per-call ToolContext to the host-agnostic fields the
- * shared definitions know about. Both adapters do this same two-field trim;
- * tests and MCP paths pass no host context.
- */
-export function trimHostContext(
-  hostContext: { sessionID: string; agent: string } | undefined,
-): HostToolContext | undefined {
-  return hostContext ? { sessionID: hostContext.sessionID, agent: hostContext.agent } : undefined;
-}
+// V1-ONLY module: this file imports the opencode v1 SDK at runtime, so
+// nothing shared may import from it. The host-agnostic pieces
+// (buildCoreContext, trimHostContext, CoreContext, TOOL_DEFS) live in
+// tool-defs.ts precisely so the v2 adapter and the MCP server can use them
+// without evaluating the v1 SDK - the v2 plugin install skips optional
+// peers, and a missing SDK import here would kill the whole plugin load.
 
 /**
  * Builds the v1 opencode tool map from shared tool definitions. Each

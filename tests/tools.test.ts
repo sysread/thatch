@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { buildCoreContext, createTools } from "../src/tools";
+import { buildCoreContext } from "../src/tool-defs";
+import { createTools } from "../src/tools";
 
 let dbPath: string;
 let dbDir: string;

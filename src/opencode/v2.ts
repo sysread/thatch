@@ -5,8 +5,7 @@ import type { ToolContext as V2ToolContext } from "@opencode/plugin/promise/tool
 import type { HostCapabilities, PromptPart, ToastInput } from "../capabilities";
 import { createRuntime } from "../runtime";
 import { wrapUpCommandContent } from "../commands";
-import { trimHostContext } from "../tools";
-import { TOOL_DEFS, type HostToolContext } from "../tool-defs";
+import { TOOL_DEFS, trimHostContext, type HostToolContext } from "../tool-defs";
 
 // The opencode v2 adapter (opencode 2.x, plugin API @opencode/plugin 2.x).
 // Loaded only by v2 hosts - the dual entry (src/index.ts) lazy-imports this
@@ -39,10 +38,13 @@ import { TOOL_DEFS, type HostToolContext } from "../tool-defs";
 //   SMOKE TEST: v2 event payload shape carries {type, properties, location};
 //   if events lack location, this filter drops everything and the plugin is
 //   inert (no reminder, no extraction, no status gating).
-// - toasts, tui commands, session delete/list/messages endpoints:
+// - toasts, tui commands, session delete/list endpoints:
 //   no v2 surface reachable from a plugin - degrades as no-op/null.
 //   fetchStatuses returns {} because the wake gate treats an unknown session
 //   as idle; the event-fed status map inside the runtime does the gating.
+//   Session MESSAGES are readable via session.context (mapped into the v1
+//   shape), so the wrap-up greenlight check works; the compaction TRIGGER
+//   does not (no session.compact on the promise domain).
 
 type V2Context = Plugin.Context;
 type V2Cleanup = Plugin.Cleanup;
@@ -62,7 +64,14 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   const directory = location.directory;
   const worktree = location.project.directory;
 
-  const capabilities = buildCapabilities(context, worktree);
+  // Plugin-created extraction children live in the project directory, which
+  // differs from this instance's directory whenever opencode is launched
+  // below the project root. Their events would never pass the directory
+  // filter, so they are forwarded by ID: sessionCreate records every child
+  // here, and the pump lets their events through.
+  const childSessions = new Set<string>();
+
+  const capabilities = buildCapabilities(context, worktree, childSessions);
   const runtime = await createRuntime({ capabilities, directory, worktree });
 
   // Tool registration: the same CoreContext the v1 adapter feeds to
@@ -94,16 +103,17 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   // (matching v1, whose hook only fired on completed tool calls).
   const registerToolHook = await context.tool.hook("execute.after", async (hook) => {
     if (hook.status && hook.status !== "completed") return;
-    // SMOKE TEST: the v2 execute.after hook's result shape. The v1 hook
-    // delivered {title, output}; v2 delivers a Tool.Result whose content
-    // may be a string or a content-part array. A wrong guess means the
-    // extraction buffer records wrong summaries, not a crash.
+    // The v2 execute.after hook's result is a Tool.Result: `content` may be
+    // a string or an array of content parts ({type: "text", text}, files,
+    // ...), and `output` is the tool's typed output value, not a title. v1's
+    // hook delivered {title, output} strings, so flatten here: text parts
+    // joined for the extraction buffer, empty title (the buffer's
+    // deriveTitle synthesizes one from the tool name and args).
     const result = hook.result;
-    const text = typeof result?.content === "string" ? result.content : "";
-    const title = typeof result?.output === "string" ? result.output : "";
+    const text = flattenToolContent(result?.content);
     await runtime.onToolExecuteAfter(
       { tool: hook.tool, sessionID: hook.sessionID, args: hook.input },
-      { title, output: text },
+      { title: "", output: text },
     );
   });
 
@@ -149,12 +159,16 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
 
   // Inject the turn's nudges into the outbound request. A user message is
   // always present (the prompt hook ran before the loop's first generate).
+  // v2's wire Message carries parts in `content: Array<ContentPart>` - it
+  // has no `parts` field, so injecting there would write a stray property
+  // the provider formatter never reads (silent nudge loss).
   const registerGenerate = await context.session.hook("generate", (request: { sessionID: string; messages: any[] }) => {
     const injections = pendingInjections.get(request.sessionID);
     if (!injections?.length) return;
     const lastUser = [...request.messages].reverse().find((m) => m?.role === "user");
     if (!lastUser) return;
-    for (const text of injections) (lastUser.parts ??= []).push({ type: "text", text });
+    const content = Array.isArray(lastUser.content) ? lastUser.content : (lastUser.content = []);
+    for (const text of injections) content.push({ type: "text", text });
   });
 
   // Compaction: the nudge-suppression flag is the only surface verified to
@@ -176,11 +190,17 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
             kind === "compact"
               ? "Flush thatch persistence, check for loose ends, then compact if clear"
               : "Flush thatch persistence, check for loose ends, then exit opencode if clear",
-          execute: async ({ sessionID }: { sessionID: string }) => {
+          // The user's typed arguments ride invocation.prompt (a
+          // PromptInput.Prompt with a text field). v1's host expanded
+          // $ARGUMENTS from the command file; v2's session.prompt does no
+          // template expansion, so substitute here - dropping the args
+          // would store a bare template as the user message.
+          execute: async ({ sessionID, prompt }: { sessionID: string; prompt?: { text?: string } }) => {
             runtime.armWrapUp(sessionID, kind);
+            const args = typeof prompt?.text === "string" ? prompt.text : "";
             await capabilities.promptSession(
               sessionID,
-              { parts: [{ type: "text", text: wrapUpCommandContent(kind) }] },
+              { parts: [{ type: "text", text: wrapUpCommandContent(kind).replace("$ARGUMENTS", args) }] },
               "sync",
             );
           },
@@ -197,7 +217,7 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   const sessionDirs = new Map<string, string>();
   const resolveSessionDir = async (sessionID: string): Promise<string | undefined> => {
     try {
-      const result = await (context.session as any).get({ id: sessionID });
+      const result = await (context.session as any).get({ sessionID });
       const dir = (result?.data ?? result)?.location?.directory;
       if (dir) sessionDirs.set(sessionID, dir);
       return dir;
@@ -209,16 +229,26 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   const pump = (async () => {
     try {
       for await (const event of context.event.subscribe({ signal: controller.signal })) {
-        const located = event as { type: string; data?: any; location?: { directory?: string } };
-        const data = located.data ?? {};
-        if (data.sessionID && located.location?.directory) sessionDirs.set(data.sessionID, located.location.directory);
-        if (data.sessionID && data.location?.directory) sessionDirs.set(data.sessionID, data.location.directory);
-        let eventDir = located.location?.directory ?? (data.sessionID ? sessionDirs.get(data.sessionID) : undefined);
-        if (!eventDir && data.sessionID) eventDir = await resolveSessionDir(data.sessionID);
-        runtime.debug("v2:pump", `event ${located.type} dir=${eventDir} self=${directory}`);
-        if (eventDir !== directory) continue;
-        const translated = translateEvent(located);
-        if (translated) await runtime.onEvent(translated);
+        // Per-event isolation: a throw inside one handler must not end the
+        // loop (a dead pump means no idle events, no extraction, and a
+        // frozen status map for the rest of the process). v1's host
+        // dispatched each hook invocation independently; this restores that
+        // blast radius.
+        try {
+          const located = event as { type: string; data?: any; location?: { directory?: string } };
+          const data = located.data ?? {};
+          if (data.sessionID && located.location?.directory) sessionDirs.set(data.sessionID, located.location.directory);
+          if (data.sessionID && data.location?.directory) sessionDirs.set(data.sessionID, data.location.directory);
+          let eventDir = located.location?.directory ?? (data.sessionID ? sessionDirs.get(data.sessionID) : undefined);
+          if (!eventDir && data.sessionID) eventDir = await resolveSessionDir(data.sessionID);
+          runtime.debug("v2:pump", `event ${located.type} dir=${eventDir} self=${directory}`);
+          if (eventMatchesInstance(eventDir, data.sessionID, directory, childSessions)) {
+            const translated = translateEvent(located);
+            if (translated) await runtime.onEvent(translated);
+          }
+        } catch (err) {
+          console.error(`[thatch] v2 event handler failed: ${err}`);
+        }
       }
     } catch (err) {
       if (!controller.signal.aborted) console.error(`[thatch] event subscription failed: ${err}`);
@@ -244,6 +274,51 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     registerCommands.dispose();
     await runtime.dispose();
   };
+}
+
+// Map v2's SessionMessageInfo list into the v1 {info: {role}, parts} shape
+// the runtime's wrap-up greenlight check reads. Assistant messages carry
+// their text in content parts; other message kinds carry a plain text field
+// (or none - those map to an empty part rather than dropping the message,
+// so role ordering survives).
+export function mapSessionContextMessages(messages: unknown): { info: { role: string }; parts: { type: string; text: string }[] }[] {
+  return ((messages as any[]) ?? []).map((m) => ({
+    info: { role: m?.type },
+    parts:
+      m?.type === "assistant"
+        ? (m.content ?? [])
+            .filter((c: any) => c.type === "text")
+            .map((c: any) => ({ type: "text", text: c.text ?? "" }))
+        : [{ type: "text", text: typeof m?.text === "string" ? m.text : "" }],
+  }));
+}
+
+// Which bus events belong to this plugin instance. An event is ours when
+// its resolved directory matches the instance's own directory, or when it
+// belongs to a session this instance created (extraction children - they
+// live in the project directory, which differs from the instance directory
+// on below-root launches).
+export function eventMatchesInstance(
+  eventDir: string | undefined,
+  sessionID: string | undefined,
+  directory: string,
+  childSessions: Set<string>,
+): boolean {
+  if (eventDir === directory) return true;
+  return sessionID !== undefined && childSessions.has(sessionID);
+}
+
+// Flatten a v2 Tool.Result content field into the plain text the shared
+// extraction buffer expects. Strings pass through; content-part arrays
+// contribute their text parts (files and other non-text parts are dropped -
+// the buffer wants a summary line, not attachments). Anything else is empty.
+export function flattenToolContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((part) => part?.type === "text" && typeof part.text === "string")
+    .map((part) => part.text)
+    .join("\n");
 }
 
 // Translate a v2 bus event into the v1-shaped event the runtime consumes.
@@ -279,14 +354,15 @@ function translateEvent(located: { type: string; data?: any }): { type: string; 
 // The HostCapabilities implementation over the v2 promise context. Every
 // operation the v2 surface lacks degrades as a no-op or null - the shared
 // runtime's callers treat those results as best-effort and log, never crash.
-function buildCapabilities(context: V2Context, worktree: string): HostCapabilities {
+function buildCapabilities(context: V2Context, worktree: string, childSessions: Set<string>): HostCapabilities {
   // SMOKE TEST: exact v2 SDK shapes for create/get/prompt. The promise
   // context's domain types are structural here; the generated client's
   // wrappers (data fields, path vs flat args) get reconciled against the
   // real binary.
   const session = context.session as unknown as {
     create(input: { location: { directory: string }; title: string }): Promise<any>;
-    get(input: { id: string }): Promise<any>;
+    get(input: { sessionID: string }): Promise<any>;
+    context(input: { sessionID: string }): Promise<any>;
     prompt(input: { sessionID: string; text: string }): Promise<unknown>;
     synthetic(input: { sessionID: string; text: string }): Promise<unknown>;
   };
@@ -306,11 +382,18 @@ function buildCapabilities(context: V2Context, worktree: string): HostCapabiliti
       // A shape mismatch must fail into the runtime's extraction fallback
       // (the nudge path), not silently corrupt the child-session maps.
       if (!id) throw new Error(`v2 session.create returned no id: ${JSON.stringify(result)?.slice(0, 200)}`);
+      // Register for event forwarding: the child's events carry the project
+      // directory, which the pump's directory filter would otherwise drop.
+      childSessions.add(id);
       return { id };
     },
     // No delete on the v2 SessionDomain: extraction child sessions are not
     // cleaned up on v2 (documented gap; the bookkeeping maps still keep the
-    // nudge path consistent).
+    // nudge path consistent). Two user-visible consequences: the session
+    // picker accumulates one thatch-extraction entry per extraction, and
+    // "continue last session" (-c) logic that picks the newest top-level
+    // session will land in an extraction child after any session that
+    // triggered extraction, because the child is top-level and newer.
     sessionDelete: async () => {},
     promptSession: async (sessionID, body, _mode) => {
       // v2's prompt endpoint takes text, not parts, and has no synthetic /
@@ -329,36 +412,32 @@ function buildCapabilities(context: V2Context, worktree: string): HostCapabiliti
       await session.prompt({ sessionID, text });
     },
     sessionGet: async (id) => {
-      const result = await session.get({ id });
+      // SessionGetInput is {sessionID}, and the adapter decodes the input
+      // before the host call - any other key rejects.
+      const result = await session.get({ sessionID: id });
       return result?.data ?? result ?? null;
     },
     sessionList: async () => null,
     sessionMessages: async (id) => {
-      // v2 stores messages as a typed event list (user/assistant/... with
-      // text or content parts), not v1's {info, parts}; map into the v1
-      // shape the runtime's wrap-up greenlight check reads.
-      const result = await (session as any).message.list({ sessionID: id });
-      return (result?.data ?? []).map((m: any) => ({
-        info: { role: m.type },
-        parts:
-          m.type === "assistant"
-            ? (m.content ?? [])
-                .filter((c: any) => c.type === "text")
-                .map((c: any) => ({ type: "text", text: c.text ?? "" }))
-            : [{ type: "text", text: m.text ?? "" }],
-      }));
+      // The v2 promise domain has no message-list endpoint (no
+      // `message` accessor and no compact/remove in the SessionDomain Pick).
+      // `session.context` IS exposed and returns the session's message list
+      // (Array<SessionMessageInfo>); map into the v1 shape the wrap-up
+      // greenlight check reads.
+      const result = await (session as any).context({ sessionID: id });
+      return mapSessionContextMessages(result?.data ?? result);
     },
     showToast: async (_toast: ToastInput) => {
       // No toast publish path reachable from the promise context (the
       // tui.toast.show event has no producer surface here). Degrades.
     },
-    tuiExecuteCommand: async (command, sessionID) => {
-      // No TUI surface on v2, but the compact action has a server endpoint:
-      // trigger the session's compaction directly (the greenlight already
-      // ran - the runtime only dispatches this after the ready token).
-      if (command === "session_compact" && sessionID) {
-        await (session as any).compact({ sessionID });
-        return;
+    tuiExecuteCommand: async (command) => {
+      // No TUI surface on v2, and the promise domain exposes no compaction
+      // trigger either (session.compact is not in the SessionDomain Pick -
+      // calling it throws). The compact wrap-up still runs its checklist and
+      // flush; only the automatic compaction itself degrades.
+      if (command === "session_compact") {
+        console.error("[thatch] v2: compaction trigger unavailable; wrap-up checklist ran, compact skipped");
       }
     },
     tuiPublish: async () => {},

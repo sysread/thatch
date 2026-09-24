@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   defragCore,
@@ -227,6 +227,26 @@ function syncCommandFiles(dir: string, defs: CommandDef[]): string[] {
  */
 export function installOpencodeCommands(configHome: string, defs: CommandDef[] = opencodeCommandDefs()): string[] {
   return syncCommandFiles(join(configHome, "opencode", "command", "thatch"), defs);
+}
+
+/**
+ * Removes wrap-up command files left in the opencode command dir. Hosts
+ * that register wrap-up commands in code (v2) pass the action-only set to
+ * installOpencodeCommands, but files written by earlier v1 runs persist -
+ * syncCommandFiles never removes - and a stale file collides with the
+ * registered command (both versions share the config dir). Call this
+ * before installing on such hosts. Idempotent: missing files are fine.
+ */
+export function removeWrapUpCommandFiles(configHome: string): void {
+  const dir = join(configHome, "opencode", "command", "thatch");
+  for (const kind of ["compact", "exit"] as const) {
+    try {
+      unlinkSync(join(dir, `${kind}.md`));
+    } catch {
+      // ENOENT is the expected steady state; anything else is equally
+      // harmless for a best-effort cleanup.
+    }
+  }
 }
 
 /** Sync Claude Code's commands into <claudeDir>/commands/thatch/ (claudeDir is ~/.claude or <project>/.claude). */

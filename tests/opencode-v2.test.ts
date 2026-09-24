@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setup } from "../src/opencode/v2";
+import { setup, eventMatchesInstance, flattenToolContent, mapSessionContextMessages } from "../src/opencode/v2";
 import { TOOL_DEFS } from "../src/tool-defs";
 
 // The v2 adapter's contract test: a mocked v2 promise context (plain
@@ -25,13 +25,17 @@ let addedTools: { name: string; description: string; input: unknown }[];
 let sessionPromptCalls: any[];
 let sessionSyntheticCalls: any[];
 let sessionCreateCalls: any[];
+let sessionGetCalls: any[];
+let sessionContextCalls: any[];
 const eventQueue: any[] = [];
 
-function makeContext() {
+function makeContext(options?: { get?: (input: any) => Promise<any>; context?: (input: any) => Promise<any> }) {
   addedTools = [];
   sessionPromptCalls = [];
   sessionSyntheticCalls = [];
   sessionCreateCalls = [];
+  sessionGetCalls = [];
+  sessionContextCalls = [];
   promptHook = undefined;
   generateHook = undefined;
   contextHook = undefined;
@@ -70,7 +74,16 @@ function makeContext() {
         sessionCreateCalls.push(input);
         return { data: { id: "v2-test-child" } };
       },
-      get: async () => ({ data: { title: "some title" } }),
+      get: async (input: any) => {
+        sessionGetCalls.push(input);
+        if (options?.get) return options.get(input);
+        return { data: { title: "some title" } };
+      },
+      context: async (input: any) => {
+        sessionContextCalls.push(input);
+        if (options?.context) return options.context(input);
+        return { data: [] };
+      },
       prompt: async (input: any) => {
         sessionPromptCalls.push(input);
         return { data: {} };
@@ -180,15 +193,17 @@ describe("opencode v2 adapter", () => {
     expect(prompt.text).toBe("what do we know about this");
 
     // The generate hook instead appends the nudge to the outbound request's
-    // last user message (the extraction nudge's wording varies with the
-    // background-subagents env, but both variants reference the payload
-    // fetch tool).
+    // last user message - v2's wire Message carries parts in `content`
+    // (there is no `parts` field, so writing there would be a stray
+    // property the provider formatter never reads). The extraction nudge's
+    // wording varies with the background-subagents env, but both variants
+    // reference the payload fetch tool.
     const request = {
       sessionID: "ses_v2_nudge",
-      messages: [{ role: "user", parts: [{ type: "text", text: "what do we know about this" }] }],
+      messages: [{ role: "user", content: [{ type: "text", text: "what do we know about this" }] }],
     };
     generateHook!(request);
-    const parts = request.messages[0].parts as { type: string; text: string }[];
+    const parts = request.messages[0].content as { type: string; text: string }[];
     expect(parts.length).toBe(2);
     expect(parts[1].type).toBe("text");
     expect(parts[1].text).toContain("thatch_get_extraction_payload");
@@ -248,10 +263,10 @@ describe("opencode v2 adapter", () => {
     expect(prompt.text).toBe(`[chat] al-go-rithm-00001 registered in the session directory`);
     const request = {
       sessionID: "ses_v2_echo",
-      messages: [{ role: "user", parts: [{ type: "text", text: "echo" }] }],
+      messages: [{ role: "user", content: [{ type: "text", text: "echo" }] }],
     };
     generateHook!(request);
-    expect((request.messages[0].parts as unknown[]).length).toBe(1);
+    expect((request.messages[0].content as unknown[]).length).toBe(1);
   });
 
   test("tool execute.after hook skips error-status calls", async () => {
@@ -315,5 +330,90 @@ describe("opencode v2 adapter", () => {
     await dispose();
     // A second call must not re-run disposal (double db.close would throw).
     await expect(dispose()).resolves.toBeUndefined();
+  });
+
+  test("wrap-up commands substitute the user's typed arguments for $ARGUMENTS", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    // v2's session.prompt does no template expansion (v1 expanded
+    // $ARGUMENTS from the command file), so the adapter must substitute the
+    // invocation's prompt text itself - bare runs get the n/a marker.
+    const exit = addedCommands.find((c) => c.name === "thatch/exit");
+    await exit!.execute({ sessionID: "ses_v2_args", prompt: { text: "Good work - see you tomorrow" } });
+    const delivered = sessionPromptCalls[0].text as string;
+    expect(delivered).toContain("Good work - see you tomorrow");
+    expect(delivered).not.toContain("$ARGUMENTS");
+
+    // A bare invocation (no prompt) still delivers a usable body.
+    sessionPromptCalls.length = 0;
+    await exit!.execute({ sessionID: "ses_v2_args" });
+    expect(sessionPromptCalls[0].text).not.toContain("$ARGUMENTS");
+  });
+
+  test("flattenToolContent passes strings through and joins text parts", async () => {
+    expect(flattenToolContent("plain output")).toBe("plain output");
+    expect(
+      flattenToolContent([{ type: "text", text: "line one" }, { type: "file", uri: "file:///x" }, { type: "text", text: "line two" }]),
+    ).toBe("line one\nline two");
+    expect(flattenToolContent([{ type: "file", uri: "file:///x" }])).toBe("");
+    expect(flattenToolContent(undefined)).toBe("");
+    expect(flattenToolContent(42)).toBe("");
+  });
+
+  test("mapSessionContextMessages maps v2 message kinds into the v1 shape", () => {
+    const mapped = mapSessionContextMessages([
+      { type: "user", text: "hello" },
+      { type: "assistant", content: [{ type: "reasoning", text: "hmm" }, { type: "text", text: "the answer" }] },
+      { type: "synthetic" },
+    ]);
+    expect(mapped).toHaveLength(3);
+    expect(mapped[0]).toEqual({ info: { role: "user" }, parts: [{ type: "text", text: "hello" }] });
+    expect(mapped[1].info.role).toBe("assistant");
+    expect(mapped[1].parts).toEqual([{ type: "text", text: "the answer" }]);
+    expect(mapped[2].parts).toEqual([{ type: "text", text: "" }]);
+  });
+
+  test("session get resolves by sessionID and location-less events survive handler throws", async () => {
+    const context = makeContext({
+      // A shared-DB hiccup under v2 (SQLITE_BUSY etc.) surfaces as a throw
+      // from the get endpoint; the pump must log and keep consuming.
+      get: async (input: any) => {
+        if (input?.sessionID === "ses_v2_dead") throw new Error("database is locked");
+        return { data: { title: "t" } };
+      },
+    });
+    cleanup = (await setup(context as any)) as () => Promise<void>;
+
+    // Location-less event for a session whose get throws: the per-event
+    // catch swallows it, and - critically - the loop continues.
+    await queueEvent({ type: "session.execution.started", data: { sessionID: "ses_v2_dead" } });
+    // The resolver must be using the v2 input shape ({sessionID}, not {id}).
+    expect(sessionGetCalls.length).toBe(1);
+    expect(sessionGetCalls[0]).toEqual({ sessionID: "ses_v2_dead" });
+
+    // A subsequent event for a session whose get succeeds still lands.
+    await toolAfterHook!({
+      tool: "Read",
+      sessionID: "ses_v2_alive",
+      input: { file_path: "/src/app.ts" },
+      status: "completed",
+      result: { content: "const x = 1;" },
+    });
+    await queueEvent({
+      type: "session.execution.succeeded",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_v2_alive" },
+    });
+    await waitFor("extraction after a handler throw", () => sessionCreateCalls.length === 1);
+  });
+
+  test("child-session events pass the directory filter on below-root launches", async () => {
+    // The child is created in the project directory; when the instance
+    // directory differs (opencode launched below the project root), the
+    // child's events must still reach the runtime - its idle event is what
+    // drives the extraction cleanup.
+    expect(eventMatchesInstance(PROJECT_DIR, "v2-test-child", SESSION_DIR, new Set(["v2-test-child"]))).toBe(true);
+    expect(eventMatchesInstance(SESSION_DIR, undefined, SESSION_DIR, new Set())).toBe(true);
+    expect(eventMatchesInstance(PROJECT_DIR, "ses_other", SESSION_DIR, new Set(["v2-test-child"]))).toBe(false);
+    expect(eventMatchesInstance(undefined, undefined, SESSION_DIR, new Set())).toBe(false);
   });
 });

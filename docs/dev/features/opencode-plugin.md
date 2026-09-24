@@ -57,20 +57,22 @@ the shared runtime needs. It is the lifecycle-level sibling of `CoreContext`
 
 | Capability | v1 source | v2 source | v2 strategy |
 |---|---|---|---|
-| bus events | `event` hook | `event.subscribe` (raw SSE) | client-side location filter; location-less events drop (mirrors v1's server-side filter) |
-| incoming message | `chat.message` hook | `session.hook("prompt")` | the hook awaits the runtime; injections append to `prompt.text` (v2 has no synthetic parts) |
+| bus events | `event` hook | `event.subscribe` (raw SSE) | client-side location filter; location-less events resolve via `session.get` (`{sessionID}` input) and drop unresolvable (mirrors v1's server-side filter); events for plugin-created extraction children pass by ID (they live in the project directory, which differs from the instance directory on below-root launches) |
+| incoming message | `chat.message` hook | `session.hook("prompt")` | the hook awaits the runtime; nudge injections append to the OUTBOUND request's last user message in the generate hook (v2 wire `Message` carries parts in `content`, not `parts`) |
 | system prompt | `experimental.chat.system.transform` | `session.hook("context")` | mutates the request's system array; the runtime pushes a raw string where v2 types SystemPart (smoke-test-gated) |
 | compaction | `experimental.session.compacting` + `.autocontinue` + `session.compacted` | `session.hook("compaction")` | flag lands; context-injection surface unverified |
-| wrap-up commands | `command.execute.before` + command files | `command.transform` + `CommandEditor.add` | registered in code: `execute` arms the greenlight check (`armWrapUp`) and delivers the same prompt body the v1 file carries; the runtime installs only ACTION command files on v2 (a file and a registered command with the same name would collide) |
-| tools | `hooks.tool` map via `tool()` | `tool.transform` + `ToolEditor.add` | zod shapes pass as Standard Schema; results wrap as `{ content }` |
-| tool buffering | `tool.execute.after` hook | `tool.hook("execute.after")` | wired: feeds the same extraction buffer; result shape smoke-test-gated |
+| wrap-up commands | `command.execute.before` + command files | `command.transform` + `CommandEditor.add` | registered in code: `execute` arms the greenlight check (`armWrapUp`) and delivers the same prompt body the v1 file carries, substituting the invocation's prompt text for `$ARGUMENTS` (v2's `session.prompt` does no template expansion); the runtime installs only ACTION command files on v2 and REMOVES stale wrap-up files from earlier v1 runs (a file and a registered command with the same name would collide) |
+| tools | `hooks.tool` map via `tool()` | `tool.transform` + `ToolEditor.add` | zod shapes pre-converted to JSON Schema with our own zod (v2's `instanceof $ZodType` detection fails for ours and drops the schema); results wrap as `{ content }` |
+| tool buffering | `tool.execute.after` hook | `tool.hook("execute.after")` | wired: feeds the same extraction buffer; `Tool.Result.content` is flattened (string passes through, content-part arrays contribute their text parts), title is left empty (the buffer's `deriveTitle` synthesizes one) |
 | noReply deliveries | `promptAsync` with `noReply` | none | gated off via `HostCapabilities.noReplyDelivery` -- chat echoes and the session-start reminder are skipped on v2 (delivering them would start real model turns: a feedback loop) |
 | synthetic wake deliveries | `promptAsync` with `synthetic` parts | `session.synthetic` endpoint | watcher + chat wake nudges route to v2's synthetic endpoint (TUI-hidden), matching v1 |
-| child sessions | `client.session.create/promptAsync/prompt/delete` | `session.create/prompt` | create+prompt supported (shapes smoke-test-gated; a missing id throws into the extraction fallback); delete degrades (extraction children are not cleaned up on v2) |
+| child sessions | `client.session.create/promptAsync/prompt/delete` | `session.create/prompt` | create+prompt supported (a missing id throws into the extraction fallback); delete degrades (extraction children are not cleaned up on v2 -- the session picker accumulates one `thatch-extraction` entry per extraction, and `-c` "continue last session" logic that picks the newest top-level session will land in an extraction child after any session that triggered extraction) |
 | session status | `client.session.status` | none | returns `{}`; the wake gate treats unknown as idle and the event-fed status map does the gating |
-| session list/messages | `client.session.list/messages` | none | degrade (`-c` resume listing + wrap-up greenlight lose their data source) |
+| session messages | `client.session.messages` | `session.context` | mapped into the v1 `{info: {role}, parts}` shape, so the wrap-up greenlight check works (the promise domain has no `message` accessor) |
+| session list | `client.session.list` | none | degrade (`-c` resume listing loses its data source) |
+| compaction trigger | `client.tui.executeCommand("session_compact")` | none | degrade (the promise domain's SessionDomain Pick has no `session.compact`; the wrap-up checklist and flush still run, only the automatic compaction is skipped) |
 | toasts | `client.tui.showToast` | none reachable | degrade (the `tui.toast.show` event has no producer surface from the promise context) |
-| TUI actions | `client.tui.executeCommand/publish` | none | degrade |
+| TUI actions | `client.tui.executeCommand/publish` | none | degrade (except the compaction trigger, handled above) |
 | dispose | `dispose` hook | cleanup returned from `setup` | must be idempotent: v2 auto-reloads plugins on file change, and a non-idempotent cleanup doubles pollers/pumps/nudges |
 
 ## Smoke-test-gated unknowns

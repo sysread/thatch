@@ -3,7 +3,7 @@ import { createDebugLog } from "./debug";
 import { ThatchDB, repoPathCache } from "./db";
 import { BgeEmbeddingModel } from "./embeddings";
 import { detectRepo, detectWorktreeKind, resolveSpawnCwd } from "./git";
-import { buildCoreContext } from "./tools";
+import { buildCoreContext } from "./tool-defs";
 import {
   systemPrompt,
   compactionContext,
@@ -20,7 +20,7 @@ import {
 import { ExtractionPipeline, type ToolInteraction } from "./extraction";
 import type { CoreContext } from "./tool-defs";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
-import { installOpencodeCommands, opencodeActionCommandDefs, COMPACT_READY_TOKEN, EXIT_READY_TOKEN } from "./commands";
+import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommandFiles, COMPACT_READY_TOKEN, EXIT_READY_TOKEN } from "./commands";
 import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
@@ -447,6 +447,7 @@ export async function createRuntime(input: {
   // files only - the wrap-ups register in code (armWrapUp), and a file with
   // the same name as a registered command would collide.
   try {
+    if (caps.nativeCommands) removeWrapUpCommandFiles(configHome);
     installOpencodeCommands(configHome, caps.nativeCommands ? opencodeActionCommandDefs() : undefined);
   } catch (err) {
     console.error(`[thatch] command install failed: ${err}`);
