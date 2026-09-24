@@ -110,3 +110,30 @@ refcounted model is behaviorally identical for v1's single instance.
 - Sharing the warm model ACROSS processes (the sideband already does this
   for MCP hook processes; extending it to plugin instances is a separate
   piece of work).
+
+## Fast-follow (after merge): watcher continuity across restarts
+
+What this PR ships: watchers survive a v2 plugin RELOAD (same pid: re-armed
+from the journal) and survive a restart for the `-s`/`-c` startup session
+only. Two gaps remain, both fixable without upstream changes:
+
+1. **Picker-resumed sessions lose their watchers.** A restart prunes
+   foreign-pid watcher rows; if the user later resumes one of those sessions
+   through the session picker (not `-c`/`-s`), nothing re-arms its watches.
+   Design: keep foreign-pid watcher rows as DORMANT (move them to a
+   not-polled state instead of deleting); when a session resumes (its first
+   registration/event re-bind), scan the dormant rows for its session id,
+   re-arm them, and notify the session ("watchers re-armed: ..."). Dormant
+   rows age out past the watcher TTL plus a grace period, so corpses do not
+   accumulate.
+
+2. **No death notice.** When a watcher row is pruned (its harness died), the
+   user finds out only when an expected notification never arrives. Design:
+   when the pruning instance can reach a LIVE session that shares the
+   dead watcher's project (a same-slug live session), deliver a one-line
+   synthetic notice: "watcher X on <target> died with its session; it will
+   re-arm if you resume that session." Best-effort, deduplicated per target.
+
+Both need no upstream support - the journal table already carries the
+definitions; the work is lifecycle plumbing in the registry plus the
+resume-time scan.
