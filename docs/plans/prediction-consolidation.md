@@ -92,12 +92,12 @@ predictions that scored above threshold in the same `scorePredictionNudge`
 call. This is the direct analog of nak's `samskara_fires.cohort_id`.
 
 **Write path:** `scorePredictionNudge` currently returns `PredictionNudgeItem[]`
-and is called from two sites (index.ts auto-fire, sideband.ts MCP path). Add a
+and is called from two sites (runtime.ts auto-fire, sideband.ts MCP path). Add a
 `recordFires` method that takes the scored predictions + a generated cohort_id
 and inserts one row per prediction. The callers generate the cohort_id before
 calling `scorePredictionNudge` and pass it through for recording.
 
-Both callers must record fires. The opencode path (index.ts) has the session_id.
+Both callers must record fires. The opencode path (runtime.ts) has the session_id.
 The MCP path (sideband.ts) does not have a session_id in the sideband request --
 pass null or derive from the socket connection.
 
@@ -278,7 +278,7 @@ db.ts.
 **Code changes by file:**
 - `src/db.ts` -- new table, 4-5 new methods (recordFires, fireCount,
   cofireCount, totalCohorts, findPredictionDuplicates, findCoFireConstellations)
-- `src/index.ts` -- generate cohort_id, pass to recordFires in auto-fire path
+- `src/runtime.ts` -- generate cohort_id, pass to recordFires in auto-fire path
 - `src/sideband.ts` -- same for MCP path
 - `src/hygiene.ts` -- add prediction dedup + constellation counts to report
 - `src/prompts.ts` -- compound minting guidance in all three prompt variants
