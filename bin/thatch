@@ -49,7 +49,9 @@ function usage(): never {
                                    Full conversation as OpenAI chat-completions JSONL
   thatch session search <query> [--session <id>] [--regex] [--limit N]
                                    JSONL of matching parts across sessions (decoded content)
-  thatch chat list [--stale N|all]  Registered chat sessions, grouped Active/Stale:
+  thatch chat list [--active] [--stale N|all]
+                                    Registered chat sessions, grouped Active/Stale. --active
+                                    shows only fresh sessions (no stale section):
                                     name, age, status, project, topic.
                                     --stale N (days) hides stale sessions
                                     older than N; default 1. --stale all
@@ -415,7 +417,7 @@ async function sessionCommand(rest: string[]): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /** Column headers for the `chat list` roster, in display order. */
-const CHAT_ROSTER_HEADER = ["NAME", "AGE", "STATUS", "PROJECT", "TOPIC"];
+const CHAT_ROSTER_HEADER = ["NAME", "SESSION ID", "AGE", "STATUS", "PROJECT", "TOPIC"];
 
 /**
  * Renders the `chat list` roster as two sections - Active and Stale - each
@@ -436,6 +438,7 @@ function formatChatRoster(sessions: ChatSessionRow[], staleCapMs: number | null 
   const renderTable = (rows: ChatSessionRow[]) => {
     const cells = (r: ChatSessionRow) => [
       r.name,
+      r.session_id,
       humanAge(r.last_seen),
       chatLiveness(r),
       r.project ?? "unknown",
@@ -447,9 +450,10 @@ function formatChatRoster(sessions: ChatSessionRow[], staleCapMs: number | null 
     const align = (line: string[]) => line.map((c, i) => (i < line.length - 1 ? c.padEnd(widths[i]) : c));
     const header = align(CHAT_ROSTER_HEADER).map((h) => paint("1", h)).join("  ");
     const body = rows.map((r) => {
-      const [name, age, status, project, topic] = align(cells(r));
+      const [name, sessionID, age, status, project, topic] = align(cells(r));
       return [
         paint("32", name),
+        paint("2", sessionID),
         paint("2", age),
         paint(status === "stale" ? "31" : "32", status),
         project,
@@ -491,6 +495,7 @@ async function chatCommand(rest: string[]): Promise<void> {
       // sessions from burying the fresh signal. --stale all restores the
       // unbounded view. A bad value dies loudly rather than silently
       // shrinking the roster.
+      const activeOnly = restArgs.includes("--active");
       const staleArg = flagValue(restArgs, "--stale");
       let staleCapMs: number | null = 24 * 60 * 60 * 1000;
       if (staleArg !== undefined) {
@@ -500,12 +505,19 @@ async function chatCommand(rest: string[]): Promise<void> {
           process.exit(1);
         } else staleCapMs = Number(staleArg) * 24 * 60 * 60 * 1000;
       }
-      const sessions = db.listChatSessions();
+      let sessions = db.listChatSessions();
+      if (activeOnly) {
+        // Vetting view: only the fresh rows, no stale section. The
+        // boundary is the same heartbeat age the roster's Active section
+        // uses, so this is exactly that section with the stale header
+        // (and the --stale window) skipped.
+        sessions = sessions.filter((r) => chatLiveness(r) === "fresh");
+      }
       if (sessions.length === 0) {
-        console.log("No sessions registered. Sessions join the directory automatically on their first idle (opencode), or via chat_register.");
+        console.log(activeOnly ? "No active sessions." : "No sessions registered. Sessions join the directory automatically on their first idle (opencode), or via chat_register.");
         break;
       }
-      console.log(formatChatRoster(sessions, staleCapMs));
+      console.log(formatChatRoster(sessions, activeOnly ? null : staleCapMs));
       break;
     }
 
