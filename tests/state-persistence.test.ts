@@ -147,6 +147,9 @@ describe("runtime rehydration through server()", () => {
     // Restart case: foreign pid (the api stamps the current pid by default,
     // so override), no startup resume -> pruned.
     db.runtimeStatePut("buffer", "ses_dead", [ix("ses_dead")], WORK_DIR, process.pid + 999);
+    // A foreign-pid hosted set must be dropped too - re-hosting it would
+    // wake sessions whose harnesses died with the old process.
+    db.runtimeStatePut("hosted", WORK_DIR, ["ses_dead"], WORK_DIR, process.pid + 999);
     db.close();
 
     let hooks: { dispose?: () => Promise<void> } | undefined;

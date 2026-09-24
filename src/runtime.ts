@@ -504,6 +504,14 @@ export async function createRuntime(input: {
     } else if (row.kind === "watchers") {
       watchers.hydrate((row.value ?? []) as Watcher[]);
     } else if (row.kind === "hosted") {
+      // Rehydrate only on a same-process reload. A foreign-pid hosted row
+      // (restart) would re-host sessions whose harnesses died - dropping
+      // it is the point: the resumed session re-hosts itself through the
+      // event stream instead.
+      if (!samePid) {
+        db.runtimeStateDelete(row.kind, row.sessionID);
+        continue;
+      }
       for (const id of (row.value ?? []) as string[]) rehostedSessions.add(id);
     } else if (row.kind === "child") {
       const rec = row.value as { parentID?: string; snapshot?: ToolInteraction[]; metrics?: { new: number; updated: number; deleted: number } };
@@ -527,9 +535,6 @@ export async function createRuntime(input: {
         db.runtimeStateDelete(row.kind, row.sessionID);
         continue;
       }
-    } else if (row.kind === "hosted") {
-      db.runtimeStateDelete(row.kind, row.sessionID);
-      continue;
     } else if (row.kind === "wrapup") {
       if (!samePid) {
         // An armed wrap-up inherited across a restart could auto-fire
