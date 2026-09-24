@@ -170,6 +170,7 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   // has no `parts` field, so injecting there would write a stray property
   // the provider formatter never reads (silent nudge loss).
   const registerGenerate = await context.session.hook("generate", (request: { sessionID: string; messages: any[] }) => {
+    runtime.debug("v2:hook:generate", `entry session=${request.sessionID} pending=${pendingInjections.get(request.sessionID)?.length ?? 0} messages=${request.messages?.length}`);
     const injections = pendingInjections.get(request.sessionID);
     if (!injections?.length) return;
     const lastUser = [...request.messages].reverse().find((m) => m?.role === "user");
