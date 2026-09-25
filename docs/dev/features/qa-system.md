@@ -95,23 +95,23 @@ opencode session timeout, compaction trigger). Run them locally with
 | `qa-dry-run` | `QA_DRY_RUN=1 bun test tests/qa/auto/index.test.ts tests/qa/live/index.test.ts --concurrent --max-concurrency 5` | List use cases without spawning sessions |
 | `qa-auto` | `bin/qa-run auto` | Run automatable only (fast, no LLM). Pass UC names as args to select a subset. |
 | `qa-live` | `bin/qa-run live` | Run live only (spawns opencode, costs tokens). Pass UC names as args to select a subset. |
-| `qa-matrix` | `QA_MATRIX=1 bin/qa-run auto && QA_MATRIX=1 bin/qa-run live` | Run opencode-driven use cases against EVERY discovered opencode install, one leg per major. UC names pass through as args. |
 
-### The opencode version matrix (QA_MATRIX=1)
+### The opencode version matrix (default behavior)
 
-Without `QA_MATRIX`, every use case runs once against the `opencode` binary
-the PATH resolves first. With `QA_MATRIX=1` (the `qa-matrix` task),
-opencode-driven use cases register one leg per discovered install, with test
-names suffixed (`UC-001-memory-roundtrip [v1]`, `UC-001-memory-roundtrip
-[v2]`).
+Every task that runs opencode-driven use cases runs one leg per
+DISCOVERED opencode install, with test names suffixed
+(`UC-001-memory-roundtrip [v1]`, `UC-001-memory-roundtrip [v2]`) when
+there are several. There is no separate matrix command - the ordinary
+tasks just do the matrix based on what is available.
 
 Discovery (tests/qa/binaries.ts) asks the package manager where its
 formulas are installed (`brew --prefix opencode`, `brew --prefix
 opencode-v2`), falls back to the PATH-resolved binary, validates each
 candidate by running `--version`, tags it by major (`v1`, `v2` - the
-version output decides, not the formula name), and dedups candidates that
-resolve to the same binary. Machine-independent: a machine with one
-install runs single-leg even under `QA_MATRIX=1`.
+version output decides, not the formula name), and dedups candidates
+that resolve to the same binary. A machine with one install runs
+single-leg with unsuffixed names, so single-binary setups behave
+exactly as they did before the matrix existed.
 
 A use case opts into or restricts the matrix with `hosts: ["v1"]` /
 `["v2"]` / `["v1", "v2"]` on the `UseCase`:
@@ -122,6 +122,10 @@ A use case opts into or restricts the matrix with `hosts: ["v1"]` /
   the fast suite is not doubled for cases that never touch opencode.
   Declare `hosts` when a custom `run` spawns opencode itself (UC-098) or
   drives a serve (UC-100).
+
+`QA_HOSTS=v1` (comma-separated) narrows the legs when iterating against
+one major; a value matching no discovered install registers nothing
+with an explanatory line.
 
 Legs get separate fixtures (the fixture directory is keyed by test name
 suffix) because hosts cannot share one: a v2 session db in a shared

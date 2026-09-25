@@ -41,7 +41,7 @@ description = "Bump version, commit, tag, and push (args: patch|minor|major)"
 run = "bin/release"
 
 [tasks.qa]
-description = "Run QA use-case scenarios in isolated temp environments (auto first, then live)"
+description = "Run QA use-case scenarios in isolated temp environments (auto first, then live). Opencode-driven use cases run one leg per installed opencode major."
 run = "bun test tests/qa/auto/index.test.ts --concurrent --max-concurrency 5 && bun test tests/qa/live/index.test.ts"
 
 [tasks.qa-dry-run]
@@ -55,8 +55,4 @@ run = "bin/qa-run auto"
 [tasks.qa-live]
 description = "Run only live-session QA use cases (spawns opencode, costs model tokens). Pass UC names as args to select a subset (e.g. mise run qa-live uc-001 uc-003)."
 run = "bin/qa-run live"
-
-[tasks.qa-matrix]
-description = "Run opencode-driven use cases against EVERY discovered opencode install (brew formulas + PATH), one leg per major. Use-case subsets pass through: mise run qa-matrix uc-100. Live legs cost model tokens."
-run = "QA_MATRIX=1 bin/qa-run auto && QA_MATRIX=1 bin/qa-run live"
 

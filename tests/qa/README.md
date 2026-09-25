@@ -43,9 +43,12 @@ TUI verification, compaction triggers, real Claude Code/Cursor sessions).
 mise run qa          # auto first (&&), then live
 mise run qa-auto     # only automatable (fast, no tokens)
 mise run qa-live     # only live sessions
-mise run qa-matrix   # opencode-driven cases against EVERY discovered install
 mise run qa-dry-run  # list all without spawning
 ```
+
+Opencode-driven use cases run one leg per installed opencode major
+(`[v1]`/`[v2]` suffixed test names) when several are installed.
+`QA_HOSTS=v1` narrows to one major while iterating.
 
 Override the model with `QA_MODEL=venice/<model-id>`.
 

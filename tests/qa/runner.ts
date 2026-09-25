@@ -49,10 +49,11 @@ export interface UseCase {
    */
   userDoc?: string;
   /**
-   * Which opencode majors this use case applies to, as tags from the
-   * QA matrix discovery ("v1", "v2"). Default: applies to every discovered
-   * host. Only read when QA_MATRIX=1; in single-binary mode every use case
-   * runs against the PATH binary regardless.
+   * Which opencode majors this use case applies to, as tags from the QA
+   * matrix's binary discovery ("v1", "v2"). Default: every discovered
+   * host. Only meaningful for use cases that touch opencode - an
+   * automatable use case with no custom-opencode run keeps a single leg
+   * regardless.
    */
   hosts?: string[];
   /**
@@ -421,22 +422,34 @@ interface MatrixLeg {
   binDir?: string;
 }
 
-const MATRIX = process.env.QA_MATRIX === "1";
-
 /**
- * The registration legs for one use case under the current mode. In matrix
- * mode, opencode-driven use cases (live default-run ones, and automatable
- * ones that declare hosts - UC-100 spawns `opencode serve`) get one leg per
- * discovered install the use case applies to; automatable use cases that
- * never touch opencode keep a single leg so the fast suite is not doubled
- * for no information.
+ * The registration legs for one use case. Opencode-driven use cases (live
+ * default-run ones, and automatable ones that declare hosts - UC-100 spawns
+ * `opencode serve`, UC-098 spawns run) get one leg per DISCOVERED opencode
+ * install, names suffixed (" [v1]"/" [v2]") when there are several.
+ * Automatable use cases that never touch opencode keep a single leg so the
+ * fast suite is not doubled for no information. QA_HOSTS=v1,v2 narrows the
+ * legs when iterating against one major.
  */
 function matrixLegs(uc: UseCase): MatrixLeg[] {
-  if (!MATRIX) return [{ label: null }];
   const spawnsOpencode = !uc.run || uc.hosts !== undefined;
   if (!spawnsOpencode) return [{ label: null }];
-  const applicable = discoverHostBinaries().filter((h) => (uc.hosts ?? ["v1", "v2"]).includes(h.tag));
-  if (applicable.length === 0) return [{ label: null }];
+  const discovered = discoverHostBinaries();
+  const requested = uc.hosts ?? discovered.map((h) => h.tag);
+  let applicable = discovered.filter((h) => requested.includes(h.tag));
+  const narrow = process.env.QA_HOSTS?.split(",").map((s) => s.trim()).filter(Boolean);
+  if (narrow?.length) {
+    applicable = applicable.filter((h) => narrow.includes(h.tag));
+    if (applicable.length === 0) {
+      console.log(`  [qa] QA_HOSTS=${narrow.join(",")} matches none of the discovered installs (${discovered.map((h) => h.tag).join(", ") || "none"}) - nothing to run`);
+      return [];
+    }
+  }
+  if (applicable.length <= 1) {
+    // One install (or none - the PATH fallback covers it): keep the bare
+    // test name so single-binary machines see the same names as before.
+    return [{ label: null, binDir: applicable[0]?.binDir }];
+  }
   return applicable.map((h) => ({ label: h.tag, binDir: h.binDir }));
 }
 
