@@ -670,13 +670,13 @@ export async function createRuntime(input: {
       return (err as NodeJS.ErrnoException).code !== "ESRCH";
     }
   };
-  const scanDormantWatchers = (sessionID: string): string[] => {
+  const scanDormantWatchers = async (sessionID: string): Promise<string[]> => {
     if (dormantScanned.has(sessionID)) return [];
     dormantScanned.add(sessionID);
     try {
       const rows = db.runtimeStateAll().filter((r) => r.kind === "watchers" && r.pid !== process.pid);
       const own: Watcher[] = [];
-      const deadTargets = new Set<string>();
+      const deadSessions = new Map<string, string[]>();
       for (const row of rows) {
         const defs = Array.isArray(row.value) ? (row.value as Watcher[]) : [];
         if (dormantWatchersStale(defs)) {
@@ -688,15 +688,28 @@ export async function createRuntime(input: {
           // re-arming is a no-op there and the notice would be redundant.
           if (!rehydratedSessions.has(sessionID)) own.push(...defs);
         } else if (row.directory === directory && !pidAlive(row.pid)) {
-          for (const def of defs) deadTargets.add(watcherTarget(def));
+          // Dedup per dead SESSION (not per target): a resumed-then-died-
+          // again cycle re-arms the same session under new ids, and its
+          // second death deserves a fresh notice. Its own re-arm clears
+          // the entry below.
+          if (!notifiedWatcherDeaths.has(row.sessionID)) {
+            deadSessions.set(row.sessionID, defs.map(watcherTarget));
+          }
         }
       }
-      const freshDeaths = [...deadTargets].filter((t) => !notifiedWatcherDeaths.has(t));
-      for (const t of freshDeaths) notifiedWatcherDeaths.add(t);
-      const { rearmed, expired } = own.length > 0 ? watchers.rearm(sessionID, own) : { rearmed: [], expired: 0 };
+      for (const dead of deadSessions.keys()) notifiedWatcherDeaths.add(dead);
       const notices: string[] = [];
-      if (rearmed.length > 0) notices.push(watcherRearmNotice(rearmed.map(watcherTarget), expired));
-      if (freshDeaths.length > 0) notices.push(watcherDeathNotice(freshDeaths));
+      if (own.length > 0) {
+        const { rearmed, expired, failed } = await watchers.rearm(sessionID, own);
+        // This session came back to life: its own previous death notice is
+        // obsolete - a future death deserves a fresh one.
+        notifiedWatcherDeaths.delete(sessionID);
+        if (rearmed.length > 0) notices.push(watcherRearmNotice(rearmed.map(watcherTarget), expired, failed));
+      }
+      if (deadSessions.size > 0) {
+        const targets = [...new Set([...deadSessions.values()].flat())];
+        notices.push(watcherDeathNotice(targets));
+      }
       return notices;
     } catch (err) {
       // Recovery must never break the message that triggered it.
@@ -1184,7 +1197,7 @@ export async function createRuntime(input: {
       // scanDormantWatchers). Injected as synthetic parts - the same path
       // nudges take, so the model sees them on every call of the turn -
       // plus a best-effort toast for the human.
-      const rearmNotices = !childToParent.has(input.sessionID) ? scanDormantWatchers(input.sessionID) : [];
+      const rearmNotices = !childToParent.has(input.sessionID) ? await scanDormantWatchers(input.sessionID) : [];
       if (rearmNotices.length > 0) {
         for (const text of rearmNotices) {
           output.parts.push({

@@ -253,13 +253,20 @@ describe("runtime rehydration through server()", () => {
 });
 
 describe("WatcherRegistry rearm (dormant recovery)", () => {
+  const quietGh: any = async (apiArgs: string[]) => {
+    const joined = apiArgs.join(" ");
+    if (/\/pulls\/\d+$/.test(joined)) return { head: { sha: "aaaa1111" }, state: "open", merged: false, title: "t", body: "" };
+    if (/issues\/\d+\/comments/.test(joined)) return [];
+    if (/pulls\/\d+\/comments/.test(joined)) return [];
+    if (/check-runs/.test(joined)) return { check_runs: [] };
+    if (/^graphql/.test(joined)) return { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } };
+    throw new Error(`no route: ${joined}`);
+  };
   const makeRegistry2 = (journal?: (sessionID: string, watchers: any[]) => void) =>
     new WatcherRegistry({
       deliver: async () => {},
       canDeliver: () => false,
-      ghRunner: async () => {
-        throw new Error("no network in tests");
-      },
+      ghRunner: quietGh,
       journal,
       pollIntervalMs: 60_000,
     });
@@ -277,22 +284,23 @@ describe("WatcherRegistry rearm (dormant recovery)", () => {
     ...overrides,
   });
 
-  test("rearm restores definitions and rewrites the journal under the current pid", () => {
+  test("rearm restores definitions and rewrites the journal under the current pid", async () => {
     const journal: { sessionID: string; watchers: any[] }[] = [];
     const registry = makeRegistry2((sessionID, watchers) => journal.push({ sessionID, watchers }));
-    const res = registry.rearm("ses_w", [def("watch_d1", "ses_w")]);
+    const res = await registry.rearm("ses_w", [def("watch_d1", "ses_w")]);
     expect(res.rearmed).toHaveLength(1);
     expect(res.expired).toBe(0);
+    expect(res.failed).toBe(0);
     expect(registry.listForSession("ses_w").map((w) => w.id)).toEqual(["watch_d1"]);
     // The journal rewrite is the point: the dormant row now belongs to this
     // process, so the next reload rehydrates it live.
     expect(journal.at(-1)).toEqual({ sessionID: "ses_w", watchers: res.rearmed });
   });
 
-  test("rearm drops expired definitions and reports the count; an all-expired rearm clears the row", () => {
+  test("rearm drops expired definitions and reports the count; an all-expired rearm clears the row", async () => {
     const journal: { sessionID: string; watchers: any[] }[] = [];
     const registry = makeRegistry2((sessionID, watchers) => journal.push({ sessionID, watchers }));
-    const res = registry.rearm("ses_w", [
+    const res = await registry.rearm("ses_w", [
       def("watch_old", "ses_w", { expiresAt: Date.now() - 1000, createdAt: Date.now() - 5000 }),
       def("watch_fresh", "ses_w"),
     ]);
@@ -300,14 +308,32 @@ describe("WatcherRegistry rearm (dormant recovery)", () => {
     expect(res.expired).toBe(1);
 
     const gone = makeRegistry2((sessionID, watchers) => journal.push({ sessionID, watchers }));
-    const res2 = gone.rearm("ses_x", [def("watch_old", "ses_x", { expiresAt: Date.now() - 1000 })]);
+    const res2 = await gone.rearm("ses_x", [def("watch_old", "ses_x", { expiresAt: Date.now() - 1000 })]);
     expect(res2.rearmed).toHaveLength(0);
     expect(res2.expired).toBe(1);
     // Nothing re-armed -> the journal emits an empty list, deleting the row.
     expect(journal.at(-1)).toEqual({ sessionID: "ses_x", watchers: [] });
   });
 
-  test("rearm caps at the per-session limit, newest first", () => {
+  test("rearm revalidates pr targets: an unreachable target drops the definition as failed", async () => {
+    const journal: { sessionID: string; watchers: any[] }[] = [];
+    const failing = new WatcherRegistry({
+      deliver: async () => {},
+      canDeliver: () => false,
+      ghRunner: async () => {
+        throw new Error("target gone");
+      },
+      journal: (sessionID, watchers) => journal.push({ sessionID, watchers }),
+      pollIntervalMs: 60_000,
+    });
+    const res = await failing.rearm("ses_w", [def("watch_gone", "ses_w")]);
+    expect(res.rearmed).toHaveLength(0);
+    expect(res.failed).toBe(1);
+    // Nothing re-armed -> the journal row is cleared.
+    expect(journal.at(-1)?.watchers).toEqual([]);
+  });
+
+  test("rearm caps at the per-session limit, newest first", async () => {
     const registry = makeRegistry2();
     registry.hydrate([
       def("live_1", "ses_w", { createdAt: 1 }),
@@ -315,7 +341,7 @@ describe("WatcherRegistry rearm (dormant recovery)", () => {
       def("live_3", "ses_w", { createdAt: 3 }),
       def("live_4", "ses_w", { createdAt: 4 }),
     ]);
-    const res = registry.rearm("ses_w", [
+    const res = await registry.rearm("ses_w", [
       def("dormant_old", "ses_w", { createdAt: 10 }),
       def("dormant_new", "ses_w", { createdAt: 20 }),
       def("dormant_newest", "ses_w", { createdAt: 30 }),
@@ -325,11 +351,11 @@ describe("WatcherRegistry rearm (dormant recovery)", () => {
     expect(registry.listForSession("ses_w")).toHaveLength(5);
   });
 
-  test("rearm does not clobber a live watcher re-registered after the restart", () => {
+  test("rearm does not clobber a live watcher re-registered after the restart", async () => {
     const registry = makeRegistry2();
     const live = def("watch_x", "ses_w", { state: { headSha: "live-sha" } });
     registry.hydrate([live]);
-    registry.rearm("ses_w", [def("watch_x", "ses_w", { state: { headSha: "stale-sha" } })]);
+    await registry.rearm("ses_w", [def("watch_x", "ses_w", { state: { headSha: "stale-sha" } })]);
     const now = registry.listForSession("ses_w").find((w) => w.id === "watch_x");
     expect((now as any).state.headSha).toBe("live-sha");
     expect(registry.listForSession("ses_w")).toHaveLength(1);

@@ -928,22 +928,39 @@ export class WatcherRegistry {
    * a restart (the dormant journal rows the runtime keeps instead of
    * pruning). Definitions whose TTL expired while the session was away are
    * dropped - a watch that outlived its own expiry must not fire on a stale
-   * baseline. The rest join the live registry newest-first up to the
-   * per-session limit (the session may have created watchers since the
-   * restart), and the journal is rewritten either way: with the current
-   * process's pid when anything re-arms, deleted when nothing does.
+   * baseline. PR and branch definitions are REVALIDATED by re-fetching
+   * their baseline: a deleted branch or closed PR would otherwise re-arm
+   * into silent poll failure, and a stale baseline would flood the session
+   * with every event that happened while it was away; fetch failures drop
+   * the definition and count as failed. The rest join the live registry
+   * newest-first up to the per-session limit (the session may have created
+   * watchers since the restart), and the journal is rewritten either way:
+   * with the current process's pid when anything re-arms, deleted when
+   * nothing does.
    */
-  rearm(sessionID: string, defs: Watcher[]): { rearmed: Watcher[]; expired: number } {
+  async rearm(sessionID: string, defs: Watcher[]): Promise<{ rearmed: Watcher[]; expired: number; failed: number }> {
     const now = Date.now();
     const fresh = defs.filter((w) => now <= w.expiresAt).sort((a, b) => b.createdAt - a.createdAt);
     const budget = Math.max(0, this.#opts.maxPerSession - this.listForSession(sessionID).length);
-    const rearmed = fresh.slice(0, budget);
-    for (const w of rearmed) {
+    const rearmed: Watcher[] = [];
+    let failed = 0;
+    for (const def of fresh.slice(0, budget)) {
+      if (def.source !== "command") {
+        try {
+          def.state = def.source === "pr"
+            ? await fetchPrState(this.#opts.ghRunner, def.repo, def.pr)
+            : await fetchBranchState(this.#opts.ghRunner, def.repo, def.branch);
+        } catch {
+          failed++;
+          continue;
+        }
+      }
       // Do not clobber a watcher created after the journal was written.
-      if (!this.#watchers.has(w.id)) this.#watchers.set(w.id, w);
+      if (!this.#watchers.has(def.id)) this.#watchers.set(def.id, def);
+      rearmed.push(def);
     }
     this.#emit(sessionID);
-    return { rearmed, expired: defs.length - fresh.length };
+    return { rearmed, expired: defs.length - fresh.length, failed };
   }
 
   /**

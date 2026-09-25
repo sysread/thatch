@@ -904,12 +904,15 @@ This is a system notification, not user input. Decide whether to act now or keep
  * not silently dropped - a watch the user expected to be waiting should be
  * known to be gone.
  */
-export function watcherRearmNotice(targets: string[], expiredCount: number): string {
+export function watcherRearmNotice(targets: string[], expiredCount: number, failedCount = 0): string {
   const list = targets.join(", ");
   const expired = expiredCount > 0
     ? `\n${expiredCount} earlier watcher${expiredCount === 1 ? "" : "s"} expired while the session was away and were not re-armed.`
     : "";
-  return `[thatch] ${targets.length} watcher${targets.length === 1 ? "" : "s"} re-armed after the restart: ${list}.${expired}
+  const failed = failedCount > 0
+    ? `\n${failedCount} watcher${failedCount === 1 ? "" : "s"} could not be re-armed (the watched target is gone or unreachable) and was dropped.`
+    : "";
+  return `[thatch] ${targets.length} watcher${targets.length === 1 ? "" : "s"} re-armed after the restart: ${list}.${expired}${failed}
 No re-registration is needed; notifications will arrive here as usual. This is a system notice, not user input - carry on with the user's request.`;
 }
 
