@@ -18,6 +18,7 @@ import {
   type NudgeMatch,
 } from "./prompts";
 import { ExtractionPipeline, unwrapExecuteThatchCalls, type ToolInteraction } from "./extraction";
+import { mostRecentTopLevelSessionId } from "./session-db";
 import type { CoreContext } from "./tool-defs";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
 import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommandFiles, COMPACT_READY_TOKEN, EXIT_READY_TOKEN } from "./commands";
@@ -372,6 +373,16 @@ export async function createRuntime(input: {
   const osArgs = osProcessArgs();
   const startupSession = startupSessionId(osArgs);
   const continueLast = !startupSession && (continuesLastSessionFromArgv(process.argv) || continuesLastSessionFromArgv(osArgs));
+  // The session whose journalled runtime state a restart inherits: -s names
+  // it on the command line; -c means "most recent top-level session in this
+  // directory", resolved straight from the session database because the
+  // rehydration loop below is synchronous and the v2 plugin context has no
+  // session.list for the SDK route. Resolving it HERE is the point -
+  // after the loop, the inherited rows are already pruned.
+  const continueTarget = continueLast && startupSession === undefined
+    ? mostRecentTopLevelSessionId(directory ?? worktree)
+    : null;
+  const inheritSession = startupSession ?? continueTarget ?? undefined;
   const autoRegisterOn = chatAutoRegister(loadConfig(dbPath).config);
   const tombstoned = startupSession ? db.hasChatLeaveTombstone(startupSession) : false;
   debug("chat:startup", `init: argv=${JSON.stringify(process.argv.slice(0, 8))} osArgs=${JSON.stringify(osArgs.slice(0, 8))} parsed=${startupSession} continue=${continueLast} chatOn=${chatOn} autoRegister=${autoRegisterOn} tombstone=${startupSession ? tombstoned : "n/a"}`);
@@ -501,6 +512,10 @@ export async function createRuntime(input: {
   //   harness. Only a startup-resumed session (-s/-c) in this directory
   //   inherits recovery-safe state; everything else is pruned.
   const rehydratedSessions = new Set<string>();
+  // Extraction children restored by a same-pid reload (childId -> parentId).
+  // Their idle event may have fired during the reload window and been lost;
+  // reconciled after setup (see reconcileRestoredChildren).
+  const restoredChildren = new Map<string, string>();
   // Sessions this instance hosted, restored from the journal on a reload
   // (same pid + same directory). Written through by the poller's hosted-set
   // read, so the next reload picks up the latest set.
@@ -509,9 +524,10 @@ export async function createRuntime(input: {
   for (const row of db.runtimeStateAll()) {
     const samePid = row.pid === process.pid;
     const ownDirectory = row.directory === directory;
-    const isStartup = startupSession !== undefined && row.sessionID === startupSession;
+    const isStartup = inheritSession !== undefined && row.sessionID === inheritSession;
     if (samePid && !ownDirectory) continue; // live sibling - untouched
-    if (!samePid && !(isStartup && ownDirectory)) {
+    if (!samePid && !ownDirectory) continue; // another location's instance owns these rows - its own restart cleans them
+    if (!samePid && !isStartup) {
       // Watcher definitions survive a restart as DORMANT rows instead of
       // being pruned: the defining session's harness died with the old
       // process, but the session itself is resumable (session picker, v2
@@ -528,7 +544,14 @@ export async function createRuntime(input: {
     if (row.kind === "buffer") {
       extraction.hydrate(row.value as ToolInteraction[], []);
     } else if (row.kind === "accepted") {
-      extraction.hydrate([], row.value as ToolInteraction[]);
+      // On a RESTART the extractor child died with the old process - there
+      // is nobody left to complete the accepted queue, and the first
+      // unrelated completion signal would silently drop it. Requeue as
+      // pending instead: the resumed session's next nudge honestly
+      // re-extracts it. On a reload the child may still be running and
+      // stays accepted.
+      if (!samePid) extraction.hydrate(row.value as ToolInteraction[], []);
+      else extraction.hydrate([], row.value as ToolInteraction[]);
     } else if (row.kind === "watchers") {
       watchers.hydrate((row.value ?? []) as Watcher[]);
     } else if (row.kind === "hosted") {
@@ -551,13 +574,17 @@ export async function createRuntime(input: {
         extractionChildren.add(row.sessionID);
         extracting.add(rec.parentID);
         if (rec.metrics) childMetrics.set(row.sessionID, rec.metrics);
+        restoredChildren.set(row.sessionID, rec.parentID);
       } else {
         // Restart: the child ran in the dead process and no execution event
         // will ever arrive for it. Recover the snapshot as plain pending
         // entries (extraction stays available) and drop the record - never
         // restore `extracting`, which would suppress both extraction paths
-        // for the resumed session forever.
-        if (isStartup && rec?.parentID === startupSession && Array.isArray(rec.snapshot)) {
+        // for the resumed session forever. The guard tests the child's
+        // PARENT against the inherited session, not the row's own session
+        // id: child rows are keyed by child id, so an isStartup-style check
+        // could never hold and the snapshot recovery was unreachable.
+        if (inheritSession !== undefined && rec?.parentID === inheritSession && Array.isArray(rec.snapshot)) {
           for (const interaction of rec.snapshot) extraction.push(interaction);
         }
         db.runtimeStateDelete(row.kind, row.sessionID);
@@ -677,6 +704,99 @@ export async function createRuntime(input: {
       return [];
     }
   };
+
+  // Finalizes an extraction child that finished. The session.status idle
+  // handler calls it when the child's idle event arrives; the reload
+  // reconciler calls it for restored children whose idle event was lost to
+  // the reload window.
+  const finishExtractionChild = async (sessionID: string, parentID: string) => {
+    if (extractionChildren.has(sessionID)) {
+      // Drain the parent's snapshot entries from the pending buffer. If the
+      // child wrote memories, consumeSnapshot already ran in
+      // tool.execute.after and the snapshot is gone - nothing to drain. If
+      // the child did a no-save run, the snapshot entries are still in the
+      // buffer and need to be drained here so they don't replay as a nudge
+      // on the next chat.message. Never drain the entire buffer -
+      // interleaved-turn entries must survive.
+      const snapshot = parentSnapshots.get(sessionID);
+      if (snapshot) {
+        extraction.consumeSnapshot(parentID, snapshot);
+      }
+
+      // Fire a toast with the extraction metrics. Only show a toast when
+      // memories were actually written - no toast for no-save runs to avoid
+      // notification fatigue.
+      const metrics = childMetrics.get(sessionID);
+      const parts: string[] = [];
+      if (metrics) {
+        if (metrics.new > 0) parts.push(`new: ${metrics.new}`);
+        if (metrics.updated > 0) parts.push(`updated: ${metrics.updated}`);
+        if (metrics.deleted > 0) parts.push(`deleted: ${metrics.deleted}`);
+      }
+      if (parts.length > 0) {
+        try {
+          await caps.showToast({
+            message: `💭 ${parts.join(", ")}`,
+            variant: "success",
+            duration: 4000,
+          });
+        } catch {
+          // TUI may not be connected (e.g. headless mode).
+        }
+      }
+
+      extraction.completeAccepted(parentID);
+      missedNudges.delete(parentID);
+      extracting.delete(parentID);
+      childToParent.delete(sessionID);
+      parentSnapshots.delete(sessionID);
+      childMetrics.delete(sessionID);
+      extractionChildren.delete(sessionID);
+      journalChild(sessionID);
+      extraction.consume(sessionID);
+      // Delete the child session to avoid clutter.
+      try {
+        await caps.sessionDelete(sessionID);
+      } catch {
+        // Best-effort - the child is idle and harmless if not deleted.
+      }
+    } else {
+      // Task-dispatched sub-agent went idle. Complete the parent's accepted
+      // entries (from the nudge-path extraction_done accept) and reset
+      // missedNudges. Retained for the nudge fallback path.
+      extraction.completeAccepted(parentID);
+      missedNudges.delete(parentID);
+    }
+  };
+
+  // A restored child may have gone idle DURING the reload window - its idle
+  // event fired before the plugin's event pump resubscribed and was lost.
+  // Without reconciliation, `extracting` stays populated forever and BOTH
+  // extraction paths stay suppressed for the session's life. Wait a beat
+  // for the pump to repopulate the status map, then finalize any restored
+  // child that is no longer running. A child genuinely mid-turn keeps its
+  // own idle event, and the finalize is idempotent if both paths race.
+  const reconcileRestoredChildren = async () => {
+    if (restoredChildren.size === 0) return;
+    await new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, 10_000);
+      t.unref?.();
+    });
+    let live: Record<string, { type: string }> = {};
+    try {
+      live = (await caps.fetchStatuses()) ?? {};
+    } catch {
+      // Map-only liveness then - the event-fed statuses are the fallback.
+    }
+    for (const [childId, parentId] of restoredChildren) {
+      const mapped = sessionStatus.get(childId);
+      const remote = live[childId]?.type;
+      if (remote === "busy" || remote === "retry" || mapped === "busy" || mapped === "retry") continue;
+      restoredChildren.delete(childId);
+      await finishExtractionChild(childId, parentId);
+    }
+  };
+  void reconcileRestoredChildren();
 
   // Skills always install to the global opencode config - installing into the
   // worktree would mutate the user's repo (untracked files in git status).
@@ -1359,63 +1479,7 @@ export async function createRuntime(input: {
           //   parent's accepted entries and reset missedNudges. Do NOT drain
           //   the buffer or delete the session - the task tool that
           //   dispatched the sub-agent needs to read its output.
-          if (extractionChildren.has(sessionID)) {
-            // Drain the parent's snapshot entries from the pending buffer.
-            // If the child wrote memories, consumeSnapshot already ran in
-            // tool.execute.after and the snapshot is gone - nothing to
-            // drain. If the child did a no-save run, the snapshot entries
-            // are still in the buffer and need to be drained here so they
-            // don't replay as a nudge on the next chat.message. Never drain
-            // the entire buffer - interleaved-turn entries must survive.
-            const snapshot = parentSnapshots.get(sessionID);
-            if (snapshot) {
-              extraction.consumeSnapshot(parentID, snapshot);
-            }
-
-            // Fire a toast with the extraction metrics. Only show a toast
-            // when memories were actually written - no toast for no-save
-            // runs to avoid notification fatigue.
-            const metrics = childMetrics.get(sessionID);
-            const parts: string[] = [];
-            if (metrics) {
-              if (metrics.new > 0) parts.push(`new: ${metrics.new}`);
-              if (metrics.updated > 0) parts.push(`updated: ${metrics.updated}`);
-              if (metrics.deleted > 0) parts.push(`deleted: ${metrics.deleted}`);
-            }
-            if (parts.length > 0) {
-              try {
-                await caps.showToast({
-                  message: `💭 ${parts.join(", ")}`,
-                  variant: "success",
-                  duration: 4000,
-                });
-              } catch {
-                // TUI may not be connected (e.g. headless mode).
-              }
-            }
-
-            extraction.completeAccepted(parentID);
-            missedNudges.delete(parentID);
-            extracting.delete(parentID);
-            childToParent.delete(sessionID);
-            parentSnapshots.delete(sessionID);
-            childMetrics.delete(sessionID);
-            extractionChildren.delete(sessionID);
-            journalChild(sessionID);
-            extraction.consume(sessionID);
-            // Delete the child session to avoid clutter.
-            try {
-              await caps.sessionDelete(sessionID);
-            } catch {
-              // Best-effort - the child is idle and harmless if not deleted.
-            }
-          } else {
-            // Task-dispatched sub-agent went idle. Complete the parent's
-            // accepted entries (from the nudge-path extraction_done accept)
-            // and reset missedNudges. Retained for the nudge fallback path.
-            extraction.completeAccepted(parentID);
-            missedNudges.delete(parentID);
-          }
+          await finishExtractionChild(sessionID, parentID);
           return;
         }
         // Wrap-up command resolution: the session went idle right after

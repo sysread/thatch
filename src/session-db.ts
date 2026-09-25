@@ -54,6 +54,38 @@ export function resolveOpencodeDbPath(): string | null {
   return existsSync(path) ? path : null;
 }
 
+/**
+ * Resolves the session `opencode -c` continues: the most recently updated
+ * top-level session in the directory, read straight from the session
+ * database - the same pick the TUI makes from client.session.list(), which
+ * the v2 plugin context cannot call (its session domain has no list) and
+ * which would arrive too late for the runtime's synchronous rehydration
+ * partition regardless. Null when the db is unavailable or no top-level
+ * session exists in the directory.
+ */
+export function mostRecentTopLevelSessionId(directory: string): string | null {
+  const dbPath = resolveOpencodeDbPath();
+  if (!dbPath) return null;
+  let db: Database;
+  try {
+    db = new Database(dbPath, { readonly: true });
+  } catch {
+    return null;
+  }
+  try {
+    const row = db
+      .query(
+        "SELECT id FROM session WHERE directory = ? AND (parent_id IS NULL OR parent_id = '') ORDER BY time_updated DESC LIMIT 1",
+      )
+      .get(directory) as { id: string } | undefined;
+    return row?.id ?? null;
+  } catch {
+    return null;
+  } finally {
+    db.close();
+  }
+}
+
 export interface SessionRow {
   id: string;
   title: string;

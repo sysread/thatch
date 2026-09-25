@@ -490,4 +490,65 @@ describe("dormant watcher recovery through server()", () => {
       await done();
     }
   });
+
+  test("a restart prunes only its own directory's rows - other locations' rows survive", async () => {
+    // Two v1 TUI windows on different projects share one thatch db: this
+    // instance's restart prune must not sweep the other location's rows -
+    // they belong to a live sibling instance's lifecycle, and deleting them
+    // destroyed its crash-recovery state.
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut("buffer", "ses_otherdir", [ix("ses_otherdir")], "/tmp/thatch-state-somewhere-else", -1);
+    db.runtimeStatePut("buffer", "ses_own", [ix("ses_own")], WORK_DIR, -1);
+    db.close();
+
+    const { finally: done } = await startServer();
+    try {
+      const check = new ThatchDB(dbPath);
+      const sessions = check.runtimeStateAll().map((r) => r.sessionID);
+      expect(sessions).toContain("ses_otherdir"); // foreign directory - untouched
+      expect(sessions).not.toContain("ses_own"); // own directory, not the startup resume - pruned
+      check.close();
+    } finally {
+      await done();
+    }
+  });
+
+  test("a restored child that went idle during the reload window is finalized", async () => {
+    // Same-pid reload with a child row: the plugin restores `extracting`
+    // for the parent - if the child's idle event was lost to the reload
+    // window, nothing would ever clear it and BOTH extraction paths stay
+    // suppressed for the session's life. The reconciler must finalize the
+    // child (delete its session, drop the bookkeeping) when it is no longer
+    // running. 30s timeout: the reconciler deliberately waits out a 10s
+    // reload window first.
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut(
+      "child",
+      "ses_child_r",
+      { parentID: "ses_parent_r", snapshot: [ix("ses_parent_r")], metrics: { new: 1, updated: 0, deleted: 0 } },
+      WORK_DIR,
+    );
+    db.close();
+
+    const { finally: done } = await startServer();
+    try {
+      // Finalization journals the child row gone (the maps are cleared, and
+      // journalChild journals a delete for a parentless child). Poll for it
+      // - the reconciler deliberately waits out the reload window first.
+      const deadline = Date.now() + 20_000;
+      for (;;) {
+        const check = new ThatchDB(dbPath);
+        const rows = check.runtimeStateAll().filter((r) => r.sessionID === "ses_child_r");
+        check.close();
+        if (rows.length === 0) break;
+        if (Date.now() > deadline) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      const check = new ThatchDB(dbPath);
+      expect(check.runtimeStateAll().some((r) => r.sessionID === "ses_child_r")).toBe(false);
+      check.close();
+    } finally {
+      await done();
+    }
+  }, 30_000);
 });

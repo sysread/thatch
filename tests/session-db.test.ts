@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 import {
   SessionDB,
   resolveOpencodeDbPath,
+  mostRecentTopLevelSessionId,
   partToTimelineEntry,
   partToTranscriptEntries,
 } from "../src/session-db";
@@ -80,6 +81,35 @@ describe("resolveOpencodeDbPath", () => {
   test("returns null when OPENCODE_DB points nowhere", () => {
     process.env.OPENCODE_DB = "/nonexistent/opencode.db";
     expect(resolveOpencodeDbPath()).toBeNull();
+  });
+});
+
+describe("mostRecentTopLevelSessionId", () => {
+  test("picks the newest top-level session in the directory; children and other directories skipped", () => {
+    // The fixture db lacks parent_id, so build a dedicated one.
+    const contPath = join(dbDir, "continue.db");
+    const cont = new Database(contPath);
+    cont.exec(`CREATE TABLE session (id text PRIMARY KEY, directory text, parent_id text, time_updated integer)`);
+    cont.query("INSERT INTO session VALUES ('ses_old', '/tmp/work', NULL, 1000)").run();
+    cont.query("INSERT INTO session VALUES ('ses_child', '/tmp/work', 'ses_old', 5000)").run();
+    cont.query("INSERT INTO session VALUES ('ses_new', '/tmp/work', NULL, 4000)").run();
+    cont.query("INSERT INTO session VALUES ('ses_elsewhere', '/somewhere/else', NULL, 9000)").run();
+    cont.close();
+
+    const saved = process.env.OPENCODE_DB;
+    process.env.OPENCODE_DB = contPath;
+    try {
+      expect(mostRecentTopLevelSessionId("/tmp/work")).toBe("ses_new");
+      expect(mostRecentTopLevelSessionId("/tmp/nowhere")).toBeNull();
+    } finally {
+      if (saved === undefined) delete process.env.OPENCODE_DB;
+      else process.env.OPENCODE_DB = saved;
+    }
+  });
+
+  test("returns null when no session db exists", () => {
+    process.env.OPENCODE_DB = "/nonexistent/opencode.db";
+    expect(mostRecentTopLevelSessionId("/tmp/work")).toBeNull();
   });
 });
 
