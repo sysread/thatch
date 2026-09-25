@@ -95,6 +95,45 @@ opencode session timeout, compaction trigger). Run them locally with
 | `qa-dry-run` | `QA_DRY_RUN=1 bun test tests/qa/auto/index.test.ts tests/qa/live/index.test.ts --concurrent --max-concurrency 5` | List use cases without spawning sessions |
 | `qa-auto` | `bin/qa-run auto` | Run automatable only (fast, no LLM). Pass UC names as args to select a subset. |
 | `qa-live` | `bin/qa-run live` | Run live only (spawns opencode, costs tokens). Pass UC names as args to select a subset. |
+| `qa-matrix` | `QA_MATRIX=1 bin/qa-run auto && QA_MATRIX=1 bin/qa-run live` | Run opencode-driven use cases against EVERY discovered opencode install, one leg per major. UC names pass through as args. |
+
+### The opencode version matrix (QA_MATRIX=1)
+
+Without `QA_MATRIX`, every use case runs once against the `opencode` binary
+the PATH resolves first. With `QA_MATRIX=1` (the `qa-matrix` task),
+opencode-driven use cases register one leg per discovered install, with test
+names suffixed (`UC-001-memory-roundtrip [v1]`, `UC-001-memory-roundtrip
+[v2]`).
+
+Discovery (tests/qa/binaries.ts) asks the package manager where its
+formulas are installed (`brew --prefix opencode`, `brew --prefix
+opencode-v2`), falls back to the PATH-resolved binary, validates each
+candidate by running `--version`, tags it by major (`v1`, `v2` - the
+version output decides, not the formula name), and dedups candidates that
+resolve to the same binary. Machine-independent: a machine with one
+install runs single-leg even under `QA_MATRIX=1`.
+
+A use case opts into or restricts the matrix with `hosts: ["v1"]` /
+`["v2"]` / `["v1", "v2"]` on the `UseCase`:
+
+- Live use cases (no custom `run`) are matrixed by default - the default
+  `runViaOpencode` path spawns opencode by definition.
+- Automatable use cases keep a single leg unless they declare `hosts` -
+  the fast suite is not doubled for cases that never touch opencode.
+  Declare `hosts` when a custom `run` spawns opencode itself (UC-098) or
+  drives a serve (UC-100).
+
+Legs get separate fixtures (the fixture directory is keyed by test name
+suffix) because hosts cannot share one: a v2 session db in a shared
+fixture fails the v1 leg's serve with "Database is not empty and has no
+session table".
+
+The v1 and v2 `run` CLIs disagree on flags (v1 has `--dir`, which v2
+dropped; v2 needs `--standalone` to skip the background daemon, which a
+fixture sandbox must not boot). `opencodeRunArgs(ctx, prompt)` in the
+runner builds the right invocation per leg by version-detecting the
+binary the leg's PATH selects; `runViaOpencode` and UC-098's custom runs
+go through it.
 
 The `qa` task runs auto first via `&&`. Auto failures stop before live runs.
 The `qa-live` task does not use `--concurrent` — live sessions are

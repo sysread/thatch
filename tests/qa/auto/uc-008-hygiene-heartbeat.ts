@@ -142,10 +142,12 @@ const useCase: UseCase = {
 
     // --- Test 3: CLI `thatch hygiene` runs without error ---
 
-    // The CLI auto-detects the store from cwd. In a non-git dir it returns
-    // the dir basename. We seed that store with a single fresh, non-stale,
-    // non-duplicate memory so the CLI should print "Store is healthy."
-    const cliStore = ctx.dir.split("/").pop()!;
+    // The CLI auto-detects the store from cwd: the fixture's origin remote
+    // (added by createFixture) makes it the remote slug. Seed THAT store
+    // with a single fresh, non-stale, non-duplicate memory so the CLI
+    // should print "Store is healthy." for a populated store, not an empty
+    // one.
+    const cliStore = "test-org/test-repo";
     const db3 = new ThatchDB(dbPath);
     const cliEmb = await model.passageEmbed("a unique cli test memory");
     db3.remember(cliStore, "cli-test", "a unique cli test memory", cliEmb, "mock");

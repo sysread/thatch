@@ -43,6 +43,7 @@ TUI verification, compaction triggers, real Claude Code/Cursor sessions).
 mise run qa          # auto first (&&), then live
 mise run qa-auto     # only automatable (fast, no tokens)
 mise run qa-live     # only live sessions
+mise run qa-matrix   # opencode-driven cases against EVERY discovered install
 mise run qa-dry-run  # list all without spawning
 ```
 
@@ -54,7 +55,11 @@ Override the model with `QA_MODEL=venice/<model-id>`.
    `tests/qa/live/uc-NNN-name.ts` (no `.test.ts` extension — only the
    barrel file uses that).
 2. Import `registerUseCase` and `UseCase` (and `QaContext` if automatable)
-   from `../runner`.
+   from `../runner`. If the use case spawns opencode itself (custom `run`
+   that shells out, or a serve), declare `hosts: ["v1", "v2"]` so the
+   `qa-matrix` task runs it against every discovered install - and build
+   the invocation with `opencodeRunArgs`, since the hosts disagree on
+   `run` flags.
 3. Define the scenario with `name`, `preconditions`, `steps`, and
    `expected` as string arrays joined by `\n`.
 4. For automatable use cases, add a `run(ctx: QaContext)` function that

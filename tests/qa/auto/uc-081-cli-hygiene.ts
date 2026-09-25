@@ -43,10 +43,11 @@ const useCase: UseCase = {
     const bin = `${ctx.repoRoot}/bin/thatch`;
     const env = { ...ctx.env };
     const dbPath = ctx.env.THATCH_DB_PATH;
-    // The CLI auto-detects the store from cwd via detectRepo(). In a
-    // non-git dir, it falls back to the dir basename. ctx.dir is
-    // /tmp/thatch-qa/UC-081-cli-hygiene, so the store is the basename.
-    const store = ctx.dir.split("/").pop()!;
+    // The CLI auto-detects the store from cwd via detectRepo(): the
+    // fixture's origin remote (added by createFixture) makes it the remote
+    // slug below. Seed that store - seeding a differently-named store would
+    // make the CLI read an empty one and the assertions pass vacuously.
+    const store = "test-org/test-repo";
     const model = new MockEmbeddingModel();
 
     // --- Seed duplicate candidates ---

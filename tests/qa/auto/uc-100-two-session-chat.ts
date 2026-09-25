@@ -36,6 +36,10 @@ async function listTextParts(client: ServeHandle["client"], sessionID: string): 
 
 const useCase: UseCase = {
   name: "UC-100-two-session-chat",
+  // Spawns `opencode serve`, so unlike most auto use cases it is
+  // host-version-coupled: declared hosts make it matrix into one leg per
+  // discovered install under QA_MATRIX=1.
+  hosts: ["v1", "v2"],
   preconditions: [
     "- opencode binary on PATH and VENICE_API_KEY set (the recipient session runs real model turns).",
   ].join("\n"),
