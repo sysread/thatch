@@ -10,7 +10,8 @@ import { server } from "../src/index";
 import { hostedSessionIds } from "../src/chat";
 
 // Persistence of volatile plugin-runtime state across v2 plugin reloads and
-// process restarts (docs/plans/plugin-state-persistence.md): the runtime
+// process restarts (docs/dev/features/opencode-plugin.md, the dispose row of
+// the capability table): the runtime
 // journals buffers, child bookkeeping, wrap-up arms, and watcher definitions
 // into runtime_state; setup() rehydrates same-pid rows (reload) and prunes
 // foreign-pid rows unless the session is the startup resume (restart).
