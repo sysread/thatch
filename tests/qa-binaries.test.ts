@@ -72,6 +72,22 @@ describe("tagBinaries", () => {
     expect(hosts.map((h) => [h.tag, h.version])).toEqual([["v1", "1.18.32"], ["v2", "2.0.16"]]);
   });
 
+  test("two installs sharing a major collapse to one leg - the newest version wins", () => {
+    // Brew 2.0.15 keg plus a newer PATH copy: one major, one leg - two
+    // legs would both label [v2] and collide on the fixture directory.
+    const oldBin = join(dir, "old", "bin");
+    const newBin = join(dir, "new", "bin");
+    fakeBinary(oldBin, "opencode v2.0.15");
+    fakeBinary(newBin, "opencode v2.1.0");
+    const hosts = tagBinaries([
+      { binDir: oldBin, origin: "brew:opencode-v2" },
+      { binDir: newBin, origin: "PATH" },
+    ]);
+    expect(hosts).toEqual([
+      { tag: "v2", version: "2.1.0", binDir: newBin, origin: "PATH" },
+    ]);
+  });
+
   test("a binary that exits nonzero or prints garbage is dropped, not guessed", () => {
     const badExit = join(dir, "bad-exit", "bin");
     fakeBinary(badExit, "opencode v2.0.0", 1);

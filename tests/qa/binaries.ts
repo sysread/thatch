@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 
 /**
  * Discovery of the opencode binaries installed on this machine, for the QA
- * matrix (QA_MATRIX=1): the opencode-driven use cases run once per
+ * matrix: the opencode-driven use cases run once per
  * discovered install instead of once against whatever the PATH happens to
  * resolve first.
  *
@@ -113,15 +113,18 @@ export function pathCandidateDir(): Candidate | null {
 
 /**
  * Pure tag-and-dedup over candidate bin dirs: runs `--version` on each
- * candidate's binary, tags by major, and dedups by real path (brew's opt
- * prefix and the PATH entry can resolve to the same cellar keg). An
- * unparseable --version drops the candidate - a binary that cannot state
- * its version cannot be asserted about.
+ * candidate's binary, tags by major, and dedups two ways - by real path
+ * (brew's opt prefix and the PATH entry can resolve to the same cellar
+ * keg) and by MAJOR (the matrix runs one leg per major; two installs
+ * sharing a major would otherwise produce duplicate `[v2]` labels and
+ * colliding fixture dirs). When a major has several installs the newest
+ * version wins - the most representative binary of that major's current
+ * state. An unparseable --version drops the candidate - a binary that
+ * cannot state its version cannot be asserted about.
  */
 export function tagBinaries(candidates: Candidate[], env?: Record<string, string>): HostBinary[] {
-  const out: HostBinary[] = [];
+  const byTag = new Map<string, HostBinary>();
   const seenPaths = new Set<string>();
-  const seenVersions = new Set<string>();
   for (const candidate of candidates) {
     const binary = joinBin(candidate.binDir, "opencode");
     let real: string;
@@ -134,11 +137,25 @@ export function tagBinaries(candidates: Candidate[], env?: Record<string, string
     const parsed = versionOfBinary(binary, env);
     if (!parsed) continue;
     seenPaths.add(real);
-    if (seenVersions.has(parsed.version)) continue;
-    seenVersions.add(parsed.version);
-    out.push({ tag: `v${parsed.major}`, version: parsed.version, binDir: candidate.binDir, origin: candidate.origin });
+    const tag = `v${parsed.major}`;
+    const incumbent = byTag.get(tag);
+    if (!incumbent || versionLt(incumbent.version, parsed.version)) {
+      byTag.set(tag, { tag, version: parsed.version, binDir: candidate.binDir, origin: candidate.origin });
+    }
   }
-  return out;
+  return [...byTag.values()];
+}
+
+/** True when semver a < semver b (numeric, dotted triples). */
+function versionLt(a: string, b: string): boolean {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    const da = pa[i] ?? 0;
+    const db = pb[i] ?? 0;
+    if (da !== db) return da < db;
+  }
+  return false;
 }
 
 let cache: HostBinary[] | null = null;

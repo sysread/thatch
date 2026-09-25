@@ -445,19 +445,29 @@ function matrixLegs(uc: UseCase): MatrixLeg[] {
       return [];
     }
   }
-  if (applicable.length <= 1) {
-    // One install (or none - the PATH fallback covers it): keep the bare
-    // test name so single-binary machines see the same names as before.
-    return [{ label: null, binDir: applicable[0]?.binDir }];
+  if (applicable.length === 0) {
+    if (uc.hosts !== undefined) {
+      // A declared hosts list is an assertion about which majors the use
+      // case covers; silently running the PATH binary instead would test
+      // the wrong major.
+      console.log(`  [qa] ${uc.name}: declared hosts (${uc.hosts.join(", ")}) match no discovered install (${discovered.map((h) => h.tag).join(", ") || "none"}) - not registered`);
+      return [];
+    }
+    return [{ label: null }];
+  }
+  if (applicable.length === 1) {
+    // Single install: keep the bare test name so single-binary machines
+    // see the same names as before.
+    return [{ label: null, binDir: applicable[0].binDir }];
   }
   return applicable.map((h) => ({ label: h.tag, binDir: h.binDir }));
 }
 
 /**
  * Register a use case as a concurrent bun test. Handles dry-run skipping,
- * manual-only marking, fixture setup, result assertion - and, under
- * QA_MATRIX=1, one registration per applicable discovered opencode install
- * (test names gain a " [v1]"/" [v2]" suffix).
+ * manual-only marking, fixture setup, result assertion - and one
+ * registration per applicable discovered opencode install when several are
+ * present (test names gain a " [v1]"/" [v2]" suffix).
  */
 export function registerUseCase(uc: UseCase): void {
   for (const leg of matrixLegs(uc)) registerLeg(uc, leg);

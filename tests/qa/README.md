@@ -60,7 +60,7 @@ Override the model with `QA_MODEL=venice/<model-id>`.
 2. Import `registerUseCase` and `UseCase` (and `QaContext` if automatable)
    from `../runner`. If the use case spawns opencode itself (custom `run`
    that shells out, or a serve), declare `hosts: ["v1", "v2"]` so the
-   `qa-matrix` task runs it against every discovered install - and build
+   ordinary qa tasks run it against every discovered install - and build
    the invocation with `opencodeRunArgs`, since the hosts disagree on
    `run` flags.
 3. Define the scenario with `name`, `preconditions`, `steps`, and
