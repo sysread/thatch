@@ -1,7 +1,32 @@
 import { describe, test, expect } from "bun:test";
 import { ExtractionPipeline, unwrapExecuteThatchCalls, type ToolInteraction } from "../src/extraction";
 
+const ix = (sessionID: string): ToolInteraction => ({
+  tool: "bash",
+  sessionID,
+  args: { command: "echo hi" },
+  title: "echo hi",
+  output: "hi",
+});
+
 describe("ExtractionPipeline", () => {
+  test("requeueStaleAccepted requeues accepted entries past the age", () => {
+    const pipeline = new ExtractionPipeline();
+    pipeline.push(ix("ses_s"));
+    pipeline.accept("ses_s");
+    // A fresh accept is inside any reasonable age bound - left alone.
+    expect(pipeline.requeueStaleAccepted(60_000)).toEqual([]);
+    expect(pipeline.pending("ses_s")).toBe(false); // still accepted, quiet
+    // Past the age (negative = everything is stale): requeued to pending,
+    // accepted cleared - the nudge replays and the entries are honestly
+    // re-extracted.
+    expect(pipeline.requeueStaleAccepted(-1)).toEqual(["ses_s"]);
+    expect(pipeline.pending("ses_s")).toBe(true);
+    expect(pipeline.peek("ses_s")).toHaveLength(1);
+    // Requeueing twice does not duplicate.
+    expect(pipeline.requeueStaleAccepted(-1)).toEqual([]);
+  });
+
   test("constructor creates an empty pipeline", () => {
     const pipeline = new ExtractionPipeline();
     expect(pipeline.pending("session-1")).toBe(false);
@@ -190,6 +215,30 @@ describe("unwrapExecuteThatchCalls", () => {
     });
     expect(result.tools).toEqual(["thatch_memory_remember"]);
     expect(result.overwrite).toBe(true);
+  });
+
+  test("detects the bracket form of wrapped thatch tools", () => {
+    // tools["thatch_extraction_done"] used to slip past the dot-form regex
+    // and re-open the dispatch/ack loop through the buffer.
+    const result = unwrapExecuteThatchCalls({
+      code: `await tools["thatch_extraction_done"]({ session_id: "ses_parent" });`,
+    });
+    expect(result.tools).toEqual(["thatch_extraction_done"]);
+    expect(result.sessionID).toBe("ses_parent");
+  });
+
+  test("captures the session_id of a wrapped extraction_done", () => {
+    const result = unwrapExecuteThatchCalls({
+      code: `const r = await tools.thatch_extraction_done({ session_id: "ses_parent" });\nreturn r;`,
+    });
+    expect(result.sessionID).toBe("ses_parent");
+  });
+
+  test("sessionID is undefined when the wrapped done carries none", () => {
+    const result = unwrapExecuteThatchCalls({
+      code: `await tools.thatch_extraction_done({});`,
+    });
+    expect(result.sessionID).toBeUndefined();
   });
 
   test("ignores overwrite when false or absent", () => {

@@ -830,12 +830,22 @@ export async function createRuntime(input: {
       missedNudges.delete(parentID);
     }
   };
-  const toolExtractionDone = (sessionID: string) => {
+  const toolExtractionDone = (sessionID: string, targetID?: string) => {
     const parentID = childToParent.get(sessionID);
     if (parentID) {
       extraction.completeAccepted(parentID);
       missedNudges.delete(parentID);
       extraction.consume(sessionID);
+    } else if (targetID && targetID !== sessionID) {
+      // A completion ack for ANOTHER session - the fact-extractor sub-agent
+      // naming its parent. v2 links no parentID on dispatched sessions
+      // (SessionCreateInput has none), so childToParent cannot know this
+      // relationship and the explicit session_id is the only signal that
+      // the target's accepted entries are accounted for. Without this
+      // branch the accepted queue lingers forever and a tool-dense session
+      // re-nudges every idle on never-draining exhaust.
+      extraction.completeAccepted(targetID);
+      missedNudges.delete(targetID);
     } else {
       extraction.accept(sessionID);
     }
@@ -930,7 +940,7 @@ export async function createRuntime(input: {
       //   accepted entries, including no-save runs that write no memory,
       //   and drop the child's own buffer (its work is done).
       if (tool === "thatch_extraction_done") {
-        toolExtractionDone(sessionID);
+        toolExtractionDone(sessionID, (input.args as { session_id?: string } | undefined)?.session_id);
         return;
       }
       // Track memory deletions in child sessions for the toast metrics.
@@ -995,7 +1005,7 @@ export async function createRuntime(input: {
         if (wrapped.tools.length > 0) {
           for (const name of wrapped.tools) {
             if (name === "thatch_memory_remember") await toolMemoryRemember(sessionID, wrapped.overwrite);
-            else if (name === "thatch_extraction_done") toolExtractionDone(sessionID);
+            else if (name === "thatch_extraction_done") toolExtractionDone(sessionID, wrapped.sessionID);
             else if (name === "thatch_memory_forget" && childToParent.has(sessionID)) toolMemoryForget(sessionID);
             // Other thatch_* tools (recall, show, list, ...) carry no hook
             // semantics - doing nothing with them is the whole point.
@@ -1164,6 +1174,11 @@ export async function createRuntime(input: {
       // is active - that means a direct-extraction child session is running
       // and the plugin is handling extraction via the SDK. The nudge fires
       // here only when direct extraction was never triggered or threw.
+      // Accepted entries whose completion signal never came (crashed
+      // extractor, or a v2 dispatch whose ack never named the parent)
+      // requeue here so they are honestly re-extracted instead of lingering
+      // as silent loss.
+      extraction.requeueStaleAccepted();
       if (!extracting.has(input.sessionID) && extraction.pending(input.sessionID)) {
         const batch = extraction.peek(input.sessionID);
         const missed = missedNudges.get(input.sessionID) ?? 0;

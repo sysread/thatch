@@ -356,8 +356,7 @@ describe("plugin entry", () => {
     expect(output.parts.length).toBe(0);
   });
 
-  test("skill, task, and subagent meta-tools are not buffered (feedback loop prevention)", async () => {
-    await hooks["tool.execute.after"]!(
+  test("skill, task, and subagent meta-tools are not buffered (feedback loop prevention)", async () => {    await hooks["tool.execute.after"]!(
       { tool: "skill", sessionID: "ses_d", callID: "c3", args: { name: "thatch-fact-extractor" } },
       { title: "load skill", output: "loaded", metadata: {} },
     );
@@ -375,6 +374,43 @@ describe("plugin entry", () => {
     const output: any = { message: { id: "msg_4" }, parts: [] };
     await hooks["chat.message"]!({ sessionID: "ses_d" } as any, output);
     expect(output.parts.length).toBe(0);
+  });
+
+  test("extraction_done naming another session completes that session's accepted queue", async () => {
+    // v2 dispatches carry no parentID (SessionCreateInput has none), so a
+    // model-dispatched extractor is never in childToParent. Its completion
+    // ack with the parent's session_id is the only signal the parent's
+    // accepted entries are accounted for - without the target branch, the
+    // accepted queue lingers forever and tool-dense sessions re-nudge every
+    // idle on never-draining exhaust.
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_p", callID: "p1", args: { command: "ls" } },
+      { title: "list", output: "file.txt", metadata: {} },
+    );
+    // Parent acks v2-style: accept, no linkage.
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_extraction_done", sessionID: "ses_p", callID: "p2", args: {} },
+      { title: "ack", output: "[acknowledged]", metadata: {} },
+    );
+    // The payload provider still serves the accepted entries to the
+    // extractor (peek + peekAccepted).
+    const served = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+      { session_id: "ses_p" },
+      { sessionID: "ses_ext" },
+    );
+    expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("file.txt");
+
+    // The extractor finishes and acks with the parent's session id: the
+    // parent's accepted queue must COMPLETE, not linger.
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_extraction_done", sessionID: "ses_ext", callID: "e1", args: { session_id: "ses_p" } },
+      { title: "ack", output: "[acknowledged]", metadata: {} },
+    );
+    const drained = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+      { session_id: "ses_p" },
+      { sessionID: "ses_ext" },
+    );
+    expect(typeof drained === "string" ? drained : JSON.stringify(drained)).not.toContain("file.txt");
   });
 
   test("extraction nudge escalates with consecutive misses and resets on memory write", async () => {

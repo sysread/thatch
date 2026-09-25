@@ -65,28 +65,37 @@ export interface ExecuteUnwrap {
   tools: string[];
   /** Whether the code passes `overwrite: true` to a memory_remember call. */
   overwrite: boolean;
+  /**
+   * The session_id a wrapped extraction_done call passes, when present -
+   * the sub-agent naming the parent whose accepted entries it completed.
+   */
+  sessionID?: string;
 }
 
 /**
  * Detect thatch_* tool invocations wrapped inside a Code Mode `execute`
- * call's code (`tools.thatch_extraction_done({session_id: "..."})`). The
- * extraction buffer matches on TOOL NAME, so without unwrapping, the
- * pipeline's own ack/drain traffic re-enters the buffer as extractable
- * interactions: each extraction run queues the next one and the nudge never
- * runs out of self-generated material (observed as an infinite
- * dispatch/ack loop, September 2026). Returns an empty tool list when the
- * args are not execute-shaped or the code invokes no thatch tools - such
- * calls buffer as normal, because they did real non-thatch work.
+ * call's code (`tools.thatch_extraction_done({session_id: "..."})` - dot
+ * and bracket forms both count; the bracket form
+ * `tools["thatch_extraction_done"]` used to slip past the unwrap and
+ * re-open the dispatch/ack loop). The extraction buffer matches on TOOL
+ * NAME, so without unwrapping, the pipeline's own ack/drain traffic
+ * re-enters the buffer as extractable interactions: each extraction run
+ * queues the next one and the nudge never runs out of self-generated
+ * material (observed as an infinite dispatch/ack loop, September 2026).
+ * Returns an empty tool list when the args are not execute-shaped or the
+ * code invokes no thatch tools - such calls buffer as normal, because they
+ * did real non-thatch work.
  */
 export function unwrapExecuteThatchCalls(args: unknown): ExecuteUnwrap {
   const code = (args as Record<string, unknown> | undefined)?.code;
   if (typeof code !== "string" || !code.includes("thatch_")) return { tools: [], overwrite: false };
   const tools: string[] = [];
-  for (const match of code.matchAll(/tools\.thatch_([a-z_]+)/g)) {
-    const name = `thatch_${match[1]}`;
+  for (const match of code.matchAll(/tools\.thatch_([a-z_]+)|tools\[\s*["']thatch_([a-z_]+)["']\s*\]/g)) {
+    const name = `thatch_${match[1] ?? match[2]}`;
     if (!tools.includes(name)) tools.push(name);
   }
-  return { tools, overwrite: /\boverwrite\s*:\s*true\b/.test(code) };
+  const doneCall = code.match(/thatch_extraction_done["']?\]?\s*\(\s*\{[^}]*?\bsession_id:\s*["']([^"']+)["']/);
+  return { tools, overwrite: /\boverwrite\s*:\s*true\b/.test(code), sessionID: doneCall?.[1] };
 }
 
 /**
@@ -127,6 +136,15 @@ export type ExtractionJournal = (
 ) => void;
 
 /**
+ * How long accepted entries wait for a completion signal before
+ * requeueStaleAccepted gives up waiting and requeues them. Generous - the
+ * extractor sub-agent can legitimately run for many minutes. The point is
+ * bounding the linger when the completion signal never comes: a crashed
+ * extractor, or a v2 dispatch whose completion ack never names the parent.
+ */
+export const ACCEPTED_STALE_MS = 15 * 60_000;
+
+/**
  * Per-session in-memory ring buffer used by the opencode plugin path. Claude
  * Code's MCP server has no equivalent plugin lifecycle, so its CLI subcommands
  * use the file-backed queue in extract-queue.ts plus buildExtractionPayload.
@@ -134,6 +152,8 @@ export type ExtractionJournal = (
 export class ExtractionPipeline {
   #buffers = new Map<string, ToolInteraction[]>();
   #accepted = new Map<string, ToolInteraction[]>();
+  /** When the session's buffer was accepted - drives requeueStaleAccepted. */
+  #acceptedAt = new Map<string, number>();
   #maxBuffer = 20;
   #journal?: ExtractionJournal;
 
@@ -152,6 +172,7 @@ export class ExtractionPipeline {
       const buf = this.#accepted.get(ix.sessionID) ?? [];
       buf.push(ix);
       this.#accepted.set(ix.sessionID, buf);
+      if (!this.#acceptedAt.has(ix.sessionID)) this.#acceptedAt.set(ix.sessionID, Date.now());
     }
   }
 
@@ -187,6 +208,7 @@ export class ExtractionPipeline {
     this.#buffers.delete(sessionID);
     const existing = this.#accepted.get(sessionID) ?? [];
     this.#accepted.set(sessionID, [...existing, ...buf]);
+    this.#acceptedAt.set(sessionID, Date.now());
     this.#journal?.("buffer", sessionID, this.#buffers.get(sessionID));
     this.#journal?.("accepted", sessionID, this.#accepted.get(sessionID));
   }
@@ -194,6 +216,7 @@ export class ExtractionPipeline {
   /** Drop accepted entries: the extractor finished (save or no-save). */
   completeAccepted(sessionID: string): void {
     this.#accepted.delete(sessionID);
+    this.#acceptedAt.delete(sessionID);
     this.#journal?.("accepted", sessionID, undefined);
   }
 
@@ -208,10 +231,28 @@ export class ExtractionPipeline {
     const accepted = this.#accepted.get(sessionID);
     if (!accepted || accepted.length === 0) return;
     this.#accepted.delete(sessionID);
+    this.#acceptedAt.delete(sessionID);
     const buf = this.#buffers.get(sessionID) ?? [];
     this.#buffers.set(sessionID, [...accepted, ...buf]);
     this.#journal?.("buffer", sessionID, this.#buffers.get(sessionID));
     this.#journal?.("accepted", sessionID, undefined);
+  }
+
+  /**
+   * Requeues accepted entries that have waited longer than maxAgeMs for a
+   * completion signal that never came: the extractor sub-agent crashed
+   * without acking, or (v2) completed without a parent linkage the plugin
+   * could see. Without this, accepted entries linger unprocessed AND
+   * un-nudged - silent loss. Returns the session ids that had entries
+   * requeued; the regular nudge path picks them up from pending on the
+   * session's next message.
+   */
+  requeueStaleAccepted(maxAgeMs = ACCEPTED_STALE_MS): string[] {
+    const stale = [...this.#acceptedAt.entries()]
+      .filter(([, acceptedAt]) => Date.now() - acceptedAt > maxAgeMs)
+      .map(([sessionID]) => sessionID);
+    for (const sessionID of stale) this.requeueAccepted(sessionID);
+    return stale;
   }
 
   /** Returns the session's accepted (held) interactions. Test/introspection. */
