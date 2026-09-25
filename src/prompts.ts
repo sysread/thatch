@@ -627,7 +627,7 @@ export function versionWarningNudge(message: string): string {
  * running one (the user upgraded but the host kept the old plugin loaded).
  * Standalone so the wording is testable. Host-specific remedies (v2's
  * "opencode plugin update", a shim-shape reminder) are planned but not yet
- * appended by any caller - see docs/plans/opencode-v2-plugin.md.
+ * appended by any caller - see docs/dev/features/opencode-plugin.md.
  */
 export function skewWarningText(onDisk: string, running: string): string {
   return `thatch was upgraded to v${onDisk} but this session is running v${running}. Restart opencode to apply the update.`;

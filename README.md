@@ -59,8 +59,12 @@ The v2 plugin API is missing a few surfaces the v1 API had. On 2.x:
   cannot auto-exit for the same reason.
 - **No `-c` session listing.** The chat resume listing degrades.
 
-Everything else - tools, memory, nudges, chat, watchers - behaves the same
-on both versions.
+Everything else - tools, memory, nudges, chat, watchers - behaves the
+same on both versions, with one caveat: v2 has no turn-free delivery
+(noReply), so the features that lean on it - the chat transcript echo
+bubble, the session-start reminder, and the post-reload re-attach
+notice - do not render on 2.x. Their model-facing content still
+arrives; only the bubble rendering is lost.
 
 Then **prime your project memory** by running `thatch prime` in your project directory.
 This launches an `opencode` session to build an initial map of the code base

@@ -446,7 +446,9 @@ function buildCapabilities(context: V2Context, worktree: string, childSessions: 
     },
     showToast: async (_toast: ToastInput) => {
       // No toast publish path reachable from the promise context (the
-      // tui.toast.show event has no producer surface here). Degrades.
+      // tui.toast.show event has no producer surface here). A `tui`
+      // companion plugin entrypoint (ui.toast.show) is the known lift
+      // candidate - not yet wired. Degrades.
     },
     compactSession: async () => {
       // No compaction trigger is reachable from the promise context: the
@@ -459,10 +461,11 @@ function buildCapabilities(context: V2Context, worktree: string, childSessions: 
     },
     exitHost: async () => {
       // No TUI surface on v2; the exit wrap-up's checklist and flush run,
-      // the exit itself does not. When upstream restores a publish path,
-      // the right v2 target is session.tab.close (close THIS session's
-      // tab), not app.exit - on a shared daemon app.exit would take down
-      // every tab. Tracked in anomalyco/opencode#50984.
+      // the exit itself does not. When upstream restores a publish path
+      // (or the `tui` companion entrypoint's ui.tabs.close is wired),
+      // the right v2 target closes THIS session's tab, not app.exit - on
+      // a shared daemon app.exit would take down every tab. Tracked in
+      // anomalyco/opencode#50984.
     },
   };
 }

@@ -16,16 +16,14 @@
  * never its output (injection hygiene: command output can be external
  * content, so it never rides a notification).
  *
- * Lifetime is deliberately process-scoped. The registry lives in plugin
- * memory, never in SQLite: opencode loads thatch in-process, so the plugin
- * process is the natural owner of its watchers. This makes multi-instance
- * ownership structurally impossible (each process polls only what it
- * registered), leaves no orphan data behind, and matches the extraction
- * pipeline's opencode path, which is also in-memory. A crashed or restarted
- * opencode loses its watchers - acceptable, because the session that created
- * them lost its conversational context too, and a delivered notification
- * into a session that no longer knows why it is being watched is worse than
- * a lost watch.
+ * Lifetime is deliberately process-scoped for the LIVE registry: the
+ * poller and delivery state live in plugin memory, never in SQLite -
+ * opencode loads thatch in-process, so the plugin process is the natural
+ * owner of its watchers, and no cross-process "who polls this?" claim
+ * logic is needed. The DEFINITIONS, however, are journaled to
+ * runtime_state (the optional journal hook) so they survive v2 plugin
+ * reloads and, as dormant rows, full restarts - see the rearm() and the
+ * runtime's dormant-watcher scan.
  */
 
 // ---------------------------------------------------------------------------

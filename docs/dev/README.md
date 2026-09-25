@@ -53,8 +53,8 @@ OpenCode plugin path
   │                     child-session bookkeeping (host-agnostic)
   ├── os-args.ts      → pure argv/OS-command-line helpers (startup session
   │                     resolution; SDK-free)
-  ├── tools.ts        → buildCoreContext (shared per-call context) +
-  │                     thin opencode tool() wrappers over tool-defs (v1)
+  ├── tools.ts        → thin opencode tool() wrappers (v1); tool-defs.ts
+  │                     owns buildCoreContext (shared per-call context)
   ├── extraction.ts   → in-memory ring buffer + shared payload builders
   ├── watchers.ts     → in-memory watcher registry + poller (opencode-only,
   │                     event-driven PR notifications delivered as prompts)

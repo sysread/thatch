@@ -1338,10 +1338,12 @@ export interface ChatPollerOptions {
 
 /**
  * Background poller: heartbeats hosted sessions, delivers wake prompts for
- * pending chat messages. Mirrors the watcher registry's shape (start/stop/
- * dispose, re-entrant guards, pending-retry semantics) but its pending state
- * lives in SQLite rather than memory, because the sender may be a different
- * process than the deliverer.
+ * pending chat messages. Mirrors the watcher registry's lifecycle shape
+ * (start/stop/dispose, re-entrant guards, pending-retry semantics) but its
+ * pending state lives in SQLite rather than memory, because the sender may
+ * be a different process than the deliverer. (The watcher registry now
+ * journals its DEFINITIONS to runtime_state; its live poll/delivery state
+ * remains in-memory.)
  */
 /**
  * Computes the chat poller's hosted set - the sessions this plugin instance

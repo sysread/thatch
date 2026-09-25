@@ -215,9 +215,9 @@ export async function createRuntime(input: {
   });
 
   // In-memory watcher registry for proactive event notifications (GitHub PR
-  // and branch watching, plus local command watches). Deliberately
-  // process-scoped: no SQLite, no cross-restart state. See src/watchers.ts
-  // for the rationale.
+  // and branch watching, plus local command watches). Live state is
+  // process-scoped; definitions are journalled for reload rehydration and
+  // restart dormancy. See src/watchers.ts for the rationale.
   //
   // Delivery prompts the session with a synthetic part - the same mechanism
   // opencode uses for background task completions - so a watched event
@@ -500,7 +500,8 @@ export async function createRuntime(input: {
   // session deletion.
   const pendingWrapUp = new Map<string, { token: string; kind: "compact" | "exit" }>();
 
-  // Rehydrate persisted runtime state (docs/plans/plugin-state-persistence.md).
+  // Rehydrate persisted runtime state (docs/dev/features/opencode-plugin.md,
+  // the runtime_state row).
   // Rows are instance-scoped (kind+session, tagged with the writer's pid and
   // location directory):
   // - same pid, same directory: a v2 plugin reload rebuilt THIS instance's
