@@ -356,13 +356,20 @@ describe("plugin entry", () => {
     expect(output.parts.length).toBe(0);
   });
 
-  test("skill and task meta-tools are not buffered (feedback loop prevention)", async () => {
+  test("skill, task, and subagent meta-tools are not buffered (feedback loop prevention)", async () => {
     await hooks["tool.execute.after"]!(
       { tool: "skill", sessionID: "ses_d", callID: "c3", args: { name: "thatch-fact-extractor" } },
       { title: "load skill", output: "loaded", metadata: {} },
     );
     await hooks["tool.execute.after"]!(
       { tool: "task", sessionID: "ses_d", callID: "c4", args: { description: "extract" } },
+      { title: "dispatch", output: "done", metadata: {} },
+    );
+    // v2's dispatch tool is named subagent; buffering a dispatch would feed
+    // the extraction loop with its own exhaust (nudge -> dispatch ->
+    // buffered dispatch -> nudge).
+    await hooks["tool.execute.after"]!(
+      { tool: "subagent", sessionID: "ses_d", callID: "c5", args: { description: "extract" } },
       { title: "dispatch", output: "done", metadata: {} },
     );
     const output: any = { message: { id: "msg_4" }, parts: [] };

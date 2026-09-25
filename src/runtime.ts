@@ -979,7 +979,11 @@ export async function createRuntime(input: {
         }
         return;
       }
-      if (input.tool.startsWith("thatch_") || input.tool === "skill" || input.tool === "task") return;
+      // "task" is v1's dispatch tool and "subagent" is v2's - a dispatch
+      // buffers itself otherwise, and the nudge then fires on the pipeline's
+      // own exhaust (the subagent-dispatch loop, sibling of the
+      // execute-wrapped-ack loop below).
+      if (input.tool.startsWith("thatch_") || input.tool === "skill" || input.tool === "task" || input.tool === "subagent") return;
       // Code Mode execute calls: when the code wraps thatch_* invocations,
       // run the wrapped tools' hook semantics and never buffer the call
       // itself - it is the pipeline's own traffic, and buffering it feeds
