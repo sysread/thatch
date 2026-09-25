@@ -59,6 +59,36 @@ function truncate(text: string, maxLen: number): string {
   return text.slice(0, maxLen) + "...";
 }
 
+/** The scan result for a Code Mode `execute` call - see unwrapExecuteThatchCalls. */
+export interface ExecuteUnwrap {
+  /** Distinct thatch_* tool names the code invokes, in first-appearance order. */
+  tools: string[];
+  /** Whether the code passes `overwrite: true` to a memory_remember call. */
+  overwrite: boolean;
+}
+
+/**
+ * Detect thatch_* tool invocations wrapped inside a Code Mode `execute`
+ * call's code (`tools.thatch_extraction_done({session_id: "..."})`). The
+ * extraction buffer matches on TOOL NAME, so without unwrapping, the
+ * pipeline's own ack/drain traffic re-enters the buffer as extractable
+ * interactions: each extraction run queues the next one and the nudge never
+ * runs out of self-generated material (observed as an infinite
+ * dispatch/ack loop, September 2026). Returns an empty tool list when the
+ * args are not execute-shaped or the code invokes no thatch tools - such
+ * calls buffer as normal, because they did real non-thatch work.
+ */
+export function unwrapExecuteThatchCalls(args: unknown): ExecuteUnwrap {
+  const code = (args as Record<string, unknown> | undefined)?.code;
+  if (typeof code !== "string" || !code.includes("thatch_")) return { tools: [], overwrite: false };
+  const tools: string[] = [];
+  for (const match of code.matchAll(/tools\.thatch_([a-z_]+)/g)) {
+    const name = `thatch_${match[1]}`;
+    if (!tools.includes(name)) tools.push(name);
+  }
+  return { tools, overwrite: /\boverwrite\s*:\s*true\b/.test(code) };
+}
+
 /**
  * Serialize a list of tool interactions into the JSON payload the
  * thatch-fact-extractor skill expects. Shared by the opencode plugin path

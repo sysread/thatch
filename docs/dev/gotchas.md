@@ -210,3 +210,22 @@ error. This is why the dual entry exports a MERGED default object
 must re-export the default as well as the name. A named-only shim loads on
 v1 and silently disables thatch on v2 - same invisible failure, opposite
 host.
+
+## The extraction buffer matches on tool NAME, so Code Mode execute calls re-queue pipeline traffic
+
+The non-bufferable filter in `onToolExecuteAfter` (`src/runtime.ts`) matches
+`input.tool`, but a Code Mode `execute` call that wraps
+`tools.thatch_extraction_done` / `tools.thatch_memory_remember` inside its
+code string arrives as tool name `execute`. Unfixed, every execute-wrapped
+ack landed back in the buffer as an extractable interaction: each
+extraction run's payload contained only the previous run's dispatch and ack,
+the nudge always found pending interactions, and a session could loop
+forever on dispatch → ack → nudge (observed live in an oink session,
+September 2026 - the looped agent answered every turn with "Extractor
+dispatched and acknowledged. Stopping per the nudge" and never resumed the
+user's work; only a human message broke the cycle). The fix unwraps execute
+calls (`unwrapExecuteThatchCalls` in `src/extraction.ts`) and runs the
+wrapped tool's hook semantics instead of buffering. Lesson for sibling
+hooks: when a filter reasons about tool identity, an aggregator tool
+(arbitrary code execution over other tools) defeats name-based matching -
+unwrap the aggregation before classifying.

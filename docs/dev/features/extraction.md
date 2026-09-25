@@ -50,6 +50,14 @@ calls are buffered for later extraction.
   itself; `skill`/`task` meta-tools would create a feedback loop (extraction
   triggers a skill load, which gets buffered, which triggers another
   extraction)
+- Code Mode `execute` calls are **unwrapped before filtering**
+  (`unwrapExecuteThatchCalls` in `src/extraction.ts`): when the call's code
+  invokes `tools.thatch_*` tools, the wrapped tools' hook semantics run
+  (ack, drain, metrics) and the call itself is never buffered. Matching on
+  the outer tool name alone re-queued the pipeline's own dispatch/ack
+  traffic every cycle — each extraction run queued the next one, producing
+  an infinite dispatch/ack loop (observed live, September 2026). Execute
+  calls that touch no thatch tools buffer as normal.
 
 **MCP hosts** — `bin/thatch`, `src/extract-queue.ts`:
 

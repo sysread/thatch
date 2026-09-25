@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { ExtractionPipeline, type ToolInteraction } from "../src/extraction";
+import { ExtractionPipeline, unwrapExecuteThatchCalls, type ToolInteraction } from "../src/extraction";
 
 describe("ExtractionPipeline", () => {
   test("constructor creates an empty pipeline", () => {
@@ -158,6 +158,65 @@ describe("ExtractionPipeline", () => {
 
     expect(parsed.interactions[0].output.length).toBeLessThan(600);
     expect(parsed.interactions[0].output).toContain("...");
+  });
+});
+
+describe("unwrapExecuteThatchCalls", () => {
+  test("detects a wrapped thatch tool and reports no overwrite", () => {
+    const result = unwrapExecuteThatchCalls({
+      code: `const done = await tools.thatch_extraction_done({ session_id: "ses_x" });\nreturn done;`,
+    });
+    expect(result.tools).toEqual(["thatch_extraction_done"]);
+    expect(result.overwrite).toBe(false);
+  });
+
+  test("detects multiple distinct wrapped tools in first-appearance order", () => {
+    const result = unwrapExecuteThatchCalls({
+      code: `await tools.thatch_memory_remember({ text: "..." });\nawait tools.thatch_extraction_done({});`,
+    });
+    expect(result.tools).toEqual(["thatch_memory_remember", "thatch_extraction_done"]);
+  });
+
+  test("dedupes repeated invocations of the same tool", () => {
+    const result = unwrapExecuteThatchCalls({
+      code: `await tools.thatch_memory_recall({ query: "a" });\nawait tools.thatch_memory_recall({ query: "b" });`,
+    });
+    expect(result.tools).toEqual(["thatch_memory_recall"]);
+  });
+
+  test("detects overwrite: true inside the code string", () => {
+    const result = unwrapExecuteThatchCalls({
+      code: `await tools.thatch_memory_remember({ text: "x", overwrite: true });`,
+    });
+    expect(result.tools).toEqual(["thatch_memory_remember"]);
+    expect(result.overwrite).toBe(true);
+  });
+
+  test("ignores overwrite when false or absent", () => {
+    const absent = unwrapExecuteThatchCalls({ code: `tools.thatch_memory_show({})` });
+    const falsy = unwrapExecuteThatchCalls({ code: `tools.thatch_memory_show({ overwrite: false })` });
+    expect(absent.overwrite).toBe(false);
+    expect(falsy.overwrite).toBe(false);
+  });
+
+  test("returns empty for code that mentions thatch without invoking tools.thatch_*", () => {
+    const result = unwrapExecuteThatchCalls({
+      code: `console.log("the thatch_extraction_done tool is nice")`,
+    });
+    expect(result.tools).toEqual([]);
+  });
+
+  test("returns empty for non-execute-shaped args", () => {
+    expect(unwrapExecuteThatchCalls(undefined).tools).toEqual([]);
+    expect(unwrapExecuteThatchCalls({ command: "ls" }).tools).toEqual([]);
+    expect(unwrapExecuteThatchCalls({ code: 42 }).tools).toEqual([]);
+  });
+
+  test("plain execute calls without thatch content signal normal buffering", () => {
+    const result = unwrapExecuteThatchCalls({
+      code: `const r = await fetch("https://example.com");\nreturn r.status;`,
+    });
+    expect(result.tools).toEqual([]);
   });
 });
 

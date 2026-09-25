@@ -17,7 +17,7 @@ import {
   skewWarningText,
   type NudgeMatch,
 } from "./prompts";
-import { ExtractionPipeline, type ToolInteraction } from "./extraction";
+import { ExtractionPipeline, unwrapExecuteThatchCalls, type ToolInteraction } from "./extraction";
 import type { CoreContext } from "./tool-defs";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
 import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommandFiles, COMPACT_READY_TOKEN, EXIT_READY_TOKEN } from "./commands";
@@ -795,6 +795,58 @@ export async function createRuntime(input: {
     }
   }
 
+  // Hook-semantics handlers for the memory/extraction tools. Both direct
+  // tool calls (input.tool match in onToolExecuteAfter) and Code Mode
+  // execute calls that wrap them (unwrapExecuteThatchCalls) must run the
+  // same logic, so the bodies live here instead of inline in the hook.
+  const toolMemoryRemember = async (sessionID: string, overwrite: unknown) => {
+    extraction.consume(sessionID);
+    missedNudges.delete(sessionID);
+    // Track extraction metrics for toast display. Counted for any
+    // child session (both direct-extraction and nudge-path sub-agents)
+    // since childToParent covers both. The toast only fires for
+    // extraction children (extractionChildren set) on idle.
+    const parentID = childToParent.get(sessionID);
+    if (parentID) {
+      const metrics = childMetrics.get(sessionID) ?? { new: 0, updated: 0, deleted: 0 };
+      if (overwrite) metrics.updated++;
+      else metrics.new++;
+      childMetrics.set(sessionID, metrics);
+      journalChild(sessionID);
+      // Complete the parent's accepted entries (the extractor confirmed
+      // it is alive and saving) and drain the parent's snapshot entries
+      // from the pending buffer. If no snapshot was recorded (unreachable
+      // when childToParent has the entry, since both are set together in
+      // session.created), skip the drain rather than dropping the entire
+      // buffer - interleaved-turn entries that arrived while the child
+      // was running must survive for the next extraction cycle.
+      extraction.completeAccepted(parentID);
+      const snapshot = parentSnapshots.get(sessionID);
+      if (snapshot) {
+        extraction.consumeSnapshot(parentID, snapshot);
+        parentSnapshots.delete(sessionID);
+      }
+      journalChild(sessionID);
+      missedNudges.delete(parentID);
+    }
+  };
+  const toolExtractionDone = (sessionID: string) => {
+    const parentID = childToParent.get(sessionID);
+    if (parentID) {
+      extraction.completeAccepted(parentID);
+      missedNudges.delete(parentID);
+      extraction.consume(sessionID);
+    } else {
+      extraction.accept(sessionID);
+    }
+    missedNudges.delete(sessionID);
+  };
+  const toolMemoryForget = (sessionID: string) => {
+    const metrics = childMetrics.get(sessionID) ?? { new: 0, updated: 0, deleted: 0 };
+    metrics.deleted++;
+    childMetrics.set(sessionID, metrics);
+  };
+
   return {
     coreContext: buildCoreContext(db, model, repo, {
       extractionPayloadProvider: (sessionID: string): string | null => {
@@ -857,37 +909,18 @@ export async function createRuntime(input: {
     //    the parent's pending buffer - but only the entries that existed at
     //    dispatch time (the snapshot). Entries from interleaved turns survive
     //    so their facts aren't silently dropped.
+    //
+    //    Code Mode `execute` calls are unwrapped before this filter applies
+    //    (unwrapExecuteThatchCalls): an execute call whose code invokes
+    //    tools.thatch_* runs the wrapped tool's hook semantics and is never
+    //    buffered. Matching on the outer tool name alone would re-queue the
+    //    pipeline's own dispatch/ack traffic every cycle - the self-feeding
+    //    extraction loop this removes (September 2026, observed live in an
+    //    oink session).
     onToolExecuteAfter: async (input, output) => {
-      if (input.tool === "thatch_memory_remember") {
-        extraction.consume(input.sessionID);
-        missedNudges.delete(input.sessionID);
-        // Track extraction metrics for toast display. Counted for any
-        // child session (both direct-extraction and nudge-path sub-agents)
-        // since childToParent covers both. The toast only fires for
-        // extraction children (extractionChildren set) on idle.
-        const parentID = childToParent.get(input.sessionID);
-        if (parentID) {
-          const metrics = childMetrics.get(input.sessionID) ?? { new: 0, updated: 0, deleted: 0 };
-          if ((input.args as any)?.overwrite) metrics.updated++;
-          else metrics.new++;
-          childMetrics.set(input.sessionID, metrics);
-          journalChild(input.sessionID);
-          // Complete the parent's accepted entries (the extractor confirmed
-          // it is alive and saving) and drain the parent's snapshot entries
-          // from the pending buffer. If no snapshot was recorded (unreachable
-          // when childToParent has the entry, since both are set together in
-          // session.created), skip the drain rather than dropping the entire
-          // buffer - interleaved-turn entries that arrived while the child
-          // was running must survive for the next extraction cycle.
-          extraction.completeAccepted(parentID);
-          const snapshot = parentSnapshots.get(input.sessionID);
-          if (snapshot) {
-            extraction.consumeSnapshot(parentID, snapshot);
-            parentSnapshots.delete(input.sessionID);
-          }
-          journalChild(input.sessionID);
-          missedNudges.delete(parentID);
-        }
+      const { tool, sessionID } = input;
+      if (tool === "thatch_memory_remember") {
+        await toolMemoryRemember(sessionID, (input.args as Record<string, unknown> | undefined)?.overwrite);
         return;
       }
       // thatch_extraction_done has two roles depending on the session:
@@ -896,25 +929,15 @@ export async function createRuntime(input: {
       // - child extractor, at the end of its run: COMPLETE the parent's
       //   accepted entries, including no-save runs that write no memory,
       //   and drop the child's own buffer (its work is done).
-      if (input.tool === "thatch_extraction_done") {
-        const parentID = childToParent.get(input.sessionID);
-        if (parentID) {
-          extraction.completeAccepted(parentID);
-          missedNudges.delete(parentID);
-          extraction.consume(input.sessionID);
-        } else {
-          extraction.accept(input.sessionID);
-        }
-        missedNudges.delete(input.sessionID);
+      if (tool === "thatch_extraction_done") {
+        toolExtractionDone(sessionID);
         return;
       }
       // Track memory deletions in child sessions for the toast metrics.
       // Same scoping as the remember handler above - only child sessions,
       // not the parent or manual memory writes from the user's session.
-      if (input.tool === "thatch_memory_forget" && childToParent.has(input.sessionID)) {
-        const metrics = childMetrics.get(input.sessionID) ?? { new: 0, updated: 0, deleted: 0 };
-        metrics.deleted++;
-        childMetrics.set(input.sessionID, metrics);
+      if (tool === "thatch_memory_forget" && childToParent.has(sessionID)) {
+        toolMemoryForget(sessionID);
         return;
       }
       // Chat conversational events echo back into the transcript as visible
@@ -957,6 +980,25 @@ export async function createRuntime(input: {
         return;
       }
       if (input.tool.startsWith("thatch_") || input.tool === "skill" || input.tool === "task") return;
+      // Code Mode execute calls: when the code wraps thatch_* invocations,
+      // run the wrapped tools' hook semantics and never buffer the call
+      // itself - it is the pipeline's own traffic, and buffering it feeds
+      // the extraction loop with its own exhaust (the September 2026
+      // infinite dispatch/ack loop). Execute calls that do not touch thatch
+      // tools fall through and buffer as normal: they did real work.
+      if (input.tool === "execute") {
+        const wrapped = unwrapExecuteThatchCalls(input.args);
+        if (wrapped.tools.length > 0) {
+          for (const name of wrapped.tools) {
+            if (name === "thatch_memory_remember") await toolMemoryRemember(sessionID, wrapped.overwrite);
+            else if (name === "thatch_extraction_done") toolExtractionDone(sessionID);
+            else if (name === "thatch_memory_forget" && childToParent.has(sessionID)) toolMemoryForget(sessionID);
+            // Other thatch_* tools (recall, show, list, ...) carry no hook
+            // semantics - doing nothing with them is the whole point.
+          }
+          return;
+        }
+      }
       extraction.push({
         tool: input.tool,
         sessionID: input.sessionID,
