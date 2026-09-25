@@ -2,11 +2,19 @@
 
 Thatch can notify you out-of-band when something happens worth leaving the
 terminal for: a CI run finishing, a merge or deploy completing, a watched PR
-receiving a comment. The notification is a desktop banner, a spoken voice
-announcement, or both, depending on your preferences.
+receiving a comment, or your LLM finishing its work while you are in another
+window. The notification is a desktop banner, a spoken voice announcement, or
+both, depending on your preferences.
 
-This works on every host (opencode, Claude Code, Cursor) because it is plain
-child processes, not host plumbing.
+Two mechanisms:
+
+- **Agent-initiated** (`thatch_notify_user`): the LLM decides something is
+  worth interrupting you for and calls the tool. Works on every host
+  (opencode, Claude Code, Cursor) because it is plain child processes, not
+  host plumbing.
+- **Automatic alerts** (opencode only): the plugin watches the session and
+  notifies you when the LLM pauses for your input or finishes a round of real
+  work -- no tool call required. See the Alerts section below.
 
 ## The tools
 
@@ -74,6 +82,38 @@ The agent can manage the whole file for you through `config_get` /
 `config_set`; edits merge at the field level, so the agent changing your
 voice cannot wipe your mode.
 
+## Alerts: notifications without a tool call
+
+On opencode, the plugin watches your session and alerts you automatically:
+
+| Alert | Fires when | Default |
+|-------|-----------|---------|
+| `pause` | The LLM asks you an interactive question, or requests a permission it needs approved. | banner |
+| `done` | A round of real work finishes. Rounds that were just bookkeeping (thatch's own nudges, background-task completions, watcher wake-ups) stay silent. | banner |
+| `error` | The session fails with nothing to recover it. Failures opencode retries through are silent, and so are turns you aborted yourself. | banner |
+
+Banners carry the session title, so when you juggle concurrent sessions you
+know which one spoke. Voice is opt-in per alert: set the mode to `voice` or
+`both` on the events you want spoken.
+
+```json
+{
+  "alerts": {
+    "pause": { "mode": "both" },
+    "done": { "mode": "banner" },
+    "error": { "mode": "both" }
+  }
+}
+```
+
+Each event's `mode` takes the same values as `notifications.mode`. Configure
+them the same two ways -- ask your agent, or edit `config.json` directly.
+
+When you want the LLM itself to decide something is worth interrupting you
+for (a watcher result, a decision it cannot make alone), that is what
+`thatch_notify_user` is for -- the automatic alerts and the tool are
+independent channels.
+
 ## Limitations
 
 - Banners are best-effort by nature of the OS. The agent can only report
@@ -82,3 +122,12 @@ voice cannot wipe your mode.
   are short by design.
 - There is no debounce. If an agent polls a status in a tight loop, it should
   notify once at the end, not per poll.
+- Alerts are opencode-only. Claude Code and Cursor have no plugin event
+  stream to watch; their hosts can only notify through
+  `thatch_notify_user`.
+- Alerts cannot tell whether your terminal is focused. A `done` banner can
+  land while you are looking at the TUI; set the event's mode to `none` if
+  that bothers you more than an occasional redundant banner.
+- A plugin reload or restart mid-round (a v2 plugin upgrade, a save to a dev
+  shim tree) loses that round's in-memory state and stays silent. The next
+  round alerts normally.

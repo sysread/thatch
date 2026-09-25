@@ -17,7 +17,8 @@ import {
   skewWarningText,
   type NudgeMatch,
 } from "./prompts";
-import { ExtractionPipeline, unwrapExecuteThatchCalls, type ToolInteraction } from "./extraction";
+import { ExtractionPipeline, isMetaToolName, unwrapExecuteThatchCalls, type ToolInteraction } from "./extraction";
+import { createAlerts, replyRequestID } from "./alerts";
 import { mostRecentTopLevelSessionId } from "./session-db";
 import type { CoreContext } from "./tool-defs";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
@@ -28,7 +29,8 @@ import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskV
 import { WatcherRegistry, ghApiRun, ghAvailable, runWatchedCommand, watcherTarget, withCwdFallback, type Watcher } from "./watchers";
 import { watcherNotificationNudge, watcherRearmNotice, watcherDeathNotice, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
 import { ChatPoller, createWakeGate, hostedSessionIds, isDefaultSessionTitle } from "./chat";
-import { chatEnabled, chatAutoRegister, loadConfig } from "./config";
+import { chatEnabled, chatAutoRegister, loadConfig, alertMode, notificationDefaults } from "./config";
+import { sendNotification } from "./notify";
 import { osProcessArgs, startupSessionId, continuesLastSessionFromArgv, continuesLastSessionId } from "./os-args";
 import type { HostCapabilities } from "./capabilities";
 import pkg from "../package.json";
@@ -195,6 +197,59 @@ export async function createRuntime(input: {
   // turn), and the chat poller's hostedSessions set (the sessions this
   // process may deliver chat mail to - the map's keys).
   const sessionStatus = new Map<string, string>();
+
+  // LLM alerts (docs/plans/llm-alerts.md): notify when the LLM pauses for
+  // human input or finishes a round of real work. Plain in-memory state -
+  // a v2 reload mid-turn loses that turn's transition and stays silent
+  // (accepted). Delivery reuses the notify_user dispatcher; the alerts
+  // config section picks the channel per event, defaulting to banner.
+  const alerts = createAlerts({
+    config: () => loadConfig(dbPath).config,
+    roundShape: async (sessionID) => {
+      const messages = await caps.sessionMessages(sessionID);
+      if (!messages?.length) return null;
+      // Newest last. The round is everything after the message that
+      // triggered the turn: the newest non-assistant message (a real user
+      // message, or a synthetic delivery on v2 / all-synthetic parts on
+      // v1 - nudges, task completions, watcher wake-ups).
+      let triggerIdx = -1;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].info.role !== "assistant") {
+          triggerIdx = i;
+          break;
+        }
+      }
+      const trigger = triggerIdx >= 0 ? messages[triggerIdx] : undefined;
+      const roundMessages = triggerIdx >= 0 ? messages.slice(triggerIdx + 1) : messages;
+      // Tool calls across ALL of the round's assistant messages - the last
+      // step of a round is often pure text after earlier steps did the work.
+      const toolCalls = roundMessages.flatMap((m) =>
+        (m.parts ?? []).filter((p) => p.type === "tool").map((p) => p.tool ?? ""),
+      );
+      const lastAssistant = [...roundMessages].reverse().find((m) => m.info.role === "assistant");
+      const textParts = (trigger?.parts ?? []).filter((p) => p.type === "text");
+      const syntheticTrigger =
+        trigger?.info.role === "synthetic" ||
+        (trigger?.info.role === "user" && textParts.length > 0 && textParts.every((p) => p.synthetic === true));
+      return { syntheticTrigger, toolCalls, roundError: lastAssistant?.info.error ?? null };
+    },
+    sessionTitle: async (sessionID) => (await caps.sessionGet(sessionID))?.title,
+    notify: async ({ kind, title, message }) => {
+      const { config } = loadConfig(dbPath);
+      const mode = alertMode(config, kind);
+      // Defensive: the alert state machine already gates "none" out.
+      if (mode === "none") return;
+      const defaults = notificationDefaults();
+      await sendNotification({
+        message,
+        title,
+        source: title,
+        channel: mode,
+        voice: defaults.voice,
+        sound: defaults.sound,
+      });
+    },
+  });
 
   // The proactive-prompt gate, shared by both delivery registries (watchers
   // and chat). Two layers, in cost order: the compacting set and the
@@ -1126,8 +1181,8 @@ export async function createRuntime(input: {
       // "task" is v1's dispatch tool and "subagent" is v2's - a dispatch
       // buffers itself otherwise, and the nudge then fires on the pipeline's
       // own exhaust (the subagent-dispatch loop, sibling of the
-      // execute-wrapped-ack loop below).
-      if (input.tool.startsWith("thatch_") || input.tool === "skill" || input.tool === "task" || input.tool === "subagent") return;
+      // execute-wrapped-ack loop below). isMetaToolName owns the set.
+      if (isMetaToolName(input.tool)) return;
       // Code Mode execute calls: when the code wraps thatch_* invocations,
       // run the wrapped tools' hook semantics and never buffer the call
       // itself - it is the pipeline's own traffic, and buffering it feeds
@@ -1449,6 +1504,27 @@ export async function createRuntime(input: {
     // get the old behavior (completeAccepted + missedNudges.reset) so their
     // sessions are not deleted out from under the task tool.
     onEvent: async (event) => {
+      // Pause alerts: the LLM blocked on a human decision. Both lines
+      // publish these on the bus; v2's adapter translates them into the
+      // same property names. Reply ids differ per line (v1's permission
+      // reply carries permissionID, the rest requestID) - replyRequestID
+      // normalizes.
+      if (event.type === "question.asked") {
+        await alerts.questionAsked(event.properties.sessionID, event.properties.id);
+        return;
+      }
+      if (event.type === "question.replied" || event.type === "question.rejected") {
+        alerts.questionResolved(event.properties.sessionID, replyRequestID(event.properties));
+        return;
+      }
+      if (event.type === "permission.asked") {
+        await alerts.permissionAsked(event.properties.sessionID, event.properties.id);
+        return;
+      }
+      if (event.type === "permission.replied") {
+        alerts.permissionResolved(event.properties.sessionID, replyRequestID(event.properties));
+        return;
+      }
       if (event.type === "session.created") {
         const info = event.properties.info;
         if (info.parentID) {
@@ -1463,6 +1539,15 @@ export async function createRuntime(input: {
       }
       if (event.type === "session.error") {
         const childID = event.properties.sessionID;
+        // Alert bookkeeping first: the error name decides abort-silence vs
+        // the needs-attention alert when the session then goes idle.
+        // Children are excluded - their failure requeues extraction here
+        // and the parent turn continues; the child session itself never
+        // alerts.
+        const errorObj = event.properties.error as { name?: string; type?: string } | undefined;
+        if (!childToParent.has(childID ?? "")) {
+          alerts.sessionError(childID ?? "", errorObj?.name ?? errorObj?.type ?? null);
+        }
         const parentID = childID ? childToParent.get(childID) : undefined;
         if (parentID && childID) {
           extraction.requeueAccepted(parentID);
@@ -1481,6 +1566,9 @@ export async function createRuntime(input: {
         // Record the latest status so the watcher registry can gate
         // proactive prompt delivery on idle sessions.
         if (sessionID && statusType) sessionStatus.set(sessionID, statusType);
+        // Busy and retry both mean the LLM is working; retry also clears a
+        // previously recorded error (opencode recovered on its own).
+        if (sessionID && (statusType === "busy" || statusType === "retry")) alerts.sessionBusy(sessionID);
         if (statusType !== "idle") return;
         const parentID = sessionID ? childToParent.get(sessionID) : undefined;
         if (parentID && sessionID) {
@@ -1496,6 +1584,11 @@ export async function createRuntime(input: {
           await finishExtractionChild(sessionID, parentID);
           return;
         }
+        // Turn-end alert: fires only when the round did real work (the
+        // classifier skips nudge/completion-driven bookkeeping rounds).
+        // Runs before the wrap-up branches so a greenlit compact or exit
+        // still ends with its completion alert.
+        if (sessionID) await alerts.sessionIdle(sessionID);
         // Wrap-up command resolution: the session went idle right after
         // /thatch/compact or /thatch/exit. The final assistant message's
         // trailing token is the greenlight - the command instructs the model
@@ -1637,6 +1730,9 @@ export async function createRuntime(input: {
       }
       if (event.type === "session.deleted") {
         const id = event.properties.info.id;
+        // Drop the session's alert state first - it has no reason to outlive
+        // the session.
+        alerts.sessionDeleted(id);
         // Shrink the chat poller's hosted set FIRST: the rest of this
         // branch runs extraction calls that could throw on a transient DB
         // error, and a leaked status key would keep heartbeat-ing a dead

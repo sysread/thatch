@@ -21,17 +21,30 @@ export const chatPrefsSchema = z.strictObject({
   autoRegister: z.boolean().optional(),
 });
 
+/** Channel preferences for one automatic alert event (pause / done / error). */
+export const alertEventPrefsSchema = z.strictObject({
+  mode: z.enum(["both", "banner", "voice", "none"]).optional(),
+});
+
+export const alertsPrefsSchema = z.strictObject({
+  pause: alertEventPrefsSchema.optional(),
+  done: alertEventPrefsSchema.optional(),
+  error: alertEventPrefsSchema.optional(),
+});
+
 export const configSchema = z.strictObject({
   notifications: notificationPrefsSchema.optional(),
   chat: chatPrefsSchema.optional(),
+  alerts: alertsPrefsSchema.optional(),
 });
 
 export type NotificationPrefs = z.infer<typeof notificationPrefsSchema>;
 export type ChatPrefs = z.infer<typeof chatPrefsSchema>;
+export type AlertsPrefs = z.infer<typeof alertsPrefsSchema>;
 export type Config = z.infer<typeof configSchema>;
 
 /** Sections in presentation order. config_get / config_set iterate this. */
-export const CONFIG_SECTIONS = ["notifications", "chat"] as const;
+export const CONFIG_SECTIONS = ["notifications", "chat", "alerts"] as const;
 export type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 
 /**
@@ -102,6 +115,11 @@ export function mergeChatPrefs(current: ChatPrefs | undefined, patch: ChatPrefs)
   return { ...current, ...patch };
 }
 
+/** Field-level merge for one section: omitted fields keep their values. */
+export function mergeAlertsPrefs(current: AlertsPrefs | undefined, patch: AlertsPrefs): AlertsPrefs {
+  return { ...current, ...patch };
+}
+
 /**
  * Whether cross-session chat is on. Unset means on - chat is the default,
  * and the toggle exists for users who want the feature entirely dark: every
@@ -133,4 +151,17 @@ export function notificationDefaults(): { mode: "both" | "banner" | "voice" | "n
     return { mode: "both", voice: "Zarvox", sound: "Submarine" };
   }
   return { mode: "both" };
+}
+
+/** The automatic alert events, in the order config_get renders them. */
+export type AlertEventKind = "pause" | "done" | "error";
+export const ALERT_EVENT_KINDS: AlertEventKind[] = ["pause", "done", "error"];
+
+/**
+ * Channel for one automatic alert event (pause / done / error). Unset means
+ * banner: the alerts exist to reach a user who walked away, so voice is
+ * opt-in per event rather than bundled with the notify_user default.
+ */
+export function alertMode(config: Config, kind: AlertEventKind): "both" | "banner" | "voice" | "none" {
+  return config.alerts?.[kind]?.mode ?? "banner";
 }

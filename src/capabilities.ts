@@ -72,10 +72,19 @@ export interface HostCapabilities {
   /** List sessions in this directory. Null when unavailable (v2 degrade). */
   sessionList(): Promise<{ id: string; parentID?: string; time?: { updated?: number } }[] | null>;
   /**
-   * Fetch a session's message list (wrap-up greenlight check). Null when
-   * unavailable. v2 reads them via session.context, mapped into this shape.
+   * Fetch a session's message list (wrap-up greenlight check, alert round
+   * classification). Null when unavailable. v2 reads them via
+   * session.context, mapped into this shape. Parts carry the fields the
+   * round classifier needs: tool parts name their tool, text parts carry
+   * the synthetic flag, and info.error holds the message-level error name
+   * (abort / stall detection).
    */
-  sessionMessages(id: string): Promise<{ info: { role: string }; parts?: { type: string; text?: string }[] }[] | null>;
+  sessionMessages(
+    id: string,
+  ): Promise<
+    { info: { role: string; error?: string }; parts?: { type: string; text?: string; tool?: string; synthetic?: boolean }[] }[]
+    | null
+  >;
   /** TUI toast. The runtime's call sites catch-and-ignore; the adapter just delivers. */
   showToast(toast: ToastInput): Promise<void>;
   /**
@@ -127,7 +136,18 @@ export function capabilitiesFromClient(client: PluginInput["client"]): HostCapab
     },
     sessionMessages: async (id) => {
       const { data } = await client.session.messages({ path: { id } });
-      return data ?? null;
+      // Map the message-level error (if any) to its name - the alert
+      // classifier matches aborts by name, and v1 message infos carry the
+      // full error object.
+      return (
+        data?.map((m) => ({
+          ...m,
+          info: {
+            ...m.info,
+            error: (m.info as { error?: { name?: string } } | undefined)?.error?.name,
+          },
+        })) ?? null
+      );
     },
     showToast: async (toast) => {
       await client.tui.showToast({ body: toast });

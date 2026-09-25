@@ -312,19 +312,31 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
 }
 
 // Map v2's SessionMessageInfo list into the v1 {info: {role}, parts} shape
-// the runtime's wrap-up greenlight check reads. Assistant messages carry
-// their text in content parts; other message kinds carry a plain text field
-// (or none - those map to an empty part rather than dropping the message,
-// so role ordering survives).
-export function mapSessionContextMessages(messages: unknown): { info: { role: string }; parts: { type: string; text: string }[] }[] {
+// the runtime's wrap-up greenlight check and the alert round classifier
+// read. Assistant messages carry their text in content parts (tool calls
+// ride alongside as tool content parts - the classifier needs their tool
+// names); other message kinds carry a plain text field (or none - those map
+// to an empty part rather than dropping the message, so role ordering
+// survives). Synthetic deliveries (nudges, task completions, watcher
+// wake-ups) are their own message kind on v2 and keep that role.
+export function mapSessionContextMessages(
+  messages: unknown,
+): { info: { role: string; error?: string }; parts: { type: string; text?: string; tool?: string; synthetic?: boolean }[] }[] {
   return ((messages as any[]) ?? []).map((m) => ({
-    info: { role: m?.type },
+    info: { role: m?.type, error: m?.error?.type ?? m?.error?.name },
     parts:
       m?.type === "assistant"
         ? (m.content ?? [])
-            .filter((c: any) => c.type === "text")
-            .map((c: any) => ({ type: "text", text: c.text ?? "" }))
-        : [{ type: "text", text: typeof m?.text === "string" ? m.text : "" }],
+            // Reasoning parts carry no wrap-up token and no tool name -
+            // skipping them keeps the wrap-up greenlight text identical to
+            // the pre-alert mapping.
+            .filter((c: any) => c.type === "text" || c.type === "tool")
+            .map((c: any) =>
+              c.type === "tool"
+                ? { type: "tool", tool: typeof c.name === "string" ? c.name : "" }
+                : { type: "text", text: c.text ?? "" },
+            )
+        : [{ type: "text", text: typeof m?.text === "string" ? m.text : "", synthetic: m?.type === "synthetic" }],
   }));
 }
 
@@ -378,9 +390,29 @@ function translateEvent(located: { type: string; data?: any }): { type: string; 
     case "session.execution.interrupted":
       return { type: "session.status", properties: { sessionID: data.sessionID, status: { type: "idle" } } };
     case "session.execution.failed":
-      return { type: "session.error", properties: { sessionID: data.sessionID } };
+      return {
+        type: "session.error",
+        properties: { sessionID: data.sessionID, error: data.error ?? undefined },
+      };
+    case "session.error":
+      return {
+        type: "session.error",
+        properties: { sessionID: data.sessionID, error: data.error ?? undefined },
+      };
     case "session.compaction.ended":
       return { type: "session.compacted", properties: { sessionID: data.sessionID } };
+    // Pause events: the LLM blocked on a human decision. V2's question and
+    // permission asks carry the request payload (id, sessionID, ...); the
+    // reply events drop it back to just the ids.
+    case "question.asked":
+      return { type: "question.asked", properties: { id: data.id, sessionID: data.sessionID } };
+    case "question.replied":
+    case "question.rejected":
+      return { type: located.type, properties: { sessionID: data.sessionID, requestID: data.requestID } };
+    case "permission.asked":
+      return { type: "permission.asked", properties: { id: data.id, sessionID: data.sessionID } };
+    case "permission.replied":
+      return { type: "permission.replied", properties: { sessionID: data.sessionID, requestID: data.requestID } };
     default:
       return null;
   }

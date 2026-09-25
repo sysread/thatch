@@ -73,6 +73,19 @@ export interface ExecuteUnwrap {
 }
 
 /**
+ * Meta tools: bookkeeping and dispatch, never real work. The extraction
+ * buffer excludes them because buffering the pipeline's own traffic feeds
+ * the nudge with its own exhaust (the dispatch/ack loops, September 2026);
+ * the alert classifier excludes them because a round made of only these
+ * did nothing the user asked for. "task" is v1's dispatch tool, "subagent"
+ * v2's, "agent" the MCP-path spelling - match all three, never one name.
+ */
+export function isMetaToolName(tool: string): boolean {
+  const t = tool.toLowerCase();
+  return t.startsWith("thatch_") || t === "skill" || t === "task" || t === "agent" || t === "subagent";
+}
+
+/**
  * Detect thatch_* tool invocations wrapped inside a Code Mode `execute`
  * call's code (`tools.thatch_extraction_done({session_id: "..."})` - dot
  * and bracket forms both count; the bracket form

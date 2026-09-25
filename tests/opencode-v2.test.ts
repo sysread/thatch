@@ -454,14 +454,28 @@ describe("opencode v2 adapter", () => {
   test("mapSessionContextMessages maps v2 message kinds into the v1 shape", () => {
     const mapped = mapSessionContextMessages([
       { type: "user", text: "hello" },
-      { type: "assistant", content: [{ type: "reasoning", text: "hmm" }, { type: "text", text: "the answer" }] },
+      {
+        type: "assistant",
+        content: [
+          { type: "reasoning", text: "hmm" },
+          { type: "tool", name: "read" },
+          { type: "text", text: "the answer" },
+        ],
+        error: { type: "MessageAbortedError", message: "aborted" },
+      },
       { type: "synthetic" },
     ]);
     expect(mapped).toHaveLength(3);
-    expect(mapped[0]).toEqual({ info: { role: "user" }, parts: [{ type: "text", text: "hello" }] });
+    expect(mapped[0]).toEqual({ info: { role: "user" }, parts: [{ type: "text", text: "hello", synthetic: false }] });
     expect(mapped[1].info.role).toBe("assistant");
-    expect(mapped[1].parts).toEqual([{ type: "text", text: "the answer" }]);
-    expect(mapped[2].parts).toEqual([{ type: "text", text: "" }]);
+    // Reasoning parts are skipped; tool parts keep the tool name for the
+    // alert round classifier; the message-level error name rides info.
+    expect(mapped[1].info.error).toBe("MessageAbortedError");
+    expect(mapped[1].parts).toEqual([
+      { type: "tool", tool: "read" },
+      { type: "text", text: "the answer" },
+    ]);
+    expect(mapped[2].parts).toEqual([{ type: "text", text: "", synthetic: true }]);
   });
 
   test("session get resolves by sessionID and location-less events survive handler throws", async () => {

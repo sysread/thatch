@@ -2,15 +2,20 @@ import { z } from "zod";
 import type { ThatchDB, DedupCandidate, MemoryRow } from "./db";
 import type { EmbeddingModel } from "./embeddings";
 import {
+  ALERT_EVENT_KINDS,
   CONFIG_SECTIONS,
+  alertEventPrefsSchema,
+  alertsPrefsSchema,
   chatEnabled,
   chatPrefsSchema,
   loadConfig,
+  mergeAlertsPrefs,
   mergeChatPrefs,
   mergeNotificationPrefs,
   notificationDefaults,
   notificationPrefsSchema,
   saveConfig,
+  type AlertsPrefs,
   type ChatPrefs,
   type Config,
   type ConfigSection,
@@ -925,6 +930,15 @@ function renderChatSection(prefs: ChatPrefs | undefined): string {
   ].join("\n");
 }
 
+/** Renders the alerts section. Every event defaults to banner. */
+function renderAlertsSection(prefs: AlertsPrefs | undefined): string {
+  const lines = ["alerts:"];
+  for (const kind of ALERT_EVENT_KINDS) {
+    lines.push(`  ${kind}.mode: ${prefs?.[kind]?.mode ?? "<unset>"} (default: banner)`);
+  }
+  return lines.join("\n");
+}
+
 /** Drops keys explicitly set to undefined so a merge never overwrites. */
 function stripUndefined(obj: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
@@ -938,7 +952,7 @@ const configGetDef: ToolDef = {
     "The config file (~/.config/thatch/config.json, beside thatch.db) is " +
     "also hand-editable. Call this before config_set.",
   args: {
-    section: z.enum(["notifications", "chat"]).optional().describe(
+    section: z.enum(["notifications", "chat", "alerts"]).optional().describe(
       "Restrict output to one section. Omit to read all sections.",
     ),
   },
@@ -955,6 +969,9 @@ const configGetDef: ToolDef = {
       }
       if (name === "chat") {
         lines.push(renderChatSection(loaded.config.chat));
+      }
+      if (name === "alerts") {
+        lines.push(renderAlertsSection(loaded.config.alerts));
       }
     }
     lines.push("", `file: ${loaded.path}`);
@@ -1002,19 +1019,39 @@ const configSetDef: ToolDef = {
       "Chat preferences to update. Fields you omit keep their current " +
       "values.",
     ),
+    alerts: z.strictObject({
+      pause: alertEventPrefsSchema.optional().describe(
+        "Alert when the LLM blocks on a question or permission prompt.",
+      ),
+      done: alertEventPrefsSchema.optional().describe(
+        "Alert when a round of real work finishes (bookkeeping rounds " +
+        "driven by thatch nudges and task completions stay silent).",
+      ),
+      error: alertEventPrefsSchema.optional().describe(
+        "Alert when a session fails with nothing to recover it (user " +
+        "aborts stay silent; retried failures stay silent).",
+      ),
+    }).optional().describe(
+      "Automatic alert preferences (desktop notification when the LLM " +
+      "pauses or finishes). Each event takes a mode: both, banner only, " +
+      "voice only, or none. Default: banner.",
+    ),
   },
   async execute(args) {
     const loaded = loadConfig();
     const config: Config = { ...loaded.config };
     const notifPatch = args.notifications as Record<string, unknown> | undefined;
     const chatPatch = args.chat as Record<string, unknown> | undefined;
+    const alertsPatch = args.alerts as Record<string, unknown> | undefined;
     const notifClean = notifPatch ? stripUndefined(notifPatch) : {};
     const chatClean = chatPatch ? stripUndefined(chatPatch) : {};
-    if (Object.keys(notifClean).length === 0 && Object.keys(chatClean).length === 0) {
+    const alertsClean = alertsPatch ? stripUndefined(alertsPatch) : {};
+    if (Object.keys(notifClean).length === 0 && Object.keys(chatClean).length === 0 && Object.keys(alertsClean).length === 0) {
       return (
         "Nothing to update: pass a section with fields to change.\n" +
         renderNotificationSection(config.notifications) + "\n" +
-        renderChatSection(config.chat)
+        renderChatSection(config.chat) + "\n" +
+        renderAlertsSection(config.alerts)
       );
     }
     if (Object.keys(notifClean).length > 0) {
@@ -1027,11 +1064,17 @@ const configSetDef: ToolDef = {
         mergeChatPrefs(config.chat, chatClean),
       );
     }
+    if (Object.keys(alertsClean).length > 0) {
+      config.alerts = alertsPrefsSchema.parse(
+        mergeAlertsPrefs(config.alerts, alertsClean),
+      );
+    }
     const path = saveConfig(config);
     return (
       `[saved] ${path}\n` +
       (Object.keys(notifClean).length > 0 ? renderNotificationSection(config.notifications) + "\n" : "") +
-      (Object.keys(chatClean).length > 0 ? renderChatSection(config.chat) : "")
+      (Object.keys(chatClean).length > 0 ? renderChatSection(config.chat) + "\n" : "") +
+      (Object.keys(alertsClean).length > 0 ? renderAlertsSection(config.alerts) : "")
     );
   },
 };
