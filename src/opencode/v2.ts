@@ -31,8 +31,10 @@ import { TOOL_DEFS, trimHostContext, type HostToolContext } from "../tool-defs";
 // - noReply deliveries (chat echoes, session-start reminder): v2's prompt
 //   endpoint cannot suppress the model turn, so the runtime gates them off
 //   via capabilities.noReplyDelivery.
-// - compaction: session.hook("compaction") marks the session; only the
-//   flag lands (the context-injection surface is unverified).
+// - compaction: session.hook("compaction") marks the session AND injects
+//   the re-familiarization system context - the compaction request carries
+//   the same mutable `system` array the context hook mutates (v1 parity:
+//   v1's system.transform fires on compaction summaries too).
 // - events: context.event.subscribe pump; the envelope is
 //   {type, data, location?}. Filtered client-side the way the v1 host
 //   filters server-side: events resolve to a directory (their own, the
@@ -184,9 +186,21 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
 
   // Compaction: the nudge-suppression flag is the only surface verified to
   // exist; the context-injection surface is unverified.
-  const registerCompaction = await context.session.hook("compaction", async (request: { sessionID: string }) => {
-    await runtime.onSessionCompacting({ sessionID: request.sessionID }, { context: [] });
-  });
+  const registerCompaction = await context.session.hook(
+    "compaction",
+    async (request: { sessionID: string; system: unknown[] }) => {
+      await runtime.onSessionCompacting({ sessionID: request.sessionID }, { context: [] });
+      // Re-familiarization context for the summary generation - the same
+      // injection the context hook gives primary requests; without it the
+      // compaction summary is the one model request that never sees the
+      // memory system's context.
+      const pushed: string[] = [];
+      await runtime.onSystemTransform({ system: pushed });
+      for (const part of pushed) {
+        request.system.push(typeof part === "string" ? { type: "text", text: part } : part);
+      }
+    },
+  );
 
   // Wrap-up slash commands register in code (v2 CommandEditor): execute
   // arms the greenlight check and delivers the same prompt body the v1
