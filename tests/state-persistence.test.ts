@@ -421,8 +421,25 @@ describe("dormant watcher recovery through server()", () => {
   };
 
   test("a restarted session's dormant watchers re-arm on its first message", async () => {
+    // Seeded as a COMMAND watcher: rearm() revalidates pr/branch baselines
+    // through the registry's real gh runner (network!), so a server()-level
+    // test must use the command source - it skips revalidation by design
+    // and keeps the test hermetic. CI has no gh CLI; a pr-def rearm would
+    // fail the fetch and re-arm nothing.
     const db = new ThatchDB(dbPath);
-    db.runtimeStatePut("watchers", "ses_w", [prDef("watch_w", "ses_w")], WORK_DIR, -1);
+    db.runtimeStatePut(
+      "watchers",
+      "ses_w",
+      [{
+        id: "watch_w", source: "command", sessionID: "ses_w",
+        command: "mise run ci-green", cwd: WORK_DIR, timeoutMs: 30_000,
+        events: ["command_success"], once: true,
+        expiresAt: Date.now() + 600_000, createdAt: Date.now(),
+        state: { lastExit: 124 },
+      }],
+      WORK_DIR,
+      -1,
+    );
     db.close();
 
     const { hooks, finally: done } = await startServer();
@@ -430,7 +447,7 @@ describe("dormant watcher recovery through server()", () => {
       const parts = await sendMessage(hooks, "ses_w");
       const rearm = parts.find((p: any) => p.synthetic && p.text.includes("re-armed"));
       expect(rearm).toBeTruthy();
-      expect(rearm.text).toContain("sysread/thatch#16");
+      expect(rearm.text).toContain("mise run ci-green");
 
       // The watcher is live in the registry: watch_list shows it.
       const list = await hooks.tool.thatch_watch_list.execute({}, { sessionID: "ses_w" });
