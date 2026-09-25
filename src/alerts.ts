@@ -72,13 +72,15 @@ function isAbortError(error: string | null | undefined): boolean {
 
 /**
  * Whether the finished round did real work and deserves a done alert. A
- * null shape (message fetch failed) counts as real work: a spurious banner
- * costs less than a silently missed completion. Rounds driven by synthetic
- * input, or made of only meta tools (thatch bookkeeping, dispatch, todo and
- * question bookkeeping), stay silent.
+ * null shape (message fetch failed) stays silent: alerts are best-effort,
+ * and a spurious banner on every broken fetch costs more than a rare
+ * missed completion (the fetch failing also breaks the wrap-up check the
+ * same way, so the session degrades consistently). Rounds driven by
+ * synthetic input, or made of only meta tools (thatch bookkeeping,
+ * dispatch, todo and question bookkeeping), stay silent.
  */
 export function roundDidRealWork(shape: RoundShape | null): boolean {
-  if (!shape) return true;
+  if (!shape) return false;
   if (shape.syntheticTrigger) return false;
   if (shape.roundError) return false;
   return shape.toolCalls.some((tool) => !isMetaToolName(tool) && tool !== "todowrite" && tool !== "question");

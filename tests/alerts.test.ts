@@ -22,8 +22,8 @@ function shape(overrides: Partial<RoundShape> = {}): RoundShape {
 }
 
 describe("roundDidRealWork", () => {
-  test("a null shape (fetch failed) counts as real work - never miss a completion", () => {
-    expect(roundDidRealWork(null)).toBe(true);
+  test("a null shape (fetch failed) stays silent - alerts are best-effort", () => {
+    expect(roundDidRealWork(null)).toBe(false);
   });
 
   test("real tool calls notify", () => {

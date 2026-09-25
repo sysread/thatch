@@ -133,8 +133,12 @@ non-assistant message before the round's assistant messages.
 - **Error alert** -- an unrecovered error (error then idle, no retry between)
   notifies needs-attention instead of done. A retried error is cleared by the
   next busy/retry, so the round's completion notifies normally.
-- **Unknown shape** -- a failed message fetch classifies as real work: a
-  spurious banner costs less than a silently missed completion.
+- **Unknown shape** -- a failed message fetch stays silent. Alerts are
+  best-effort: a spurious banner on every broken fetch costs more than a
+  rare missed completion, and the same fetch failing also breaks the
+  wrap-up greenlight check, so the session degrades consistently. This
+  rule also keeps adapter-level tests (whose client mocks have no message
+  surface) from ever spawning a real banner.
 
 State is plain memory, deliberately not journaled to `runtime_state`: a v2
 reload mid-turn (plugin save, upgrade) loses that turn's busy->idle

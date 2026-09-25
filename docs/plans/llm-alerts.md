@@ -233,3 +233,25 @@ lines. Divergence is confined to two seams, both already abstracted in
 - Retire the orphaned v1 notifier config during rollout; leave v2's built-in
   attention settings untouched unless doubles annoy (its TUI-side notifications
   only fire when blurred).
+
+## Deviations from the plan as written
+
+- **Unknown round shape stays silent**, not "notify". The original choice
+  (never miss a completion) made every adapter-level test whose client mock
+  lacks a message surface spawn a real osascript banner during `mise run
+  check` -- the state machine reached live delivery through the pump's
+  busy->idle path. Silence on a failed fetch is also the better product
+  behavior: alerts are best-effort, and the same fetch failure already
+  breaks the wrap-up greenlight check, so the session degrades consistently.
+- **v1 event names verified from source, not SSE probe**: v1.18.9 publishes
+  `question.asked`/`question.replied`/`question.rejected`
+  (`packages/schema/src/v1/question.ts`) and `permission.asked`/
+  `permission.replied` (`packages/schema/src/v1/permission.ts`); the
+  installed v1 SDK's `types.gen.d.ts` is stale (no question events, and
+  `permission.updated` is a legacy type with no publish site). The events
+  flow through the plugin event hook as untyped `{type, properties}`, so
+  SDK staleness is harmless.
+- **v2 idle translation reused**: v2's SSE stream delivers the idle signal
+  as `session.execution.*` events (the existing `translateEvent` mapping),
+  so pause events needed translation cases there rather than a new
+  subscription path.
