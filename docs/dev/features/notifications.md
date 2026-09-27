@@ -20,7 +20,7 @@ Two delivery paths share the dispatcher and the config file:
 | `src/config.ts` | Zod section schemas, config file load/save/merge, platform defaults, `alertMode`. |
 | `src/notify.ts` | Per-platform dispatch for banner + voice, with an injectable spawner. |
 | `src/tool-defs.ts` | `config_get`, `config_set`, `notify_user` tool definitions (shared registry, non-opencodeOnly). |
-| `src/alerts.ts` | Alert state machine: pause/done/error decisions, per-session dedup and debounce. |
+| `src/alerts.ts` | Alert state machine: pause/done/error decisions from session events, per-session dedup (no timer-based debounce - one alert per busy->idle transition, per request id for pauses). |
 
 ## Config design
 
@@ -96,49 +96,72 @@ Details that matter:
 runtime (both the v1 and v2 adapters feed it the same event stream) drives it
 from the shared `onEvent` hook; delivery reuses `sendNotification` with the
 `alerts` config section choosing the channel per event (`alertMode`, default
-`banner`).
+`banner`). Delivery is fire-and-forget (a spoken alert awaits the sentence
+for seconds and must never stall the event pump); the machine owns the
+per-event `none` gate and the per-delivery config re-read is what makes
+config changes apply without a restart.
 
 Events consumed:
 
 | Event | Machine input |
 |-------|---------------|
 | `question.asked` / `permission.asked` | Pause alert, deduped per request id; cleared by the matching replied/rejected event. |
-| `session.status` busy/retry | Marks the session active and clears a recorded error (a retry means opencode recovered). |
-| `session.error` / `session.execution.failed` | Records the error name; the next idle decides. |
+| `session.status` busy/retry | Marks the session active and clears a recorded error (a retry means opencode recovered; v1-only -- v2 never publishes `session.error` for a retried attempt). |
+| `session.error` / `session.execution.failed` | Records the error name; on v2 the adapter emits this paired with the idle event, so the verdict always follows. |
 | `session.status` idle (from active) | The verdict: error alert, done alert, or silence. |
 | `session.deleted` | Drops the state. |
 
-The idle verdict classifies the finished round from the message list
-(`roundShape` in the runtime wiring, fetched via
-`HostCapabilities.sessionMessages`): the triggering message is the newest
-non-assistant message before the round's assistant messages.
+The verdict combines two sources, because neither alone can answer "was
+this a real round of work the user asked for?":
 
+- **The tool side is live bookkeeping, not message archaeology.** The
+  runtime calls `sessionRealWork` at exactly the extraction buffer's push
+  site -- the buffer's filter is the one classification of "this call was
+  not bookkeeping" (`isMetaToolName`: `thatch_*`, `skill`, `task`,
+  `agent`, `subagent`; execute-wrapped thatch calls are unwrapped and never
+  reach the push). Message parts do not carry tool arguments, so the
+  execute-unwrap cannot be redone from messages. `todowrite` and `question`
+  reach the push (the buffer wants their facts) but are excluded from the
+  alert signal -- see `isNoWorkTool` in `src/alerts.ts`; they deliberately
+  do NOT live in `isMetaToolName`, and moving them there would silently
+  stop the buffer from queueing them.
+- **The trigger side comes from the message list** via the pure
+  `deriveRoundShape` (exported from `src/alerts.ts`, fed
+  `HostCapabilities.sessionMessages` output). The round delimiter is v2's
+  own idle marker: v2 appends a `{type: "idle"}` marker message at every
+  turn end (`SessionMessage.Idle`), so the round is everything after the
+  previous marker -- the host's turn definition, immune to mid-round
+  steers. V1 has no markers and falls back to "newest non-assistant message
+  triggered the round" (a mid-round steer under-classifies there; accepted
+  v1 limitation).
+
+Silence rules, in verdict order:
+
+- **Unknown shape** -- a failed or empty message fetch stays silent.
+  Alerts are best-effort: a spurious banner on every broken fetch costs
+  more than a rare missed completion, and the same fetch failing also
+  breaks the wrap-up greenlight check, so the session degrades
+  consistently. This rule also keeps adapter-level tests (whose client
+  mocks have no message surface) from ever spawning a real banner.
 - **Synthetic-trigger silence** -- nudges, background-task completions, and
   watcher wake-ups are synthetic deliveries (v2: their own message kind; v1:
-  all-synthetic text parts on the user message). A round they triggered never
-  notifies: without this rule, every async thatch activity would produce a
-  banner.
-- **Meta-tool silence** -- a round whose tool calls are all bookkeeping
-  (`isMetaToolName` in `src/extraction.ts`: `thatch_*`, `skill`, `task`,
-  `agent`, `subagent`, plus `todowrite` and `question`) did no real work. The
-  dispatch tools match by set because the name is version-dependent (`task`
-  on v1, `subagent` on v2). The same helper drives the extraction buffer's
-  non-bufferable filter, so the aggregator-tool lessons (execute-unwrap,
-  dispatch-name drift) live in one place.
-- **Abort silence** -- an error whose name matches /abort/i
-  (`MessageAbortedError`) means the user interrupted the turn themselves.
-  Both the event-level error (v1: `session.error` properties; v2: translated
-  from `session.execution.failed`) and the message-level error (the last
-  assistant message's error name) route through this check.
-- **Error alert** -- an unrecovered error (error then idle, no retry between)
-  notifies needs-attention instead of done. A retried error is cleared by the
-  next busy/retry, so the round's completion notifies normally.
-- **Unknown shape** -- a failed message fetch stays silent. Alerts are
-  best-effort: a spurious banner on every broken fetch costs more than a
-  rare missed completion, and the same fetch failing also breaks the
-  wrap-up greenlight check, so the session degrades consistently. This
-  rule also keeps adapter-level tests (whose client mocks have no message
-  surface) from ever spawning a real banner.
+  all-synthetic text parts on the user message). A round they triggered
+  never notifies, EVEN when it does real work: a watcher wake that merges a
+  branch produces no done banner (the watcher already announced itself).
+  Without this rule, every async thatch activity would produce a banner.
+- **Abort and shutdown silence** -- an error name matching /abort|shutdown/i
+  means the user interrupted the turn themselves (`MessageAbortedError`, or
+  v2's user-reason interrupt translation) or the process is leaving
+  (`SessionShutdownError`). Sources: the event-level error, the message-level
+  error on the last assistant message, and v2's interrupted-reason
+  translation.
+- **Error alert** -- any other recorded error (event-level, or message-level
+  on the last assistant message) notifies needs-attention with the error
+  name in the message, instead of done.
+- **No real work** -- a round whose only tool calls were bookkeeping (or
+  that made none) stays silent. A round delegated entirely to subagents
+  also stays silent: dispatch tools are meta, and child sessions never
+  alert.
 
 State is plain memory, deliberately not journaled to `runtime_state`: a v2
 reload mid-turn (plugin save, upgrade) loses that turn's busy->idle
@@ -175,15 +198,19 @@ rejected for that reason (plus v1 has no TUI plugin surface at all).
   platform, plus tool-level tests (merge-no-wipe, echo, `mode: none` no-op,
   configured voice honored) with `THATCH_DB_PATH` pointed at a tempdir.
 - `tests/tool-defs.test.ts` -- registry count and name list (hardcoded literals that fail loudly when the surface changes).
-- `tests/alerts.test.ts` -- the alert state machine: round classification
-  (synthetic/meta/error/unknown shapes), pause dedup and re-arm, abort
-  silence, error-then-idle vs retry recovery, `mode: none` per event, config
-  round-trip.
+- `tests/alerts.test.ts` -- the alert state machine: `deriveRoundShape`
+  (idle-marker delimiter, v1 fallback, synthetic trigger detection), the
+  real-work flag, pause dedup and re-arm, abort/shutdown silence,
+  error-with-name, retry recovery, `mode: none` per event, config
+  round-trip (isolated tempdir).
 
 ## QA coverage
 
 `tests/qa/auto/uc-059-tool-prefixing.ts` asserts the full bare-name list; the
 three new names are in its `expected` array. `uc-108-llm-alerts.ts` drives
-the full alert event flow against a spy notifier (config defaults, pause
-dedup/re-arm, done once per real round, silence rules, error/retry, mode
-none).
+the full alert event flow against a spy notifier, including the adapter
+seam: raw v2 bus events through `translateEvent` and real-shaped
+`session.context` lists through `mapSessionContextMessages` +
+`deriveRoundShape` (the seam where the idle-marker bug hid). A live
+banner-by-ear check remains a manual verification against a running
+session.

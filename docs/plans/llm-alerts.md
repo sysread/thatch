@@ -236,6 +236,35 @@ lines. Divergence is confined to two seams, both already abstracted in
 
 ## Deviations from the plan as written
 
+Recorded during implementation and review pass 1 (crash-override-00004);
+the review's blocking findings were real and fixed:
+
+- **The round's tool side comes from live bookkeeping, not the message
+  list.** The plan's classifier read tool calls from messages and reused
+  `unwrapExecuteThatchCalls` there; message parts do not carry tool
+  arguments, so the unwrap was impossible at that seam (and was silently
+  dropped -- the round-1 review caught the plan Mandate going unmet). The
+  shipped design marks real work at the extraction buffer's push site
+  (`sessionRealWork`), which already classifies meta tools and unwraps
+  execute-wrapped thatch calls. `RoundShape` carries only the trigger side
+  (synthetic) and the round error. `deriveRoundShape` is exported and pure
+  (the review found the inline closure untestable, which is exactly where
+  the blocking bug hid).
+- **The round delimiter is the host's idle marker on v2** (review B1):
+  v2.0.16 appends a `{type: "idle"}` marker message at every turn end, and
+  the plan's "newest non-assistant message is the trigger" scan picked the
+  marker -- every v2 round looked empty and done alerts were dead. The
+  round is now everything after the previous marker (the host's turn
+  definition; also fixes mid-round steers on v2). V1 keeps the trigger
+  scan (no markers; mid-round steers under-classify -- accepted v1
+  limitation).
+- **A v2 execution failure now delivers the verdict immediately** (review
+  B2): failed is the only terminal event for a failed busy period -- no
+  idle follows it -- so the adapter translates it to the v1-shaped pair
+  (`session.error` + `session.status` idle). Interrupts translate to an
+  error named by reason (`user` -> MessageAbortedError silent, `shutdown`
+  -> SessionShutdownError silent, `inactivity` -> SessionInactivityError ->
+  needs-attention) + idle.
 - **Unknown round shape stays silent**, not "notify". The original choice
   (never miss a completion) made every adapter-level test whose client mock
   lacks a message surface spawn a real osascript banner during `mise run
@@ -250,7 +279,8 @@ lines. Divergence is confined to two seams, both already abstracted in
   installed v1 SDK's `types.gen.d.ts` is stale (no question events, and
   `permission.updated` is a legacy type with no publish site). The events
   flow through the plugin event hook as untyped `{type, properties}`, so
-  SDK staleness is harmless.
+  SDK staleness is harmless. Reply events carry `requestID` on both lines
+  (the review killed a defensive `permissionID` fallback as dead code).
 - **v2 idle translation reused**: v2's SSE stream delivers the idle signal
   as `session.execution.*` events (the existing `translateEvent` mapping),
   so pause events needed translation cases there rather than a new

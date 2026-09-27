@@ -18,7 +18,7 @@ import {
   type NudgeMatch,
 } from "./prompts";
 import { ExtractionPipeline, isMetaToolName, unwrapExecuteThatchCalls, type ToolInteraction } from "./extraction";
-import { createAlerts, replyRequestID } from "./alerts";
+import { createAlerts, deriveRoundShape, isNoWorkTool, replyRequestID } from "./alerts";
 import { mostRecentTopLevelSessionId } from "./session-db";
 import type { CoreContext } from "./tool-defs";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
@@ -202,49 +202,24 @@ export async function createRuntime(input: {
   // human input or finishes a round of real work. Plain in-memory state -
   // a v2 reload mid-turn loses that turn's transition and stays silent
   // (accepted). Delivery reuses the notify_user dispatcher; the alerts
-  // config section picks the channel per event, defaulting to banner.
+  // config section picks the channel per event, defaulting to banner. The
+  // config is re-read per delivery so a config_set (or hand edit) applies
+  // without a restart, the same contract the chat tools' per-call config
+  // read gives the chat section.
   const alerts = createAlerts({
     config: () => loadConfig(dbPath).config,
-    roundShape: async (sessionID) => {
-      const messages = await caps.sessionMessages(sessionID);
-      if (!messages?.length) return null;
-      // Newest last. The round is everything after the message that
-      // triggered the turn: the newest non-assistant message (a real user
-      // message, or a synthetic delivery on v2 / all-synthetic parts on
-      // v1 - nudges, task completions, watcher wake-ups).
-      let triggerIdx = -1;
-      for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].info.role !== "assistant") {
-          triggerIdx = i;
-          break;
-        }
-      }
-      const trigger = triggerIdx >= 0 ? messages[triggerIdx] : undefined;
-      const roundMessages = triggerIdx >= 0 ? messages.slice(triggerIdx + 1) : messages;
-      // Tool calls across ALL of the round's assistant messages - the last
-      // step of a round is often pure text after earlier steps did the work.
-      const toolCalls = roundMessages.flatMap((m) =>
-        (m.parts ?? []).filter((p) => p.type === "tool").map((p) => p.tool ?? ""),
-      );
-      const lastAssistant = [...roundMessages].reverse().find((m) => m.info.role === "assistant");
-      const textParts = (trigger?.parts ?? []).filter((p) => p.type === "text");
-      const syntheticTrigger =
-        trigger?.info.role === "synthetic" ||
-        (trigger?.info.role === "user" && textParts.length > 0 && textParts.every((p) => p.synthetic === true));
-      return { syntheticTrigger, toolCalls, roundError: lastAssistant?.info.error ?? null };
-    },
+    roundShape: async (sessionID) =>
+      deriveRoundShape(await caps.sessionMessages(sessionID)),
     sessionTitle: async (sessionID) => (await caps.sessionGet(sessionID))?.title,
     notify: async ({ kind, title, message }) => {
-      const { config } = loadConfig(dbPath);
-      const mode = alertMode(config, kind);
-      // Defensive: the alert state machine already gates "none" out.
-      if (mode === "none") return;
       const defaults = notificationDefaults();
       await sendNotification({
         message,
         title,
         source: title,
-        channel: mode,
+        // The machine owns the per-event "none" gate and never calls here
+        // with one - this cast records that contract.
+        channel: alertMode(loadConfig(dbPath).config, kind) as "both" | "banner" | "voice",
         voice: defaults.voice,
         sound: defaults.sound,
       });
@@ -1209,6 +1184,15 @@ export async function createRuntime(input: {
         title: output.title,
         output: typeof output.output === "string" ? output.output : "",
       });
+      // The push site is the single classification of "this call was real
+      // work" - meta tools and execute-wrapped thatch calls never reach it -
+      // so it is also the done-alert signal. todowrite/question reach it
+      // (the buffer wants them) but are no-work for alerts - see
+      // isNoWorkTool in src/alerts.ts for why they must not move into
+      // isMetaToolName.
+      if (!isNoWorkTool(input.tool)) {
+        alerts.sessionRealWork(sessionID);
+      }
     },
 
     // 4. Per-message nudge - two priority tiers:
@@ -1506,9 +1490,7 @@ export async function createRuntime(input: {
     onEvent: async (event) => {
       // Pause alerts: the LLM blocked on a human decision. Both lines
       // publish these on the bus; v2's adapter translates them into the
-      // same property names. Reply ids differ per line (v1's permission
-      // reply carries permissionID, the rest requestID) - replyRequestID
-      // normalizes.
+      // same property names (requestID on all reply events).
       if (event.type === "question.asked") {
         await alerts.questionAsked(event.properties.sessionID, event.properties.id);
         return;
@@ -1540,10 +1522,11 @@ export async function createRuntime(input: {
       if (event.type === "session.error") {
         const childID = event.properties.sessionID;
         // Alert bookkeeping first: the error name decides abort-silence vs
-        // the needs-attention alert when the session then goes idle.
-        // Children are excluded - their failure requeues extraction here
-        // and the parent turn continues; the child session itself never
-        // alerts.
+        // the needs-attention alert when the session then goes idle (on v2
+        // the adapter emits session.error + idle as a pair for terminal
+        // failures and interrupts, so the verdict always follows). Children
+        // are excluded - their failure requeues extraction here and the
+        // parent turn continues; the child session itself never alerts.
         const errorObj = event.properties.error as { name?: string; type?: string } | undefined;
         if (!childToParent.has(childID ?? "")) {
           alerts.sessionError(childID ?? "", errorObj?.name ?? errorObj?.type ?? null);

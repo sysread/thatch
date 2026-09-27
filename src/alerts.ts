@@ -7,29 +7,38 @@
 // The brain is deliberately a plain in-memory state machine owned by the
 // plugin runtime. The runtime is a single instance per project directory in
 // the shared server no matter how many TUIs are attached, so per-session
-// deduplication and debouncing are exact by construction - delivering from
-// the TUI side instead would fire once per attached TUI. State is rebuilt
-// empty on plugin setup: a v2 reload mid-turn loses the busy->idle
-// transition for that turn and the alert stays silent (accepted; see
-// docs/plans/llm-alerts.md).
+// deduplication is exact by construction - delivering from the TUI side
+// instead would fire once per attached TUI. State is rebuilt empty on
+// plugin setup: a v2 reload mid-turn loses that turn's transition and the
+// alert stays silent (accepted; see docs/plans/llm-alerts.md).
+//
+// What makes a round "real work" is split across two sources, on purpose:
+// - the TOOL side comes from live bookkeeping: the runtime marks real work
+//   exactly where the extraction buffer pushes (the buffer's non-bufferable
+//   filter already knows the meta tools and unwraps execute-wrapped thatch
+//   calls), so the execute-unwrap lesson lives in one place;
+// - the TRIGGER side (was the turn started by a real user prompt, or by a
+//   synthetic delivery?) and the round's error come from the message list,
+//   via deriveRoundShape. Messages cannot answer the tool side (tool args -
+//   the execute code - are not in message parts), and live bookkeeping
+//   cannot answer the trigger side. Neither source alone is sufficient.
 
 import { alertMode, type AlertEventKind, type Config } from "./config";
-import { isMetaToolName } from "./extraction";
 
 /**
- * What the runtime can observe about the round that just ended. Shapes come
- * from the capabilities layer's message list, so both opencode lines map
- * into this one view.
+ * What the message list says about the round that just ended. Derived by
+ * deriveRoundShape from the capabilities layer's message view; null means
+ * the shape is unknown (empty/failed fetch) and the alert stays silent.
  */
 export interface RoundShape {
   /**
    * The turn was triggered by synthetic input only - a thatch nudge, a
    * background-task completion, a watcher wake-up. Such rounds are
-   * bookkeeping, not work the user asked for, and never notify.
+   * bookkeeping, not work the user asked for, and never notify - even when
+   * they end up doing real tool work (e.g. a watcher wake that merges a
+   * branch: the watcher already announced itself).
    */
   syntheticTrigger: boolean;
-  /** Tool names invoked by the round's last assistant message, in order. */
-  toolCalls: string[];
   /**
    * The round ended in an error (message-level: abort, stall, provider
    * failure). Routes to the error alert instead of done. Null when the
@@ -45,55 +54,130 @@ export interface AlertInput {
   message: string;
 }
 
+/** Structural message view - the capabilities layer's sessionMessages shape. */
+export interface RoundMessage {
+  info: { role: string; error?: string };
+  parts?: { type: string; text?: string; tool?: string; synthetic?: boolean }[];
+}
+
 export interface AlertsDeps {
   /** Current user config (the alerts section decides the channel). */
   config(): Config;
-  /** Fetch the finished round's shape; null when the fetch fails. */
+  /** Derive the finished round's shape from the message list. */
   roundShape(sessionID: string): Promise<RoundShape | null>;
   /** Session title for the source label; undefined when unknown. */
   sessionTitle(sessionID: string): Promise<string | undefined>;
-  /** Delivery. The production impl wraps sendNotification; tests inject a spy. */
+  /**
+   * Delivery. The production impl wraps sendNotification; tests inject a
+   * synchronous spy. Fire-and-forget from the machine's side - a voice
+   * delivery awaits `say` for seconds and must never delay the event pump.
+   */
   notify(input: AlertInput): Promise<void>;
 }
 
 interface SessionAlertState {
-  /** Seen busy since the last idle. */
+  /** Seen busy since the last verdict. */
   active: boolean;
+  /** Real tool work observed this busy period (the extraction-push signal). */
+  realWork: boolean;
   /** Error recorded by session.error / execution failure, by error name. */
   lastError: string | null;
   /** Pause requests already notified, awaiting their reply event. */
   pendingAsks: Set<string>;
 }
 
-/** Errors that mean the human aborted the turn themselves - never notify. */
-function isAbortError(error: string | null | undefined): boolean {
-  return !!error && /abort/i.test(error);
-}
-
 /**
- * Whether the finished round did real work and deserves a done alert. A
- * null shape (message fetch failed) stays silent: alerts are best-effort,
- * and a spurious banner on every broken fetch costs more than a rare
- * missed completion (the fetch failing also breaks the wrap-up check the
- * same way, so the session degrades consistently). Rounds driven by
- * synthetic input, or made of only meta tools (thatch bookkeeping,
- * dispatch, todo and question bookkeeping), stay silent.
+ * Error names that never alert: the user aborted the turn themselves
+ * (MessageAbortedError, and v2's user-reason interrupt translation), or the
+ * process is shutting down and there is nobody left to notify.
  */
-export function roundDidRealWork(shape: RoundShape | null): boolean {
-  if (!shape) return false;
-  if (shape.syntheticTrigger) return false;
-  if (shape.roundError) return false;
-  return shape.toolCalls.some((tool) => !isMetaToolName(tool) && tool !== "todowrite" && tool !== "question");
+function isSilentError(error: string | null | undefined): boolean {
+  return !!error && /abort|shutdown/i.test(error);
 }
 
 /**
- * Whether the reply-event bookkeeping matches the ask-event bookkeeping for
- * the same request. V1 replies carry permissionID (legacy surface), v2 and
- * question replies carry requestID - both resolve here.
+ * Which tool calls count as real work for the ALERT classifier, on top of
+ * the extraction buffer's push (which already excludes isMetaToolName and
+ * execute-wrapped thatch calls). todowrite and question are intentionally
+ * NOT in isMetaToolName - the extraction buffer must buffer them (they
+ * carry extractable facts) - but a round made of only them did nothing the
+ * user is waiting for: a todo write has no outcome to announce, and a
+ * question is announced by its own pause alert. Do not move them into the
+ * shared helper; that would silently stop the buffer from queueing them.
+ */
+export function isNoWorkTool(tool: string): boolean {
+  const t = tool.toLowerCase();
+  return t === "todowrite" || t === "question";
+}
+
+/**
+ * Derive the round shape from the message list (oldest first, the
+ * capabilities layer's sessionMessages order).
+ *
+ * Round delimiter: on v2 the host appends an `{type: "idle"}` marker
+ * message at every turn end (SessionMessage.Idle, projected before
+ * subscribers are notified), so the round is everything after the previous
+ * idle marker - the host's own turn definition, immune to mid-round
+ * steers. V1 has no markers: fall back to "the newest non-assistant message
+ * triggered the round" (a mid-round steer under-classifies the round there;
+ * accepted v1 limitation).
+ */
+export function deriveRoundShape(messages: RoundMessage[] | null | undefined): RoundShape | null {
+  if (!messages?.length) return null;
+  // The CURRENT turn's idle marker is the last message on v2 (projected
+  // before subscribers see the terminal event) - it terminates the round,
+  // so trim trailing markers first, then the round is everything after the
+  // PREVIOUS marker.
+  let end = messages.length;
+  while (end > 0 && messages[end - 1].info.role === "idle") end--;
+  let start = -1;
+  for (let i = end - 1; i >= 0; i--) {
+    if (messages[i].info.role === "idle") {
+      start = i + 1;
+      break;
+    }
+  }
+  if (start < 0) {
+    // No markers (v1): the newest non-assistant message triggered the round.
+    for (let i = end - 1; i >= 0; i--) {
+      if (messages[i].info.role !== "assistant") {
+        start = i;
+        break;
+      }
+    }
+  }
+  if (start < 0) return null; // only assistant messages - no trigger, no round
+  const round = messages.slice(start, end);
+  const trigger = round.find((m) => m.info.role !== "assistant" && m.info.role !== "idle");
+  const lastAssistant = [...round].reverse().find((m) => m.info.role === "assistant");
+  const textParts = (trigger?.parts ?? []).filter((p) => p.type === "text");
+  const syntheticTrigger =
+    trigger?.info.role === "synthetic" ||
+    (trigger?.info.role === "user" && textParts.length > 0 && textParts.every((p) => p.synthetic === true));
+  return { syntheticTrigger: !!syntheticTrigger, roundError: lastAssistant?.info.error ?? null };
+}
+
+/**
+ * Whether the finished round did real work and deserves a done alert.
+ * Unknown shape stays silent (alerts are best-effort; the same fetch
+ * failure also breaks the wrap-up greenlight check, so the session
+ * degrades consistently). A round triggered by synthetic input stays
+ * silent even when it did real work (M3 rule above).
+ */
+export function roundDidRealWork(shape: RoundShape | null, realWork: boolean): boolean {
+  if (!shape || shape.syntheticTrigger || shape.roundError) return false;
+  return realWork;
+}
+
+/**
+ * The reply-event bookkeeping: all reply events on both lines carry
+ * requestID (verified against v1.18.9's schema - despite the v1 SDK's
+ * stale types showing a legacy permissionID spelling, the v1 host's active
+ * permission publisher uses the v1 schema's requestID).
  */
 export function replyRequestID(properties: Record<string, unknown> | undefined): string | undefined {
   if (!properties) return undefined;
-  const id = properties.requestID ?? properties.permissionID;
+  const id = properties.requestID;
   return typeof id === "string" ? id : undefined;
 }
 
@@ -103,22 +187,38 @@ export function createAlerts(deps: AlertsDeps) {
   function stateFor(sessionID: string): SessionAlertState {
     let state = sessions.get(sessionID);
     if (!state) {
-      state = { active: false, lastError: null, pendingAsks: new Set() };
+      state = { active: false, realWork: false, lastError: null, pendingAsks: new Set() };
       sessions.set(sessionID, state);
     }
     return state;
+  }
+
+  function titleFor(sessionID: string): Promise<string> {
+    return deps
+      .sessionTitle(sessionID)
+      .catch(() => undefined)
+      .then((t) => t ?? "opencode");
+  }
+
+  function deliver(input: AlertInput): void {
+    // Fire-and-forget: a voice delivery awaits the sentence for seconds,
+    // and the caller (the event pump) must not stall other sessions'
+    // events behind it. Delivery failures are logged, never surfaced.
+    deps.notify(input).catch((err) => console.error(`[thatch] alert delivery failed: ${err}`));
   }
 
   /** One ask of any kind. Deduped per request id; duplicates stay silent. */
   async function asked(sessionID: string, requestID: string | undefined, message: string): Promise<void> {
     try {
       const state = stateFor(sessionID);
+      // No id (never observed in the wild): dedup per session+kind. Two
+      // concurrent id-less asks of the same kind dedup to one alert -
+      // over-clearing on reply is the accepted cost.
       const key = requestID ?? `anon:${message}`;
       if (state.pendingAsks.has(key)) return;
       state.pendingAsks.add(key);
       if (alertMode(deps.config(), "pause") === "none") return;
-      const title = (await deps.sessionTitle(sessionID).catch(() => undefined)) ?? "opencode";
-      await deps.notify({ kind: "pause", title, message });
+      deliver({ kind: "pause", title: await titleFor(sessionID), message });
     } catch (err) {
       console.error(`[thatch] pause alert failed: ${err}`);
     }
@@ -128,6 +228,8 @@ export function createAlerts(deps: AlertsDeps) {
     const state = sessions.get(sessionID);
     if (!state) return;
     if (requestID) state.pendingAsks.delete(requestID);
+    // No id: clear all - the reply event dropped the request payload, and
+    // a stuck pending ask would suppress a future genuine alert.
     else state.pendingAsks.clear();
   }
 
@@ -148,9 +250,23 @@ export function createAlerts(deps: AlertsDeps) {
     sessionBusy(sessionID: string): void {
       const state = stateFor(sessionID);
       state.active = true;
+      state.realWork = false;
       // A retry means opencode recovered on its own - the failure was not
-      // terminal, so the turn's outcome decides the alert again.
+      // terminal, so the turn's outcome decides the alert again. (V1 only:
+      // v2 never publishes session.error for a retried attempt, only the
+      // terminal event.)
       state.lastError = null;
+    },
+
+    /**
+     * Real tool work happened this busy period. The runtime calls this
+     * exactly where the extraction buffer pushes - the buffer's filter is
+     * the single classification of "this call was not bookkeeping" (meta
+     * tools excluded, execute-wrapped thatch calls unwrapped). todowrite
+     * and question are additionally excluded here (see isNoWorkTool).
+     */
+    sessionRealWork(sessionID: string): void {
+      stateFor(sessionID).realWork = true;
     },
 
     /** The session failed (session.error / execution failure). */
@@ -160,44 +276,38 @@ export function createAlerts(deps: AlertsDeps) {
       state.lastError = errorName ?? "unknown";
     },
 
-    /** The session went idle (busy -> idle transition). The turn verdict. */
+    /**
+     * The session went idle (busy -> idle transition). The verdict: error
+     * alert, done alert, or silence. On both lines every busy period ends
+     * with an idle event - v2's execution.failed is translated to
+     * session.error + idle by the adapter, so this is the single verdict
+     * path.
+     */
     async sessionIdle(sessionID: string): Promise<void> {
       const state = sessions.get(sessionID);
       if (!state?.active) return;
       state.active = false;
       try {
-        const recordedError = state.lastError;
+        const recorded = state.lastError;
         state.lastError = null;
-        // The user aborted this turn themselves; they know.
-        if (isAbortError(recordedError)) return;
-        if (recordedError) {
-          if (alertMode(deps.config(), "error") !== "none") {
-            const title = (await deps.sessionTitle(sessionID).catch(() => undefined)) ?? "opencode";
-            await deps.notify({
-              kind: "error",
-              title,
-              message: "Session needs attention - the last round failed",
-            });
-          }
-          return;
-        }
         const shape = await deps.roundShape(sessionID).catch(() => null);
-        if (isAbortError(shape?.roundError)) return;
-        if (shape?.roundError) {
+        if (!shape) return; // unknown shape: silent (best-effort)
+        const errorName = recorded ?? shape.roundError ?? null;
+        if (isSilentError(errorName)) return; // user abort or shutdown
+        if (errorName) {
           if (alertMode(deps.config(), "error") !== "none") {
-            const title = (await deps.sessionTitle(sessionID).catch(() => undefined)) ?? "opencode";
-            await deps.notify({
+            deliver({
               kind: "error",
-              title,
-              message: "Session needs attention - the last round failed",
+              title: await titleFor(sessionID),
+              message: `Session needs attention - the last round failed (${errorName})`,
             });
           }
           return;
         }
-        if (!roundDidRealWork(shape)) return;
+        if (shape.syntheticTrigger) return; // nudge / completion / watcher-driven round
+        if (!state.realWork) return; // bookkeeping-only round (or no tool calls)
         if (alertMode(deps.config(), "done") === "none") return;
-        const title = (await deps.sessionTitle(sessionID).catch(() => undefined)) ?? "opencode";
-        await deps.notify({ kind: "done", title, message: "Work finished" });
+        deliver({ kind: "done", title: await titleFor(sessionID), message: "Work finished" });
       } catch (err) {
         console.error(`[thatch] idle alert failed: ${err}`);
       }

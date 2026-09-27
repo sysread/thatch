@@ -279,8 +279,9 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
           if (!eventDir && data.sessionID) eventDir = await resolveSessionDir(data.sessionID);
           runtime.debug("v2:pump", `event ${located.type} dir=${eventDir} self=${directory}`);
           if (eventMatchesInstance(eventDir, data.sessionID, directory, childSessions)) {
-            const translated = translateEvent(located);
-            if (translated) await runtime.onEvent(translated);
+            for (const translated of translateEvent(located)) {
+              await runtime.onEvent(translated);
+            }
           }
         } catch (err) {
           console.error(`[thatch] v2 event handler failed: ${err}`);
@@ -377,44 +378,73 @@ export function flattenToolContent(content: unknown): string {
 //   called session.error
 // - compaction completion is session.compaction.ended (v1: session.compacted)
 // Events the runtime does not consume return null and are dropped.
-function translateEvent(located: { type: string; data?: any }): { type: string; properties: any } | null {
+// Translate one raw v2 bus event into the runtime's {type, properties}
+// shape. Returns a LIST: a terminal execution event maps to the pair the
+// runtime's v1-shaped flow expects (session.error to record the failure +
+// session.status idle to deliver the verdict), because v2 publishes exactly
+// ONE terminal event per busy period - Succeeded, Interrupted, or Failed,
+// mutually exclusive (execution.ts "One terminal observation per busy
+// period") - while v1's halt always publishes session.error followed by
+// idle. Exported for tests: this is the seam where done/error alerts died
+// silently when the mapping lagged the host's turn model.
+export function translateEvent(located: { type: string; data?: any }): { type: string; properties: any }[] {
   const data = located.data ?? {};
   switch (located.type) {
     case "session.created":
-      return { type: "session.created", properties: { info: { id: data.sessionID, parentID: data.parentID } } };
+      return [{ type: "session.created", properties: { info: { id: data.sessionID, parentID: data.parentID } } }];
     case "session.deleted":
-      return { type: "session.deleted", properties: { info: { id: data.sessionID } } };
+      return [{ type: "session.deleted", properties: { info: { id: data.sessionID } } }];
     case "session.execution.started":
-      return { type: "session.status", properties: { sessionID: data.sessionID, status: { type: "busy" } } };
+      return [{ type: "session.status", properties: { sessionID: data.sessionID, status: { type: "busy" } } }];
     case "session.execution.succeeded":
-    case "session.execution.interrupted":
-      return { type: "session.status", properties: { sessionID: data.sessionID, status: { type: "idle" } } };
+      return [{ type: "session.status", properties: { sessionID: data.sessionID, status: { type: "idle" } } }];
+    case "session.execution.interrupted": {
+      // Interrupts are never success: name the reason so the alert state
+      // machine can apply its silence rules. user = the human aborted
+      // (MessageAbortedError, v1's name for it - silent); shutdown = the
+      // process is leaving (nobody to notify); inactivity = the session
+      // stalled out (a genuine needs-attention case). The idle event still
+      // follows so the runtime's idle machinery (extraction trigger,
+      // chat auto-register) runs as before.
+      const reason = data.reason as string | undefined;
+      const name = reason === "user" ? "MessageAbortedError" : reason === "shutdown" ? "SessionShutdownError" : "SessionInactivityError";
+      return [
+        { type: "session.error", properties: { sessionID: data.sessionID, error: { name } } },
+        { type: "session.status", properties: { sessionID: data.sessionID, status: { type: "idle" } } },
+      ];
+    }
     case "session.execution.failed":
-      return {
-        type: "session.error",
-        properties: { sessionID: data.sessionID, error: data.error ?? undefined },
-      };
+      // Failed is the idle signal for a failed busy period: emit the error
+      // AND the idle, or the recorded error would sit unverified until the
+      // next turn's busy cleared it (error alerts were deterministically
+      // dead this way).
+      return [
+        { type: "session.error", properties: { sessionID: data.sessionID, error: data.error ?? undefined } },
+        { type: "session.status", properties: { sessionID: data.sessionID, status: { type: "idle" } } },
+      ];
     case "session.error":
-      return {
-        type: "session.error",
-        properties: { sessionID: data.sessionID, error: data.error ?? undefined },
-      };
+      return [
+        {
+          type: "session.error",
+          properties: { sessionID: data.sessionID, error: data.error ?? undefined },
+        },
+      ];
     case "session.compaction.ended":
-      return { type: "session.compacted", properties: { sessionID: data.sessionID } };
+      return [{ type: "session.compacted", properties: { sessionID: data.sessionID } }];
     // Pause events: the LLM blocked on a human decision. V2's question and
     // permission asks carry the request payload (id, sessionID, ...); the
     // reply events drop it back to just the ids.
     case "question.asked":
-      return { type: "question.asked", properties: { id: data.id, sessionID: data.sessionID } };
+      return [{ type: "question.asked", properties: { id: data.id, sessionID: data.sessionID } }];
     case "question.replied":
     case "question.rejected":
-      return { type: located.type, properties: { sessionID: data.sessionID, requestID: data.requestID } };
+      return [{ type: located.type, properties: { sessionID: data.sessionID, requestID: data.requestID } }];
     case "permission.asked":
-      return { type: "permission.asked", properties: { id: data.id, sessionID: data.sessionID } };
+      return [{ type: "permission.asked", properties: { id: data.id, sessionID: data.sessionID } }];
     case "permission.replied":
-      return { type: "permission.replied", properties: { sessionID: data.sessionID, requestID: data.requestID } };
+      return [{ type: "permission.replied", properties: { sessionID: data.sessionID, requestID: data.requestID } }];
     default:
-      return null;
+      return [];
   }
 }
 

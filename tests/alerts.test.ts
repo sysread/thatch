@@ -1,9 +1,14 @@
 import { describe, test, expect } from "bun:test";
-import { createAlerts, roundDidRealWork, replyRequestID, type AlertInput, type AlertsDeps, type RoundShape } from "../src/alerts";
-import { alertMode, loadConfig, saveConfig, type Config } from "../src/config";
+import { createAlerts, deriveRoundShape, roundDidRealWork, replyRequestID, type AlertInput, type AlertsDeps, type RoundMessage, type RoundShape } from "../src/alerts";
+import { alertMode, configFilePath, loadConfig, saveConfig, type Config } from "../src/config";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-// The alert state machine with all delivery faked out. Records every
-// notified alert; roundShape and titles are injectable per test.
+// The alert state machine with all delivery faked out. The spy is
+// SYNCHRONOUS on purpose: the machine fire-and-forgets delivery, so the
+// spy must record before the promise resolves for assertions to be
+// deterministic.
 function harness(config: Config | undefined, roundShape: RoundShape | null | (() => RoundShape | null) = null) {
   const alerts: AlertInput[] = [];
   const deps: AlertsDeps = {
@@ -18,49 +23,35 @@ function harness(config: Config | undefined, roundShape: RoundShape | null | (()
 }
 
 function shape(overrides: Partial<RoundShape> = {}): RoundShape {
-  return { syntheticTrigger: false, toolCalls: ["read", "bash"], roundError: null, ...overrides };
+  return { syntheticTrigger: false, roundError: null, ...overrides };
 }
 
 describe("roundDidRealWork", () => {
   test("a null shape (fetch failed) stays silent - alerts are best-effort", () => {
-    expect(roundDidRealWork(null)).toBe(false);
+    expect(roundDidRealWork(null, true)).toBe(false);
   });
 
-  test("real tool calls notify", () => {
-    expect(roundDidRealWork(shape())).toBe(true);
+  test("real work notifies", () => {
+    expect(roundDidRealWork(shape(), true)).toBe(true);
   });
 
-  test("synthetic-triggered rounds stay silent", () => {
-    expect(roundDidRealWork(shape({ syntheticTrigger: true }))).toBe(false);
+  test("no real work stays silent", () => {
+    expect(roundDidRealWork(shape(), false)).toBe(false);
+  });
+
+  test("synthetic-triggered rounds stay silent even with real work", () => {
+    expect(roundDidRealWork(shape({ syntheticTrigger: true }), true)).toBe(false);
   });
 
   test("rounds that ended in an error stay silent (error alert owns it)", () => {
-    expect(roundDidRealWork(shape({ roundError: "ProviderError" }))).toBe(false);
-  });
-
-  test("meta-only rounds stay silent", () => {
-    expect(roundDidRealWork(shape({ toolCalls: ["thatch_recall", "thatch_memory_remember"] }))).toBe(false);
-    expect(roundDidRealWork(shape({ toolCalls: ["skill", "task"] }))).toBe(false);
-    expect(roundDidRealWork(shape({ toolCalls: ["subagent"] }))).toBe(false);
-    expect(roundDidRealWork(shape({ toolCalls: ["todowrite", "question"] }))).toBe(false);
-  });
-
-  test("a round that mixed meta tools with real work notifies", () => {
-    expect(roundDidRealWork(shape({ toolCalls: ["thatch_recall", "read"] }))).toBe(true);
-  });
-
-  test("a round with no tool calls did no work", () => {
-    expect(roundDidRealWork(shape({ toolCalls: [] }))).toBe(false);
+    expect(roundDidRealWork(shape({ roundError: "ProviderError" }), true)).toBe(false);
   });
 });
 
 describe("replyRequestID", () => {
-  test("requestID (v2 / question replies)", () => {
+  test("all reply events carry requestID (both lines)", () => {
     expect(replyRequestID({ requestID: "que_1" })).toBe("que_1");
-  });
-
-  test("permissionID (v1 permission replies)", () => {
-    expect(replyRequestID({ permissionID: "per_1" })).toBe("per_1");
+    expect(replyRequestID({ requestID: "per_1" })).toBe("per_1");
   });
 
   test("absent or non-string ids resolve to undefined", () => {
@@ -70,10 +61,120 @@ describe("replyRequestID", () => {
   });
 });
 
+describe("deriveRoundShape", () => {
+  const user = (text: string): RoundMessage => ({ info: { role: "user" }, parts: [{ type: "text", text, synthetic: false }] });
+  const assistant = (tools: string[], error?: string): RoundMessage => ({
+    info: { role: "assistant", ...(error ? { error } : {}) },
+    parts: [...tools.map((t) => ({ type: "tool", tool: t })), { type: "text", text: "done" }],
+  });
+
+  test("empty message list has no shape", () => {
+    expect(deriveRoundShape(null)).toBeNull();
+    expect(deriveRoundShape([])).toBeNull();
+  });
+
+  test("v2: the round is everything after the previous idle marker", () => {
+    // Turn 1: user prompt, assistant work, idle marker appended by the host.
+    // Turn 2 (the round under evaluation): synthetic nudge, assistant ack, marker.
+    const messages: RoundMessage[] = [
+      user("do the thing"),
+      assistant(["read", "bash"]),
+      { info: { role: "idle" }, parts: [{ type: "text", text: "" }] },
+      { info: { role: "synthetic" }, parts: [{ type: "text", text: "nudge", synthetic: true }] },
+      assistant(["thatch_extraction_done"]),
+      { info: { role: "idle" }, parts: [{ type: "text", text: "" }] },
+    ];
+    const shape = deriveRoundShape(messages)!;
+    // The newest marker delimits the round; the trigger is the synthetic
+    // nudge inside it - NOT the marker itself (the pre-fix bug: the marker
+    // hijacked the trigger scan and every v2 round looked empty).
+    expect(shape.syntheticTrigger).toBe(true);
+  });
+
+  test("v2: a user-prompted round with real work is not synthetic", () => {
+    const messages: RoundMessage[] = [
+      user("do the thing"),
+      assistant(["read"]),
+      { info: { role: "idle" }, parts: [] },
+      user("and now this"),
+      assistant(["bash", "edit"]),
+      { info: { role: "idle" }, parts: [] },
+    ];
+    const shape = deriveRoundShape(messages)!;
+    expect(shape.syntheticTrigger).toBe(false);
+  });
+
+  test("v2: the round error comes from the last assistant message", () => {
+    const messages: RoundMessage[] = [
+      user("go"),
+      assistant(["read"]),
+      assistant(["bash"], "ProviderError"),
+      { info: { role: "idle" }, parts: [] },
+    ];
+    expect(deriveRoundShape(messages)!.roundError).toBe("ProviderError");
+  });
+
+  test("v2: a mid-round steer does not truncate the round (marker delimiter)", () => {
+    // The user steered mid-turn; the marker-based round still contains the
+    // pre-steer assistant work (v1's trigger-scan cannot see this).
+    const messages: RoundMessage[] = [
+      user("long task"),
+      assistant(["bash"]),
+      user("also watch the output"),
+      assistant(["edit", "write"]),
+      { info: { role: "idle" }, parts: [] },
+    ];
+    const shape = deriveRoundShape(messages)!;
+    expect(shape.syntheticTrigger).toBe(false); // the round starts at the real prompt
+  });
+
+  test("v1 (no markers): the newest non-assistant message triggers the round", () => {
+    const messages: RoundMessage[] = [
+      user("earlier task"),
+      assistant(["read"]),
+      user("latest prompt"),
+      assistant(["bash", "edit"]),
+    ];
+    const shape = deriveRoundShape(messages)!;
+    expect(shape.syntheticTrigger).toBe(false);
+  });
+
+  test("v1: a synthetic nudge user message (all parts synthetic) is a synthetic trigger", () => {
+    const messages: RoundMessage[] = [
+      user("earlier task"),
+      assistant(["read"]),
+      {
+        info: { role: "user" },
+        parts: [
+          { type: "text", text: "nudge part", synthetic: true },
+          { type: "text", text: "nudge part 2", synthetic: true },
+        ],
+      },
+      assistant(["thatch_extraction_done"]),
+    ];
+    expect(deriveRoundShape(messages)!.syntheticTrigger).toBe(true);
+  });
+
+  test("v1: a real prompt with an appended nudge part is NOT synthetic", () => {
+    const messages: RoundMessage[] = [
+      {
+        info: { role: "user" },
+        parts: [
+          { type: "text", text: "real prompt", synthetic: false },
+          { type: "text", text: "nudge part", synthetic: true },
+        ],
+      },
+      assistant(["bash"]),
+    ];
+    expect(deriveRoundShape(messages)!.syntheticTrigger).toBe(false);
+  });
+});
+
 describe("alert state machine", () => {
   test("busy then idle with real work notifies once", async () => {
     const h = harness({}, shape());
     h.machine.sessionBusy("s1");
+    h.machine.sessionRealWork("s1");
     await h.machine.sessionIdle("s1");
     expect(h.alerts).toEqual([{ kind: "done", title: "test session", message: "Work finished" }]);
     // A second idle without a new busy stays silent.
@@ -87,39 +188,60 @@ describe("alert state machine", () => {
     expect(h.alerts).toEqual([]);
   });
 
-  test("synthetic-triggered and meta-only rounds stay silent", async () => {
-    const h = harness({}, shape({ syntheticTrigger: true }));
+  test("real work from a previous round does not leak into a bookkeeping round", async () => {
+    const h = harness({}, shape());
+    h.machine.sessionBusy("s1");
+    h.machine.sessionRealWork("s1");
+    await h.machine.sessionIdle("s1");
+    // New round: busy resets the real-work flag; a meta-only round stays silent.
     h.machine.sessionBusy("s1");
     await h.machine.sessionIdle("s1");
-    expect(h.alerts).toEqual([]);
-
-    const h2 = harness({}, shape({ toolCalls: ["thatch_extraction_done"] }));
-    h2.machine.sessionBusy("s2");
-    await h2.machine.sessionIdle("s2");
-    expect(h2.alerts).toEqual([]);
+    expect(h.alerts).toHaveLength(1);
   });
 
   test("user aborts stay silent", async () => {
     const h = harness({}, shape());
     h.machine.sessionBusy("s1");
+    h.machine.sessionRealWork("s1");
     h.machine.sessionError("s1", "MessageAbortedError");
     await h.machine.sessionIdle("s1");
     expect(h.alerts).toEqual([]);
   });
 
-  test("an unrecovered error notifies the error alert, not done", async () => {
+  test("v2 shutdown interrupts stay silent", async () => {
     const h = harness({}, shape());
     h.machine.sessionBusy("s1");
-    h.machine.sessionError("s1", "ApiError");
+    h.machine.sessionRealWork("s1");
+    h.machine.sessionError("s1", "SessionShutdownError");
     await h.machine.sessionIdle("s1");
-    expect(h.alerts).toEqual([{ kind: "error", title: "test session", message: "Session needs attention - the last round failed" }]);
+    expect(h.alerts).toEqual([]);
   });
 
-  test("a retry clears the error - the round completes normally", async () => {
+  test("an unrecovered error notifies the error alert with the error name, not done", async () => {
+    const h = harness({}, shape());
+    h.machine.sessionBusy("s1");
+    h.machine.sessionRealWork("s1");
+    h.machine.sessionError("s1", "ProviderError");
+    await h.machine.sessionIdle("s1");
+    expect(h.alerts).toEqual([
+      { kind: "error", title: "test session", message: "Session needs attention - the last round failed (ProviderError)" },
+    ]);
+  });
+
+  test("a v2 inactivity stall notifies needs-attention", async () => {
+    const h = harness({}, shape());
+    h.machine.sessionBusy("s1");
+    h.machine.sessionError("s1", "SessionInactivityError");
+    await h.machine.sessionIdle("s1");
+    expect(h.alerts[0].kind).toBe("error");
+  });
+
+  test("a retry clears the error - the round completes normally (v1)", async () => {
     const h = harness({}, shape());
     h.machine.sessionBusy("s1");
     h.machine.sessionError("s1", "ApiError");
     h.machine.sessionBusy("s1");
+    h.machine.sessionRealWork("s1");
     await h.machine.sessionIdle("s1");
     expect(h.alerts).toEqual([{ kind: "done", title: "test session", message: "Work finished" }]);
   });
@@ -127,6 +249,7 @@ describe("alert state machine", () => {
   test("a message-level abort error (v2 round shape) stays silent", async () => {
     const h = harness({}, shape({ roundError: "MessageAbortedError" }));
     h.machine.sessionBusy("s1");
+    h.machine.sessionRealWork("s1");
     await h.machine.sessionIdle("s1");
     expect(h.alerts).toEqual([]);
   });
@@ -162,6 +285,7 @@ describe("alert state machine", () => {
     await h.machine.questionAsked("s1", "que_1");
     expect(h.alerts).toEqual([]);
     h.machine.sessionBusy("s1");
+    h.machine.sessionRealWork("s1");
     await h.machine.sessionIdle("s1");
     expect(h.alerts).toEqual([]);
   });
@@ -169,6 +293,7 @@ describe("alert state machine", () => {
   test("session deletion drops state", async () => {
     const h = harness({}, shape());
     h.machine.sessionBusy("s1");
+    h.machine.sessionRealWork("s1");
     h.machine.sessionDeleted("s1");
     await h.machine.sessionIdle("s1");
     expect(h.alerts).toEqual([]);
@@ -188,9 +313,17 @@ describe("alertMode", () => {
     expect(alertMode(config, "pause")).toBe("banner");
   });
 
-  test("the alerts section round-trips through the config file", () => {
-    const config: Config = { alerts: { pause: { mode: "both" } } };
-    const path = saveConfig(config);
-    expect(loadConfig(path).config).toEqual(config);
+  test("the alerts section round-trips through the config file (isolated tempdir)", () => {
+    // M1 regression guard: saveConfig with no path writes the REAL user
+    // config (~/.config/thatch/config.json). Always pass an isolated path.
+    const dir = mkdtempSync(join(tmpdir(), "thatch-alerts-test-"));
+    try {
+      const config: Config = { alerts: { pause: { mode: "both" } } };
+      const path = saveConfig(config, join(dir, "thatch.db"));
+      expect(path).toBe(configFilePath(join(dir, "thatch.db")));
+      expect(loadConfig(path).config).toEqual(config);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -1024,8 +1024,9 @@ const configSetDef: ToolDef = {
         "Alert when the LLM blocks on a question or permission prompt.",
       ),
       done: alertEventPrefsSchema.optional().describe(
-        "Alert when a round of real work finishes (bookkeeping rounds " +
-        "driven by thatch nudges and task completions stay silent).",
+        "Alert when a round of real work finishes. Rounds triggered by " +
+        "synthetic input (thatch nudges, task completions, watcher " +
+        "wake-ups) and rounds of only bookkeeping tools stay silent.",
       ),
       error: alertEventPrefsSchema.optional().describe(
         "Alert when a session fails with nothing to recover it (user " +
