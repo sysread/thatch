@@ -236,14 +236,39 @@ describe("alert state machine", () => {
     expect(h.alerts[0].kind).toBe("error");
   });
 
-  test("a retry clears the error - the round completes normally (v1)", async () => {
+  test("a retry clears the error but preserves real work (v1)", async () => {
     const h = harness({}, shape());
     h.machine.sessionBusy("s1");
-    h.machine.sessionError("s1", "ApiError");
-    h.machine.sessionBusy("s1");
     h.machine.sessionRealWork("s1");
+    h.machine.sessionError("s1", "ApiError");
+    // Retry: opencode recovered - but the tool calls before the retry
+    // happened, so the real-work flag must survive the recovery.
+    h.machine.sessionRetry("s1");
     await h.machine.sessionIdle("s1");
     expect(h.alerts).toEqual([{ kind: "done", title: "test session", message: "Work finished" }]);
+  });
+
+  test("a recorded error delivers its verdict even when the message fetch fails", async () => {
+    const h = harness({}, () => {
+      throw new Error("host API down");
+    });
+    h.machine.sessionBusy("s1");
+    h.machine.sessionError("s1", "ProviderError");
+    await h.machine.sessionIdle("s1");
+    expect(h.alerts).toEqual([
+      { kind: "error", title: "test session", message: "Session needs attention - the last round failed (ProviderError)" },
+    ]);
+  });
+
+  test("superseded and unknown interrupt reasons stay silent", async () => {
+    const h = harness({}, shape());
+    for (const name of ["SessionInterruptedError", "SessionShutdownError", "MessageAbortedError"]) {
+      h.machine.sessionBusy("s1");
+      h.machine.sessionRealWork("s1");
+      h.machine.sessionError("s1", name);
+      await h.machine.sessionIdle("s1");
+    }
+    expect(h.alerts).toEqual([]);
   });
 
   test("a message-level abort error (v2 round shape) stays silent", async () => {

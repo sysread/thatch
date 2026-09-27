@@ -1549,9 +1549,11 @@ export async function createRuntime(input: {
         // Record the latest status so the watcher registry can gate
         // proactive prompt delivery on idle sessions.
         if (sessionID && statusType) sessionStatus.set(sessionID, statusType);
-        // Busy and retry both mean the LLM is working; retry also clears a
-        // previously recorded error (opencode recovered on its own).
-        if (sessionID && (statusType === "busy" || statusType === "retry")) alerts.sessionBusy(sessionID);
+        // Busy resets the round; a retry (v1 only) clears a recorded error
+        // but preserves the real-work flag - the tool calls before the
+        // retry happened.
+        if (sessionID && statusType === "busy") alerts.sessionBusy(sessionID);
+        else if (sessionID && statusType === "retry") alerts.sessionRetry(sessionID);
         if (statusType !== "idle") return;
         const parentID = sessionID ? childToParent.get(sessionID) : undefined;
         if (parentID && sessionID) {

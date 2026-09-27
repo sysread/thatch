@@ -468,8 +468,9 @@ describe("opencode v2 adapter", () => {
     expect(mapped).toHaveLength(3);
     expect(mapped[0]).toEqual({ info: { role: "user" }, parts: [{ type: "text", text: "hello", synthetic: false }] });
     expect(mapped[1].info.role).toBe("assistant");
-    // Reasoning parts are skipped; tool parts keep the tool name for the
-    // alert round classifier; the message-level error name rides info.
+    // Reasoning parts are skipped; tool parts keep the tool name (other
+    // consumers may want it - the alert classifier reads roles and errors,
+    // not tool names); the message-level error name rides info.
     expect(mapped[1].info.error).toBe("MessageAbortedError");
     expect(mapped[1].parts).toEqual([
       { type: "tool", tool: "read" },

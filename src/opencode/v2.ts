@@ -313,13 +313,16 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
 }
 
 // Map v2's SessionMessageInfo list into the v1 {info: {role}, parts} shape
-// the runtime's wrap-up greenlight check and the alert round classifier
-// read. Assistant messages carry their text in content parts (tool calls
-// ride alongside as tool content parts - the classifier needs their tool
-// names); other message kinds carry a plain text field (or none - those map
-// to an empty part rather than dropping the message, so role ordering
-// survives). Synthetic deliveries (nudges, task completions, watcher
-// wake-ups) are their own message kind on v2 and keep that role.
+// the runtime's wrap-up greenlight check and the alert round-derivation
+// read. The alert classifier reads ROLES (idle markers delimit rounds),
+// synthetic flags, and message-level errors from this mapping - tool names
+// are irrelevant to it (the real-work signal comes from live tool
+// bookkeeping), but they are preserved for other consumers. Assistant
+// messages carry their text in content parts; other message kinds carry a
+// plain text field (or none - those map to an empty part rather than
+// dropping the message, so role ordering survives). Synthetic deliveries
+// (nudges, task completions, watcher wake-ups) are their own message kind
+// on v2 and keep that role.
 export function mapSessionContextMessages(
   messages: unknown,
 ): { info: { role: string; error?: string }; parts: { type: string; text?: string; tool?: string; synthetic?: boolean }[] }[] {
@@ -402,12 +405,23 @@ export function translateEvent(located: { type: string; data?: any }): { type: s
       // Interrupts are never success: name the reason so the alert state
       // machine can apply its silence rules. user = the human aborted
       // (MessageAbortedError, v1's name for it - silent); shutdown = the
-      // process is leaving (nobody to notify); inactivity = the session
-      // stalled out (a genuine needs-attention case). The idle event still
-      // follows so the runtime's idle machinery (extraction trigger,
+      // process is leaving (nobody to notify); inactivity = the location-
+      // activity sweeper evicted a quiet directory while work was still
+      // executing (the one interrupt that genuinely needs a banner).
+      // Anything else (the schema reserves "superseded"; future reasons)
+      // maps to a silent catch-all name - a spurious banner costs more
+      // than a missed alert for an unknown lifecycle edge. The idle event
+      // still follows so the runtime's idle machinery (extraction trigger,
       // chat auto-register) runs as before.
       const reason = data.reason as string | undefined;
-      const name = reason === "user" ? "MessageAbortedError" : reason === "shutdown" ? "SessionShutdownError" : "SessionInactivityError";
+      const name =
+        reason === "user"
+          ? "MessageAbortedError"
+          : reason === "shutdown"
+            ? "SessionShutdownError"
+            : reason === "inactivity"
+              ? "SessionInactivityError"
+              : "SessionInterruptedError";
       return [
         { type: "session.error", properties: { sessionID: data.sessionID, error: { name } } },
         { type: "session.status", properties: { sessionID: data.sessionID, status: { type: "idle" } } },

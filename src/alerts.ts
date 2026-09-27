@@ -88,11 +88,13 @@ interface SessionAlertState {
 
 /**
  * Error names that never alert: the user aborted the turn themselves
- * (MessageAbortedError, and v2's user-reason interrupt translation), or the
- * process is shutting down and there is nobody left to notify.
+ * (MessageAbortedError, and v2's user-reason interrupt translation), the
+ * process is shutting down and there is nobody left to notify
+ * (SessionShutdownError), or the execution was superseded by a newer one
+ * (SessionInterruptedError catch-all - a new busy period is taking over).
  */
 function isSilentError(error: string | null | undefined): boolean {
-  return !!error && /abort|shutdown/i.test(error);
+  return !!error && /abort|shutdown|interrupt/i.test(error);
 }
 
 /**
@@ -162,7 +164,8 @@ export function deriveRoundShape(messages: RoundMessage[] | null | undefined): R
  * Unknown shape stays silent (alerts are best-effort; the same fetch
  * failure also breaks the wrap-up greenlight check, so the session
  * degrades consistently). A round triggered by synthetic input stays
- * silent even when it did real work (M3 rule above).
+ * silent even when it did real work - see the RoundShape.syntheticTrigger
+ * doc for why.
  */
 export function roundDidRealWork(shape: RoundShape | null, realWork: boolean): boolean {
   if (!shape || shape.syntheticTrigger || shape.roundError) return false;
@@ -246,15 +249,24 @@ export function createAlerts(deps: AlertsDeps) {
     questionResolved: resolved,
     permissionResolved: resolved,
 
-    /** The session started or resumed work (status busy or retry). */
+    /** The session started work (status busy). Resets the round. */
     sessionBusy(sessionID: string): void {
       const state = stateFor(sessionID);
       state.active = true;
       state.realWork = false;
-      // A retry means opencode recovered on its own - the failure was not
-      // terminal, so the turn's outcome decides the alert again. (V1 only:
-      // v2 never publishes session.error for a retried attempt, only the
-      // terminal event.)
+      state.lastError = null;
+    },
+
+    /**
+     * A retry (status retry, v1 only - v2 never publishes session.error
+     * for a retried attempt). Clears a recorded error - opencode recovered
+     * on its own - but PRESERVES the real-work flag: the tool calls before
+     * the retry happened, and the recovered tail is often text-only, so a
+     * reset here would make the done alert under-fire.
+     */
+    sessionRetry(sessionID: string): void {
+      const state = stateFor(sessionID);
+      state.active = true;
       state.lastError = null;
     },
 
@@ -290,22 +302,35 @@ export function createAlerts(deps: AlertsDeps) {
       try {
         const recorded = state.lastError;
         state.lastError = null;
-        const shape = await deps.roundShape(sessionID).catch(() => null);
-        if (!shape) return; // unknown shape: silent (best-effort)
-        const errorName = recorded ?? shape.roundError ?? null;
-        if (isSilentError(errorName)) return; // user abort or shutdown
-        if (errorName) {
+        // A recorded error delivers its verdict WITHOUT the message fetch:
+        // the fetch rides the same host API whose failure plausibly
+        // accompanied the execution failure, and silence must not land
+        // exactly when the needs-attention alert matters most.
+        if (recorded) {
+          if (isSilentError(recorded)) return; // user abort or shutdown
           if (alertMode(deps.config(), "error") !== "none") {
             deliver({
               kind: "error",
               title: await titleFor(sessionID),
-              message: `Session needs attention - the last round failed (${errorName})`,
+              message: `Session needs attention - the last round failed (${recorded})`,
             });
           }
           return;
         }
-        if (shape.syntheticTrigger) return; // nudge / completion / watcher-driven round
-        if (!state.realWork) return; // bookkeeping-only round (or no tool calls)
+        const shape = await deps.roundShape(sessionID).catch(() => null);
+        if (!shape) return; // unknown shape: silent (best-effort)
+        if (isSilentError(shape.roundError)) return; // user abort or shutdown
+        if (shape.roundError) {
+          if (alertMode(deps.config(), "error") !== "none") {
+            deliver({
+              kind: "error",
+              title: await titleFor(sessionID),
+              message: `Session needs attention - the last round failed (${shape.roundError})`,
+            });
+          }
+          return;
+        }
+        if (!roundDidRealWork(shape, state.realWork)) return;
         if (alertMode(deps.config(), "done") === "none") return;
         deliver({ kind: "done", title: await titleFor(sessionID), message: "Work finished" });
       } catch (err) {

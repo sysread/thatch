@@ -144,9 +144,9 @@ export function capabilitiesFromClient(client: PluginInput["client"]): HostCapab
           ...m,
           info: {
             ...m.info,
-            // Same type-then-name fallback as the v2 mapping, so an error
-            // that carries only one of the two still reaches the alert
-            // classifier on both lines.
+            // Name-then-type fallback (mirroring the v2 mapping's
+            // type-then-name), so an error carrying only one of the two
+            // still reaches the alert classifier on both lines.
             error:
               (m.info as { error?: { name?: string; type?: string } } | undefined)?.error?.name ??
               (m.info as { error?: { type?: string } } | undefined)?.error?.type,

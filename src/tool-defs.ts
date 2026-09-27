@@ -584,7 +584,11 @@ const predictionUpdateDef: ToolDef = {
     "and confidence adjustment automatically.",
   args: {
     matcher: z.string().describe(
-      "Description of the situation. What decision was being made?",
+      "Description of the situation. What decision was being made? Word it " +
+      "for semantic matching: after writing it, re-read it against " +
+      "everything that ought to trigger it and widen the wording to the " +
+      "broadest surface of the class - a matcher that only names this " +
+      "incident never fires for the next one.",
     ),
     prediction: z.string().describe(
       "The user's preference or tendency in this situation.",
@@ -745,11 +749,19 @@ const behaviorCodifyDef: ToolDef = {
     "discipline, not what the user wants. Examples: check the whole " +
     "codebase for a library before importing it; investigate disabled " +
     "tests before touching the area; read a large function fully before " +
-    "editing it.",
+    "editing it. When a review, bug, or incident reveals a CLASS of " +
+    "mistake you are prone to (not a one-off), codify a guard against the " +
+    "class - and word the situation for semantic matching: describe the " +
+    "context a future session will be in, then re-read it against " +
+    "everything that ought to trigger it and widen the wording to the " +
+    "broadest surface of the class. A matcher that only names this " +
+    "incident never fires for the next one.",
   args: {
     situation: z.string().describe(
       "Description of the situation that triggers this behavior. What context " +
-      "or task type makes this rule apply?",
+      "or task type makes this rule apply? Word it for semantic matching: " +
+      "broad enough to cover the whole class of situations, concrete enough " +
+      "that a future session recognizes it is in one.",
     ),
     behavior: z.string().describe(
       "The behavioral rule. What should you do when this situation arises?",
@@ -807,7 +819,10 @@ const behaviorFeedbackDef: ToolDef = {
     "or relevant: false (spam) if it does not. This trains the classifier " +
     "so future nudges are more accurate. Also use when the user corrects " +
     "your behavior and you realize a codified rule led you astray or " +
-    "should have been followed.",
+    "should have been followed. If the tool reports no match for the text " +
+    "you passed, the nudge display may carry an older plugin version's " +
+    "wording: fetch the current statement with behavior_list and retry " +
+    "against that.",
   args: {
     behavior: z.string().describe(
       "The behavior statement to provide feedback on. Use behavior_list " +

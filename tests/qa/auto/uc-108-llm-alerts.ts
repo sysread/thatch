@@ -96,6 +96,22 @@ const useCase: UseCase = {
       console.log("  FAIL: a user-prompted round derived as synthetic");
       return "FAIL";
     }
+    // The message-level error rides the mapping into the round shape (the
+    // v2 error path when no session.error event carried the verdict).
+    const erroredContext = [
+      { type: "user", text: "do the thing" },
+      {
+        type: "assistant",
+        content: [{ type: "tool", name: "bash" }, { type: "text", text: "ok" }],
+        error: { type: "ProviderError", message: "boom" },
+      },
+      { type: "idle" },
+    ];
+    const erroredShape = deriveRoundShape(mapSessionContextMessages(erroredContext));
+    if (!erroredShape || erroredShape.roundError !== "ProviderError") {
+      console.log("  FAIL: message-level error did not reach the round shape");
+      return "FAIL";
+    }
 
     // Spy harness over the real state machine (synchronous spy: the
     // machine fire-and-forgets delivery, so the spy must record before the
@@ -157,12 +173,46 @@ const useCase: UseCase = {
     if (alerts.filter((a) => a.kind === "done").length !== 2) return fail("a silent-rule round notified done");
     if (alerts.some((a) => a.kind === "error")) return fail("a user abort or shutdown notified");
 
-    // Step 6: error flow - the v2 failed pair delivers the verdict; mode
-    // none silences only its own kind.
+    // Step 6: error flow - the v2 failed pair delivers the verdict (the
+    // runtime extracts the error NAME from the pair's payload before
+    // calling the machine - passing the raw object would degrade the alert
+    // message to "[object Object]", so this drives the machine the way
+    // production does); mode none silences only its own kind.
     const events = translateEvent({ type: "session.execution.failed", data: { sessionID: "s1", error: { type: "ProviderError" } } });
-    for (const event of events) await machine[event.type === "session.error" ? "sessionError" : "sessionIdle"]("s1", event.properties.error);
+    for (const event of events) {
+      if (event.type === "session.error") {
+        const err = event.properties.error as { name?: string; type?: string } | undefined;
+        await machine.sessionError("s1", err?.name ?? err?.type ?? null);
+      } else {
+        await machine.sessionIdle("s1");
+      }
+    }
     await machine.sessionIdle("s1");
-    if (alerts.filter((a) => a.kind === "error").length !== 1) return fail("unrecovered error did not notify needs-attention");
+    const errorAlerts = alerts.filter((a) => a.kind === "error");
+    if (errorAlerts.length !== 1) return fail("unrecovered error did not notify needs-attention");
+    if (!errorAlerts[0].message.includes("ProviderError")) return fail("error alert message lost the error name");
+    // Inactivity: the location-activity sweeper evicting a quiet directory
+    // is the one interrupt that must banner.
+    const inactivity = translateEvent({ type: "session.execution.interrupted", data: { sessionID: "s1", reason: "inactivity" } });
+    for (const event of inactivity) {
+      if (event.type === "session.error") {
+        const err = event.properties.error as { name?: string; type?: string } | undefined;
+        machine.sessionError("s1", err?.name ?? err?.type ?? null);
+      } else {
+        await machine.sessionIdle("s1");
+      }
+    }
+    if (alerts.filter((a) => a.kind === "error").length !== 2) return fail("inactivity interrupt did not notify needs-attention");
+    // Unknown interrupt reasons (the schema reserves "superseded") map to
+    // the silent catch-all, never a banner.
+    const superseded = translateEvent({ type: "session.execution.interrupted", data: { sessionID: "s1", reason: "superseded" } });
+    const supName = (superseded[0].properties.error as { name?: string }).name;
+    if (supName !== "SessionInterruptedError") return fail("unknown interrupt reason mapped to the wrong name");
+    machine.sessionBusy("s1");
+    machine.sessionRealWork("s1");
+    machine.sessionError("s1", supName);
+    await machine.sessionIdle("s1");
+    if (alerts.filter((a) => a.kind === "error").length !== 2) return fail("superseded interrupt bannered");
     saveConfig({ alerts: { done: { mode: "none" } } }, dbPath);
     machine.sessionBusy("s1");
     machine.sessionRealWork("s1");

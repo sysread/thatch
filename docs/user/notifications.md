@@ -90,16 +90,18 @@ On opencode, the plugin watches your session and alerts you automatically:
 |-------|-----------|---------|
 | `pause` | The LLM asks you an interactive question, or requests a permission it needs approved. | banner |
 | `done` | A round of real work finishes -- meaning the turn started from a prompt you typed AND ran at least one real tool. | banner |
-| `error` | The session fails with nothing to recover it. Failures opencode retries through are silent, and so are turns you aborted yourself. | banner |
+| `error` | The session fails with nothing to recover it, or opencode's inactivity sweeper kills a still-running session (a project directory quiet for 60 minutes gets its executions interrupted). Failures opencode retries through are silent, and so are turns you aborted yourself. | banner |
 
 Rounds that stay silent even when they ran real tools: anything triggered by
 async agent activity rather than a prompt you typed -- thatch's own nudges,
-background-task completions, and watcher wake-ups. A watcher that wakes the
-session and merges a branch announces itself; the finished round does not
-banner a second time. A round delegated entirely to subagents stays silent
-too (the dispatch is bookkeeping; the child sessions never alert). If you
-want the LLM to decide when a watcher outcome is worth interrupting you
-for, that is what `thatch_notify_user` is for.
+background-task completions, and watcher wake-ups. On opencode v2 those
+wakes are invisible by design (the injected message is hidden from the TUI,
+and plugin toasts are unavailable), so a watcher-driven round produces no
+visible feedback at all -- that is why the silence rule exists, and why the
+escape hatch matters: the LLM sees the watcher event in its context and can
+call `thatch_notify_user` when the outcome is worth interrupting you for.
+A round delegated entirely to subagents stays silent too (the dispatch is
+bookkeeping; the child sessions never alert).
 
 Banners carry the session title, so when you juggle concurrent sessions you
 know which one spoke. Voice is opt-in per alert: set the mode to `voice` or

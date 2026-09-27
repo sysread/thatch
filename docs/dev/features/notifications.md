@@ -106,9 +106,10 @@ Events consumed:
 | Event | Machine input |
 |-------|---------------|
 | `question.asked` / `permission.asked` | Pause alert, deduped per request id; cleared by the matching replied/rejected event. |
-| `session.status` busy/retry | Marks the session active and clears a recorded error (a retry means opencode recovered; v1-only -- v2 never publishes `session.error` for a retried attempt). |
+| `session.status` busy | Marks the session active and resets the round. |
+| `session.status` retry (v1 only) | Clears a recorded error -- opencode recovered on its own -- but preserves the real-work flag (the tool calls before the retry happened). |
 | `session.error` / `session.execution.failed` | Records the error name; on v2 the adapter emits this paired with the idle event, so the verdict always follows. |
-| `session.status` idle (from active) | The verdict: error alert, done alert, or silence. |
+| `session.status` idle (from active) | The verdict: error alert, done alert, or silence. A recorded error delivers its verdict WITHOUT the message fetch (the fetch rides the same host API whose failure plausibly accompanied the failure). |
 | `session.deleted` | Drops the state. |
 
 The verdict combines two sources, because neither alone can answer "was
@@ -146,22 +147,28 @@ Silence rules, in verdict order:
 - **Synthetic-trigger silence** -- nudges, background-task completions, and
   watcher wake-ups are synthetic deliveries (v2: their own message kind; v1:
   all-synthetic text parts on the user message). A round they triggered
-  never notifies, EVEN when it does real work: a watcher wake that merges a
-  branch produces no done banner (the watcher already announced itself).
-  Without this rule, every async thatch activity would produce a banner.
-- **Abort and shutdown silence** -- an error name matching /abort|shutdown/i
-  means the user interrupted the turn themselves (`MessageAbortedError`, or
-  v2's user-reason interrupt translation) or the process is leaving
-  (`SessionShutdownError`). Sources: the event-level error, the message-level
+  never fires the DONE alert, even when it does real work. It is a silence
+  on the done verdict only: a synthetic round that ends in a real error
+  still banners the error. The rule exists because async thatch activity
+  would otherwise produce a banner every time.
+- **Abort and shutdown silence** -- an error name matching
+  /abort|shutdown|interrupt/i means the user interrupted the turn
+  themselves (`MessageAbortedError`, or v2's user-reason interrupt
+  translation), the process is leaving (`SessionShutdownError`), or the
+  execution was superseded by a newer one (the catch-all for unknown
+  interrupt reasons). Sources: the event-level error, the message-level
   error on the last assistant message, and v2's interrupted-reason
   translation.
 - **Error alert** -- any other recorded error (event-level, or message-level
   on the last assistant message) notifies needs-attention with the error
-  name in the message, instead of done.
+  name in the message, instead of done. Notably `SessionInactivityError`:
+  v2's location-activity sweeper interrupts still-executing sessions when a
+  project directory goes quiet for an hour -- the one banner most likely to
+  reach Jeff away from the terminal.
 - **No real work** -- a round whose only tool calls were bookkeeping (or
-  that made none) stays silent. A round delegated entirely to subagents
-  also stays silent: dispatch tools are meta, and child sessions never
-  alert.
+  that made none, or whose tool executions all crashed at the host layer)
+  stays silent. A round delegated entirely to subagents also stays silent:
+  dispatch tools are meta, and child sessions never alert.
 
 State is plain memory, deliberately not journaled to `runtime_state`: a v2
 reload mid-turn (plugin save, upgrade) loses that turn's busy->idle
