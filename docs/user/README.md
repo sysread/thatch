@@ -13,7 +13,7 @@ This README is the overview. Each feature has its own guide:
 - [extraction.md](extraction.md): automatic fact extraction from tool calls
 - [watchers.md](watchers.md): event-driven notifications (PR, branch, and command watching)
 - [cross-session-chat.md](cross-session-chat.md): sessions messaging each other on one machine
-- [notifications.md](notifications.md): banner and voice notifications, user config
+- [notifications.md](notifications.md): banner and voice notifications, automatic LLM alerts (pause / done / error), user config
 - [prediction-engine.md](prediction-engine.md): user decision model
 - [behavior-engine.md](behavior-engine.md): agent self-discipline rules
 - [default-behaviors.md](default-behaviors.md): what ships automatically
@@ -444,7 +444,9 @@ Most configuration needs none. Two layers exist:
 
 - **Preferences the agent manages** live in
   `~/.config/thatch/config.json` (beside the database): notification mode,
-  voice, and sound. Ask your agent ("set notifications to banner only") or
+  voice, sound, and the automatic LLM alerts (pause / done / error, each
+  independently set to banner, voice, both, or none). Ask your agent ("set
+  notifications to banner only", "silence the done alert") or
   edit the file by hand. See [notifications.md](notifications.md).
 - **Environment variables** for infrastructure:
 

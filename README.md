@@ -205,10 +205,13 @@ Thatch gives your agent:
   the agent lists them and nothing fires -- you decide when to retry.
 - **Notifications + user config** -- the agent can ping you out-of-band when a
   long-running outcome lands: a desktop banner, a spoken voice
-  announcement, or both (macOS and Linux). Preferences live in a
+  announcement, or both (macOS and Linux). On opencode, thatch also watches
+  the session and alerts you automatically when the LLM pauses for your
+  input (a question or permission prompt) or finishes a round of real work
+  -- bookkeeping rounds stay silent. Preferences live in a
   hand-editable config file (`~/.config/thatch/config.json`) that the agent
-  manages through `config_get`/`config_set` -- ask it to change your voice
-  or quiet notifications entirely.
+  manages through `config_get`/`config_set` -- ask it to change your voice,
+  quiet notifications entirely, or tune which alerts fire.
 
 Plus **skills** for memory workflows, structured multi-specialist code
 review, review response, plan refinement, change and feature walkthroughs,
