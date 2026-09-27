@@ -204,6 +204,10 @@ export function createAlerts(deps: AlertsDeps) {
   }
 
   function deliver(input: AlertInput): void {
+    // One INFO line per actual delivery - a notification feature must be
+    // able to answer "did the alert fire?" from the server log, and the
+    // verdict log below covers the suppressed cases.
+    console.info(`[thatch] alert: ${input.kind} -> "${input.message}" (${input.title})`);
     // Fire-and-forget: a voice delivery awaits the sentence for seconds,
     // and the caller (the event pump) must not stall other sessions'
     // events behind it. Delivery failures are logged, never surfaced.
@@ -318,7 +322,10 @@ export function createAlerts(deps: AlertsDeps) {
           return;
         }
         const shape = await deps.roundShape(sessionID).catch(() => null);
-        if (!shape) return; // unknown shape: silent (best-effort)
+        if (!shape) {
+          console.info(`[thatch] alert verdict ${sessionID}: silent (round shape unavailable)`);
+          return; // unknown shape: silent (best-effort)
+        }
         if (isSilentError(shape.roundError)) return; // user abort or shutdown
         if (shape.roundError) {
           if (alertMode(deps.config(), "error") !== "none") {
@@ -330,7 +337,12 @@ export function createAlerts(deps: AlertsDeps) {
           }
           return;
         }
-        if (!roundDidRealWork(shape, state.realWork)) return;
+        if (!roundDidRealWork(shape, state.realWork)) {
+          console.info(
+            `[thatch] alert verdict ${sessionID}: silent (${shape.syntheticTrigger ? "synthetic-triggered round" : "no real tool work"})`,
+          );
+          return;
+        }
         if (alertMode(deps.config(), "done") === "none") return;
         deliver({ kind: "done", title: await titleFor(sessionID), message: "Work finished" });
       } catch (err) {
