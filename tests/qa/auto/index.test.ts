@@ -90,3 +90,4 @@ import "./uc-105-chat-stop-notify";
 import "./uc-106-thatch-actions";
 import "./uc-107-worktree-deletion-recovery";
 import "./uc-108-llm-alerts";
+import "./uc-109-behavior-feedback-via-situation";

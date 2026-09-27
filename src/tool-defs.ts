@@ -54,6 +54,37 @@ function dedupScanStores(store: string): string[] {
   return store === "global" ? ["global"] : [store, "global"];
 }
 
+/**
+ * Resolve a behavior from feedback/delete text. The behavior nudge renders
+ * "When <matcher description>: <verb> <statement>" - and models copy back
+ * EITHER half (observed live three times: the situation half was fed back
+ * and statement search failed, even though the text was verbatim from the
+ * nudge). Try the statement first, then the matcher description resolved
+ * through its edge to the linked behavior. Returns the behavior row, an
+ * ambiguity list (the situation is shared by multiple behaviors), or null.
+ */
+async function resolveBehaviorForFeedback(
+  ctx: CoreContext,
+  store: string,
+  text: string,
+): Promise<{ behavior: { id: string; statement: string }; via: string } | { ambiguous: string[] } | null> {
+  const embed = await ctx.model.passageEmbed(text);
+  const direct = ctx.db.findNearestBehavior(dedupScanStores(store), embed, BEHAVIOR_DEDUP_COSINE);
+  if (direct) return { behavior: direct, via: "statement" };
+  for (const s of dedupScanStores(store)) {
+    const matcher = ctx.db.findNearestBehaviorMatcher(s, embed, BEHAVIOR_DEDUP_COSINE);
+    if (!matcher) continue;
+    const linked = ctx.db.scoreBehaviors([{ id: matcher.id, description: matcher.description, score: 1 }]);
+    if (linked.length === 1) {
+      const row = ctx.db.getBehavior(linked[0].behavior_id);
+      if (row) return { behavior: row, via: "matcher description" };
+      return null;
+    }
+    if (linked.length > 1) return { ambiguous: linked.map((l) => l.statement) };
+  }
+  return null;
+}
+
 // Minimum matcher cosine to consider a prediction relevant. Matches the
 // auto-fire threshold in runtime.ts (PREDICTION_THRESHOLD). The query tool
 // should not return predictions from near-zero-similarity matchers that
@@ -818,16 +849,19 @@ const behaviorFeedbackDef: ToolDef = {
     "or relevant: false (spam) if it does not. This trains the classifier " +
     "so future nudges are more accurate. Also use when the user corrects " +
     "your behavior and you realize a codified rule led you astray or " +
-    "should have been followed. If the tool reports no match: pass the " +
-    "behavior's statement VERBATIM (not the reformatted nudge line), and " +
-    "note the behavior may live in a different store than your default - " +
-    "seeded behaviors live in the global store. List with behavior_list " +
-    "(it shows both stores) and retry, passing the store the behavior was " +
-    "listed from.",
+    "should have been followed. The nudge line carries two texts - the " +
+    "situation (\"When ...\") and the behavior statement (after \"do\") - " +
+    "and EITHER is accepted: the tool resolves the situation back to its " +
+    "linked behavior. If it reports no match, the behavior may live in a " +
+    "different store than your default (seeded behaviors live in the " +
+    "global store): list with behavior_list and retry, passing the store " +
+    "the behavior was listed from.",
   args: {
     behavior: z.string().describe(
-      "The behavior statement to provide feedback on. Use behavior_list " +
-      "to find the exact text; matching is semantic (cosine >= 0.85).",
+      "The behavior statement to provide feedback on. The situation line " +
+      "from the nudge (\"When ...\") is also accepted and resolves to its " +
+      "linked behavior. Use behavior_list to find the exact text; " +
+      "matching is semantic (cosine >= 0.85).",
     ),
     relevant: z.boolean().describe(
       "true (ham) if the behavior is relevant to the current situation. " +
@@ -847,13 +881,20 @@ const behaviorFeedbackDef: ToolDef = {
     const relevant = args.relevant as boolean;
     const contextText = args.context as string;
 
-    const behaviorEmbed = await ctx.model.passageEmbed(behaviorText);
-    // Scan the target store AND global (same rationale as behavior_codify):
-    // seeded behaviors live only in global, and the nudge surfaces them
-    // regardless of which store the current session defaults to - feedback
-    // against the displayed text must resolve the same rows the nudge does.
-    const behavior = ctx.db.findNearestBehavior(dedupScanStores(store), behaviorEmbed, BEHAVIOR_DEDUP_COSINE);
-    if (!behavior) return `No behavior matching "${behaviorText}" found in any of ${dedupScanStores(store).join(", ")}.`;
+    const resolved = await resolveBehaviorForFeedback(ctx, store, behaviorText);
+    if (!resolved) {
+      return (
+        `No behavior matching "${behaviorText}" found in any of ${dedupScanStores(store).join(", ")} ` +
+        `(tried both statements and matcher descriptions). Use behavior_list to see the exact statements.`
+      );
+    }
+    if ("ambiguous" in resolved) {
+      return (
+        `That text matches a situation shared by multiple behaviors - re-run with the exact statement: ` +
+        resolved.ambiguous.map((s) => `"${s}"`).join("; ")
+      );
+    }
+    const behavior = resolved.behavior;
 
     const signal = relevant ? "confirm" : "disconfirm";
     ctx.db.transaction(() => {
@@ -901,7 +942,9 @@ const behaviorDeleteDef: ToolDef = {
     "automatically (cascade).",
   args: {
     statement: z.string().describe(
-      "The behavior statement to delete. Use behavior_list to find the " +
+      "The behavior statement to delete. The situation line from the " +
+      "nudge (\"When ...\") is also accepted and resolves to its linked " +
+      "behavior. Use behavior_list to find the " +
       "exact text; matching is semantic (cosine >= 0.85).",
     ),
     store: z.string().optional().describe(
@@ -911,15 +954,24 @@ const behaviorDeleteDef: ToolDef = {
   async execute(args, ctx) {
     const store = resolveStore(args, ctx);
     const statementText = args.statement as string;
-    const behaviorEmbed = await ctx.model.passageEmbed(statementText);
-    // Same cross-store scan as behavior_feedback: the statement may live in
-    // global (seeded behaviors) while the session defaults to the project
-    // store.
-    const behavior = ctx.db.findNearestBehavior(dedupScanStores(store), behaviorEmbed, BEHAVIOR_DEDUP_COSINE);
-    if (!behavior) return `No behavior matching "${statementText}" found in any of ${dedupScanStores(store).join(", ")}.`;
+    const resolved = await resolveBehaviorForFeedback(ctx, store, statementText);
+    if (!resolved) {
+      return (
+        `No behavior matching "${statementText}" found in any of ${dedupScanStores(store).join(", ")} ` +
+        `(tried both statements and matcher descriptions). Use behavior_list to see the exact statements.`
+      );
+    }
+    if ("ambiguous" in resolved) {
+      return (
+        `That text matches a situation shared by multiple behaviors - re-run with the exact statement: ` +
+        resolved.ambiguous.map((s) => `"${s}"`).join("; ")
+      );
+    }
+    const behavior = resolved.behavior;
+    const rowBefore = ctx.db.getBehavior(behavior.id);
     const deleted = ctx.db.deleteBehavior(behavior.id);
     if (!deleted) return `Failed to delete behavior "${behavior.statement}".`;
-    return `[deleted] "${behavior.statement}" from "${behavior.store ?? store}"`;
+    return `[deleted] "${behavior.statement}" from "${rowBefore?.store ?? store}"`;
   },
 };
 
