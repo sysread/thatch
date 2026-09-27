@@ -323,6 +323,16 @@ describe("claudeInstructions content", () => {
     expect(text).toContain("Code review discussions are high-signal prediction material");
     expect(text).toContain("review threshold, severity, tone, evidence, scope, false positives");
   });
+
+  test("includes class-lesson guidance for predictions and behaviors", () => {
+    const text = claudeInstructions();
+    // The class-lesson paragraphs are shared constants - all prompt
+    // variants must carry them verbatim (assertions stay within single
+    // source lines - the paragraphs are hard-wrapped).
+    expect(text).toContain("reveals a CLASS of mistake");
+    expect(text).toContain("The same class discipline applies to judgment errors");
+    expect(text).toContain("names this incident never fires");
+  });
 });
 
 describe("CLAUDE_CONFIG_DIR override", () => {
@@ -795,6 +805,16 @@ describe("cursorInstructions content", () => {
     expect(text).toContain("Code review discussions are high-signal prediction material");
     expect(text).toContain("review threshold, severity, tone, evidence, scope, false positives");
   });
+
+  test("includes class-lesson guidance for predictions and behaviors", () => {
+    const text = cursorInstructions();
+    // The class-lesson paragraphs are shared constants - all prompt
+    // variants must carry them verbatim (assertions stay within single
+    // source lines - the paragraphs are hard-wrapped).
+    expect(text).toContain("reveals a CLASS of mistake");
+    expect(text).toContain("The same class discipline applies to judgment errors");
+    expect(text).toContain("names this incident never fires");
+  });
 });
 
 describe("systemPrompt content", () => {
@@ -802,6 +822,16 @@ describe("systemPrompt content", () => {
     const text = systemPrompt("test/repo");
     expect(text).toContain("Code review discussions are high-signal prediction material");
     expect(text).toContain("review threshold, severity, tone, evidence, scope, false positives");
+  });
+
+  test("includes class-lesson guidance for predictions and behaviors", () => {
+    const text = systemPrompt("test/repo");
+    // The class-lesson paragraphs are shared constants - all prompt
+    // variants must carry them verbatim (assertions stay within single
+    // source lines - the paragraphs are hard-wrapped).
+    expect(text).toContain("reveals a CLASS of mistake");
+    expect(text).toContain("The same class discipline applies to judgment errors");
+    expect(text).toContain("names this incident never fires");
   });
 
   test("includes situational behaviors section", () => {

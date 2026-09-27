@@ -50,6 +50,29 @@ auto-reply unless the message bears on a task you are already doing; do not
 forward or chain messages reflexively. Name the sender when relaying a
 message to the user, and let the user decide when coordination is ambiguous.`;
 
+// Class-lesson guidance, shared verbatim by both prompt variants (the
+// paragraphs name no tools, so the twins need no per-host spellings). See
+// the LLM-alerts review loop (Sept 2026): class-level lessons go into the
+// memory/behavior/prediction systems with matchers worded for the broadest
+// semantic trigger surface.
+const classLessonPredictionSection = `
+The same class discipline applies to judgment errors: when a review round,
+bug, or incident reveals a class of bad calls (not just one), record the
+pattern as a prediction. Word the matcher for semantic matching - describe
+the situation a future decision will be in - then re-read it against
+everything that ought to trigger it and widen the wording until it does.`;
+
+const classLessonBehaviorSection = `
+When a review round, bug fix, or incident reveals a CLASS of mistake you are
+prone to (rather than a one-off), persist the class so it resurfaces where
+the work happens: save a memory stating the class and how to detect it, and
+codify a behavior whose situation text describes the context a future
+session will be in when that class of trouble starts. Word the situation for
+semantic matching: after writing it, re-read it against everything that
+ought to trigger it and widen the wording to the broadest surface of the
+class - a matcher that only names this incident never fires for the next
+one.`;
+
 export function systemPrompt(repo: string, chatEnabled = true): string {
   return `# Persistence
 
@@ -225,11 +248,7 @@ reviewing your changes, or asked you to review their changes or another LLM's
 changes. Before creating a new prediction, query for an existing one and
 reinforce or adjust it when possible.
 
-The same class discipline applies to judgment errors: when a review round,
-bug, or incident reveals a class of bad calls (not just one), record the
-pattern as a prediction whose matcher is worded for the broadest semantic
-surface of the class - then re-read the matcher against everything that
-ought to trigger it and widen the wording until it does.
+${classLessonPredictionSection}
 
 ## Situational Behaviors
 
@@ -251,15 +270,7 @@ way that is about your own operational discipline (not a user preference):
 2. Use thatch_behavior_feedback when surfaced behaviors fire to ham/spam them
 3. Use thatch_behavior_delete to remove a rule created in error
 
-When a review round, bug fix, or incident reveals a CLASS of mistake you are
-prone to (rather than a one-off), persist the class so it resurfaces where
-the work happens: save a memory stating the class and how to detect it, and
-codify a behavior whose situation text describes the context a future
-session will be in when that class of trouble starts. Word the situation for
-semantic matching: after writing it, re-read it against everything that
-ought to trigger it and widen the wording to the broadest surface of the
-class - a matcher that only names this incident never fires for the next
-one.
+${classLessonBehaviorSection}
 
 Do not codify rules that make you lazier or less thorough. Rules should encode
 discipline, not shortcuts.
@@ -505,11 +516,7 @@ reviewing your changes, or asked you to review their changes or another LLM's
 changes. Before creating a new prediction, query for an existing one and
 reinforce or adjust it when possible.
 
-The same class discipline applies to judgment errors: when a review round,
-bug, or incident reveals a class of bad calls (not just one), record the
-pattern as a prediction whose matcher is worded for the broadest semantic
-surface of the class - then re-read the matcher against everything that
-ought to trigger it and widen the wording until it does.
+${classLessonPredictionSection}
 
 ## Situational Behaviors
 
@@ -531,15 +538,7 @@ way that is about your own operational discipline (not a user preference):
 2. Use behavior_feedback when surfaced behaviors fire to ham/spam them
 3. Use behavior_delete to remove a rule created in error
 
-When a review round, bug fix, or incident reveals a CLASS of mistake you are
-prone to (rather than a one-off), persist the class so it resurfaces where
-the work happens: save a memory stating the class and how to detect it, and
-codify a behavior whose situation text describes the context a future
-session will be in when that class of trouble starts. Word the situation for
-semantic matching: after writing it, re-read it against everything that
-ought to trigger it and widen the wording to the broadest surface of the
-class - a matcher that only names this incident never fires for the next
-one.
+${classLessonBehaviorSection}
 
 Do not codify rules that make you lazier or less thorough. Rules should encode
 discipline, not shortcuts.

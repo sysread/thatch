@@ -751,17 +751,16 @@ const behaviorCodifyDef: ToolDef = {
     "tests before touching the area; read a large function fully before " +
     "editing it. When a review, bug, or incident reveals a CLASS of " +
     "mistake you are prone to (not a one-off), codify a guard against the " +
-    "class - and word the situation for semantic matching: describe the " +
-    "context a future session will be in, then re-read it against " +
-    "everything that ought to trigger it and widen the wording to the " +
-    "broadest surface of the class. A matcher that only names this " +
-    "incident never fires for the next one.",
+    "class.",
   args: {
     situation: z.string().describe(
       "Description of the situation that triggers this behavior. What context " +
       "or task type makes this rule apply? Word it for semantic matching: " +
-      "broad enough to cover the whole class of situations, concrete enough " +
-      "that a future session recognizes it is in one.",
+      "describe the context a future session will be in when this class of " +
+      "trouble starts, then re-read your wording against everything that " +
+      "ought to trigger it and widen it to the broadest surface of the " +
+      "class - a matcher that only names this incident never fires for the " +
+      "next one.",
     ),
     behavior: z.string().describe(
       "The behavioral rule. What should you do when this situation arises?",
@@ -819,10 +818,12 @@ const behaviorFeedbackDef: ToolDef = {
     "or relevant: false (spam) if it does not. This trains the classifier " +
     "so future nudges are more accurate. Also use when the user corrects " +
     "your behavior and you realize a codified rule led you astray or " +
-    "should have been followed. If the tool reports no match for the text " +
-    "you passed, the nudge display may carry an older plugin version's " +
-    "wording: fetch the current statement with behavior_list and retry " +
-    "against that.",
+    "should have been followed. If the tool reports no match: pass the " +
+    "behavior's statement VERBATIM (not the reformatted nudge line), and " +
+    "note the behavior may live in a different store than your default - " +
+    "seeded behaviors live in the global store. List with behavior_list " +
+    "(it shows both stores) and retry, passing the store the behavior was " +
+    "listed from.",
   args: {
     behavior: z.string().describe(
       "The behavior statement to provide feedback on. Use behavior_list " +
@@ -847,8 +848,12 @@ const behaviorFeedbackDef: ToolDef = {
     const contextText = args.context as string;
 
     const behaviorEmbed = await ctx.model.passageEmbed(behaviorText);
-    const behavior = ctx.db.findNearestBehavior(store, behaviorEmbed, BEHAVIOR_DEDUP_COSINE);
-    if (!behavior) return `No behavior matching "${behaviorText}" found in "${store}".`;
+    // Scan the target store AND global (same rationale as behavior_codify):
+    // seeded behaviors live only in global, and the nudge surfaces them
+    // regardless of which store the current session defaults to - feedback
+    // against the displayed text must resolve the same rows the nudge does.
+    const behavior = ctx.db.findNearestBehavior(dedupScanStores(store), behaviorEmbed, BEHAVIOR_DEDUP_COSINE);
+    if (!behavior) return `No behavior matching "${behaviorText}" found in any of ${dedupScanStores(store).join(", ")}.`;
 
     const signal = relevant ? "confirm" : "disconfirm";
     ctx.db.transaction(() => {
@@ -907,11 +912,14 @@ const behaviorDeleteDef: ToolDef = {
     const store = resolveStore(args, ctx);
     const statementText = args.statement as string;
     const behaviorEmbed = await ctx.model.passageEmbed(statementText);
-    const behavior = ctx.db.findNearestBehavior(store, behaviorEmbed, BEHAVIOR_DEDUP_COSINE);
-    if (!behavior) return `No behavior matching "${statementText}" found in "${store}".`;
+    // Same cross-store scan as behavior_feedback: the statement may live in
+    // global (seeded behaviors) while the session defaults to the project
+    // store.
+    const behavior = ctx.db.findNearestBehavior(dedupScanStores(store), behaviorEmbed, BEHAVIOR_DEDUP_COSINE);
+    if (!behavior) return `No behavior matching "${statementText}" found in any of ${dedupScanStores(store).join(", ")}.`;
     const deleted = ctx.db.deleteBehavior(behavior.id);
     if (!deleted) return `Failed to delete behavior "${behavior.statement}".`;
-    return `[deleted] "${behavior.statement}" from "${store}"`;
+    return `[deleted] "${behavior.statement}" from "${behavior.store ?? store}"`;
   },
 };
 
