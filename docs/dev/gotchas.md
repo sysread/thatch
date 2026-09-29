@@ -260,3 +260,29 @@ mention site, because the model's first call happens before it has seen a
 working example. Also note Code Mode `execute` validation failures are only
 persisted in the v2 `session_message` store - they are invisible in the v1
 `part` table, so error-rate analysis on old data undercounts them.
+
+## ThatchDB lazy reopen: new accessors must go through the private getters, and journal writes stay guarded at call sites
+
+`ThatchDB` reopens its SQLite connection on first use after `close()`
+(`src/db.ts`, the `#db`/`#predictions`/`#behaviors`/`#chat` private getters), so
+an in-flight tool call that races a v2 plugin reload's `dispose()` completes
+instead of throwing "Cannot use a closed database". Two rules keep this intact:
+
+- **New facade methods need no extra wiring, but new state-holding members
+  do.** The engine facades (`ChatStore`, `PredictionEngine`, `BehaviorEngine`)
+  capture the `Database` handle at construction; the reopen rebuilds them. A
+  new member that captures the Database directly must get its own private
+  getter that ensures the handle is open first - a plain field keeps serving
+  the stale closed handle and the reopen silently never fires for it (this
+  exact bug is pinned by the "engine facades are rebuilt" test in
+  tests/db.test.ts).
+- **Post-dispose journal writes are no-ops at their call sites, not in
+  db.ts.** After a reload, the RELOADED instance owns the `runtime_state`
+  rows, so delayed writers in `src/runtime.ts` check the `disposed` flag
+  BEFORE touching the db - the lazy reopen would otherwise hand a stale
+  writer a fresh connection. All three journal callbacks are guarded (the
+  extraction pipeline's finalization, the WatcherRegistry journal - a poll
+  cycle suspended at an await can outlive `watchers.dispose()` - and the
+  wrap-up arming write, whose command executes are not drained by the v2
+  cleanup). Do not "fix" the guard away by moving it into db.ts: the
+  accessor cannot tell a legitimate in-flight caller from a stale writer.

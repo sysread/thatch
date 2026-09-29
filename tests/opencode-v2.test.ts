@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setup, eventMatchesInstance, flattenToolContent, mapSessionContextMessages, translateEvent } from "../src/opencode/v2";
-import { TOOL_DEFS } from "../src/tool-defs";
+import { TOOL_DEFS, type ToolDef } from "../src/tool-defs";
 
 // Mock @huggingface/transformers (same as tests/plugin.test.ts): without it,
 // every setup() builds a real BgeEmbeddingModel and the runtime's embedding
@@ -545,5 +545,88 @@ describe("opencode v2 adapter", () => {
     expect(eventMatchesInstance(SESSION_DIR, undefined, SESSION_DIR, new Set())).toBe(true);
     expect(eventMatchesInstance(PROJECT_DIR, "ses_other", SESSION_DIR, new Set(["v2-test-child"]))).toBe(false);
     expect(eventMatchesInstance(undefined, undefined, SESSION_DIR, new Set())).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dispose-race hardening: in-flight drain + retryable closed-db surface
+// ---------------------------------------------------------------------------
+
+describe("v2 dispose race hardening", () => {
+  // The adapter reads def.execute at call time, so swapping the property on
+  // the shared TOOL_DEFS entry redirects the registered wrapper. Restore it
+  // so later tests (and other suites importing the same module instance)
+  // see the real implementation.
+  function stubToolExec(name: string, impl: ToolDef["execute"]): () => void {
+    const def = TOOL_DEFS.find((d) => d.name === name)!;
+    const original = def.execute;
+    def.execute = impl;
+    return () => {
+      def.execute = original;
+    };
+  }
+
+  test("cleanup waits for an in-flight tool execute before disposing the runtime", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const restore = stubToolExec("watch_list", async () => {
+      await gate;
+      return "slow result";
+    });
+    try {
+      const tool = addedTools.find((t) => t.name === "thatch_watch_list")!;
+      const call = tool.execute({}, { sessionID: "ses_v2_drain", agent: "build" });
+      // Let the execute enter the wrapper (in-flight count 1).
+      await new Promise((r) => setTimeout(r, 50));
+
+      let cleaned = false;
+      const teardown = cleanup!().then(() => (cleaned = true));
+      cleanup = undefined;
+      // Still draining: the bounded wait holds dispose back while the
+      // execute is in flight.
+      await new Promise((r) => setTimeout(r, 150));
+      expect(cleaned).toBe(false);
+
+      release();
+      const result = await call;
+      expect(result).toEqual({ content: "slow result" });
+      await teardown;
+      expect(cleaned).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  test("a closed-database failure becomes a retryable message, not a throw", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const restore = stubToolExec("watch_list", async () => {
+      throw new RangeError("Cannot use a closed database");
+    });
+    try {
+      const tool = addedTools.find((t) => t.name === "thatch_watch_list")!;
+      const result = (await tool.execute({}, { sessionID: "ses_v2_race", agent: "build" })) as {
+        content: string;
+      };
+      expect(result.content).toContain("plugin was reloaded mid-call");
+      expect(result.content).toContain("retry");
+    } finally {
+      restore();
+    }
+  });
+
+  test("other tool failures still reject the execute", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const restore = stubToolExec("watch_list", async () => {
+      throw new Error("some other failure");
+    });
+    try {
+      const tool = addedTools.find((t) => t.name === "thatch_watch_list")!;
+      await expect(tool.execute({}, { sessionID: "ses_v2_boom2", agent: "build" })).rejects.toThrow(
+        "some other failure",
+      );
+    } finally {
+      restore();
+    }
   });
 });

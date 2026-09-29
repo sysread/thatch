@@ -142,6 +142,14 @@ export async function createRuntime(input: {
   const dbPath = process.env.THATCH_DB_PATH ?? join(configHome, "thatch", "thatch.db");
   const modelName = process.env.THATCH_MODEL ?? "Xenova/bge-small-en-v1.5";
 
+  // Set by dispose(). Delayed async work (the child-reconcile timer, the
+  // extraction pipeline's queued finalization, queued event handlers) can
+  // fire after the db is closed; anything running past this flag must not
+  // touch the db - and journal writes must no-op BEFORE the lazy reopen
+  // accessor (src/db.ts) would hand them a fresh connection, because after
+  // a v2 plugin reload the RELOADED instance owns those rows.
+  let disposed = false;
+
   // The DB must exist before identity detection: detectRepo consults the
   // repo_paths cache when the session directory is gone.
   const db = new ThatchDB(dbPath);
@@ -161,8 +169,13 @@ export async function createRuntime(input: {
   const releaseModel = () => sharedModels.release(dbPath);
 
   // Extraction buffer, journaled to runtime_state so a v2 plugin reload
-  // (same process, graph rebuilt) can rehydrate it.
+  // (same process, graph rebuilt) can rehydrate it. The journal callback
+  // checks the disposed flag FIRST: a finalization delayed past dispose
+  // (await points inside the pipeline) must not write through the lazy
+  // reopen accessor after the reload - the reloaded instance owns those
+  // rows. Same ownership rule as journalChild below.
   const extraction = new ExtractionPipeline((kind, sessionID, value) => {
+    if (disposed) return;
     if (value === undefined) db.runtimeStateDelete(kind, sessionID);
     else db.runtimeStatePut(kind, sessionID, value, directory);
   });
@@ -267,7 +280,13 @@ export async function createRuntime(input: {
   const watchers = new WatcherRegistry({
     // Journal watcher definitions so a v2 plugin reload (same process) can
     // re-arm them; the registry journals after every membership change.
+    // Disposed check FIRST: a poll cycle suspended at an await can outlive
+    // watchers.dispose() and reach this callback after db.close(); with the
+    // lazy reopen it would otherwise hand a stale writer a fresh connection
+    // and resurrect an expired watcher after the reload. Same ownership rule
+    // as the extraction callback and journalChild.
     journal: (sessionID, sessionWatchers) => {
+      if (disposed) return;
       if (sessionWatchers.length === 0) db.runtimeStateDelete("watchers", sessionID);
       else db.runtimeStatePut("watchers", sessionID, sessionWatchers, directory);
     },
@@ -455,11 +474,6 @@ export async function createRuntime(input: {
   // stale flag). If all three somehow miss, the flag leaks (graceful
   // degradation: nudges stay off for that session, but no crash).
   const compacting = new Set<string>();
-
-  // Set by dispose(). Delayed async work (the reconcile timer, queued
-  // event handlers) can fire after the db is closed; anything running past
-  // this flag must not touch the db.
-  let disposed = false;
 
   // Per-session count of consecutive extraction nudges delivered without any
   // memory_remember call in between. Drives nudge escalation: the agent gets
@@ -1291,7 +1305,12 @@ export async function createRuntime(input: {
       if (wrapUp) {
         pendingWrapUp.set(input.sessionID, wrapUp);
         // Journaled so a v2 plugin reload before the session's next idle
-        // does not silently drop the armed wrap-up.
+        // does not silently drop the armed wrap-up. Disposed check FIRST:
+        // a command execute still in flight when the reload's cleanup runs
+        // must not land a stale wrap-up row through the lazy reopen (the
+        // reloaded instance owns the journal rows; same rule as the
+        // extraction and watcher journal callbacks).
+        if (disposed) return;
         db.runtimeStatePut("wrapup", input.sessionID, wrapUp, directory);
       }
     },
@@ -1906,12 +1925,16 @@ export async function createRuntime(input: {
       stopVersionChecker();
       watchers.dispose();
       chatPoller.dispose();
-      await releaseModel();
-      // Note: the runtime_state journal is deliberately NOT cleared here.
-      // Disposal happens before every v2 plugin reload, and the reloaded
-      // setup() rehydrates from it; stale rows from dead processes are
-      // pruned by the setup-time partition instead.
-      db.close();
+      try {
+        await releaseModel();
+      } finally {
+        // In finally so a releaseModel rejection cannot leak the connection.
+        // Note: the runtime_state journal is deliberately NOT cleared here.
+        // Disposal happens before every v2 plugin reload, and the reloaded
+        // setup() rehydrates from it; stale rows from dead processes are
+        // pruned by the setup-time partition instead.
+        db.close();
+      }
     },
   };
 }

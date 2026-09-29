@@ -55,12 +55,67 @@ export interface DedupCandidate {
  * stored as BLOBs. Similarity search is brute-force cosine in JS.
  */
 export class ThatchDB {
-  #db: Database;
-  #predictions: PredictionEngine;
-  #behaviors: BehaviorEngine;
-  #chat: ChatStore;
+  #path: string;
+  #handle: Database | null = null;
+  #predictionsStore!: PredictionEngine;
+  #behaviorsStore!: BehaviorEngine;
+  #chatStore!: ChatStore;
 
   constructor(path: string) {
+    this.#path = path;
+    this.#open();
+  }
+
+  /**
+   * Connection accessor. Every read goes through here, so a handle closed by
+   * dispose() (a v2 plugin reload tears down the old activation while tool
+   * calls may still be in flight) transparently reopens on the next touch
+   * instead of surfacing bun:sqlite's "Cannot use a closed database". WAL
+   * journaling plus busy_timeout make the extra connection safe - the chat
+   * subsystem already runs as several concurrent connections by design.
+   *
+   * OWNERSHIP RULE: reopen serves READS and in-flight callers only. After a
+   * reload, the RELOADED instance owns the runtime_state journal rows, so
+   * post-dispose journal writes must no-op - they are guarded by the
+   * disposed flag at their call sites in src/runtime.ts, checked BEFORE any
+   * db access reaches this accessor. Do not move that guard in here: this
+   * method cannot distinguish a legitimate in-flight caller from a stale
+   * writer.
+   *
+   * Reopen caveat: a `:memory:` database has no file behind it, so a
+   * close-then-use cycle on one yields a brand-new EMPTY database. No
+   * production path does that (:memory: is test-only and tests never use the
+   * instance after close), but keep it that way - use a tmp-file db if a
+   * test needs close-then-use.
+   */
+  get #db(): Database {
+    if (this.#handle === null) this.#open();
+    return this.#handle!;
+  }
+
+  // The engine facades get the same treatment as #db: every accessor
+  // ensures an open connection first, so delegation routes through the
+  // facade REBUILT by the reopen rather than the stale one. Without this,
+  // a post-close chat call would reach the old ChatStore's captured handle
+  // and throw "Cannot use a closed database" even though ThatchDB itself
+  // reopened.
+  get #predictions(): PredictionEngine {
+    if (this.#handle === null) this.#open();
+    return this.#predictionsStore;
+  }
+
+  get #behaviors(): BehaviorEngine {
+    if (this.#handle === null) this.#open();
+    return this.#behaviorsStore;
+  }
+
+  get #chat(): ChatStore {
+    if (this.#handle === null) this.#open();
+    return this.#chatStore;
+  }
+
+  #open(): void {
+    const path = this.#path;
     // bun:sqlite creates the file but not its parent directory. On a fresh
     // machine the default path (~/.config/thatch/thatch.db) has no dir yet, so
     // create it here - otherwise every command fails with SQLITE_CANTOPEN.
@@ -68,18 +123,23 @@ export class ThatchDB {
     if (path !== ":memory:" && !path.startsWith("file:")) {
       mkdirSync(dirname(path), { recursive: true });
     }
-    this.#db = new Database(path, { create: true });
-    this.#db.run("PRAGMA journal_mode = WAL");
-    this.#db.run("PRAGMA busy_timeout = 5000");
+    const db = new Database(path, { create: true });
+    db.run("PRAGMA journal_mode = WAL");
+    db.run("PRAGMA busy_timeout = 5000");
     // Enforce FK constraints per connection. The prediction tables use
     // ON DELETE CASCADE for edges and provenance; enabling this pragma
     // ensures those cascades fire. Also enforces the entries table's
     // existing FK to stores(name), which was declarative but unenforced
     // before this branch.
-    this.#db.run("PRAGMA foreign_keys = ON");
-    this.#predictions = new PredictionEngine(this.#db);
-    this.#behaviors = new BehaviorEngine(this.#db);
-    this.#chat = new ChatStore(this.#db);
+    db.run("PRAGMA foreign_keys = ON");
+    this.#handle = db;
+    // The engine facades hold the Database handle they were constructed
+    // with, so a reopened connection rebuilds them. They are stateless
+    // views over SQLite - all durable state lives in the tables - so
+    // reconstruction is lossless.
+    this.#predictionsStore = new PredictionEngine(db);
+    this.#behaviorsStore = new BehaviorEngine(db);
+    this.#chatStore = new ChatStore(db);
     this.#initSchema();
   }
 
@@ -1169,7 +1229,12 @@ export class ThatchDB {
   }
 
   close(): void {
-    this.#db.close();
+    // Drops the current handle only. A later use reopens (see the #db
+    // accessor) - the MCP server and CLI call this on process shutdown,
+    // where nothing follows; the opencode plugin's dispose calls it on
+    // reload, where straggler in-flight tool calls must survive.
+    this.#handle?.close();
+    this.#handle = null;
   }
 }
 

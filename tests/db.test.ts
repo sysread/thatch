@@ -775,3 +775,40 @@ describe("migration", () => {
     migrated.close();
   });
 });
+
+// ---------------------------------------------------------------------------
+// lazy reopen (dispose race hardening)
+// ---------------------------------------------------------------------------
+
+describe("ThatchDB lazy reopen", () => {
+  test("use after close() reopens and preserves data written before the close", () => {
+    // The v2 plugin reload race: dispose() closes the db while a tool call
+    // may still be in flight. The closed handle must reopen on the next
+    // touch instead of throwing "Cannot use a closed database".
+    db.runtimeStatePut("buffer", "ses_pre", [{ n: 1 }], "/test/dir");
+    db.close();
+
+    // Post-close read reopens and still sees the pre-close write (same
+    // file; the reopen creates a fresh connection to it).
+    const rows = db.runtimeStateAll();
+    expect(rows.map((r) => r.sessionID)).toContain("ses_pre");
+
+    // Post-close writes land on the reopened connection too.
+    db.runtimeStatePut("wrapup", "ses_post", { token: "T" }, "/test/dir");
+    const ids = db.runtimeStateAll().map((r) => r.sessionID);
+    expect(ids).toContain("ses_pre");
+    expect(ids).toContain("ses_post");
+  });
+
+  test("the engine facades are rebuilt against the reopened connection", () => {
+    // ChatStore/PredictionEngine/BehaviorEngine hold the Database handle
+    // they were constructed with; the reopen must rebind them, or chat
+    // and prediction calls would use the stale closed handle.
+    db.registerChatSession("ses_chat", "proj", null, "opencode", undefined, undefined);
+    db.close();
+    // Through the rebuilt ChatStore: the pre-close registration is intact.
+    const roster = db.listChatSessions();
+    expect(roster.some((r: any) => r.session_id === "ses_chat")).toBe(true);
+    db.unregisterChatSession("ses_chat");
+  });
+});

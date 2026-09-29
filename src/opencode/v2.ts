@@ -72,6 +72,10 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   // here, and the pump lets their events through.
   const childSessions = new Set<string>();
 
+  // Tool executions currently running against this instance's runtime (see
+  // the counter in the tool execute wrapper below).
+  let inflightTools = 0;
+
   const capabilities = buildCapabilities(context, worktree, childSessions);
   const runtime = await createRuntime({ capabilities, directory, worktree });
   // Seed the forwarding set from rehydrated child bookkeeping: after a
@@ -97,9 +101,33 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
         description: def.description,
         input: z.toJSONSchema(z.object(def.args)),
         execute: async (input: unknown, toolContext: V2ToolContext) => {
-          const host: HostToolContext | undefined = trimHostContext(toolContext);
-          const result: string = await def.execute(input as Record<string, unknown>, runtime.coreContext, host);
-          return { content: result } as Tool.Result;
+          // In-flight counter (read by the cleanup below): v2 tears the old
+          // activation down while a call it registered may still be running,
+          // so cleanup waits briefly for stragglers before disposing the
+          // runtime whose db they use.
+          inflightTools++;
+          try {
+            const host: HostToolContext | undefined = trimHostContext(toolContext);
+            const result: string = await def.execute(input as Record<string, unknown>, runtime.coreContext, host);
+            return { content: result } as Tool.Result;
+          } catch (err) {
+            // A db closed mid-call by a concurrent reload's dispose surfaces
+            // here even after the wait (the call may have started racing the
+            // cleanup itself). Fail the call with an explicit retry hint -
+            // the reloaded instance is live by then, so a retry succeeds.
+            // (Hard failures are never retried by models - every prior
+            // session that hit one just abandoned the call.)
+            if (err instanceof Error && /closed database|connection closed/i.test(err.message)) {
+              return {
+                content:
+                  "thatch: the plugin was reloaded mid-call and this instance's database handle " +
+                  "was closed underneath it. The reloaded instance is live - retry the same call.",
+              } as Tool.Result;
+            }
+            throw err;
+          } finally {
+            inflightTools--;
+          }
         },
       });
     }
@@ -296,11 +324,21 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   // second setup after a skipped or partial cleanup would double every
   // poller, pump, and nudge. The pump await is safe: its body is fully
   // try/caught and abort ends the loop, so it settles promptly.
+  //
+  // Before disposing the runtime, briefly drain in-flight tool executions:
+  // v2 tears this activation down mid-turn, and an execute whose db access
+  // would race the close either completes here or (past the bound) hits the
+  // lazy reopen + retry hint in the wrapper. The bound keeps a hung tool
+  // from holding the reload hostage.
   let disposed = false;
   return async () => {
     if (disposed) return;
     disposed = true;
     controller.abort();
+    const drainDeadline = Date.now() + 5_000;
+    while (inflightTools > 0 && Date.now() < drainDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     await pump;
     registerTools.dispose();
     registerToolHook.dispose();
