@@ -456,6 +456,11 @@ export async function createRuntime(input: {
   // degradation: nudges stay off for that session, but no crash).
   const compacting = new Set<string>();
 
+  // Set by dispose(). Delayed async work (the reconcile timer, queued
+  // event handlers) can fire after the db is closed; anything running past
+  // this flag must not touch the db.
+  let disposed = false;
+
   // Per-session count of consecutive extraction nudges delivered without any
   // memory_remember call in between. Drives nudge escalation: the agent gets
   // a couple of polite chances, then the tone shifts to directive, then to
@@ -525,6 +530,7 @@ export async function createRuntime(input: {
   // branch - consumeSnapshot silently dropped the parent's buffered entries
   // without extraction, and the task tool's session got a delete call.
   const journalChild = (childId: string) => {
+    if (disposed) return;
     const parentID = childToParent.get(childId);
     if (!parentID) {
       db.runtimeStateDelete("child", childId);
@@ -859,6 +865,10 @@ export async function createRuntime(input: {
       const t = setTimeout(resolve, 10_000);
       t.unref?.();
     });
+    // Dispose (a v2 plugin reload or process exit) may have closed the db
+    // during the 10s window; finalizing into it would throw on the journal
+    // write. The reloaded instance's own reconciler owns the rows now.
+    if (disposed) return;
     let live: Record<string, { type: string }> = {};
     try {
       live = (await caps.fetchStatuses()) ?? {};
@@ -1892,6 +1902,7 @@ export async function createRuntime(input: {
     },
 
     dispose: async () => {
+      disposed = true;
       stopVersionChecker();
       watchers.dispose();
       chatPoller.dispose();
