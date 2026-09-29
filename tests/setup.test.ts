@@ -318,6 +318,11 @@ describe("claudeInstructions content", () => {
     expect(text).toContain("When to Write");
   });
 
+  test("startup recall examples teach the Code Mode execute fallback", () => {
+    const text = systemPrompt("test/repo");
+    expect(text).toContain("through the Code Mode execute runtime");
+  });
+
   test("MCP host instructions teach the object-argument shape", () => {
     for (const text of [claudeInstructions(), cursorInstructions()]) {
       expect(text).toContain('memory_recall` with `{"query": "user preferences and personality"}`');

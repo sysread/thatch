@@ -11,6 +11,29 @@ export function predictionVerb(evidenceCount: number): string {
 }
 
 /**
+ * Shared nudge-line formatter for the prediction and behavior surfaces.
+ * The model supplies the matcher and statement text, and both frequently
+ * arrive already carrying the render prefixes: matchers phrased as
+ * "When ..." (a natural situation phrasing, or copied from an earlier
+ * nudge) and statements copied with the evidence verb ("you tend to ...").
+ * The unconditional prefixes doubled that text in every rendered nudge,
+ * so each prefix is skipped when the supplied text already carries it.
+ */
+export function formatWhenLine(
+  confidence: number,
+  evidenceCount: number,
+  matcher: string,
+  statement: string,
+  verb: string,
+): string {
+  const matcherText = /^when\b/i.test(matcher) ? matcher : `When ${matcher}`;
+  const statementText = new RegExp(`^${verb}\b`, "i").test(statement) || /^you (?:tend to|may prefer)\b/i.test(statement)
+    ? statement
+    : `${verb} ${statement}`;
+  return `[${confidence.toFixed(2)} conf, ${evidenceCount} tests] ${matcherText}: ${statementText}`;
+}
+
+/**
  * Cross-session chat section of the opencode system prompt. Omitted when the
  * user disabled chat via config (chat.enabled: false), so a disabled feature
  * never advertises itself to the model.
@@ -113,7 +136,9 @@ WIP, PR status). Unscoped memories are project-wide and always included in searc
 
 Before diving into code, thatch_memory_recall with a query relevant to the area
 you're working in. Prior sessions may have already investigated it. All thatch
-tools take a single object argument: never a bare positional string.
+tools take a single object argument: never a bare positional string. Call them
+directly, or through the Code Mode execute runtime when the harness only
+exposes tools through code.
 
 ## Skills
 
@@ -885,7 +910,7 @@ function formatRecallNudge(matches: NudgeMatch[], toolName: string): string {
 export function predictionNudge(items: PredictionNudgeItem[]): string {
   const lines = items.map((p) => {
     const verb = predictionVerb(p.evidence_count);
-    return `- [${p.confidence.toFixed(2)} conf, ${p.evidence_count} tests] When ${p.matcher_description}: ${verb} ${p.statement}`;
+    return `- ${formatWhenLine(p.confidence, p.evidence_count, p.matcher_description, p.statement, verb)}`;
   });
   return `[thatch] User decision model\n${lines.join("\n")}`;
 }
@@ -899,7 +924,7 @@ export function predictionNudge(items: PredictionNudgeItem[]): string {
 export function behaviorNudge(items: BehaviorNudgeItem[]): string {
   const lines = items.map((b) => {
     const verb = b.evidence_count === 0 ? "consider" : "do";
-    return `- [${b.confidence.toFixed(2)} conf, ${b.evidence_count} tests] When ${b.matcher_description}: ${verb} ${b.statement}`;
+    return `- ${formatWhenLine(b.confidence, b.evidence_count, b.matcher_description, b.statement, verb)}`;
   });
   return `[thatch] Situational behaviors\n${lines.join("\n")}`;
 }

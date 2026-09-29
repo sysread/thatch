@@ -22,7 +22,7 @@ import {
   type NotificationPrefs,
 } from "./config";
 import { sendNotification, defaultSpawner, type NotifyChannel, type Spawner } from "./notify";
-import { predictionVerb, chatInboxFrame } from "./prompts";
+import { predictionVerb, formatWhenLine, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, type WatcherRegistry, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
 import { CHAT_STALE_MS, chatLiveness, humanAge, renderChatParticipant, sortChatRoster, splitChatRoster, type ChatHostKind } from "./chat";
@@ -624,8 +624,7 @@ const predictionQueryDef: ToolDef = {
     if (scored.length === 0) return "No matching predictions found.";
     return scored.map((s) => {
       const verb = predictionVerb(s.evidence_count);
-      return `[${s.confidence.toFixed(2)} conf, ${s.evidence_count} tests] ` +
-        `When ${s.matcher_description}: ${verb} ${s.statement}`;
+      return formatWhenLine(s.confidence, s.evidence_count, s.matcher_description, s.statement, verb);
     }).join("\n");
   },
 };
@@ -651,7 +650,11 @@ const predictionUpdateDef: ToolDef = {
       "incident never fires for the next one.",
     ),
     prediction: z.string().describe(
-      "The user's preference or tendency in this situation.",
+      "The user's preference or tendency in this situation. Phrase it as a " +
+      "tendency starting with a base-form verb (e.g. \"prefer X over Y\", " +
+      "\"push back on Z\") rather than " +
+      "a full sentence - the nudge and query renderers prefix the evidence " +
+      "verb (\"you tend to ...\") onto it.",
     ),
     signal: z.enum(["confirm", "disconfirm", "soft", "create"]).describe(
       "What happened: confirm (user confirmed the prediction), " +

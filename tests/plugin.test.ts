@@ -1350,6 +1350,32 @@ describe("recallNudge (opencode)", () => {
   });
 });
 
+describe("formatWhenLine prefix deduplication", () => {
+  const { formatWhenLine, predictionVerb } = require("../src/prompts");
+
+  test("does not double a matcher that already starts with When", () => {
+    const line = formatWhenLine(0.56, 1, "When reviewing a tiny config PR", "prefer the existing pattern", "you tend to");
+    expect(line).toContain("] When reviewing a tiny config PR:");
+    expect(line).not.toContain("When When");
+  });
+
+  test("prepends When to a gerund matcher", () => {
+    const line = formatWhenLine(0.56, 1, "Deciding how to show activity feedback", "prefer toast notifications", "you tend to");
+    expect(line).toContain("] When Deciding how to show activity feedback: you tend to prefer toast notifications");
+  });
+
+  test("does not double a statement that already carries the evidence verb", () => {
+    const line = formatWhenLine(0.56, 1, "Deciding how to show activity feedback", "you tend to prefer toast notifications", predictionVerb(1));
+    expect(line).toContain(": you tend to prefer toast notifications");
+    expect(line).not.toContain("you tend to you tend to");
+  });
+
+  test("0-evidence statements keep the hedged verb", () => {
+    const line = formatWhenLine(0.5, 0, "Deciding how to show activity feedback", "prefer toast notifications", predictionVerb(0));
+    expect(line).toContain("you may prefer");
+  });
+});
+
 describe("claudeRecallNudge (Claude Code / Cursor)", () => {
   test("uses bare tool name without thatch_ prefix", () => {
     const matches: NudgeMatch[] = [{ label: "Architecture", score: 0.72 }];
