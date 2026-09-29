@@ -1329,6 +1329,10 @@ describe("recallNudge (opencode)", () => {
     expect(nudge).toContain("1 memory relates to this prompt");
     expect(nudge).toContain('"Architecture"');
     expect(nudge).toContain("thatch_memory_recall");
+    // The nudge teaches the argument shape: a bare positional string is the
+    // most common first-call mistake (opencode DB analysis, Sept 2026).
+    expect(nudge).toContain('({ query: "..." })');
+    expect(nudge).toContain("never a bare positional string");
   });
 
   test("multiple matches use plural and show up to 2 labels", () => {
@@ -1352,6 +1356,7 @@ describe("claudeRecallNudge (Claude Code / Cursor)", () => {
     const nudge = claudeRecallNudge(matches);
     expect(nudge).toContain("memory_recall");
     expect(nudge).not.toContain("thatch_memory_recall");
+    expect(nudge).toContain('({ query: "..." })');
   });
 });
 
@@ -1540,6 +1545,46 @@ describe("recall nudge via chat.message", () => {
       parts: [{ type: "text", text: "ok" }],
     };
     await hooks["chat.message"]!({ sessionID: "ses_short", messageID: "msg_recall_3" } as any, output);
+    expect(output.parts.length).toBe(1);
+  });
+
+  test("task-dispatched sub-agent sessions get no recall nudge", async () => {
+    // Task sub-agents (session.created with a parentID, not created by the
+    // extraction pipeline) have restricted tool lists that exclude the
+    // thatch tools - nudging them only produces "No tool named" error
+    // rounds (opencode DB analysis, Sept 2026).
+    await hooks.event!({ event: {
+      type: "session.created",
+      properties: { info: { id: "ses_subagent_recall", parentID: "ses_subagent_parent" } } } as any,
+    });
+
+    const output: any = {
+      message: { id: "msg_subagent_recall" },
+      parts: [{ type: "text", text: "# test-coverage\n\ntest coverage metrics and gaps" }],
+    };
+    await hooks["chat.message"]!({
+      sessionID: "ses_subagent_recall", messageID: "msg_subagent_recall",
+    } as any, output);
+    expect(output.parts.length).toBe(1);
+  });
+
+  test("task-dispatched sub-agent sessions get no extraction nudge", async () => {
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_subagent_extract", callID: "sx1", args: { command: "ls" } },
+      { title: "list files", output: "file.txt", metadata: {} },
+    );
+    await hooks.event!({ event: {
+      type: "session.created",
+      properties: { info: { id: "ses_subagent_extract", parentID: "ses_subagent_parent2" } } } as any,
+    });
+
+    const output: any = {
+      message: { id: "msg_subagent_extract" },
+      parts: [{ type: "text", text: "next prompt for the sub-agent session" }],
+    };
+    await hooks["chat.message"]!({
+      sessionID: "ses_subagent_extract", messageID: "msg_subagent_extract",
+    } as any, output);
     expect(output.parts.length).toBe(1);
   });
 

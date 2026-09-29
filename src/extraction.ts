@@ -254,9 +254,8 @@ export class ExtractionPipeline {
   /**
    * Requeues accepted entries that have waited longer than maxAgeMs for a
    * completion signal that never came: the extractor sub-agent crashed
-   * without acking, or (v2) completed without a parent linkage the plugin
-   * could see. Without this, accepted entries linger unprocessed AND
-   * un-nudged - silent loss. Returns the session ids that had entries
+   * without acking, or the completion ack was lost. Without this, accepted
+   * entries linger unprocessed AND un-nudged - silent loss. Returns the session ids that had entries
    * requeued; the regular nudge path picks them up from pending on the
    * session's next message.
    */

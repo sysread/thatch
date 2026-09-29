@@ -104,7 +104,7 @@ Stores are created automatically. No setup required.
 
 | Tool | What it does |
 |------|-------------|
-| `thatch_memory_remember` | Save a piece of information. Label it, and thatch embeds it for later recall. |
+| `thatch_memory_remember` | Save a piece of information; thatch embeds it for later recall. The label is optional - it is derived from the content's first heading or line when omitted. |
 | `thatch_memory_recall` | Search for relevant information using natural language. Searches both the current project's store and `global` by default. |
 | `thatch_memory_list` | List all memory labels in a store. |
 | `thatch_memory_show` | Read the full content of a memory by exact label. |

@@ -117,7 +117,7 @@ first-ever install is invisible until the next server start.
 ## Interactions with other features
 
 - Extraction pipeline ([extraction.md](extraction.md)): direct extraction is triggered by `session.status idle`; child lifecycle managed here
-- Nudge pipeline ([nudge-pipeline.md](nudge-pipeline.md)): `extracting` set suppresses tier 1; `compacting` set suppresses all tiers
+- Nudge pipeline ([nudge-pipeline.md](nudge-pipeline.md)): `extracting` set suppresses tier 1; `compacting` set suppresses all tiers; task-dispatched sub-agents (in `childToParent`, not in `extractionChildren`) suppress all tiers
 - Hygiene ([hygiene.md](hygiene.md)): hygiene report runs at `session.created` for top-level sessions
 - Compaction recovery ([compaction-recovery.md](compaction-recovery.md)): `session.compacted` event clears the compacting flag
 - Memory store ([memory-store.md](memory-store.md)): child sessions write memories via `memory_remember`, which triggers drain via `tool.execute.after`

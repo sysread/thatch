@@ -41,7 +41,7 @@ here first. These are the things that have already cost time.
   a memory, write it with `archived: true`; to unarchive, `archived: false`.
 - **Updating an archived memory requires explicit `archived` param.** If the
   entry is already archived and a `remember` call omits the `archived` param,
-  the tool returns an error (`db.ts:395`). Pass `archived: true` to keep it
+  the tool returns an error (`db.ts:585`). Pass `archived: true` to keep it
   archived or `archived: false` to unarchive. This guard prevents accidental
   unarchival via an unrelated content update.
 
@@ -229,3 +229,34 @@ wrapped tool's hook semantics instead of buffering. Lesson for sibling
 hooks: when a filter reasons about tool identity, an aggregator tool
 (arbitrary code execution over other tools) defeats name-based matching -
 unwrap the aggregation before classifying.
+
+## LLMs guess tool-call shapes on the first call, so teach the shape at the mention site
+
+A September 2026 audit of every thatch tool-call error in the opencode
+session database (~19k calls, both v1 and v2 storage) found the failures
+cluster on the model's FIRST thatch call - usually the startup recall round -
+and fall into a short list of avoidable mistakes:
+
+- **Bare positional string instead of an object argument** (the largest
+  bucket): `thatch_memory_recall({ query: "..." })` called as
+  `thatch_memory_recall("...")`. Root cause: the opencode system prompt's
+  startup section and the recall nudge both used positional-style examples
+  (`thatch_memory_recall "query"`), and Code Mode models mimic that shape
+  inside `execute`. Both now teach the object form.
+- **Required discriminator params omitted**: `memory_remember` without
+  `label` (models pass `title`/`id`/`statement` instead, or nothing),
+  `prediction_update` without `signal`, `behavior_codify` without
+  `situation`. Fixes: `label` is optional and derived from content;
+  tool descriptions state the all-args-required contract.
+- **Nudges leak into tool-less agent contexts**: task-dispatched sub-agents
+  (explore/general and friends) have restricted tool lists that exclude the
+  thatch tools, but `chat.message` nudges fired for them anyway, producing
+  guaranteed "No tool named ..." error rounds. The chat.message hook now
+  skips nudges for child sessions that are not extraction children.
+
+The general lesson: any surface that names a tool to an LLM (system prompt,
+nudge, skill text) is a usage-shape prior. Give the argument shape at the
+mention site, because the model's first call happens before it has seen a
+working example. Also note Code Mode `execute` validation failures are only
+persisted in the v2 `session_message` store - they are invisible in the v1
+`part` table, so error-rate analysis on old data undercounts them.

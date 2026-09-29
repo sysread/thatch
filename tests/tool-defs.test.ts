@@ -136,6 +136,65 @@ describe("tool-defs execute functions", () => {
     expect(result).toContain("Test");
   });
 
+  test("memory_remember derives label from leading heading when label omitted", async () => {
+    const def = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const result = await def.execute(
+      { content: "# Derived heading\n\nBody text here." }, ctx,
+    );
+    expect(result).toContain("[saved]");
+    expect(result).toContain("Derived heading");
+    const show = TOOL_DEFS.find((t) => t.name === "memory_show")!;
+    const entry = await show.execute({ label: "Derived heading" }, ctx);
+    // The heading becomes the label header and is not duplicated in content.
+    expect(entry).toContain("Body text here.");
+    expect(entry).not.toContain("# Derived heading\n\n# Derived heading");
+  });
+
+  test("memory_remember derives label from first line without a heading", async () => {
+    const def = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const result = await def.execute(
+      { content: "First line stands in as the label\n\nMore body." }, ctx,
+    );
+    expect(result).toContain("[saved]");
+    expect(result).toContain("First line stands in as the label");
+  });
+
+  test("memory_remember heading-only content keeps the entry non-empty", async () => {
+    const def = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const result = await def.execute({ content: "# Solo heading" }, ctx);
+    expect(result).toContain("[saved]");
+    const show = TOOL_DEFS.find((t) => t.name === "memory_show")!;
+    const entry = await show.execute({ label: "Solo heading" }, ctx);
+    // The heading text doubles as the body so the entry is never empty:
+    // stored content is the label header followed by the body text.
+    expect(entry).toContain("# Solo heading\n\nSolo heading");
+  });
+
+  test("memory_remember truncates a derived label to 80 characters", async () => {
+    const def = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const longLine = "x".repeat(120);
+    const result = await def.execute({ content: longLine }, ctx);
+    expect(result).toContain("[saved]");
+    expect(result).toContain("x".repeat(80));
+    expect(result).not.toContain("x".repeat(81));
+  });
+
+  test("memory_remember overwrite on a derived label upserts instead of duplicating", async () => {
+    const def = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const content = "# Derived overwrite\n\nbody";
+    await def.execute({ content }, ctx);
+    const again = await def.execute({ content, overwrite: true }, ctx);
+    expect(again).toContain("[saved]");
+    const list = await TOOL_DEFS.find((t) => t.name === "memory_list")!.execute({}, ctx);
+    expect(list.split("\n").filter((l) => l.includes("Derived overwrite")).length).toBe(1);
+  });
+
+  test("memory_remember without content returns guidance instead of throwing", async () => {
+    const def = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const result = await def.execute({ label: "Orphan" }, ctx);
+    expect(result).toContain("content parameter");
+  });
+
   test("memory_recall returns matches", async () => {
     const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
     const recall = TOOL_DEFS.find((t) => t.name === "memory_recall")!;
@@ -557,16 +616,26 @@ describe("behavior tool execute functions", () => {
 });
 
 describe("tool-defs validation", () => {
-  test("memory_remember requires label", () => {
+  test("memory_remember label is optional (derived from content when omitted)", () => {
     const def = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
     const schema = z.object(def.args);
-    expect(() => schema.parse({ content: "test" })).toThrow();
+    expect(() => schema.parse({ content: "test" })).not.toThrow();
   });
 
   test("memory_remember requires content", () => {
     const def = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
     const schema = z.object(def.args);
     expect(() => schema.parse({ label: "test" })).toThrow();
+  });
+
+  test("prediction_update and behavior_codify descriptions state the required-arg contract", () => {
+    // The DB audit (Sept 2026) found the models drop the discriminator
+    // params (signal, situation) unless the contract is spelled out.
+    const update = TOOL_DEFS.find((t) => t.name === "prediction_update")!;
+    expect(update.description).toContain("ALL FOUR");
+    expect(update.description).toContain("create, confirm, disconfirm, soft");
+    const codify = TOOL_DEFS.find((t) => t.name === "behavior_codify")!;
+    expect(codify.description).toContain("ALL THREE");
   });
 
   test("confidence must be 1-10", () => {

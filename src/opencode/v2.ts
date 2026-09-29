@@ -394,7 +394,13 @@ export function translateEvent(located: { type: string; data?: any }): { type: s
   const data = located.data ?? {};
   switch (located.type) {
     case "session.created":
-      return [{ type: "session.created", properties: { info: { id: data.sessionID, parentID: data.parentID } } }];
+      // v2 publishes the v1-compat payload { sessionID, info: SessionInfo };
+      // the parent link lives at info.parentID (the task tool dispatches
+      // sub-agents with parentID), not at the payload top level. Without
+      // this, childToParent never populates on v2 and every child-session
+      // behavior (buffer drain, nudge suppression, child cleanup) silently
+      // only works on v1.
+      return [{ type: "session.created", properties: { info: { id: data.sessionID, parentID: data.info?.parentID ?? data.parentID } } }];
     case "session.deleted":
       return [{ type: "session.deleted", properties: { info: { id: data.sessionID } } }];
     case "session.execution.started":

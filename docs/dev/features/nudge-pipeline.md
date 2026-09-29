@@ -49,6 +49,18 @@ not a compaction summary, compaction has already failed (the auto-continue
 never fired). Thatch clears the stale `compacting` flag and proceeds normally.
 See [compaction-recovery.md](compaction-recovery.md).
 
+#### Task sub-agent guard
+
+If the session is a child in `childToParent` but not in `extractionChildren`
+(a task-dispatched sub-agent), all nudge tiers are skipped and the hook
+returns before tier 1. Dispatched sub-agents may have restricted tool lists
+that exclude the thatch tools, and even where the tools exist the child is
+driven by its dispatch prompt, so a nudge only produces "No tool named"
+error rounds or noise. `extraction.requeueStaleAccepted()` still runs before
+the guard - it is session-independent maintenance. See
+[session-lifecycle.md](session-lifecycle.md) for the `extractionChildren`
+distinction.
+
 #### Tier 1---Extraction nudge (fallback path)
 
 Fires only when direct extraction was never triggered or threw (the session is

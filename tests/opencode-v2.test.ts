@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setup, eventMatchesInstance, flattenToolContent, mapSessionContextMessages } from "../src/opencode/v2";
+import { setup, eventMatchesInstance, flattenToolContent, mapSessionContextMessages, translateEvent } from "../src/opencode/v2";
 import { TOOL_DEFS } from "../src/tool-defs";
 
 // Mock @huggingface/transformers (same as tests/plugin.test.ts): without it,
@@ -166,6 +166,29 @@ afterEach(async () => {
   delete process.env.THATCH_DB_PATH;
   delete process.env.XDG_CONFIG_HOME;
   rmSync(dbDir, { recursive: true, force: true });
+});
+
+describe("translateEvent session.created parentID", () => {
+  test("maps the parent link from info.parentID (v2 payload shape)", () => {
+    // v2 publishes the v1-compat payload { sessionID, info: SessionInfo };
+    // the task tool dispatches sub-agents with a parentID, and the runtime's
+    // childToParent map reads properties.info.parentID.
+    const [event] = translateEvent({
+      type: "session.created",
+      data: { sessionID: "ses_child", info: { id: "ses_child", parentID: "ses_parent" } },
+    });
+    expect(event.type).toBe("session.created");
+    expect(event.properties.info.id).toBe("ses_child");
+    expect(event.properties.info.parentID).toBe("ses_parent");
+  });
+
+  test("falls back to a top-level parentID", () => {
+    const [event] = translateEvent({
+      type: "session.created",
+      data: { sessionID: "ses_child", parentID: "ses_parent" },
+    });
+    expect(event.properties.info.parentID).toBe("ses_parent");
+  });
 });
 
 describe("opencode v2 adapter", () => {

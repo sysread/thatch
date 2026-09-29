@@ -58,7 +58,7 @@ The "global" store always exists — it is inserted at schema init (`INSERT OR I
 ### Write path (memory_remember)
 
 ```text
-agent calls memory_remember(label, content, opts)
+agent calls memory_remember(label?, content, opts) - label is derived from the content's first heading or line when omitted
   → model.passageEmbed("# label\n\ncontent")  →  Float32Array
   → db.findSimilar(store, embedding, { excludeSlug })  →  write-time collision check
   → db.remember(store, label, content, embedding, model.name, opts)

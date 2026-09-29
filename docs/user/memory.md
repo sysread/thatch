@@ -33,7 +33,7 @@ store when recalling.
 
 | Tool | What it does |
 |------|-------------|
-| `thatch_memory_remember` | Save a memory with a label and content. Optional: branch, confidence (1-10), archived flag, overwrite. |
+| `thatch_memory_remember` | Save a memory with a label and content. The label may be omitted - it is derived from the content's first heading or line. Optional: branch, confidence (1-10), archived flag, overwrite. |
 | `thatch_memory_recall` | Semantic search across stores. Returns matching memories with similarity scores. |
 | `thatch_memory_list` | List all memories in a store (metadata only, no content). |
 | `thatch_memory_show` | Show full content of a single memory by label. |

@@ -318,6 +318,13 @@ describe("claudeInstructions content", () => {
     expect(text).toContain("When to Write");
   });
 
+  test("MCP host instructions teach the object-argument shape", () => {
+    for (const text of [claudeInstructions(), cursorInstructions()]) {
+      expect(text).toContain('memory_recall` with `{"query": "user preferences and personality"}`');
+      expect(text).toContain("never a bare positional string");
+    }
+  });
+
   test("includes review-discussion prediction guidance", () => {
     const text = claudeInstructions();
     expect(text).toContain("Code review discussions are high-signal prediction material");
@@ -818,6 +825,15 @@ describe("cursorInstructions content", () => {
 });
 
 describe("systemPrompt content", () => {
+  test("startup recall examples use object-argument shape", () => {
+    const text = systemPrompt("test/repo");
+    // The startup examples must use the object-argument form: the
+    // positional style is the most common first-call validation failure
+    // (opencode DB analysis, Sept 2026).
+    expect(text).toContain('thatch_memory_recall({ query: "user preferences and personality" })');
+    expect(text).not.toContain('thatch_memory_recall "');
+  });
+
   test("includes review-discussion prediction guidance", () => {
     const text = systemPrompt("test/repo");
     expect(text).toContain("Code review discussions are high-signal prediction material");

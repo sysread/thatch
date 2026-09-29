@@ -238,8 +238,9 @@ const rememberDef: ToolDef = {
     "Each memory should be focused on a single topic. Write memories as " +
     "reference material for a future instance of yourself with zero context.",
   args: {
-    label: z.string().describe(
-      "Short descriptive title. Used for deduplication - same label in the same store is the same entry.",
+    label: z.string().optional().describe(
+      "Short descriptive title. Used for deduplication - same label in the same store is the same entry. " +
+      "Omit to derive it from the content's first heading or line (capped at 80 characters).",
     ),
     content: z.string().describe(
       "The information to remember. Self-contained, understandable without session context.",
@@ -264,8 +265,32 @@ const rememberDef: ToolDef = {
   },
   async execute(args, ctx) {
     const store = resolveStore(args, ctx);
-    const label = args.label as string;
-    const content = `# ${label}\n\n${args.content as string}`;
+    const rawContent = (args.content as string | undefined)?.trim();
+    if (!rawContent) {
+      return "No content provided - pass the information to remember in the content parameter.";
+    }
+    let label = (args.label as string | undefined)?.trim();
+    let content = rawContent;
+    if (!label) {
+      // Label omitted (or arrived under a misnamed key that schema
+      // validation stripped): derive it from the content so the write
+      // still lands instead of erroring. A leading markdown heading
+      // becomes the label and is stripped from the stored content
+      // (heading-only content keeps the heading text as the body so the
+      // entry is never empty). The 80-char cap keeps a derived label -
+      // which can be a whole first line - from bloating list output and
+      // slug keys; matches deriveTitle's cap in extraction.ts.
+      const firstLine = rawContent.split("\n")[0]?.trim() ?? "";
+      const heading = /^#{1,6}\s+(.+)$/.exec(firstLine);
+      if (heading) {
+        label = heading[1].trim().slice(0, 80);
+        const rest = rawContent.split("\n").slice(1).join("\n").trim();
+        content = rest.length > 0 ? rest : heading[1].trim();
+      } else {
+        label = firstLine.slice(0, 80);
+      }
+    }
+    content = `# ${label}\n\n${content}`;
     const embedding = await ctx.model.passageEmbed(content);
 
     const similar = ctx.db.findSimilar(store, embedding, {
@@ -612,7 +637,11 @@ const predictionUpdateDef: ToolDef = {
     "model. Use when the user corrects you, answers a question, or " +
     "provides a clear signal about their preferences or decision-making " +
     "strategy. The tool handles matcher and prediction lookup, dedup, " +
-    "and confidence adjustment automatically.",
+    "and confidence adjustment automatically. " +
+    "ALL FOUR of matcher, prediction, signal, and rationale are required " +
+    "in the SAME call - calls omitting any of them fail validation. " +
+    "signal must be exactly one of: create, confirm, disconfirm, soft " +
+    "(use \"create\" for a new observation - never a prose description).",
   args: {
     matcher: z.string().describe(
       "Description of the situation. What decision was being made? Word it " +
@@ -782,7 +811,8 @@ const behaviorCodifyDef: ToolDef = {
     "tests before touching the area; read a large function fully before " +
     "editing it. When a review, bug, or incident reveals a CLASS of " +
     "mistake you are prone to (not a one-off), codify a guard against the " +
-    "class.",
+    "class. ALL THREE of situation, behavior, and rationale are required " +
+    "in the SAME call - calls omitting any of them fail validation.",
   args: {
     situation: z.string().describe(
       "Description of the situation that triggers this behavior. What context " +

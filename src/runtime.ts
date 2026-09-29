@@ -1352,6 +1352,13 @@ export async function createRuntime(input: {
       // requeue here so they are honestly re-extracted instead of lingering
       // as silent loss.
       extraction.requeueStaleAccepted();
+      // Task-dispatched sub-agent sessions may have restricted tool lists
+      // that exclude the thatch tools, and even where the tools exist the
+      // child is driven by its dispatch prompt, so nudges only burn "No
+      // tool named ..." error rounds or add noise there. Extraction
+      // children are excluded: they run with full tools and are driven by
+      // extractionDirectPrompt.
+      if (childToParent.has(input.sessionID) && !extractionChildren.has(input.sessionID)) return;
       if (!extracting.has(input.sessionID) && extraction.pending(input.sessionID)) {
         const batch = extraction.peek(input.sessionID);
         const missed = missedNudges.get(input.sessionID) ?? 0;

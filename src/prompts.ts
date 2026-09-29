@@ -106,13 +106,14 @@ WIP, PR status). Unscoped memories are project-wide and always included in searc
 
 ## Session Startup
 
-1. thatch_memory_recall "user preferences and personality"
-2. thatch_memory_recall "project architecture and conventions"
-3. If on a non-main branch, thatch_memory_recall with the branch name
+1. thatch_memory_recall({ query: "user preferences and personality" })
+2. thatch_memory_recall({ query: "project architecture and conventions" })
+3. If on a non-main branch, thatch_memory_recall with the branch name as the query
 4. thatch_memory_list and thatch_store_list to see what's available
 
 Before diving into code, thatch_memory_recall with a query relevant to the area
-you're working in. Prior sessions may have already investigated it.
+you're working in. Prior sessions may have already investigated it. All thatch
+tools take a single object argument: never a bare positional string.
 
 ## Skills
 
@@ -422,13 +423,14 @@ WIP, PR status). Unscoped memories are project-wide and always included in searc
 
 ## Session Startup
 
-1. \`memory_recall\` "user preferences and personality" (global store)
-2. \`memory_recall\` "project architecture and conventions" (project store)
-3. If on a non-main branch, \`memory_recall\` with the branch name
+1. \`memory_recall\` with \`{"query": "user preferences and personality"}\` (global store)
+2. \`memory_recall\` with \`{"query": "project architecture and conventions"}\` (project store)
+3. If on a non-main branch, \`memory_recall\` with the branch name as the query
 4. \`memory_list\` and \`store_list\` to see what's available
 
 Before diving into code, \`memory_recall\` with a query relevant to the area
-you're working in. Prior sessions may have already investigated it.
+you're working in. Prior sessions may have already investigated it. All thatch
+tools take a single JSON object argument: never a bare positional string.
 
 ## Skills
 
@@ -866,7 +868,11 @@ function formatRecallNudge(matches: NudgeMatch[], toolName: string): string {
   const verb = n === 1 ? "relates" : "relate";
   const labels = matches.slice(0, 2).map((m) => `"${m.label}"`).join(", ");
   const etc = n > 2 ? ", etc." : "";
-  return `[thatch] ${n} ${word} ${verb} to this prompt (${labels}${etc}). Use ${toolName} before responding.`;
+  return (
+    `[thatch] ${n} ${word} ${verb} to this prompt (${labels}${etc}). ` +
+    `Use ${toolName}({ query: "..." }) before responding - the argument is ` +
+    `a single object with a "query" key, never a bare positional string.`
+  );
 }
 
 // ---------------------------------------------------------------------------
