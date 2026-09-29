@@ -233,6 +233,93 @@ export class ExtractionPipeline {
     this.#journal?.("accepted", sessionID, undefined);
   }
 
+  #claims = new Map<string, { target: string; entries: ToolInteraction[] }>();
+
+  /**
+   * Claim the session's pending + previously-accepted entries for a fetcher
+   * (the extractor sub-agent fetching its payload). The entries stay in the
+   * accepted holding area; the claim records WHICH fetcher they were
+   * delivered to, so that fetcher's completion signal consumes only its own
+   * delivery. Without this, any child's completion dropped the whole
+   * accepted set - a sibling sub-agent going idle at the wrong moment
+   * silently discarded another extractor's in-flight payload (the
+   * accept-then-racing-completion loss, observed September 2026).
+   *
+   * Entries are claimed by reference identity: later accepts append new
+   * arrays, so a stale claim never reaches entries claimed after it.
+   */
+  claim(sessionID: string, fetcherID: string): ToolInteraction[] {
+    this.accept(sessionID);
+    const accepted = this.#accepted.get(sessionID) ?? [];
+    this.#claims.set(fetcherID, { target: sessionID, entries: accepted });
+    return accepted;
+  }
+
+  /**
+   * Consume only the fetcher's claimed entries. Returns false when the
+   * fetcher holds no claim - a sibling that never fetched, or a fetch that
+   * never happened. Callers must NOT fall back to whole-set completion on
+   * the idle path: a fetcher that never fetched processed nothing, and
+   * dropping the set would lose another extractor's claimed payload.
+   */
+  completeClaimed(fetcherID: string): boolean {
+    const claim = this.#claims.get(fetcherID);
+    if (!claim) return false;
+    this.#claims.delete(fetcherID);
+    const accepted = this.#accepted.get(claim.target);
+    if (accepted) {
+      const claimed = new Set(claim.entries);
+      const rest = accepted.filter((ix) => !claimed.has(ix));
+      if (rest.length > 0) {
+        this.#accepted.set(claim.target, rest);
+        this.#journal?.("accepted", claim.target, rest);
+      } else {
+        this.#accepted.delete(claim.target);
+        this.#acceptedAt.delete(claim.target);
+        this.#journal?.("accepted", claim.target, undefined);
+      }
+    }
+    return true;
+  }
+
+  /** Forget a fetcher's claim (its session was deleted or cleaned up). */
+  dropClaim(fetcherID: string): void {
+    this.#claims.delete(fetcherID);
+  }
+
+  /**
+   * Requeue only the fetcher's claimed entries back to pending: its session
+   * errored, so the delivery was never processed. Returns false when the
+   * fetcher holds no claim - a task-kind child that never fetched processed
+   * nothing, and requeueing the whole accepted set here would yank another
+   * extractor's in-flight claim back to pending for duplicate extraction.
+   * Callers decide whether a claim-less error falls back to whole-set
+   * requeue (extraction children: yes - the error is a strong immediate
+   * death signal; task children: no).
+   */
+  requeueClaimed(fetcherID: string): boolean {
+    const claim = this.#claims.get(fetcherID);
+    if (!claim) return false;
+    this.#claims.delete(fetcherID);
+    const accepted = this.#accepted.get(claim.target);
+    if (accepted) {
+      const claimed = new Set(claim.entries);
+      const rest = accepted.filter((ix) => !claimed.has(ix));
+      if (rest.length > 0) {
+        this.#accepted.set(claim.target, rest);
+        this.#journal?.("accepted", claim.target, rest);
+      } else {
+        this.#accepted.delete(claim.target);
+        this.#acceptedAt.delete(claim.target);
+        this.#journal?.("accepted", claim.target, undefined);
+      }
+    }
+    const buf = this.#buffers.get(claim.target) ?? [];
+    this.#buffers.set(claim.target, [...claim.entries, ...buf]);
+    this.#journal?.("buffer", claim.target, this.#buffers.get(claim.target));
+    return true;
+  }
+
   /**
    * Move accepted entries back to pending: the extractor errored or its
    * session was deleted before completing, so the facts were never

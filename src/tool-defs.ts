@@ -100,12 +100,16 @@ export interface CoreContext {
   db: ThatchDB;
   model: EmbeddingModel;
   defaultStore: string;
-  /** Peeks the extraction buffer for a session and returns the serialized
-   *  JSON payload (same shape as buildExtractionPayload). Returns null when
-   *  no interactions are queued. Used by the get_extraction_payload tool so
-   *  the sub-agent fetches the payload as a tool response instead of
-   *  receiving it inline in the nudge text. */
-  extractionPayloadProvider?: (sessionID: string) => string | null;
+  /** Fetches a session's extraction payload for a fetcher. Returns the
+   *  serialized JSON payload (same shape as buildExtractionPayload), or
+   *  null when no interactions are queued. With a fetcherID, the fetch is
+   *  a CLAIM: the fetched entries stay accepted and that fetcher's
+   *  completion signal consumes only this delivery (sibling sub-agents
+   *  going idle cannot drop it). Without a fetcherID, the fetch is a pure
+   *  peek. Used by the get_extraction_payload tool so the sub-agent
+   *  fetches the payload as a tool response instead of receiving it
+   *  inline in the nudge text. */
+  extractionPayloadProvider?: (sessionID: string, fetcherID?: string) => string | null;
   /** Drains a session's extraction queue. On the MCP path this deletes the
    *  file-backed queue and resets the missed-nudge counter. On the opencode
    *  path this is unused (the tool.execute.after hook handles drain via
@@ -165,6 +169,73 @@ export interface ToolDef {
 // Formatting helpers - shared by all tools that render entries
 // ---------------------------------------------------------------------------
 
+/**
+ * Human-readable age of a memory, rendered at output time so the reading
+ * model can weigh staleness semantically (an ISO timestamp does not get
+ * weighed; "47 days ago" does). Keyed on updated_at - the last CONTENT
+ * change - and deliberately NOT on last_recalled_at: hygiene's staleness
+ * sweep treats a recall as refreshing the clock, but for content accuracy
+ * the opposite holds. A memory recalled yesterday but written eight months
+ * ago is exactly the case where the world may have moved on since the
+ * claim was recorded. Freshness-of-use is not freshness-of-claim.
+ *
+ * Bucket boundaries are a formatting choice, independent of hygiene's
+ * 90-day staleness window (db.ts STALE_DAYS) - the two 90s are a
+ * coincidence, do not couple them. Compact sibling: humanAge() in
+ * chat.ts renders roster-style "5m ago" for chat surfaces; keep the two
+ * apart when changing either.
+ */
+export function formatAge(iso: string, now: Date = new Date()): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "unknown age";
+  const seconds = Math.max(0, Math.floor((now.getTime() - then) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 90) return `${days} day${days === 1 ? "" : "s"} ago`;
+  if (days < 365) return `${Math.floor(days / 30)} month${Math.floor(days / 30) === 1 ? "" : "s"} ago`;
+  const years = Math.floor(days / 365);
+  return `${years} year${years === 1 ? "" : "s"} ago`;
+}
+
+/**
+ * The age sentence inserted between the meta line and a memory's content,
+ * so the model weighs staleness BEFORE reading the claim it qualifies.
+ */
+function ageLine(iso: string): string {
+  return `This memory was last updated ${formatAge(iso)}.`;
+}
+
+/**
+ * Caveat attached to memory_recall and memory_show tool output at render
+ * time - the persisted rows are untouched. The sibling of chatInboxFrame's
+ * untrusted-content framing in prompts.ts: a content-classification line
+ * that rides with the claims it qualifies, at the moment they enter the
+ * model's context, instead of a general rule it has to recall from the
+ * system prompt (or a nudge it learns to tune out). memory_list is
+ * excluded: a labels-only listing carries no artifact claims to qualify.
+ *
+ * Tool names use the BARE form (memory_remember, memory_forget) on
+ * purpose: tool-defs.ts is host-shared and has no host context. On MCP
+ * hosts the bare-name convention is established by the instructions in
+ * prompts.ts ("Bare names used below for readability"); on opencode the
+ * system prompt uses thatch_ spellings, but the model sees its own tool
+ * list and maps the bare name without a stated convention. If either
+ * convention changes, update this string with it.
+ */
+const memoryCaveat =
+  `[thatch] Memories are a point-in-time record - a guide to where to look, ` +
+  `not a source of truth. Verify artifact claims (code, docs, tickets, git) ` +
+  `against current sources before relying on them; if a memory has drifted, ` +
+  `correct it with memory_remember (overwrite: true) or memory_forget.`;
+
+function withMemoryCaveat(body: string): string {
+  return `${memoryCaveat}\n\n${body}`;
+}
+
 function formatEntry(
   entry: Awaited<ReturnType<ThatchDB["showEntry"]>>,
 ): string | null {
@@ -175,8 +246,8 @@ function formatEntry(
   if (entry.branch) meta += ` branch:${entry.branch}`;
   if (entry.confidence) meta += ` confidence:${entry.confidence}`;
   if (entry.archived) meta += " archived:true";
-  meta += ` created:${entry.created_at} updated:${entry.updated_at}`;
-  parts.push(meta, "", entry.content);
+  meta += ` created:${entry.created_at}`;
+  parts.push(meta, "", ageLine(entry.updated_at), entry.content);
   return parts.join("\n");
 }
 
@@ -185,9 +256,8 @@ function formatRecallResult(entry: MemoryRow & { _score: number }): string {
   if (entry.branch) meta += ` branch:${entry.branch}`;
   if (entry.confidence) meta += ` confidence:${entry.confidence}`;
   if (entry.archived) meta += " archived:true";
-  meta += ` updated:${entry.updated_at}`;
   const score = entry._score.toFixed(3);
-  return `[${meta}] [score:${score}]\n${entry.content}`;
+  return `[${meta}] [score:${score}]\n${ageLine(entry.updated_at)}\n${entry.content}`;
 }
 
 /**
@@ -357,7 +427,7 @@ const recallDef: ToolDef = {
 
     if (results.length === 0) return "No matching memories found.";
 
-    return results.map(formatRecallResult).join("\n\n-----\n\n");
+    return withMemoryCaveat(results.map(formatRecallResult).join("\n\n-----\n\n"));
   },
 };
 
@@ -407,7 +477,7 @@ const showDef: ToolDef = {
 
     if (!entry) return `No memory labeled "${args.label as string}" found in store "${store}".`;
 
-    return formatEntry(entry) || "Error formatting entry.";
+    return withMemoryCaveat(formatEntry(entry) || "Error formatting entry.");
   },
 };
 
@@ -535,7 +605,7 @@ const getExtractionPayloadDef: ToolDef = {
     if (!sessionID) {
       return 'session_id is required on this host (it has no session context). Pass the parent session\'s session_id from the extraction nudge.';
     }
-    const payload = ctx.extractionPayloadProvider(sessionID);
+    const payload = ctx.extractionPayloadProvider(sessionID, host?.sessionID);
     if (!payload) {
       return "No queued tool interactions found for this session.";
     }
@@ -549,8 +619,10 @@ const getExtractionPayloadDef: ToolDef = {
  * Called in a PARENT session after dispatching the fact-extractor, it accepts
  * the buffer: entries move to a holding area and the nudge quiets, but they
  * are not dropped until the extractor completes. Called in a CHILD extractor
- * at the end of its run, it completes the parent's accepted entries -
- * including no-save runs that write no memory. If the child errors or is
+ * at the end of its run, it completes the entries THAT child claimed via its
+ * payload fetch - never the whole accepted set, so a sibling sub-agent's
+ * completion cannot drop another extractor's in-flight payload. Completion
+ * includes no-save runs that write no memory. If the child errors or is
  * deleted before either signal, the host requeues the entries so the facts
  * are not lost.
  *

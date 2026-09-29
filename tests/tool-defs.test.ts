@@ -7,7 +7,7 @@ import { z } from "zod";
 import { ThatchDB } from "../src/db";
 import { saveConfig } from "../src/config";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { TOOL_DEFS, type CoreContext } from "../src/tool-defs";
+import { TOOL_DEFS, formatAge, type CoreContext } from "../src/tool-defs";
 import { systemPrompt, claudeInstructions } from "../src/prompts";
 import { WatcherRegistry, type GhRunner } from "../src/watchers";
 
@@ -203,6 +203,60 @@ describe("tool-defs execute functions", () => {
     expect(result).not.toBe("No matching memories found.");
   });
 
+  test("memory_recall output carries the point-in-time caveat and age prose", async () => {
+    // Wording-specific assertions are intentional: the caveat is a fixed
+    // contract string (its lines are concatenated, so rewrapping the source
+    // must not rewrap the rendered output these assertions pin).
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const recall = TOOL_DEFS.find((t) => t.name === "memory_recall")!;
+    await remember.execute({ label: "Caveat Me", content: "Caveat content" }, ctx);
+    const result = await recall.execute({ query: "Caveat" }, ctx);
+    expect(result).toContain("point-in-time record");
+    expect(result).toContain("not a source of truth");
+    expect(result).toContain("memory_remember");
+    expect(result).toContain("This memory was last updated");
+  });
+
+  test("age prose keys on updated_at, not last_recalled_at", async () => {
+    // Regression guard for the branch's core read-side claim: a memory
+    // recalled moments ago but last written 47 days ago must render the
+    // write-side age. Swapping the argument for last_recalled_at would
+    // render "just now" and fail here.
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const show = TOOL_DEFS.find((t) => t.name === "memory_show")!;
+    await remember.execute({ label: "Backdated", content: "Old claim" }, ctx);
+    const raw = new Database(dbPath);
+    raw.run("UPDATE entries SET updated_at = ? WHERE store = ? AND label = ?", [
+      new Date(Date.now() - 47 * 86_400_000).toISOString(),
+      defaultStore,
+      "Backdated",
+    ]);
+    raw.close();
+    const result = await show.execute({ label: "Backdated" }, ctx);
+    expect(result).toContain("47 days ago");
+    expect(result).not.toContain("just now");
+  });
+
+  test("memory_show output carries the caveat; memory_list does not", async () => {
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const show = TOOL_DEFS.find((t) => t.name === "memory_show")!;
+    const list = TOOL_DEFS.find((t) => t.name === "memory_list")!;
+    await remember.execute({ label: "Caveat Show", content: "Caveat content" }, ctx);
+    const shown = await show.execute({ label: "Caveat Show" }, ctx);
+    expect(shown).toContain("point-in-time record");
+    expect(shown).toContain("This memory was last updated");
+    const listed = await list.execute({}, ctx);
+    expect(listed).not.toContain("point-in-time record");
+  });
+
+  test("memory_recall without results carries no caveat", async () => {
+    const recall = TOOL_DEFS.find((t) => t.name === "memory_recall")!;
+    const result = await recall.execute(
+      { query: "nothing matches here", store: "empty-store" }, ctx,
+    );
+    expect(result).toBe("No matching memories found.");
+  });
+
   test("store_list includes global", async () => {
     const def = TOOL_DEFS.find((t) => t.name === "store_list")!;
     const result = await def.execute({}, ctx);
@@ -262,6 +316,39 @@ describe("tool-defs execute functions", () => {
     const result = await list.execute({}, ctx);
     expect(result).not.toContain("Normal (archived)");
     expect(result).toContain("Old (archived)");
+  });
+});
+
+describe("formatAge", () => {
+  const now = new Date("2026-09-29T12:00:00Z");
+  const ago = (days: number): string =>
+    new Date(now.getTime() - days * 86_400_000).toISOString();
+
+  test("renders boundary buckets in human-readable prose", () => {
+    expect(formatAge(new Date(now.getTime() - 30_000).toISOString(), now)).toBe("just now");
+    expect(formatAge(new Date(now.getTime() - 5 * 60_000).toISOString(), now)).toBe("5 minutes ago");
+    expect(formatAge(new Date(now.getTime() - 3 * 3_600_000).toISOString(), now)).toBe("3 hours ago");
+    expect(formatAge(new Date(now.getTime() - 47 * 86_400_000).toISOString(), now)).toBe("47 days ago");
+    expect(formatAge(new Date(now.getTime() - 90 * 86_400_000).toISOString(), now)).toBe("3 months ago");
+    expect(formatAge(ago(800), now)).toBe("2 years ago");
+  });
+
+  test("the month bucket covers the whole year gap - never '0 years ago'", () => {
+    // months = floor(days/30) reaches 12 at day 360 while
+    // years = floor(days/365) stays 0 until day 365; the month gate must
+    // be keyed on days so the window renders as months, not zero years.
+    expect(formatAge(ago(360), now)).toBe("12 months ago");
+    expect(formatAge(ago(364), now)).toBe("12 months ago");
+    expect(formatAge(ago(365), now)).toBe("1 year ago");
+  });
+
+  test("handles malformed input like the house sibling humanAge", () => {
+    expect(formatAge("not-a-date", now)).toBe("unknown age");
+  });
+
+  test("uses singular for one unit", () => {
+    expect(formatAge(new Date(now.getTime() - 60_000).toISOString(), now)).toBe("1 minute ago");
+    expect(formatAge(ago(1), now)).toBe("1 day ago");
   });
 });
 

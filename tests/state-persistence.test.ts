@@ -595,4 +595,80 @@ describe("dormant watcher recovery through server()", () => {
       await done();
     }
   }, 30_000);
+
+  test("a task-kind child row restores without the extraction sets", async () => {
+    // A task-dispatched sub-agent journaled with kind "task" must come back
+    // from a reload OUTSIDE the extraction machinery: no `extracting` for
+    // the parent (its pending entries must still nudge) and no
+    // `extractionChildren` (the child's idle must take the task path, not
+    // the extraction branch whose consumeSnapshot drops buffered entries
+    // without extraction and deletes a session the task tool needs).
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut("child", "ses_task_child", {
+      kind: "task", parentID: "ses_parent_t",
+      snapshot: [ix("ses_parent_t")], metrics: { new: 0, updated: 0, deleted: 0 },
+    }, WORK_DIR);
+    db.runtimeStatePut("buffer", "ses_parent_t", [ix("ses_parent_t")], WORK_DIR);
+    db.close();
+
+    const { hooks, finally: done } = await startServer();
+    try {
+      const parts = await sendMessage(hooks, "ses_parent_t");
+      expect(parts.some((pt: any) => pt.text?.includes("fact-extractor"))).toBe(true);
+      // The task child's row survives - its idle event, not the reconciler,
+      // owns its cleanup.
+      const check = new ThatchDB(dbPath);
+      expect(check.runtimeStateAll().some((r) => r.kind === "child" && r.sessionID === "ses_task_child")).toBe(true);
+      check.close();
+    } finally {
+      await done();
+    }
+  }, 30_000);
+
+  test("legacy child rows without a kind restore as extraction children", async () => {
+    // Pre-marker rows were only meant to hold extraction children, so the
+    // default keeps their old restore behavior: `extracting` comes back for
+    // the parent and tier 1 stays suppressed while the child runs.
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut("child", "ses_legacy_child", {
+      parentID: "ses_parent_l",
+      snapshot: [ix("ses_parent_l")], metrics: { new: 0, updated: 0, deleted: 0 },
+    }, WORK_DIR);
+    db.runtimeStatePut("buffer", "ses_parent_l", [ix("ses_parent_l")], WORK_DIR);
+    db.close();
+
+    const { hooks, finally: done } = await startServer();
+    try {
+      const parts = await sendMessage(hooks, "ses_parent_l");
+      expect(parts.some((pt: any) => pt.text?.includes("fact-extractor"))).toBe(false);
+    } finally {
+      await done();
+    }
+  }, 30_000);
+
+  test("journalChild records the child kind from the live sets", async () => {
+    const { hooks, finally: done } = await startServer();
+    try {
+      // A task-dispatched sub-agent: session.created with a parentID, no
+      // extraction machinery - journaled as kind "task".
+      await hooks.event({ event: { type: "session.created", properties: { info: { id: "ses_j_task", parentID: "ses_j_parent" } } } });
+      // An extraction child: buffered parent work + idle triggers the
+      // direct-extraction child (the mock client creates session "c").
+      await hooks["tool.execute.after"]!(
+        { tool: "bash", sessionID: "ses_j_parent", callID: "j1", args: { command: "echo hi" } },
+        { title: "echo hi", output: "hi", metadata: {} },
+      );
+      await hooks.event({ event: { type: "session.status", properties: { sessionID: "ses_j_parent", status: { type: "idle" } } } });
+
+      const check = new ThatchDB(dbPath);
+      const rows = check.runtimeStateAll().filter((r) => r.kind === "child");
+      check.close();
+      const taskRow = rows.find((r) => r.sessionID === "ses_j_task");
+      const extractionRow = rows.find((r) => r.sessionID === "c");
+      expect(taskRow?.value ? (taskRow.value as any).kind : undefined).toBe("task");
+      expect(extractionRow?.value ? (extractionRow.value as any).kind : undefined).toBe("extraction");
+    } finally {
+      await done();
+    }
+  }, 30_000);
 });

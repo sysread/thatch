@@ -459,7 +459,12 @@ describe("plugin entry", () => {
     expect(out4.parts[0].text).not.toContain("YOU HAVE NOT");
   });
 
-  test("fix A: child memory_remember drains parent's pre-dispatch entries", async () => {
+  test("task child memory write does not drain the parent's buffer", async () => {
+    // A task-dispatched sub-agent saving its OWN findings is not evidence
+    // that the parent's buffer was extracted: the child never fetched a
+    // payload. The old whole-child drain silently dropped the parent's
+    // pre-dispatch entries without extraction once v2 linked all children
+    // to their parents - the drain is now extraction-child only.
     // Step 1: Buffer tool interactions in the PARENT session BEFORE dispatch
     await hooks["tool.execute.after"]!(
       { tool: "bash", sessionID: "ses_parent_fixa", callID: "fa0", args: { command: "ls" } },
@@ -485,13 +490,14 @@ describe("plugin entry", () => {
       { title: "save", output: "[saved]", metadata: {} },
     );
 
-    // Parent's pre-dispatch entries should be drained — no nudge on next chat.message
+    // Parent's pre-dispatch entries SURVIVE the task child's memory write -
+    // the nudge still fires for them.
     const parentOut2: any = { message: { id: "msg_fa1" }, parts: [] };
     await hooks["chat.message"]!({ sessionID: "ses_parent_fixa", messageID: "msg_fa1" } as any, parentOut2);
-    expect(parentOut2.parts.length).toBe(0);
+    expect(parentOut2.parts.length).toBe(1);
   });
 
-  test("fix A: child drain preserves interleaved-turn entries in parent buffer", async () => {
+  test("task child memory write preserves interleaved entries too", async () => {
     // Buffer tool calls in parent BEFORE dispatch
     await hooks["tool.execute.after"]!(
       { tool: "bash", sessionID: "ses_parent_interleave", callID: "iv0", args: { command: "git status" } },
@@ -510,13 +516,14 @@ describe("plugin entry", () => {
       { title: "log", output: "history", metadata: {} },
     );
 
-    // Sub-agent writes a memory — drains only snapshot entries
+    // Sub-agent writes a memory — a task-kind child drains NOTHING: the
+    // pre-dispatch AND interleaved entries both survive.
     await hooks["tool.execute.after"]!(
       { tool: "thatch_memory_remember", sessionID: "ses_child_interleave", callID: "iv2", args: {} },
       { title: "save", output: "[saved]", metadata: {} },
     );
 
-    // Parent should still have a pending nudge for the interleaved entry
+    // Parent should still have a pending nudge covering both entries
     const parentOut: any = { message: { id: "msg_iv1" }, parts: [] };
     await hooks["chat.message"]!({ sessionID: "ses_parent_interleave", messageID: "msg_iv1" } as any, parentOut);
     expect(parentOut.parts.length).toBe(1);
@@ -590,7 +597,7 @@ describe("plugin entry", () => {
     expect(out.parts[0].text).toContain("thatch_get_extraction_payload");
   });
 
-  test("accept/requeue: child session deleted before completing returns entries", async () => {
+  test("accept/requeue: task child deleted before completing leaves entries held", async () => {
     await hooks["tool.execute.after"]!(
       { tool: "bash", sessionID: "ses_delq", callID: "dq1", args: { command: "ls" } },
       { title: "list", output: "file.txt", metadata: {} },
@@ -608,11 +615,14 @@ describe("plugin entry", () => {
       properties: { info: { id: "ses_child_delq" } } } as any,
     });
 
+    // A task-kind child is deleted ROUTINELY (after finishing, or by the
+    // harness). Its deletion must not requeue the parent's accepted set -
+    // that would yank an in-flight extractor's claim back to pending. The
+    // claim-less task child holds nothing; requeueStaleAccepted bounds any
+    // orphan linger, so the entries re-nudge eventually rather than here.
     const out: any = { message: { id: "msg_dq1" }, parts: [] };
     await hooks["chat.message"]!({ sessionID: "ses_delq", messageID: "msg_dq1" } as any, out);
-    expect(out.parts.length).toBe(1);
-    expect(out.parts[0].text).toContain("ses_delq");
-    expect(out.parts[0].text).toContain("thatch_get_extraction_payload");
+    expect(out.parts.length).toBe(0);
   });
 
   test("accept/complete: child extraction_done completes the parent's accepted entries", async () => {
@@ -661,6 +671,109 @@ describe("plugin entry", () => {
     const out: any = { message: { id: "msg_mw1" }, parts: [] };
     await hooks["chat.message"]!({ sessionID: "ses_mwc", messageID: "msg_mw1" } as any, out);
     expect(out.parts.length).toBe(0);
+  });
+
+  test("sibling sub-agent going idle does not drop the extractor's claimed payload", async () => {
+    // THE RACE, pinned: parent acks (accept) immediately after dispatching
+    // the extractor, per the nudge's own instruction. A sibling
+    // task-dispatched sub-agent (a code-review specialist) goes idle while
+    // the extractor is still working. Before claim scoping, the sibling's
+    // idle signal dropped the WHOLE accepted set and the extractor's
+    // payload fetch came back empty - silent loss, and the nudge loop
+    // Jeff saw for a week.
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_race", callID: "rc1", args: { command: "git log" } },
+      { title: "log", output: "abc123 the real interaction", metadata: {} },
+    );
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_extraction_done", sessionID: "ses_race", callID: "rc2", args: {} },
+      { title: "ack", output: "[acknowledged]", metadata: {} },
+    );
+    await hooks.event!({ event: {
+      type: "session.created",
+      properties: { info: { id: "ses_specialist", parentID: "ses_race" } } } as any,
+    });
+    await hooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_specialist", status: { type: "idle" } } } as any,
+    });
+
+    const served = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+      { session_id: "ses_race" },
+      { sessionID: "ses_extractor" },
+    );
+    expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("abc123");
+  });
+
+  test("completion consumes only the completing child's claimed delivery", async () => {
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_two", callID: "t1", args: { command: "cmd A" } },
+      { title: "A", output: "interaction A", metadata: {} },
+    );
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_extraction_done", sessionID: "ses_two", callID: "t2", args: {} },
+      { title: "ack", output: "[acknowledged]", metadata: {} },
+    );
+    await hooks.event!({ event: {
+      type: "session.created",
+      properties: { info: { id: "ses_ext1", parentID: "ses_two" } } } as any,
+    });
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_get_extraction_payload", sessionID: "ses_ext1", callID: "t3", args: { session_id: "ses_two" } },
+      { title: "fetch", output: "payload-1", metadata: {} },
+    );
+
+    // New exhaust accumulates while extractor 1 works; extractor 2 fetches
+    // and its claim covers the delivered set.
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_two", callID: "t4", args: { command: "cmd B" } },
+      { title: "B", output: "interaction B", metadata: {} },
+    );
+    await hooks.event!({ event: {
+      type: "session.created",
+      properties: { info: { id: "ses_ext2", parentID: "ses_two" } } } as any,
+    });
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_get_extraction_payload", sessionID: "ses_ext2", callID: "t5", args: { session_id: "ses_two" } },
+      { title: "fetch", output: "payload-2", metadata: {} },
+    );
+
+    // Extractor 1 finishes: only ITS delivery (interaction A) completes.
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_extraction_done", sessionID: "ses_ext1", callID: "t6", args: {} },
+      { title: "ack", output: "[acknowledged]", metadata: {} },
+    );
+
+    // Interaction B survives extractor 1's completion.
+    const served = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+      { session_id: "ses_two" },
+      { sessionID: "ses_ext3" },
+    );
+    const text = typeof served === "string" ? served : JSON.stringify(served);
+    expect(text).toContain("interaction B");
+    expect(text).not.toContain("interaction A");
+  });
+
+  test("parent-side direct fetch plus memory write completes its own claim", async () => {
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_direct", callID: "d1", args: { command: "cmd C" } },
+      { title: "C", output: "interaction C", metadata: {} },
+    );
+    // The parent fetches its own payload (no sub-agent) and then saves.
+    const served = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+      { session_id: "ses_direct" },
+      { sessionID: "ses_direct" },
+    );
+    expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("interaction C");
+    await hooks["tool.execute.after"]!(
+      { tool: "thatch_memory_remember", sessionID: "ses_direct", callID: "d2", args: {} },
+      { title: "save", output: "[saved]", metadata: {} },
+    );
+    const drained = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+      { session_id: "ses_direct" },
+      { sessionID: "ses_direct" },
+    );
+    expect(typeof drained === "string" ? drained : JSON.stringify(drained)).not.toContain("interaction C");
   });
 
   // -----------------------------------------------------------------------
@@ -720,8 +833,55 @@ describe("plugin entry", () => {
     testHooks.dispose?.();
   });
 
-  test("direct extraction: extracting set suppresses nudge in chat.message", async () => {
+  test("direct extraction: extraction child deleted before completing requeues", async () => {
+    // The no-loss contract for EXTRACTION-kind children: the child is
+    // deleted before it fetches or acks, so the parent's accepted set
+    // returns to pending and the nudge replays. (Task-kind children are
+    // deleted routinely and do NOT requeue - see the task-child deletion
+    // test above; the kind gate is what separates the two.)
     const recClient = {
+      session: {
+        prompt: async () => {},
+        promptAsync: async () => {},
+        create: async () => ({ data: { id: "child_delx" } }),
+        delete: async () => {},
+      },
+      tui: {
+        showToast: async () => {},
+      },
+    };
+    process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS = "true";
+    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
+
+    // Buffer a tool interaction, then let the parent go idle - the plugin
+    // dispatches a direct-extraction child (kind=extraction).
+    await testHooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_delx", callID: "dx1", args: { command: "ls" } },
+      { title: "list", output: "file.txt", metadata: {} },
+    );
+    await testHooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_delx", status: { type: "idle" } } } as any,
+    });
+
+    // The extraction child is deleted before completing.
+    await testHooks.event!({ event: {
+      type: "session.deleted",
+      properties: { info: { id: "child_delx" } } } as any,
+    });
+
+    // The entries return to pending: the nudge replays with the session id.
+    const out: any = { message: { id: "msg_delx" }, parts: [] };
+    await testHooks["chat.message"]!({ sessionID: "ses_delx", messageID: "msg_delx" } as any, out);
+    expect(out.parts.length).toBe(1);
+    expect(out.parts[0].text).toContain("ses_delx");
+    expect(out.parts[0].text).toContain("thatch_get_extraction_payload");
+
+    delete process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS;
+    testHooks.dispose?.();
+  });
+
+  test("direct extraction: extracting set suppresses nudge in chat.message", async () => {    const recClient = {
       session: {
         prompt: async () => {},
         promptAsync: async () => {},
@@ -790,6 +950,18 @@ describe("plugin entry", () => {
       properties: { info: { id: "child_direct3", parentID: "ses_direct3" } } } as any,
     });
 
+    // Child fetches its payload (the tool call records the claim), does a
+    // no-save run, and acks - the claim completion consumes the delivered
+    // entries.
+    await (testHooks as any).tool.thatch_get_extraction_payload.execute(
+      { session_id: "ses_direct3" },
+      { sessionID: "child_direct3" },
+    );
+    await testHooks["tool.execute.after"]!(
+      { tool: "thatch_extraction_done", sessionID: "child_direct3", callID: "d3c", args: {} },
+      { title: "ack", output: "[acknowledged]", metadata: {} },
+    );
+
     // Child goes idle — should clean up and delete the child
     await testHooks.event!({ event: {
       type: "session.status",
@@ -799,12 +971,14 @@ describe("plugin entry", () => {
     expect(deleteCalled).toBe(true);
     expect(deleteArgs.path.id).toBe("child_direct3");
 
-    // After cleanup, the extracting flag is cleared and the parent's
-    // snapshot entries are drained from the buffer (no-save run fallback).
-    // No nudge should fire — the entries are gone.
+    // After cleanup, the extracting flag is cleared and the claimed entries
+    // are consumed. No nudge should fire - the delivered entries were
+    // processed. (A child that never fetches leaves them pending: the nudge
+    // replays and extraction self-heals, instead of the old idle-time
+    // snapshot drain that silently dropped never-fetched entries.)
     const out: any = { message: { id: "msg_d3" }, parts: [{ type: "text", text: "hello world testing" }] };
     await testHooks["chat.message"]!({ sessionID: "ses_direct3", messageID: "msg_d3" } as any, out);
-    expect(out.parts.length).toBe(1); // no nudge, buffer drained on child idle
+    expect(out.parts.length).toBe(1); // no nudge, claim consumed on child ack
 
     testHooks.dispose?.();
   });

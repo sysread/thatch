@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import yaml from "yaml";
 import { setupClaudeCode, setupCursor, checkSetup, registerClaudeMcpServer } from "../src/setup";
-import { claudeInstructions, cursorInstructions, systemPrompt } from "../src/prompts";
+import {
+  claudeInstructions,
+  cursorInstructions,
+  memoryPointersSection,
+  opencodeToolName,
+  systemPrompt,
+} from "../src/prompts";
 import { SHARED_SKILLS, OPENCODE_ONLY_SKILLS, installSkills } from "../src/skills";
 
 let projectDir: string;
@@ -862,6 +868,27 @@ describe("systemPrompt content", () => {
     expect(text).toContain("behavior_feedback");
   });
 
+  test("extraction completions are never re-dispatch signals", () => {
+    // The completion frame rides with the fact-extractor's own return
+    // value; the system prompt carries the matching instruction so the
+    // completion turn cannot be misread as new nudge traffic. The skill
+    // half is pinned separately below - the frame is load-bearing at BOTH
+    // surfaces, and reverting either alone reintroduces the September
+    // 2026 re-dispatch loop.
+    const text = systemPrompt("test/repo");
+    expect(text).toContain("not an extraction nudge");
+    expect(text).toContain("Never re-dispatch an extractor");
+  });
+
+  test("the fact-extractor's final-message contract carries the frame", () => {
+    // Pins the skill artifact itself: the parent model sees the skill's
+    // mandated string inside the <task_result> block, so the frame must
+    // live there, not only in the system prompt.
+    const skill = readFileSync(join(__dirname, "../artifacts/skills/thatch-fact-extractor.md"), "utf8");
+    expect(skill).toContain("not an extraction nudge; the buffer is drained");
+    expect(skill).toContain("Never re-dispatch an extractor because a completion arrived");
+  });
+
   test("claudeInstructions includes situational behaviors section", () => {
     const text = claudeInstructions();
     expect(text).toContain("Situational Behaviors");
@@ -896,6 +923,47 @@ describe("systemPrompt content", () => {
     for (const text of [systemPrompt("test/repo"), claudeInstructions(), cursorInstructions()]) {
       expect(text).toContain("thatch-clear-writing");
       expect(text).toContain("clarity-over-compression prose rules");
+    }
+  });
+});
+
+describe("memories-are-pointers guidance", () => {
+  test("section body renders from the shared source", () => {
+    // The body is one template string shared by all three variants, so the
+    // body anchors are asserted against the shared function directly
+    // (assertions stay within single source lines - the prose is
+    // hard-wrapped). The per-variant test below only checks that each
+    // variant actually interpolates the section.
+    const body = memoryPointersSection(opencodeToolName);
+    expect(body).toContain("## Memories Are Pointers, Not Truth");
+    expect(body).toContain("speed up research");
+    expect(body).toContain("they are not a source of truth");
+    expect(body).toContain("**Policy memories**");
+    expect(body).toContain("**Artifact memories**");
+    expect(body).toContain("Before asserting an artifact claim from memory");
+    expect(body).toContain("The source wins");
+  });
+
+  test("present in every host prompt", () => {
+    for (const text of [systemPrompt("test/repo"), claudeInstructions(), cursorInstructions()]) {
+      expect(text).toContain("## Memories Are Pointers, Not Truth");
+      // The How-to-Write pointer bullet is interpolated from a shared const
+      // into each rendered variant; its assertions stay per-variant.
+      expect(text).toContain("should carry their pointers");
+      expect(text).toContain("Verification is cheap later only if the memory says where");
+      expect(text).toContain('a bare "where X lives" is exactly what the durability test');
+    }
+  });
+
+  test("uses host-correct tool spellings and replaces the old section", () => {
+    const sys = systemPrompt("test/repo");
+    expect(sys).toContain(
+      "thatch_memory_remember (overwrite: true) or thatch_memory_forget",
+    );
+    expect(sys).not.toContain("## Memory Verification");
+    for (const text of [claudeInstructions(), cursorInstructions()]) {
+      expect(text).toContain("memory_remember (overwrite: true) or memory_forget");
+      expect(text).not.toContain("## Memory Verification");
     }
   });
 });

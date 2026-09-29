@@ -20,7 +20,7 @@ This skill is the catch.
 
 Call `thatch_memory_show` with the label (or accept the memory content directly if dispatched by a coordinator that already read it).
 
-Note the `created_at` and `updated_at` dates. A memory that was last updated recently is less likely to be stale than one that has not been touched in months.
+Note the age line ("This memory was last updated N ago"). A memory that was last updated recently is less likely to be stale than one that has not been touched in months.
 
 ## Step 2: Classify Claims
 
@@ -111,6 +111,6 @@ If no corrections were needed, report "all claims verified, no updates needed."
 
 # Proactive Use
 
-When `thatch_memory_show` or `thatch_memory_recall` returns a memory with an old `updated_at` date (more than a few weeks), consider loading this skill to fact-check it before relying on its code-related claims. The `updated_at` date is included in the memory output for this purpose.
+When `thatch_memory_show` or `thatch_memory_recall` returns a memory whose age line shows it has not been updated in a while (more than a few weeks), consider loading this skill to fact-check it before relying on its code-related claims. The age prose ("This memory was last updated N ago") is included in the memory output for this purpose.
 
 This is not mandatory for every old memory. Use judgment: a memory about a stable architectural decision may be fine for months, while a memory about file locations or function names is more likely to drift.

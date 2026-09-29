@@ -96,6 +96,49 @@ ought to trigger it and widen the wording to the broadest surface of the
 class - a matcher that only names this incident never fires for the next
 one.`;
 
+/**
+ * The artifact-pointer bullet of the "How to Write" section. Names no
+ * tools, so it is shared verbatim by both prompt variants (the
+ * class-lesson convention above).
+ */
+const artifactPointerBullet = `- Artifact memories should carry their pointers: file paths, ticket IDs,
+  package names. Verification is cheap later only if the memory says where
+  to check. A pointer is provenance for durable knowledge, not knowledge
+  itself - a bare "where X lives" is exactly what the durability test
+  excludes.`;
+
+/**
+ * "Memories are pointers, not truth" instruction body, shared by all three
+ * prompt variants. Takes a ToolNamer because the section names memory tools
+ * (thatch_memory_remember on opencode, bare on MCP hosts, whose
+ * instructions establish the bare-name convention). Staleness is a
+ * property of the claim's relationship to a mutable world, not of the
+ * memory's age.
+ */
+export function memoryPointersSection(tool: ToolNamer): string {
+  return `## Memories Are Pointers, Not Truth
+
+${tool("memory_recall")} surfaces a point-in-time record: a semantic guide
+associating "what I'm looking for" with "where I should look", written when
+the knowledge was current. Memories speed up research - they do not replace
+it, and they are not a source of truth.
+
+- **Policy memories** ("the user always wants X", "check CI after merging")
+  are self-executing: they are the ground truth for behavior.
+- **Artifact memories** ("feature X lives in <file> and uses <technique>")
+  are pointers to checkable claims about code, docs, tickets, or git.
+  Follow the pointer and assert from the source, not from the memory.
+
+Before asserting an artifact claim from memory, re-derive it from the
+current source. Confirming the reference still exists verifies little: the
+file can survive while the behavior changed (scope drift, priority shifts,
+implementation details that proved too complex in practice).
+The source wins. When reality has moved on, correct the record with
+${tool("memory_remember")} (overwrite: true) or ${tool("memory_forget")} -
+silently; memory maintenance is not user-facing. For a deep staleness check
+of a specific memory, load the thatch-memory-verify skill.`;
+}
+
 export function systemPrompt(repo: string, chatEnabled = true): string {
   return `# Persistence
 
@@ -160,7 +203,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-ticket-description\` - draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
 - \`thatch-split-overlarge-pr\` - split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
 - \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
-- \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory has an old \`updated_at\` date or when preparing a knowledge export.
+- \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory looks stale or when preparing a knowledge export.
 - \`thatch-knowledge-export\` - compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories, and generates a clean export.
 - \`thatch-clear-writing\` - prose rules for any human-facing text not covered by a dedicated writing skill: PR and ticket comments, documentation, plans, reports, and chat replies. Load before drafting any of those.
 
@@ -188,15 +231,7 @@ whether you've discovered knowledge worth persisting. Use thatch_memory_recall
 to check for duplicates, then thatch_memory_remember for new findings. Then
 deliver your response.
 
-## Memory Verification
-
-When thatch_memory_show or thatch_memory_recall returns a memory with an old
-updated_at date (more than a few weeks), consider loading the
-thatch-memory-verify skill to fact-check its code-related claims against the
-current codebase before relying on them. This is not mandatory for every old
-memory. Use judgment: a memory about a stable architectural decision may be
-fine for months, while a memory about file locations or function names is
-more likely to drift.
+${memoryPointersSection(opencodeToolName)}
 
 ## Background Task Completions
 
@@ -212,6 +247,12 @@ If a background task was cancelled after timing out, re-dispatch it once with
 the same prompt. If the re-dispatch also fails or times out, note the gap and
 move on. Do not retry more than once - repeated failures indicate an
 intractable prompt, not a transient hang.
+
+When the fact-extractor sub-agent completes, its "Extraction complete."
+report is a background-task completion, not an extraction nudge: the buffer
+is drained and nothing follows from it. Never re-dispatch an extractor
+because a completion arrived - a new extraction nudge is the only dispatch
+signal.
 
 ## Watchers
 
@@ -330,6 +371,7 @@ config in memory.
 - One topic per memory. Write for a future instance with zero current context.
 - Confidence 1-2: single signal. 5-6: moderate. 9: explicitly stated.
   10: hard constraint.
+${artifactPointerBullet}
 
 ## What NOT to Store
 
@@ -477,7 +519,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-ticket-description\` - draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
 - \`thatch-split-overlarge-pr\` - split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
 - \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
-- \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory has an old \`updated_at\` date or when preparing a knowledge export.
+- \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory looks stale or when preparing a knowledge export.
 - \`thatch-knowledge-export\` - compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories, and generates a clean export.
 - \`thatch-clear-writing\` - prose rules for any human-facing text not covered by a dedicated writing skill: PR and ticket comments, documentation, plans, reports, and chat replies. Load before drafting any of those.
 
@@ -505,14 +547,7 @@ whether you've discovered knowledge worth persisting. Use memory_recall to
 check for duplicates, then memory_remember for new findings. Then deliver
 your response.
 
-## Memory Verification
-
-When memory_show or memory_recall returns a memory with an old updated_at
-date (more than a few weeks), consider loading the thatch-memory-verify skill
-to fact-check its code-related claims against the current codebase before
-relying on them. This is not mandatory for every old memory. Use judgment: a
-memory about a stable architectural decision may be fine for months, while a
-memory about file locations or function names is more likely to drift.
+${memoryPointersSection(bareToolName)}
 
 ## User Decision Model
 
@@ -598,6 +633,7 @@ hand-editable; do not store thatch config in memory.
 - One topic per memory. Write for a future instance with zero current context.
 - Confidence 1-2: single signal. 5-6: moderate. 9: explicitly stated.
   10: hard constraint.
+${artifactPointerBullet}
 
 ## What NOT to Store
 
@@ -709,6 +745,13 @@ export type ToolNamer = (name: string) => string;
 
 export const opencodeToolName: ToolNamer = (name) => `thatch_${name}`;
 export const mcpToolName: ToolNamer = (name) => `mcp__thatch__${name}`;
+
+/**
+ * The bare name itself. Used by prompt sections embedded in instructions
+ * that establish the bare-name convention (mcpInstructions and twins): the
+ * model maps bare names to the host spelling at call time.
+ */
+export const bareToolName: ToolNamer = (name) => name;
 
 /**
  * The extraction instruction body. sessionIdArg is either ` with session_id

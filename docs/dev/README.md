@@ -179,11 +179,15 @@ Two of these hooks were dead for weeks because failures were invisible.
 10. **Background completion narration is suppressed, not prevented.** When a
     background sub-agent completes, opencode injects a `<task_result>` block
     into the parent session and triggers a full model generation. Thatch
-    cannot cancel this turn (no pre-response hook). Two mitigations: the
-    fact-extractor skill's return value is constrained to the literal
-    "Extraction complete." so the injected block has no narratable content,
-    and the system prompt's "Background Task Completions" section instructs
-    the model not to narrate completions or treat them as approval to act.
+    cannot cancel this turn (no pre-response hook). The mitigations: the
+    fact-extractor skill's return value is a fixed string so the injected
+    block has nothing to narrate AND the string self-identifies as a
+    completion, not an extraction nudge (a bare "Extraction complete." was
+    misread mid-loop as new nudge traffic and re-dispatched - the September
+    2026 re-dispatch loop); the system prompt's "Background Task
+    Completions" section instructs the model not to narrate completions or
+    treat them as approval to act, and that a completion is never a
+    re-dispatch signal.
 11. **Prediction engine is a statistical model, not an LLM call.** The query
     (embed prompt, cosine-match against matchers, score linked predictions)
     is mechanical — same shape as `thatch_memory_recall` but against different

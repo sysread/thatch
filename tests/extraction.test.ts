@@ -454,3 +454,96 @@ describe("ExtractionPipeline accept/complete/requeue", () => {
     expect(pipeline.peek(session).length).toBe(2);
   });
 });
+
+describe("ExtractionPipeline claim semantics", () => {
+  function pushN(pipeline: ExtractionPipeline, session: string, n: number): ToolInteraction[] {
+    const entries: ToolInteraction[] = [];
+    for (let i = 0; i < n; i++) {
+      const ix: ToolInteraction = {
+        tool: "bash",
+        sessionID: session,
+        args: { command: `cmd-${i}` },
+        title: `title-${i}`,
+        output: `output-${i}`,
+      };
+      entries.push(ix);
+      pipeline.push(ix);
+    }
+    return entries;
+  }
+
+  test("claim delivers pending + accepted and holds them for the fetcher", () => {
+    const pipeline = new ExtractionPipeline();
+    const session = "parent";
+
+    pushN(pipeline, session, 3);
+    pipeline.accept(session); // parent ack accepted the first 3
+    pushN(pipeline, session, 2); // new exhaust after the ack
+
+    const claimed = pipeline.claim(session, "child-1");
+    expect(claimed.length).toBe(5);
+    expect(pipeline.peek(session).length).toBe(0);
+    expect(pipeline.peekAccepted(session).length).toBe(5);
+  });
+
+  test("the fetcher's completion consumes only its claim", () => {
+    const pipeline = new ExtractionPipeline();
+    const session = "parent";
+
+    pushN(pipeline, session, 3);
+    pipeline.claim(session, "child-1");
+    pushN(pipeline, session, 2);
+    pipeline.claim(session, "child-2"); // both children hold overlapping sets
+
+    pipeline.completeClaimed("child-1");
+    // child-1's claim covered the first 3; child-2's later claim covers all
+    // 5, so child-1's completion leaves child-2's claim intact.
+    expect(pipeline.peekAccepted(session).length).toBe(2);
+  });
+
+  test("a completion from a child with no claim is a no-op - the sibling race", () => {
+    const pipeline = new ExtractionPipeline();
+    const session = "parent";
+
+    pushN(pipeline, session, 3);
+    pipeline.accept(session); // parent ack
+    pipeline.claim(session, "extractor"); // the extractor fetched
+
+    // A sibling sub-agent (code-review specialist) goes idle. It never
+    // fetched a payload; its completion must not drop the accepted set.
+    expect(pipeline.completeClaimed("specialist")).toBe(false);
+    expect(pipeline.peekAccepted(session).length).toBe(3);
+  });
+
+  test("requeue between claim and completion orphans the claim safely", () => {
+    const pipeline = new ExtractionPipeline();
+    const session = "parent";
+
+    pushN(pipeline, session, 3);
+    pipeline.claim(session, "child-1");
+    pipeline.requeueAccepted(session); // extractor errored; entries back to pending
+
+    expect(pipeline.completeClaimed("child-1")).toBe(true);
+    expect(pipeline.peekAccepted(session).length).toBe(0);
+    expect(pipeline.peek(session).length).toBe(3); // entries preserved for re-extraction
+  });
+
+  test("dropClaim forgets a fetcher's claim on session deletion", () => {
+    const pipeline = new ExtractionPipeline();
+    const session = "parent";
+
+    pushN(pipeline, session, 2);
+    pipeline.claim(session, "child-1");
+    pipeline.dropClaim("child-1");
+
+    expect(pipeline.completeClaimed("child-1")).toBe(false);
+    expect(pipeline.peekAccepted(session).length).toBe(2);
+  });
+
+  test("completing an empty claim is a no-op that still returns true", () => {
+    const pipeline = new ExtractionPipeline();
+    pipeline.claim("parent", "child-1");
+    expect(pipeline.completeClaimed("child-1")).toBe(true);
+    expect(pipeline.peekAccepted("parent").length).toBe(0);
+  });
+});

@@ -470,6 +470,16 @@ export async function createRuntime(input: {
   // Populated from session.created events that carry a parentID.
   const childToParent = new Map<string, string>();
 
+  // Per-child kind ("extraction" | "task"), recorded at session.created from
+  // the live extractionChildren set and at restore from the journal record.
+  // The parent-state mutations a child's lifecycle triggers (snapshot drain
+  // on memory write, whole-set requeue on error/deletion) are only correct
+  // for extraction children - a task sub-agent saving its own findings never
+  // processed the parent's buffer, and treating its lifecycle as extraction
+  // evidence silently dropped in-flight or pending entries (the v2
+  // all-children-linked loss vector, September 2026).
+  const childKinds = new Map<string, "extraction" | "task">();
+
   // Snapshot of the parent's buffer at the moment each child was dispatched.
   // When the child writes a memory, consumeSnapshot drains only these entries
   // (by reference identity), preserving interleaved-turn entries that arrived
@@ -494,9 +504,10 @@ export async function createRuntime(input: {
   // children from task-dispatched sub-agents (code review specialists, the
   // nudge-path fact-extractor, any model-dispatched task). Only extraction
   // children get the full cleanup: buffer drain, session deletion, toast.
-  // Non-extraction children get the old behavior (completeAccepted +
-  // missedNudges.reset) so their sessions are not deleted out from under the
-  // task tool that dispatched them.
+  // Non-extraction children get claim-scoped completion (a no-op for a
+  // child that never fetched a payload) + missedNudges.reset so their
+  // sessions are not deleted out from under the task tool that dispatched
+  // them.
   const extractionChildren = new Set<string>();
 
   // Per-child-session extraction metrics for the toast notification. When the
@@ -507,7 +518,12 @@ export async function createRuntime(input: {
 
   // Journal the child bookkeeping (parent link, buffer snapshot, metrics) so
   // a v2 plugin reload can rehydrate an in-flight extraction instead of
-  // orphaning it. A child with no parent entry journals a delete.
+  // orphaning it. A child with no parent entry journals a delete. The kind
+  // marker distinguishes extraction children from task-dispatched sub-agents
+  // (the live source of truth is the extractionChildren set): restoring a
+  // task sub-agent as an extraction child let its idle take the extraction
+  // branch - consumeSnapshot silently dropped the parent's buffered entries
+  // without extraction, and the task tool's session got a delete call.
   const journalChild = (childId: string) => {
     const parentID = childToParent.get(childId);
     if (!parentID) {
@@ -515,6 +531,7 @@ export async function createRuntime(input: {
       return;
     }
     db.runtimeStatePut("child", childId, {
+      kind: extractionChildren.has(childId) ? "extraction" : "task",
       parentID,
       snapshot: parentSnapshots.get(childId) ?? [],
       metrics: childMetrics.get(childId) ?? { new: 0, updated: 0, deleted: 0 },
@@ -596,16 +613,27 @@ export async function createRuntime(input: {
       }
       for (const id of (row.value ?? []) as string[]) rehostedSessions.add(id);
     } else if (row.kind === "child") {
-      const rec = row.value as { parentID?: string; snapshot?: ToolInteraction[]; metrics?: { new: number; updated: number; deleted: number } };
+      const rec = row.value as { kind?: "extraction" | "task"; parentID?: string; snapshot?: ToolInteraction[]; metrics?: { new: number; updated: number; deleted: number } };
       if (samePid && rec?.parentID) {
         // Reload: the child may still be running - restore its live
-        // bookkeeping so its idle event finds the maps populated.
+        // bookkeeping so its idle event finds the maps populated. The
+        // default covers rows written before the marker existed; it errs
+        // toward extraction (defaulting to task would strand a legacy
+        // in-flight extraction child with extracting never restored,
+        // suppressing both extraction paths for the session's life), at
+        // the cost of resurrecting the restore-time misclassification for
+        // the rarer pre-upgrade in-flight task child - a one-window trade,
+        // self-healing as rows are rewritten with kinds.
+        const kind = rec.kind ?? "extraction";
+        childKinds.set(row.sessionID, kind);
         childToParent.set(row.sessionID, rec.parentID);
         parentSnapshots.set(row.sessionID, rec.snapshot ?? []);
-        extractionChildren.add(row.sessionID);
-        extracting.add(rec.parentID);
         if (rec.metrics) childMetrics.set(row.sessionID, rec.metrics);
-        restoredChildren.set(row.sessionID, rec.parentID);
+        if (kind === "extraction") {
+          extractionChildren.add(row.sessionID);
+          extracting.add(rec.parentID);
+          restoredChildren.set(row.sessionID, rec.parentID);
+        }
       } else {
         // Restart: the child ran in the dead process and no execution event
         // will ever arrive for it. Recover the snapshot as plain pending
@@ -755,17 +783,14 @@ export async function createRuntime(input: {
   // the reload window.
   const finishExtractionChild = async (sessionID: string, parentID: string) => {
     if (extractionChildren.has(sessionID)) {
-      // Drain the parent's snapshot entries from the pending buffer. If the
-      // child wrote memories, consumeSnapshot already ran in
-      // tool.execute.after and the snapshot is gone - nothing to drain. If
-      // the child did a no-save run, the snapshot entries are still in the
-      // buffer and need to be drained here so they don't replay as a nudge
-      // on the next chat.message. Never drain the entire buffer -
-      // interleaved-turn entries must survive.
-      const snapshot = parentSnapshots.get(sessionID);
-      if (snapshot) {
-        extraction.consumeSnapshot(parentID, snapshot);
-      }
+      // The child's claimed delivery is consumed by completeClaimed below -
+      // the fetch recorded exactly what the child received, so nothing else
+      // is dropped here. Entries the child never received (post-fetch
+      // arrivals, or a never-fetched payload) stay pending and re-nudge;
+      // the old snapshot drain here would have silently dropped the
+      // never-fetched case without extraction. (Snapshot drain removed
+      // September 2026 - claim semantics subsume it. The journal's
+      // snapshot field remains for restart recovery.)
 
       // Fire a toast with the extraction metrics. Only show a toast when
       // memories were actually written - no toast for no-save runs to avoid
@@ -789,9 +814,14 @@ export async function createRuntime(input: {
         }
       }
 
-      extraction.completeAccepted(parentID);
+      // Scope the completion to THIS child's claimed delivery. A fetcher
+      // that never fetched (a sibling sub-agent going idle, an extractor
+      // that crashed before its payload call) has no claim and must not
+      // drop the accepted set - another extractor may hold it in flight.
+      extraction.completeClaimed(sessionID);
       missedNudges.delete(parentID);
       extracting.delete(parentID);
+      childKinds.delete(sessionID);
       childToParent.delete(sessionID);
       parentSnapshots.delete(sessionID);
       childMetrics.delete(sessionID);
@@ -805,10 +835,13 @@ export async function createRuntime(input: {
         // Best-effort - the child is idle and harmless if not deleted.
       }
     } else {
-      // Task-dispatched sub-agent went idle. Complete the parent's accepted
-      // entries (from the nudge-path extraction_done accept) and reset
-      // missedNudges. Retained for the nudge fallback path.
-      extraction.completeAccepted(parentID);
+      // Task-dispatched sub-agent went idle. Complete only what THIS child
+      // claimed via its payload fetch - sibling specialists going idle have
+      // no claim and must be a no-op, or their idle signal drops another
+      // extractor's in-flight accepted payload. An extractor that never
+      // fetched leaves its entries held; requeueStaleAccepted bounds the
+      // linger.
+      extraction.completeClaimed(sessionID);
       missedNudges.delete(parentID);
     }
   };
@@ -915,6 +948,7 @@ export async function createRuntime(input: {
     const cleanupChild = () => {
       extracting.delete(parentID);
       extractionChildren.delete(childId);
+      childKinds.delete(childId);
       childToParent.delete(childId);
       parentSnapshots.delete(childId);
       childMetrics.delete(childId);
@@ -966,6 +1000,10 @@ export async function createRuntime(input: {
   const toolMemoryRemember = async (sessionID: string, overwrite: unknown) => {
     extraction.consume(sessionID);
     missedNudges.delete(sessionID);
+    // A session that fetched its own payload (direct parent-side fetch or a
+    // child's payload call) completes its claim when it writes a memory -
+    // the write proves the delivered entries were processed.
+    extraction.completeClaimed(sessionID);
     // Track extraction metrics for toast display. Counted for any
     // child session (both direct-extraction and nudge-path sub-agents)
     // since childToParent covers both. The toast only fires for
@@ -978,18 +1016,18 @@ export async function createRuntime(input: {
       childMetrics.set(sessionID, metrics);
       journalChild(sessionID);
       // Complete the parent's accepted entries (the extractor confirmed
-      // it is alive and saving) and drain the parent's snapshot entries
-      // from the pending buffer. If no snapshot was recorded (unreachable
-      // when childToParent has the entry, since both are set together in
-      // session.created), skip the drain rather than dropping the entire
-      // buffer - interleaved-turn entries that arrived while the child
-      // was running must survive for the next extraction cycle.
-      extraction.completeAccepted(parentID);
-      const snapshot = parentSnapshots.get(sessionID);
-      if (snapshot) {
-        extraction.consumeSnapshot(parentID, snapshot);
-        parentSnapshots.delete(sessionID);
-      }
+      // it is alive and saving). Completion is scoped to THIS child's
+      // claimed delivery - the fetch IS the delivery record, so whatever
+      // the child received is consumed here and nothing else. Pending
+      // entries the child never received (post-fetch arrivals, or a child
+      // that never fetched) stay pending and re-nudge: no silent loss.
+      // (The old dispatch-time snapshot drain was either a no-op under
+      // claim semantics or a silent-loss vector for children that never
+      // fetched - removed September 2026. The journal's snapshot field
+      // remains for restart recovery.)
+      extraction.completeClaimed(sessionID);
+      journalChild(sessionID);
+      missedNudges.delete(parentID);
       journalChild(sessionID);
       missedNudges.delete(parentID);
     }
@@ -997,7 +1035,14 @@ export async function createRuntime(input: {
   const toolExtractionDone = (sessionID: string, targetID?: string) => {
     const parentID = childToParent.get(sessionID);
     if (parentID) {
-      extraction.completeAccepted(parentID);
+      // The child's completion consumes its own claimed delivery. The
+      // whole-set fallback covers a child that acks without ever fetching
+      // (its payload call errored) - rare, and the ack is a deliberate
+      // processed signal, unlike the automatic idle path which is
+      // claim-scoped only.
+      if (!extraction.completeClaimed(sessionID)) {
+        extraction.completeAccepted(parentID);
+      }
       missedNudges.delete(parentID);
       extraction.consume(sessionID);
     } else if (targetID && targetID !== sessionID) {
@@ -1007,8 +1052,13 @@ export async function createRuntime(input: {
       // relationship and the explicit session_id is the only signal that
       // the target's accepted entries are accounted for. Without this
       // branch the accepted queue lingers forever and a tool-dense session
-      // re-nudges every idle on never-draining exhaust.
-      extraction.completeAccepted(targetID);
+      // re-nudges every idle on never-draining exhaust. Completion is
+      // scoped to the child's claimed delivery; the whole-set fallback
+      // covers the no-claim case (a fetch that errored, or the MCP path
+      // where the file-backed queue was drained instead).
+      if (!extraction.completeClaimed(sessionID)) {
+        extraction.completeAccepted(targetID);
+      }
       missedNudges.delete(targetID);
     } else {
       extraction.accept(sessionID);
@@ -1023,10 +1073,15 @@ export async function createRuntime(input: {
 
   return {
     coreContext: buildCoreContext(db, model, repo, {
-      extractionPayloadProvider: (sessionID: string): string | null => {
-        const interactions = extraction.peek(sessionID);
-        const accepted = extraction.peekAccepted(sessionID);
-        const all = [...accepted, ...interactions];
+      extractionPayloadProvider: (targetID: string, fetcherID?: string): string | null => {
+        // A fetcher identity turns the fetch into the delivery record: the
+        // claimed entries stay accepted, and THAT fetcher's completion
+        // signal consumes only them (claim semantics). Without a fetcher
+        // (no host session context) the fetch is a pure peek - legacy
+        // behavior.
+        const all = fetcherID
+          ? extraction.claim(targetID, fetcherID)
+          : [...extraction.peekAccepted(targetID), ...extraction.peek(targetID)];
         if (all.length === 0) return null;
         return extraction.buildPayload(all, repo);
       },
@@ -1076,6 +1131,13 @@ export async function createRuntime(input: {
     //      extraction_done call in a child session of that parent (the
     //      extractor confirming it processed them), or the child going idle
     //      (a no-save run that never acks still counts as processed).
+    //      Completion is CLAIM-SCOPED: the pipeline records which fetcher
+    //      received the payload (get_extraction_payload), and a completion
+    //      signal consumes only that fetcher's delivery. A sibling
+    //      sub-agent going idle - a code-review specialist, a slow child
+    //      from a previous round - has no claim and is a no-op, so it can
+    //      no longer silently drop another extractor's in-flight payload
+    //      (the accept-then-racing-completion loss, fixed September 2026).
     //    - REQUEUE returns the held entries to pending. Signals: the child
     //      session errors or is deleted before completing.
     //
@@ -1518,6 +1580,7 @@ export async function createRuntime(input: {
         const info = event.properties.info;
         if (info.parentID) {
           childToParent.set(info.id, info.parentID);
+          childKinds.set(info.id, extractionChildren.has(info.id) ? "extraction" : "task");
           parentSnapshots.set(info.id, [...extraction.peek(info.parentID)]);
           journalChild(info.id);
           // Child sessions don't need the session-start reminder - only
@@ -1540,8 +1603,17 @@ export async function createRuntime(input: {
         }
         const parentID = childID ? childToParent.get(childID) : undefined;
         if (parentID && childID) {
-          extraction.requeueAccepted(parentID);
+          // Requeue what THIS child actually held: its claimed delivery if
+          // it fetched. ERROR is a terminal death signal, so a claim-less
+          // child (died before fetching - boot failures land here) falls
+          // back to whole-set requeue for immediate recovery, regardless
+          // of kind: the worst case is a benign duplicate extraction, never
+          // silent loss.
+          if (!extraction.requeueClaimed(childID)) {
+            extraction.requeueAccepted(parentID);
+          }
           extracting.delete(parentID);
+          childKinds.delete(childID);
           childToParent.delete(childID);
           parentSnapshots.delete(childID);
           childMetrics.delete(childID);
@@ -1737,12 +1809,23 @@ export async function createRuntime(input: {
         // ChatStore.unregister), and the tombstone is cleared only by an
         // explicit chat_register rejoin, so a genuinely new session is
         // unaffected.
-        // A child deleted before completing never processed its payload.
+        // A child deleted before completing never processed its payload -
+        // unless it was a task-kind child: task sub-agents finish and get
+        // deleted ROUTINELY, and a finished task child's later deletion
+        // must not requeue the parent's extraction state (it would yank an
+        // in-flight extractor's accepted set back to pending for duplicate
+        // extraction). Requeue what the child actually held: its claim, or
+        // for a claim-less extraction child the whole accepted set.
         const parentID = childToParent.get(id);
+        const childKind = childKinds.get(id) ?? "extraction";
         if (parentID) {
-          extraction.requeueAccepted(parentID);
-          extracting.delete(parentID);
+          if (!extraction.requeueClaimed(id) && childKind === "extraction") {
+            extraction.requeueAccepted(parentID);
+          }
+          if (childKind === "extraction") extracting.delete(parentID);
         }
+        extraction.dropClaim(id);
+        childKinds.delete(id);
         childToParent.delete(id);
         parentSnapshots.delete(id);
         childMetrics.delete(id);
@@ -1754,6 +1837,7 @@ export async function createRuntime(input: {
         // watchers die with it - the session that would receive their
         // notifications no longer exists.
         extraction.completeAccepted(id);
+        extraction.dropClaim(id);
         extracting.delete(id);
         watchers.cancelSession(id);
         // Leaving the chat directory is the graceful-exit fast path; a

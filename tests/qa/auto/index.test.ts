@@ -92,3 +92,4 @@ import "./uc-107-worktree-deletion-recovery";
 import "./uc-108-llm-alerts";
 import "./uc-109-behavior-feedback-via-situation";
 import "./uc-110-memory-label-derivation";
+import "./uc-111-recall-point-in-time-caveat";

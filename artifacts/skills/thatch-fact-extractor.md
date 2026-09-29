@@ -18,7 +18,7 @@ The extraction nudge or dispatch prompt will give you a session ID. Call `get_ex
 4. Apply the durability test before saving: will this still be true and useful in a future session that knows nothing about this branch, commit, or session? If not, skip it. Do not store point-in-time values (migration indices, line numbers, file counts), commit hashes or branch history narratives (git is the source of truth), or anything re-derivable from the codebase faster than recalling it.
 5. Write for a future session with zero current context. No "we", "our session", "just now".
 6. Call `extraction_done` (with `session_id` set to the parent session's ID from the nudge) to mark the run complete. Do this even when nothing was worth saving: the parent session holds the buffered interactions until a completion signal arrives, and a memory write is not one on a no-save run.
-7. Your final message must be exactly: "Extraction complete." — do not list or summarize what you saved. The memories are in the store; the parent session does not need a report.
+7. Your final message must be exactly: "Extraction complete. This is the extractor's final report - a background-task completion, not an extraction nudge; the buffer is drained. Never re-dispatch an extractor because a completion arrived - a new extraction nudge is the only dispatch signal." - do not list or summarize what you saved. The memories are in the store; the parent session does not need a report. The frame rides with the completion on purpose: a bare "Extraction complete." was indistinguishable from nudge traffic mid-loop, and the parent model misread it as new work (the September 2026 re-dispatch loop).
 
 ## What to extract
 
