@@ -369,10 +369,20 @@ export async function createRuntime(input: {
         rehostedSessions: [...rehostedSessions, ...unexpiredGraceRehosts(rehostGrace, now)],
         exclude: childToParent.keys(),
       });
-      // Journal the set so the NEXT reload (same pid + directory) re-hosts
-      // these sessions and the poller can wake them with pending mail
-      // instead of waiting for the user to type.
-      db.runtimeStatePut("hosted", directory, hosted, directory);
+      // The journal NEVER SHRINKS within a process lifetime: a plugin
+      // reload rebuilds the hosted set empty (sessionStatus is in-memory),
+      // so a session that was idle across a reload would otherwise be
+      // dropped from the set and never re-hosted - falsely stale while its
+      // tab is open. The union means the next reload re-graces everything
+      // this process ever hosted (bounded by the 24h grace decay);
+      // shrinking happens only through session.deleted, which rewrites the
+      // row.
+      const prevRow = db
+        .runtimeStateAll()
+        .find((r) => r.kind === "hosted" && r.sessionID === directory);
+      const prevIds = prevRow && Array.isArray(prevRow.value) ? (prevRow.value as string[]) : [];
+      const merged = [...new Set([...prevIds, ...hosted])];
+      db.runtimeStatePut("hosted", directory, merged, directory);
       return hosted;
     },
     deliver: async (sessionID, senders, count) => {
@@ -1884,8 +1894,22 @@ export async function createRuntime(input: {
         childKinds.delete(id);
         childToParent.delete(id);
         // A deleted session's grace rehost ends immediately - the user
-        // closed it deliberately; the roster must not keep it fresh.
+        // closed it deliberately; the roster must not keep it fresh. The
+        // hosted-row journal is pruned too: the union never shrinks on its
+        // own, and a deleted session must not re-host into the grace on
+        // the next reload.
         rehostGrace.delete(id);
+        const hostedRow = db
+          .runtimeStateAll()
+          .find((r) => r.kind === "hosted" && r.sessionID === directory);
+        if (hostedRow && Array.isArray(hostedRow.value)) {
+          db.runtimeStatePut(
+            "hosted",
+            directory,
+            (hostedRow.value as string[]).filter((sid) => sid !== id),
+            directory,
+          );
+        }
         parentSnapshots.delete(id);
         childMetrics.delete(id);
         extractionChildren.delete(id);
