@@ -778,6 +778,9 @@ describe("plugin entry", () => {
     // the journal is reconciled INTO the registry, never over it.
     expect(listed).toContain("cmd:");
     expect(listed).toContain("watch_stale");
+    // Tidy up: the seeded row must not leak into later tests (this file
+    // shares one db across tests).
+    jdb.runtimeStateDelete("watchers", "ses_live");
   });
 
   test("sibling sub-agent going idle does not drop the extractor's claimed payload", async () => {
