@@ -1792,8 +1792,18 @@ export async function createRuntime(input: {
         // the topic column instead (refreshed on every idle), so the name
         // and the description stay separate identities. Fire-and-forget: a
         // failed registration or title fetch must never block event
-        // delivery.
-        if (chatOn && chatAutoRegister(loadConfig(dbPath).config) && sessionID && !db.hasChatLeaveTombstone(sessionID)) {
+        // delivery. TOP-LEVEL ONLY: child sessions (extraction sub-agents,
+        // task sub-agents) are machinery, not chat participants - without
+        // this check every fact-extractor run registered a roster row
+        // (the "thatch-extraction" corpse flood, September 2026). The
+        // prompt-register path above has the same check.
+        if (
+          chatOn &&
+          chatAutoRegister(loadConfig(dbPath).config) &&
+          sessionID &&
+          !childToParent.has(sessionID) &&
+          !db.hasChatLeaveTombstone(sessionID)
+        ) {
           void (async () => {
             try {
               const data = await caps.sessionGet(sessionID);

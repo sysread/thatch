@@ -2530,6 +2530,31 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
     }
   });
 
+  test("first idle does not register a sub-agent child session", async () => {
+    // The idle auto-register path (the backstop for sessions whose TUI was
+    // not connected at init) had no child check: every fact-extractor run
+    // registered a roster row on its terminal idle - the "thatch-extraction"
+    // corpse flood (September 2026). Children are machinery, not chat
+    // participants, on BOTH registration paths.
+    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr-child-idle" } as any);
+    try {
+      await prHooks.event!({ event: {
+        type: "session.created",
+        properties: { info: { id: "ses_idle_child", parentID: "ses_idle_parent" } } } as any,
+      });
+      // The child's run ends: its terminal idle must not register it.
+      await prHooks.event!({ event: {
+        type: "session.status",
+        properties: { sessionID: "ses_idle_child", status: { type: "idle" } } } as any,
+      });
+      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+      expect(prDb.listChatSessions().find((r) => r.session_id === "ses_idle_child")).toBeUndefined();
+      prDb.close();
+    } finally {
+      prHooks.dispose?.();
+    }
+  });
+
   test("chat.message honors a leave tombstone", async () => {
     const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr-left" } as any);
     try {
