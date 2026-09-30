@@ -19,7 +19,7 @@ const useCase: UseCase = {
     "- An isolated fixture with THATCH_DB_PATH and XDG_CONFIG_HOME set",
   ].join("\n"),
   steps: [
-    "1. Load the plugin server. Verify the action command files (defrag, extract, hygiene, reflect) were synced next to the wrap-up files, each carrying a description frontmatter and its prompt-core body.",
+    "1. Load the plugin server. Verify the action command files (defrag, extract, hygiene, refine, reflect) were synced next to the wrap-up files, each carrying a description frontmatter and its prompt-core body.",
     "2. Verify the extract action instructs the model to learn the session ID from get_session_info and pass it explicitly to the sub-agent.",
     "3. Verify installClaudeCommands writes only defrag/hygiene/refine/reflect, spelled with mcp__thatch__ tool names.",
     "4. Verify host parity: opencode = claude set + compact/exit/extract; MCP prompts = claude set.",
@@ -27,9 +27,9 @@ const useCase: UseCase = {
     "6. Call the same tool with no session_id and no host context (the MCP-host shape). Verify the error names the parent-session rule.",
   ].join("\n"),
   expected: [
-    "- The plugin syncs six command files: wrap-ups (compact, exit) plus the four actions.",
+    "- The plugin syncs seven command files: wrap-ups (compact, exit) plus the five actions.",
     "- Action bodies are rendered from the prompt cores; the extract action carries the session-id rule.",
-    "- Claude Code gets the three shared actions; MCP prompts match Claude Code's set one-to-one.",
+    "- Claude Code gets the four shared actions; MCP prompts match Claude Code's set one-to-one.",
     "- An omitted session_id resolves to the invoking session on the opencode path and errors with the pass-the-parent-id rule when no session context exists.",
   ].join("\n"),
 
@@ -61,7 +61,7 @@ const useCase: UseCase = {
     try {
       // Step 1: action command files synced at plugin load.
       const dir = join(ctx.env.XDG_CONFIG_HOME, "opencode", "command", "thatch");
-      for (const name of ["compact", "exit", "defrag", "extract", "hygiene", "reflect"]) {
+      for (const name of ["compact", "exit", "defrag", "extract", "hygiene", "refine", "reflect"]) {
         if (!existsSync(join(dir, `${name}.md`))) {
           console.log(`  FAIL: ${name}.md not installed into the fixture config home`);
           return "FAIL";

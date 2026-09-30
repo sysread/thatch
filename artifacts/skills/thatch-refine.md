@@ -1,6 +1,6 @@
 ---
 name: thatch-refine
-description: Classify the current project (audience, lifecycle, surface) and refine a plan under that type's requirements. Entry point for the thatch-refine-* family. Use when the user asks to refine a plan, runs /thatch/refine, or when a plan is about to be implemented and the project type should shape the refinement bar. Loads thatch-plan-refinement for the core loop plus the matching thatch-refine-<type> skill for the deltas.
+description: Classify the current project (audience, lifecycle, surface) and refine a plan under that type's requirements. Entry point for the thatch-refine-* family. Use when the user asks to refine a plan, runs /thatch/refine, or when a plan is about to be implemented and the project type should shape the refinement bar. For a bare "refine this plan" request, load this skill rather than thatch-plan-refinement directly - the router picks the type and applies its delta on top of the core loop.
 ---
 
 You are the entry point for project-type-aware plan refinement. The core
