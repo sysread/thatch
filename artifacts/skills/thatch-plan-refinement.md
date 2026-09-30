@@ -75,7 +75,8 @@ One reviewer per round in quick mode; one lens fan-out total in deep mode, then 
 
 ## Relationship to other skills
 
-- **`thatch-code-archaeology`** — the research skill for understanding the code; its output is often the plan's input. The archaeology lens is a targeted, plan-scoped re-run of its git-history step, not a replacement for it.
+- **`thatch-refine`** - the type-aware entry point. Different project types need different refinement bars: a team codebase owes coordination and breadcrumbs, a personal project allows cleverness, a shared library owes API hygiene. When the user runs `/thatch/refine` or the project's type should shape the bar, load `thatch-refine` first; it classifies and hands back a thatch-refine-* delta to apply on top of this loop. This skill stays the generic core.
+- **`thatch-code-archaeology`** - the research skill for understanding the code; its output is often the plan's input. The archaeology lens is a targeted, plan-scoped re-run of its git-history step, not a replacement for it.
 - **`thatch-coding-workflow`** — the procedure skill for executing the refined plan. Refinement ends where coding-workflow begins.
 - **`thatch-ticket-description` / `thatch-pr-description`** — if the refined plan feeds a ticket or PR description (or the session iterated on one using this skill), RE-LOAD the appropriate writing skill and draft within its contract. A plan is a working artifact for the session that wrote it; a ticket or PR description is a reader-facing document with its own sections, verbosity budget, and prose rules. Refinement output — findings, accepted risks, review rounds — is SOURCE MATERIAL for those skills, never a substitute for them. This holds the right level of detail for the medium and keeps the writing clear.
 - **`thatch-clear-writing`** — for any other human-facing text produced along the way (reports, comments, docs).

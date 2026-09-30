@@ -328,6 +328,13 @@ response, walkthrough, and workflow skills that support the review pipeline:
 | `thatch-code-walkthrough` | Explains a feature, module, or workflow to the user as a teaching walkthrough with file:line citations. Also used to draft high-level docs for new or undocumented features. |
 | `thatch-coding-workflow` | Plans and executes code changes with a task-list-driven workflow: complexity triage, milestone planning, research before coding, post-coding verification. Pairs with `thatch-code-archaeology` (research first, then plan). |
 | `thatch-plan-refinement` | Refines a plan before it is implemented: a fresh-context reviewer subagent re-checks the plan each round until consensus; deep mode adds specialist lenses (reuse, alternatives, hidden problems, safe-to-modify, intent archaeology). |
+| `thatch-refine` | Classifies the project (audience, lifecycle, surface) and refines a plan under that type's requirements. The entry point for the `thatch-refine-*` family; also the `/thatch/refine` command. |
+| `thatch-refine-team-app` | Team codebases: consistency outranks cleverness, intent breadcrumbs are deliverables, pre-mortem and safe-to-modify lenses dominate. |
+| `thatch-refine-personal` | Solo projects: relaxed coordination, cleverness and experimentation welcome, premise verification stays honest. |
+| `thatch-refine-shared-lib` | Library API surfaces: flexible on input, strict on output, keep special cases out of the API, never foreclose caller options, docs are a deliverable. |
+| `thatch-refine-spike` | Throwaway prototypes: skip the loop, verify only the premises the experiment's conclusion depends on. |
+| `thatch-refine-infra` | CI, Terraform, and k8s changes: blast radius, mandatory rollback plan and staged verification, pattern-following is near-absolute. |
+| `thatch-refine-oss-contribution` | PRs to repos you do not maintain: the maintainer's design authority governs, minimal diff, upstream discussion gates significant design work. |
 
 ### Writing skills
 

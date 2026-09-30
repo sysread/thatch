@@ -55,7 +55,14 @@ description: Extract durable project facts ... Use when ...
 | `thatch-code-walkthrough` | Explain a feature, module, or workflow to the user as a teaching walkthrough: identify the code area (optionally from a branch or PR), research how it works, teach it with file:line citations and analogies, list the key files. |
 | `thatch-session-reflection` | End-of-session memory recording (project, user, tools, self). |
 | `thatch-coding-workflow` | Plan and execute code changes with a task-list-driven workflow. Use when implementing features, fixing bugs, or making multi-file changes. |
-| `thatch-plan-refinement` | Refine a plan before implementing it: fresh-context reviewer rounds until consensus, with an optional deep-mode lens fan-out (reuse, alternatives, hidden problems, safe-to-modify, archaeology). |
+| `thatch-plan-refinement` | Refine a plan before implementing it: fresh-context reviewer rounds until consensus, with an optional deep-mode lens fan-out (reuse, alternatives, hidden problems, safe-to-modify, archaeology). The generic core loop. |
+| `thatch-refine` | Classify the project (audience, lifecycle, surface) and refine a plan under that type's requirements. Entry point for the `thatch-refine-*` family; also the `/thatch/refine` command. |
+| `thatch-refine-team-app` | Refinement deltas for multi-developer team codebases: consistency outranks cleverness, intent breadcrumbs are deliverables, pre-mortem and safe-to-modify lenses dominate. |
+| `thatch-refine-personal` | Refinement deltas for solo projects with no downstream consumers: relaxed coordination, cleverness and experimentation welcome, premise verification stays honest. |
+| `thatch-refine-shared-lib` | Refinement deltas for changes touching a library's API surface: flexible on input, strict on output, keep special cases out of the API, never foreclose caller options, docs are a deliverable. |
+| `thatch-refine-spike` | Refinement deltas for throwaway prototypes: skip the loop, verify only the premises the experiment's conclusion depends on, state the question and the time box. |
+| `thatch-refine-infra` | Refinement deltas for CI, Terraform, and k8s changes: blast radius across pipelines and environments, rollback plan and staged verification are mandatory, pattern-following is near-absolute. |
+| `thatch-refine-oss-contribution` | Refinement deltas for PRs to repos you do not maintain: the maintainer's design authority governs, minimal diff, upstream discussion gates significant design work. |
 | `thatch-pr-description` | Draft PR descriptions with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, project-context research, clarity checks, and bold+italic emphasis for scanning. |
 | `thatch-ticket-description` | Draft ticket/issue descriptions with clear sections, project-context research, clarity checks, and bold+italic emphasis for scanning. |
 | `thatch-split-overlarge-pr` | Split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main. |

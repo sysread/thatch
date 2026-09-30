@@ -2800,7 +2800,7 @@ describe("installOpencodeCommands", () => {
     try {
       const first = installOpencodeCommands(home);
       const names = first.map((p) => p.split("/").pop()!.replace(/\.md$/, "")).sort();
-      expect(names).toEqual(["compact", "defrag", "exit", "extract", "hygiene", "reflect"]);
+      expect(names).toEqual(["compact", "defrag", "exit", "extract", "hygiene", "refine", "reflect"]);
       const compact = readFileSync(join(first[0]!), "utf8");
       expect(compact).toContain("description:");
       expect(compact).toContain("THATCH_COMPACT_READY");
@@ -2886,11 +2886,12 @@ describe("action commands", () => {
   test("Claude Code command set drops wrap-ups and the opencode-only extract action", async () => {
     const { claudeCommandDefs } = await import("../src/commands");
     const names = claudeCommandDefs().map((d) => d.name).sort();
-    expect(names).toEqual(["defrag", "hygiene", "reflect"]);
+    expect(names).toEqual(["defrag", "hygiene", "refine", "reflect"]);
     for (const def of claudeCommandDefs()) {
       // Tool spelling follows the host. Hygiene drives the thatch CLI and
-      // names no memory tools, so it is exempt from the MCP spelling check.
-      if (def.name !== "hygiene") {
+      // refine triggers a skill; neither names a memory tool, so both are
+      // exempt from the MCP spelling check.
+      if (def.name !== "hygiene" && def.name !== "refine") {
         expect(def.content).toMatch(/mcp__thatch__/);
         expect(def.content).not.toContain("thatch_find_duplicates");
       }
@@ -2902,7 +2903,7 @@ describe("action commands", () => {
     const claudeDir = mkdtempSync(join(tmpdir(), "thatch-claude-cmds-"));
     try {
       const first = installClaudeCommands(claudeDir);
-      expect(first).toHaveLength(3);
+      expect(first).toHaveLength(4);
       expect(first[0]).toContain(join("commands", "thatch"));
       expect(installClaudeCommands(claudeDir)).toEqual([]);
     } finally {

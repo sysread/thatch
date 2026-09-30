@@ -9,7 +9,7 @@ import { registerUseCase, type UseCase, type QaContext } from "../runner";
  * Automatable: yes — skill dir inspection after setup. The code-review
  * coordinator skill (thatch-code-review) is only installed for opencode
  * (which has sub-agent support). MCP hosts (Claude Code, Cursor) get
- * SHARED_SKILLS only (28 skills, no coordinator).
+ * SHARED_SKILLS only (35 skills, no coordinator).
  */
 
 const useCase: UseCase = {
@@ -24,8 +24,8 @@ const useCase: UseCase = {
     "3. Check whether thatch-code-review appears in each directory.",
   ].join("\n"),
   expected: [
-    "- Claude Code: 28 thatch-* skill directories present. thatch-code-review is absent.",
-    "- Cursor: 28 thatch-* skill directories present. thatch-code-review is absent.",
+    "- Claude Code: 35 thatch-* skill directories present. thatch-code-review is absent.",
+    "- Cursor: 35 thatch-* skill directories present. thatch-code-review is absent.",
     "- opencode: 29 thatch-* skill directories present. thatch-code-review is present (verified by uc-014).",
   ].join("\n"),
 
@@ -53,8 +53,8 @@ const useCase: UseCase = {
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
 
-    if (claudeSkills.length !== 28) {
-      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 28`);
+    if (claudeSkills.length !== 35) {
+      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 35`);
       return "FAIL";
     }
     if (claudeSkills.includes("thatch-code-review")) {
@@ -80,8 +80,8 @@ const useCase: UseCase = {
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
 
-    if (cursorSkills.length !== 28) {
-      console.log(`  FAIL: Cursor skills count is ${cursorSkills.length}, expected 28`);
+    if (cursorSkills.length !== 35) {
+      console.log(`  FAIL: Cursor skills count is ${cursorSkills.length}, expected 35`);
       return "FAIL";
     }
     if (cursorSkills.includes("thatch-code-review")) {

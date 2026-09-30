@@ -194,8 +194,10 @@ Thatch gives your agent:
   auto-joining with `chat.autoRegister: false`).
 - **Slash commands** -- `/thatch/defrag` (consolidate duplicate memories),
   `/thatch/extract` (drain the extraction queue now), `/thatch/hygiene`
-  (tend stale and orphaned memories), and `/thatch/reflect` (persist what
-  the session learned) run on demand the same behaviors the nudges run on
+  (tend stale and orphaned memories), `/thatch/reflect` (persist what
+  the session learned), and `/thatch/refine` (refine a plan under the
+  project type's requirements, classifying the project first) run on
+  demand. The first four mirror the same behaviors the nudges run on
   their own schedule. Plus the opencode-only wrap-ups: `/thatch/compact` and
   `/thatch/exit` run a pre-flight checklist before a compaction or an exit:
   the agent flushes pending fact extraction, finishes promised memory

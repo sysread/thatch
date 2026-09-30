@@ -208,7 +208,7 @@ describe("setupClaudeCode (project-local)", () => {
     // Shared skills only — opencode-only skills (thatch-code-review) are not
     // installed for Claude Code because they require sub-agent support.
     expect(result.skills.dir).toBe(join(projectDir, ".claude", "skills"));
-    expect(result.skills.added.length).toBe(28);
+    expect(result.skills.added.length).toBe(35);
     expect(result.skills.updated).toEqual([]);
     expect(result.skills.unchanged).toEqual([]);
     expect(result.skills.removed).toEqual([]);
@@ -238,6 +238,13 @@ describe("setupClaudeCode (project-local)", () => {
     expect(skillNames).toContain("thatch-split-overlarge-pr");
     expect(skillNames).toContain("thatch-review-response");
     expect(skillNames).toContain("thatch-plan-refinement");
+    expect(skillNames).toContain("thatch-refine");
+    expect(skillNames).toContain("thatch-refine-team-app");
+    expect(skillNames).toContain("thatch-refine-personal");
+    expect(skillNames).toContain("thatch-refine-shared-lib");
+    expect(skillNames).toContain("thatch-refine-spike");
+    expect(skillNames).toContain("thatch-refine-infra");
+    expect(skillNames).toContain("thatch-refine-oss-contribution");
     expect(skillNames).not.toContain("thatch-code-review");
 
     for (const skill of result.skills.added) {
@@ -364,7 +371,7 @@ describe("CLAUDE_CONFIG_DIR override", () => {
       expect(result.settings).toBe(join(customDir, "settings.json"));
       // skills are installed under the custom dir
       expect(result.skills.dir).toBe(join(customDir, "skills"));
-      expect(result.skills.added.length).toBe(28);
+      expect(result.skills.added.length).toBe(35);
       for (const skill of result.skills.added) {
         expect(skill.path.startsWith(customDir + "/")).toBe(true);
       }
@@ -394,7 +401,7 @@ describe("CLAUDE_CONFIG_DIR override", () => {
       expect(existsSync(join(projectDir, ".claude", "settings.json"))).toBe(true);
 
       expect(result.skills.dir).toBe(join(projectDir, ".claude", "skills"));
-      expect(result.skills.added.length).toBe(28);
+      expect(result.skills.added.length).toBe(35);
       for (const skill of result.skills.added) {
         expect(skill.path.startsWith(projectDir + "/")).toBe(true);
       }
@@ -700,7 +707,7 @@ describe("setupCursor (project-local)", () => {
     const result = setupCursor("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
     expect(result.skills.dir).toBe(join(projectDir, ".cursor", "skills"));
-    expect(result.skills.added.length).toBe(28);
+    expect(result.skills.added.length).toBe(35);
     expect(result.skills.updated).toEqual([]);
     expect(result.skills.unchanged).toEqual([]);
     expect(result.skills.removed).toEqual([]);
@@ -721,6 +728,13 @@ describe("setupCursor (project-local)", () => {
     expect(skillNames).toContain("thatch-split-overlarge-pr");
     expect(skillNames).toContain("thatch-review-response");
     expect(skillNames).toContain("thatch-plan-refinement");
+    expect(skillNames).toContain("thatch-refine");
+    expect(skillNames).toContain("thatch-refine-team-app");
+    expect(skillNames).toContain("thatch-refine-personal");
+    expect(skillNames).toContain("thatch-refine-shared-lib");
+    expect(skillNames).toContain("thatch-refine-spike");
+    expect(skillNames).toContain("thatch-refine-infra");
+    expect(skillNames).toContain("thatch-refine-oss-contribution");
     expect(skillNames).not.toContain("thatch-code-review");
 
     for (const skill of result.skills.added) {
@@ -765,7 +779,7 @@ describe("setupCursor (global)", () => {
     const result = setupCursor("/usr/local/bin/thatch", true, projectDir, fakeHome);
 
     expect(result.skills.dir).toBe(join(fakeHome, ".cursor", "skills"));
-    expect(result.skills.added.length).toBe(28);
+    expect(result.skills.added.length).toBe(35);
     for (const skill of result.skills.added) {
       expect(skill.path.startsWith(join(fakeHome, ".cursor", "skills"))).toBe(true);
     }

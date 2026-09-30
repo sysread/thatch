@@ -21,7 +21,7 @@ const useCase: UseCase = {
   steps: [
     "1. Load the plugin server. Verify the action command files (defrag, extract, hygiene, reflect) were synced next to the wrap-up files, each carrying a description frontmatter and its prompt-core body.",
     "2. Verify the extract action instructs the model to learn the session ID from get_session_info and pass it explicitly to the sub-agent.",
-    "3. Verify installClaudeCommands writes only defrag/hygiene/reflect, spelled with mcp__thatch__ tool names.",
+    "3. Verify installClaudeCommands writes only defrag/hygiene/refine/reflect, spelled with mcp__thatch__ tool names.",
     "4. Verify host parity: opencode = claude set + compact/exit/extract; MCP prompts = claude set.",
     "5. Buffer a tool interaction for a session via tool.execute.after, then call thatch_get_extraction_payload with the session_id omitted and a host context carrying that session ID. Verify the queued payload comes back.",
     "6. Call the same tool with no session_id and no host context (the MCP-host shape). Verify the error names the parent-session rule.",
@@ -85,8 +85,8 @@ const useCase: UseCase = {
       const claudeDir = join(ctx.dir, ".claude-fixture");
       const written = installClaudeCommands(claudeDir);
       const names = claudeCommandDefs().map((d) => d.name).sort();
-      if (names.join(",") !== "defrag,hygiene,reflect" || written.length !== 3) {
-        console.log(`  FAIL: claude command set should be defrag/hygiene/reflect, got ${names.join(",")}`);
+      if (names.join(",") !== "defrag,hygiene,refine,reflect" || written.length !== 4) {
+        console.log(`  FAIL: claude command set should be defrag/hygiene/refine/reflect, got ${names.join(",")}`);
         return "FAIL";
       }
       const claudeDefrag = readFileSync(join(claudeDir, "commands", "thatch", "defrag.md"), "utf8");

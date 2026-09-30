@@ -101,6 +101,16 @@ After dispatching, call thatch_extraction_done to acknowledge.`,
       body: hygieneCore(),
     },
     {
+      name: "refine",
+      description: "Refine a plan under the project type's requirements (classifies the project first)",
+      // A skill trigger, not a nudge behavior: the body points at the
+      // thatch-refine router skill, which classifies the project and loads
+      // the matching type deltas on top of the plan-refinement core loop.
+      body: `Load and follow the thatch-refine skill to refine a plan for the current project.
+
+The user message may name a project type (team-app, personal, shared-lib, spike, infra, oss-contribution); if it does, skip classification and use that type. If no plan is drafted yet in this session, the skill's loop starts with drafting one.`,
+    },
+    {
       name: "reflect",
       description: "Persist what this session learned as memories",
       body: reflectCore(tool),

@@ -17,6 +17,13 @@ or you invoke it.
   The agent asks before forgetting anything that may still matter.
 - `/thatch/reflect` — run the session-reflection skill to persist what the
   current session learned.
+- `/thatch/refine` — refine a plan for a code change under the current
+  project type's requirements: the agent classifies the project (team,
+  personal, shared library, spike, infrastructure, or open source
+  contribution), confirms the pick, and runs the refinement loop with
+  that type's expectations applied. Text after the command can name the
+  type directly (for example, `/thatch/refine shared-lib`) to skip
+  classification.
 - `/thatch/compact` and `/thatch/exit` — the wrap-up commands. They run a
   pre-flight checklist (flush extraction, finish promised memory writes,
   surface loose ends) before a compaction or an exit, gated by a greenlight
@@ -31,6 +38,7 @@ or you invoke it.
 | `/thatch/extract` | yes | no | no |
 | `/thatch/hygiene` | yes | yes | yes (as an MCP prompt) |
 | `/thatch/reflect` | yes | yes | yes (as an MCP prompt) |
+| `/thatch/refine` | yes | yes | yes (as an MCP prompt) |
 | `/thatch/compact`, `/thatch/exit` | yes | no | no |
 
 Why the gaps: `/thatch/extract` needs the invoking session's ID, which only
