@@ -854,6 +854,18 @@ export class WatcherRegistry {
     commandRunner: CommandRunner;
     commandTimeoutMs: number;
   };
+  /**
+   * The most recently constructed instance in this process. opencode v2
+   * re-runs plugin setup() when the session's directory changes
+   * (session_move between directories of the same repo) or on plugin-file
+   * changes; each setup() built a fresh registry while the OLD instance's
+   * poller timer kept running - the watch tools then queried an empty
+   * registry ("No active watchers" / "No watcher in this session") while
+   * delivery kept flowing from the orphaned poller. The handoff stops the
+   * predecessor's poller at construction so at most one registry polls per
+   * process; the watch tools' journal reconcile covers the state transfer.
+   */
+  static #live: WatcherRegistry | undefined;
 
   constructor(options: WatcherRegistryOptions) {
     this.#opts = {
@@ -865,6 +877,8 @@ export class WatcherRegistry {
       ...options,
     };
     this.#journal = options.journal;
+    WatcherRegistry.#live?.stop();
+    WatcherRegistry.#live = this;
   }
 
   // -- Lifecycle -----------------------------------------------------------

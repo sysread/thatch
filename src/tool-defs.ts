@@ -24,7 +24,7 @@ import {
 import { sendNotification, defaultSpawner, type NotifyChannel, type Spawner } from "./notify";
 import { predictionVerb, formatWhenLine, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
-import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, type WatcherRegistry, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
+import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, type WatcherRegistry, type Watcher, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
 import { CHAT_STALE_MS, chatLiveness, humanAge, renderChatParticipant, sortChatRoster, splitChatRoster, type ChatHostKind } from "./chat";
 import { detectWorktreeKind } from "./git";
 
@@ -265,8 +265,26 @@ function formatRecallResult(entry: MemoryRow & { _score: number }): string {
  * so a topic fragmented across N entries reads as one cluster instead of
  * O(N²) pairs. Verdicts stay pairwise (markChecked) - this is presentation only.
  */
-function renderClusters(candidates: DedupCandidate[]): string {
-  const parent = new Map<string, string>();
+/**
+ * Self-heal the watcher registry from the journal before a watch tool reads
+ * it. The runtime (and its registry) is rebuilt on session directory changes
+ * and plugin reloads, leaving journaled watchers absent from the live set
+ * while the old instance's poller keeps delivering: watch_list reported "No
+ * active watchers" and watch_cancel "No watcher in this session" for
+ * watchers that were alive and firing (observed + reproduced September
+ * 2026). Hydrating the CURRENT process's journal row for the session makes
+ * every watch-tool call converge. Cross-process (dormant) rows stay owned
+ * by the runtime's scanDormantWatchers and its revalidation.
+ */
+function reconcileSessionWatchers(ctx: CoreContext, sessionID: string): void {
+  if (!ctx.watchers) return;
+  const row = ctx.db
+    .runtimeStateAll()
+    .find((r) => r.kind === "watchers" && r.sessionID === sessionID && r.pid === process.pid);
+  if (row && Array.isArray(row.value)) ctx.watchers.hydrate(row.value as Watcher[]);
+}
+
+function renderClusters(candidates: DedupCandidate[]): string {  const parent = new Map<string, string>();
   const find = (x: string): string => {
     let root = parent.get(x) ?? x;
     while (root !== (parent.get(root) ?? root)) root = parent.get(root) ?? root;
@@ -1499,6 +1517,7 @@ const watchCreateDef: ToolDef = {
     if (!ctx.watchers) {
       return "Watching is unavailable: no watcher registry was wired by this host.";
     }
+    reconcileSessionWatchers(ctx, host.sessionID);
     const repo = (args.repo as string | undefined) ?? ctx.defaultStore;
     const events = (args.events as PrWatcherEventType[] | undefined) ?? [...PR_EVENT_TYPES];
     const result = await ctx.watchers.createPr(host.sessionID, repo, args.pr as number, events, { once: args.once === true });
@@ -1538,6 +1557,7 @@ const watchListDef: ToolDef = {
     if (!ctx.watchers) {
       return "Watching is unavailable: no watcher registry was wired by this host.";
     }
+    reconcileSessionWatchers(ctx, host.sessionID);
     const watchers = ctx.watchers.listForSession(host.sessionID);
     if (watchers.length === 0) return "No active watchers.";
     const minutesLeft = (w: { expiresAt: number }) => Math.max(0, Math.round((w.expiresAt - Date.now()) / 60_000));
@@ -1603,6 +1623,7 @@ const watchBranchCreateDef: ToolDef = {
     if (!ctx.watchers) {
       return "Watching is unavailable: no watcher registry was wired by this host.";
     }
+    reconcileSessionWatchers(ctx, host.sessionID);
     const repo = (args.repo as string | undefined) ?? ctx.defaultStore;
     const events = (args.events as BranchWatcherEventType[] | undefined) ?? [...BRANCH_EVENT_TYPES];
     const result = await ctx.watchers.createBranch(
@@ -1687,6 +1708,7 @@ const watchCommandCreateDef: ToolDef = {
     if (!ctx.watchers) {
       return "Watching is unavailable: no watcher registry was wired by this host.";
     }
+    reconcileSessionWatchers(ctx, host.sessionID);
     const dir = (args.cd as string | undefined) ?? ctx.projectDir;
     if (!dir) {
       return "Watching is unavailable: no project directory was wired by this host.";
@@ -1727,6 +1749,7 @@ const watchCancelDef: ToolDef = {
     if (!ctx.watchers) {
       return "Watching is unavailable: no watcher registry was wired by this host.";
     }
+    reconcileSessionWatchers(ctx, host.sessionID);
     const cancelled = ctx.watchers.cancel(host.sessionID, args.id as string);
     if (!cancelled) return `No watcher "${args.id}" in this session.`;
     return `[cancelled] ${args.id}`;
