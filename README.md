@@ -280,3 +280,5 @@ embeddings, no network.
 [MIT](LICENSE)
 
 [Bun]: https://bun.sh
+
+<!-- watcher-repro: probe 1 (delivery check) -->
