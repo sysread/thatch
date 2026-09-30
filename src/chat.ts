@@ -1371,6 +1371,23 @@ export function hostedSessionIds(options: {
   return [...new Set(hosted)].filter((id) => !excluded.has(id));
 }
 
+/**
+ * Grace-rehost ids still inside their rehost window, pruning expired
+ * entries as a side effect (the map is the runtime's live restart-grace
+ * state - see CHAT_REHOST_GRACE_MS in runtime.ts). A restart re-hosts the
+ * dead daemon's hosted set under this grace: open TUI tabs reconnect but
+ * emit no events until the user types, so without it they go falsely
+ * stale while alive-idle.
+ */
+export function unexpiredGraceRehosts(grace: Map<string, number>, now: number): string[] {
+  const live: string[] = [];
+  for (const [id, deadline] of grace) {
+    if (now >= deadline) grace.delete(id);
+    else live.push(id);
+  }
+  return live;
+}
+
 export class ChatPoller {
   #opts: Required<ChatPollerOptions>;
   #timer: ReturnType<typeof setInterval> | null = null;

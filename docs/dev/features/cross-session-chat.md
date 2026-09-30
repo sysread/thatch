@@ -191,7 +191,14 @@ rather than one so a single late poll cycle does not flap the roster.
 Heartbeat age is the ONLY liveness signal, by design. A host process id
 cannot serve: the same session is re-hosted by a new process on every
 `-s` resume, so a pid stamped on the row lies as soon as a different
-harness beats it (it says dead while the heartbeat proves alive). `isStale`
+harness beats it (it says dead while the heartbeat proves alive). RESTART
+grace: a new daemon re-hosts the dead one's hosted set under a bounded
+window (`CHAT_REHOST_GRACE_MS`, 24h, `THATCH_CHAT_REHOST_GRACE_MINUTES`
+to override) - open TUI tabs reconnect but emit no events until typed
+into, so without the grace they would read stale while alive-idle and
+mail to them would not wake the tab. Sessions that emit activity
+graduate to permanent hosting; still-silent ones (closed tabs) age out
+at the grace and go stale. `isStale`
 (src/chat.ts) is the single rule; `chatLiveness`, the `chat_send` note,
 and the broadcast skip all call it, so they cannot disagree. `chat_list`
 groups the result into Active and Stale sections - the stale section's

@@ -28,7 +28,7 @@ import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
 import { WatcherRegistry, ghApiRun, ghAvailable, runWatchedCommand, watcherTarget, withCwdFallback, type Watcher } from "./watchers";
 import { watcherNotificationNudge, watcherRearmNotice, watcherDeathNotice, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
-import { ChatPoller, createWakeGate, hostedSessionIds, isDefaultSessionTitle } from "./chat";
+import { ChatPoller, createWakeGate, hostedSessionIds, isDefaultSessionTitle, unexpiredGraceRehosts } from "./chat";
 import { chatEnabled, chatAutoRegister, loadConfig, alertMode, notificationDefaults } from "./config";
 import { sendNotification } from "./notify";
 import { osProcessArgs, startupSessionId, continuesLastSessionFromArgv, continuesLastSessionId } from "./os-args";
@@ -50,6 +50,17 @@ const RECALL_THRESHOLD = parseFloat(process.env.THATCH_RECALL_THRESHOLD ?? "0.55
 // overnight watch; the grace keeps recovery possible for sessions the user
 // returns to days later.
 const DORMANT_WATCHER_GRACE_MS = 24 * 60 * 60 * 1000;
+
+// Grace rehosting after a RESTART (see the hosted-row branch in the
+// rehydration loop): the dead daemon's hosted set re-hosts for this window.
+// Open TUI tabs reconnect to the new daemon but emit no events until the
+// user types, so without the grace they go falsely stale ("presumed gone")
+// while alive-idle, and mail stops waking them. Sessions that emit activity
+// graduate to permanent hosting via the event stream; still-silent ones
+// (closed tabs) age out at the grace and go stale again. Matches
+// DORMANT_WATCHER_GRACE_MS - same resumability shape, same trade.
+const CHAT_REHOST_GRACE_MS =
+  (Number(process.env.THATCH_CHAT_REHOST_GRACE_MINUTES ?? 0) * 60_000) || 24 * 60 * 60 * 1000;
 
 /**
  * True when every definition in a dormant watcher row is past its TTL plus
@@ -351,10 +362,11 @@ export async function createRuntime(input: {
   const chatPoller = new ChatPoller({
     store: db,
     hostedSessions: () => {
+      const now = Date.now();
       const hosted = hostedSessionIds({
         statusKeys: sessionStatus.keys(),
         resumedSessions: resumedSessions,
-        rehostedSessions: rehostedSessions,
+        rehostedSessions: [...rehostedSessions, ...unexpiredGraceRehosts(rehostGrace, now)],
         exclude: childToParent.keys(),
       });
       // Journal the set so the NEXT reload (same pid + directory) re-hosts
@@ -588,6 +600,11 @@ export async function createRuntime(input: {
   // (same pid + same directory). Written through by the poller's hosted-set
   // read, so the next reload picks up the latest set.
   const rehostedSessions = new Set<string>();
+  // Foreign-pid hosted rows (restart): the dead daemon's hosted set,
+  // re-hosted under a grace window instead of dropped - open TUI tabs
+  // reconnect but emit no events until the user types. id -> grace
+  // deadline (epoch ms).
+  const rehostGrace = new Map<string, number>();
   const rehydrated: Record<string, number> = {};
   for (const row of db.runtimeStateAll()) {
     const samePid = row.pid === process.pid;
@@ -604,6 +621,21 @@ export async function createRuntime(input: {
       // watcher TTL plus the dormant grace period age out here instead -
       // corpses of sessions that will probably never return.
       if (row.kind === "watchers" && !dormantWatchersStale((row.value as Watcher[] | null) ?? [])) {
+        continue;
+      }
+      // A foreign-pid HOSTED row re-hosts under a grace window instead of
+      // being pruned: open TUI tabs reconnect to the new daemon but emit
+      // no events until the user types, so dropping the set made them
+      // falsely stale ("presumed gone") while alive-idle, and mail to
+      // them stopped waking the tab. Sessions that emit activity graduate
+      // to permanent hosting via the event stream; still-silent ones
+      // (closed tabs) age out at the grace and go stale. The row itself
+      // stays: the poller's next hosted-set journal rewrites it, and a
+      // further restart re-graces whatever it then holds.
+      if (row.kind === "hosted") {
+        for (const id of (row.value ?? []) as string[]) {
+          rehostGrace.set(id, Date.now() + CHAT_REHOST_GRACE_MS);
+        }
         continue;
       }
       db.runtimeStateDelete(row.kind, row.sessionID);
@@ -623,14 +655,9 @@ export async function createRuntime(input: {
     } else if (row.kind === "watchers") {
       watchers.hydrate((row.value ?? []) as Watcher[]);
     } else if (row.kind === "hosted") {
-      // Rehydrate only on a same-process reload. A foreign-pid hosted row
-      // (restart) would re-host sessions whose harnesses died - dropping
-      // it is the point: the resumed session re-hosts itself through the
-      // event stream instead.
-      if (!samePid) {
-        db.runtimeStateDelete(row.kind, row.sessionID);
-        continue;
-      }
+      // Same-pid reload: re-host permanently (the plugin re-ran in place;
+      // the sessions may still be running). Foreign-pid rows were graced
+      // in the restart branch above.
       for (const id of (row.value ?? []) as string[]) rehostedSessions.add(id);
     } else if (row.kind === "child") {
       const rec = row.value as { kind?: "extraction" | "task"; parentID?: string; snapshot?: ToolInteraction[]; metrics?: { new: number; updated: number; deleted: number } };
@@ -1856,6 +1883,9 @@ export async function createRuntime(input: {
         extraction.dropClaim(id);
         childKinds.delete(id);
         childToParent.delete(id);
+        // A deleted session's grace rehost ends immediately - the user
+        // closed it deliberately; the roster must not keep it fresh.
+        rehostGrace.delete(id);
         parentSnapshots.delete(id);
         childMetrics.delete(id);
         extractionChildren.delete(id);

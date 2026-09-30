@@ -7,7 +7,7 @@ import { ExtractionPipeline, type ToolInteraction } from "../src/extraction";
 import { WatcherRegistry } from "../src/watchers";
 import { SharedModelPool } from "../src/embeddings";
 import { server } from "../src/index";
-import { hostedSessionIds } from "../src/chat";
+import { hostedSessionIds, unexpiredGraceRehosts } from "../src/chat";
 
 // Persistence of volatile plugin-runtime state across v2 plugin reloads and
 // process restarts (docs/dev/features/opencode-plugin.md, the dispose row of
@@ -148,8 +148,9 @@ describe("runtime rehydration through server()", () => {
     // Restart case: foreign pid (the api stamps the current pid by default,
     // so override), no startup resume -> pruned.
     db.runtimeStatePut("buffer", "ses_dead", [ix("ses_dead")], WORK_DIR, process.pid + 999);
-    // A foreign-pid hosted set must be dropped too - re-hosting it would
-    // wake sessions whose harnesses died with the old process.
+    // A foreign-pid hosted set is RE-HOSTED under a grace window now (open
+    // TUI tabs reconnect but emit no events until typed into) - the row
+    // itself must survive startup so the grace survives further restarts.
     db.runtimeStatePut("hosted", WORK_DIR, ["ses_dead"], WORK_DIR, process.pid + 999);
     db.close();
 
@@ -188,6 +189,9 @@ describe("runtime rehydration through server()", () => {
       const sessions = check.runtimeStateAll().map((r) => r.sessionID);
       expect(sessions).not.toContain("ses_dead");
       expect(sessions).toContain("ses_reload");
+      // The hosted row SURVIVES the restart (grace rehosting): its session
+      // set re-hosts under the grace instead of being dropped.
+      expect(sessions).toContain(WORK_DIR);
       check.close();
     } finally {
       await hooks?.dispose?.();
@@ -372,6 +376,26 @@ describe("hostedSessionIds (reload re-hosting)", () => {
       exclude: ["ses_child"],
     });
     expect(hosted.sort()).toEqual(["ses_rehydrated", "ses_resumed", "ses_seen"]);
+  });
+});
+
+describe("unexpiredGraceRehosts (restart grace re-hosting)", () => {
+  test("live grace entries join the set; expired ones are pruned", () => {
+    const now = 1_000_000;
+    const grace = new Map<string, number>([
+      ["ses_open_tab", now + 60_000],
+      ["ses_closed_tab", now - 1],
+    ]);
+    const live = unexpiredGraceRehosts(grace, now);
+    expect(live).toEqual(["ses_open_tab"]);
+    expect(grace.has("ses_closed_tab")).toBe(false); // expired: pruned
+    expect(grace.has("ses_open_tab")).toBe(true); // live: kept
+  });
+
+  test("an empty or fully-expired grace map contributes nothing", () => {
+    const grace = new Map<string, number>([["ses_gone", 0]]);
+    expect(unexpiredGraceRehosts(grace, Date.now())).toEqual([]);
+    expect(grace.size).toBe(0);
   });
 });
 
