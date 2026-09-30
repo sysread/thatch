@@ -1480,6 +1480,16 @@ export async function createRuntime(input: {
       // requeue here so they are honestly re-extracted instead of lingering
       // as silent loss.
       extraction.requeueStaleAccepted();
+      // Nudges skip injected prompts. A background-task completion, chat
+      // notification, or watcher notification arrives as a prompt whose
+      // parts are all synthetic - it is not user input, and nudging on it
+      // feeds the pipeline its own exhaust: an extractor sub-agent's
+      // completion would otherwise fire a fresh extraction nudge for the
+      // entries the handling turn itself queued (the circular-nudge
+      // pattern). Real user messages carry at least one non-synthetic
+      // part, and an empty-parts message keeps nudging (unchanged
+      // behavior).
+      if (output.parts.length > 0 && (output.parts as any[]).every((p) => p.synthetic)) return;
       // Task-dispatched sub-agent sessions may have restricted tool lists
       // that exclude the thatch tools, and even where the tools exist the
       // child is driven by its dispatch prompt, so nudges only burn "No

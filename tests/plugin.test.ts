@@ -305,6 +305,47 @@ describe("plugin entry", () => {
     expect(realOutput.parts.length).toBe(2);
   });
 
+  test("nudges skip injected synthetic-only prompts (completions do not re-nudge)", async () => {
+    // Buffer an interaction so the extraction nudge would fire on any
+    // ordinary message for this session. A background-task completion is
+    // delivered as a prompt whose parts are all synthetic; nudging on it
+    // is the pipeline responding to its own exhaust (an extractor's
+    // completion would fire a fresh extraction nudge for the entries the
+    // handling turn queued).
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_synth", callID: "cs1", args: { command: "ls" } },
+      { title: "list files", output: "README.md", metadata: {} },
+    );
+    const injected: any = {
+      message: { id: "msg_inj" },
+      parts: [{ type: "text", text: "Extraction complete.", synthetic: true }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_synth", messageID: "msg_inj" } as any, injected);
+    expect(injected.parts.length).toBe(1);
+
+    // The same pending buffer still nudges on a real user message.
+    const real: any = {
+      message: { id: "msg_real" },
+      parts: [{ type: "text", text: "what is next?" }],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_synth", messageID: "msg_real" } as any, real);
+    expect(real.parts.length).toBe(2);
+    expect(real.parts[1].text).toContain("thatch-fact-extractor");
+
+    // A mixed message (synthetic part plus real user text) is user input
+    // as far as the nudge machinery is concerned.
+    const mixed: any = {
+      message: { id: "msg_mixed" },
+      parts: [
+        { type: "text", text: "attached context", synthetic: true },
+        { type: "text", text: "and my actual question" },
+      ],
+    };
+    await hooks["chat.message"]!({ sessionID: "ses_synth", messageID: "msg_mixed" } as any, mixed);
+    expect(mixed.parts.length).toBe(3);
+    expect(mixed.parts[2].text).toContain("thatch-fact-extractor");
+  });
+
   test("buffered tool interactions surface as a payload nudge, scoped per session", async () => {
     await hooks["tool.execute.after"]!(
       { tool: "bash", sessionID: "ses_a", callID: "c1", args: { command: "ls" } },
