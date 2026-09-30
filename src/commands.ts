@@ -108,10 +108,20 @@ After dispatching, call thatch_extraction_done to acknowledge.`,
   ];
 }
 
+/**
+ * Renders a YAML double-quoted scalar. Plain scalars break on values
+ * containing ": " (invalid YAML - the mapping key would be ambiguous), and
+ * opencode's lenient fallback parser does not rescue every host path, so the
+ * description must always be quoted.
+ */
+function yamlQuote(value: string): string {
+  return JSON.stringify(value);
+}
+
 /** Renders one action as a full command markdown file. */
 export function renderActionCommand(action: ActionDef): string {
   return `---
-description: ${action.description}
+description: ${yamlQuote(action.description)}
 ---
 ${userMessageSection}
 
@@ -121,7 +131,7 @@ ${action.body}`;
 }
 
 const COMPACT_TEMPLATE = `---
-description: Flush thatch persistence, check for loose ends, then compact if clear
+description: ${yamlQuote("Flush thatch persistence, check for loose ends, then compact if clear")}
 ---
 ${userMessageSection}
 
@@ -138,7 +148,7 @@ ${COMPACT_READY_TOKEN}
 If anything is outstanding, list the items concisely so the user can address them, and do NOT include the token. The session will only be compacted when the token is present.`;
 
 const EXIT_TEMPLATE = `---
-description: Flush thatch persistence, check for loose ends, then exit opencode if clear
+description: ${yamlQuote("Flush thatch persistence, check for loose ends, then exit opencode if clear")}
 ---
 ${userMessageSection}
 

@@ -2830,6 +2830,18 @@ describe("action commands", () => {
     expect(extract.content).toContain("thatch_extraction_done");
   });
 
+  test("frontmatter descriptions are always quoted YAML scalars", async () => {
+    // An unquoted value containing ": " (hygiene's description has one) is
+    // invalid YAML; hosts that miss the lenient fallback then show the
+    // command with no description at all.
+    const { opencodeCommandDefs, claudeCommandDefs } = await import("../src/commands");
+    for (const def of [...opencodeCommandDefs(), ...claudeCommandDefs()]) {
+      const line = def.content.split("\n").find((l) => l.startsWith("description:"))!;
+      const value = line.slice("description:".length).trim();
+      expect(value).toMatch(/^".*"$/);
+    }
+  });
+
   test("Claude Code command set drops wrap-ups and the opencode-only extract action", async () => {
     const { claudeCommandDefs } = await import("../src/commands");
     const names = claudeCommandDefs().map((d) => d.name).sort();

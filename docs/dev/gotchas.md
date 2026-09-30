@@ -286,3 +286,16 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   wrap-up arming write, whose command executes are not drained by the v2
   cleanup). Do not "fix" the guard away by moving it into db.ts: the
   accessor cannot tell a legitimate in-flight caller from a stale writer.
+
+## Command frontmatter descriptions must be quoted YAML scalars
+
+- **A plain-scalar frontmatter value containing a colon followed by a space
+  is invalid YAML, and not every host path rescues it.** `/thatch/hygiene`'s
+  description ("Tend the memory store: stale entries, ...") shipped unquoted;
+  the first parse throws
+  and only opencode's fallback sanitizer recovers it — and a long-lived
+  server was observed dropping the description entirely while a fresh server
+  parsed it fine, which made the bug look like a TUI rendering issue. The
+  renderer quotes every description (`yamlQuote` in src/commands.ts) and a
+  unit test pins the quoted form. Keep it that way for any new frontmatter
+  field whose value is free-form prose.
