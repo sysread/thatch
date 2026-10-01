@@ -587,8 +587,9 @@ describe("dormant watcher recovery through server()", () => {
     // window, nothing would ever clear it and BOTH extraction paths stay
     // suppressed for the session's life. The reconciler must finalize the
     // child (delete its session, drop the bookkeeping) when it is no longer
-    // running. 30s timeout: the reconciler deliberately waits out a 10s
-    // reload window first.
+    // running. The production reload window is 10s; the runtime reads it
+    // from the environment at call time, so shorten it here - the suite
+    // must stay fast, and the wait itself is not what is under test.
     const db = new ThatchDB(dbPath);
     db.runtimeStatePut(
       "child",
@@ -598,27 +599,31 @@ describe("dormant watcher recovery through server()", () => {
     );
     db.close();
 
+    const prevWindow = process.env.THATCH_CHILD_RECONCILE_MS;
+    process.env.THATCH_CHILD_RECONCILE_MS = "50";
     const { finally: done } = await startServer();
     try {
       // Finalization journals the child row gone (the maps are cleared, and
       // journalChild journals a delete for a parentless child). Poll for it
-      // - the reconciler deliberately waits out the reload window first.
-      const deadline = Date.now() + 20_000;
+      // - the reconciler waits out the (shortened) reload window first.
+      const deadline = Date.now() + 5_000;
       for (;;) {
         const check = new ThatchDB(dbPath);
         const rows = check.runtimeStateAll().filter((r) => r.sessionID === "ses_child_r");
         check.close();
         if (rows.length === 0) break;
         if (Date.now() > deadline) break;
-        await new Promise((r) => setTimeout(r, 500));
+        await new Promise((r) => setTimeout(r, 25));
       }
       const check = new ThatchDB(dbPath);
       expect(check.runtimeStateAll().some((r) => r.sessionID === "ses_child_r")).toBe(false);
       check.close();
     } finally {
       await done();
+      if (prevWindow === undefined) delete process.env.THATCH_CHILD_RECONCILE_MS;
+      else process.env.THATCH_CHILD_RECONCILE_MS = prevWindow;
     }
-  }, 30_000);
+  }, 10_000);
 
   test("a task-kind child row restores without the extraction sets", async () => {
     // A task-dispatched sub-agent journaled with kind "task" must come back
@@ -638,7 +643,16 @@ describe("dormant watcher recovery through server()", () => {
     const { hooks, finally: done } = await startServer();
     try {
       const parts = await sendMessage(hooks, "ses_parent_t");
-      expect(parts.some((pt: any) => pt.text?.includes("fact-extractor"))).toBe(true);
+      // There is no model-facing extraction nudge on opencode any more -
+      // chat.message stays clean even with pending entries.
+      expect(parts.some((pt: any) => pt.text?.includes("fact-extractor"))).toBe(false);
+      // The buffered entries survive the reload and are still served for
+      // extraction by the plugin.
+      const served = await hooks.tool.thatch_get_extraction_payload.execute(
+        { session_id: "ses_parent_t" },
+        { sessionID: "ses_ext_t" },
+      );
+      expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("hi");
       // The task child's row survives - its idle event, not the reconciler,
       // owns its cleanup.
       const check = new ThatchDB(dbPath);

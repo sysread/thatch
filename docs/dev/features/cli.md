@@ -85,6 +85,7 @@ Read-only window on the cross-session chat directory ([cross-session-chat.md](cr
 | `THATCH_RECALL_THRESHOLD` | Cosine cutoff for recall nudge | `0.55` |
 | `THATCH_PREDICTION_THRESHOLD` | Cutoff for prediction auto-fire | `0.60` |
 | `THATCH_BEHAVIOR_THRESHOLD` | Cutoff for behavior auto-fire | `0.60` |
+| `THATCH_CHILD_RECONCILE_MS` | Reload window before a restored extraction child is judged finished (test knob) | `10000` |
 | `CLAUDE_PROJECT_DIR` | Claude Code project dir | `process.cwd()` |
 | `CURSOR_PROJECT_DIR` | Cursor project dir | falls through |
 | `CLAUDE_CONFIG_DIR` | Claude config dir | `~/.claude` |

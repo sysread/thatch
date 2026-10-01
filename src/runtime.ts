@@ -912,12 +912,17 @@ export async function createRuntime(input: {
   // own idle event, and the finalize is idempotent if both paths race.
   const reconcileRestoredChildren = async () => {
     if (restoredChildren.size === 0) return;
+    // The reload window: how long to let the event pump repopulate the
+    // status map before judging a restored child "no longer running".
+    // Read at call time (not module load) so the test suite can shorten it
+    // per server() instance instead of waiting out the production 10s.
+    const windowMs = Number(process.env.THATCH_CHILD_RECONCILE_MS) || 10_000;
     await new Promise<void>((resolve) => {
-      const t = setTimeout(resolve, 10_000);
+      const t = setTimeout(resolve, windowMs);
       t.unref?.();
     });
     // Dispose (a v2 plugin reload or process exit) may have closed the db
-    // during the 10s window; finalizing into it would throw on the journal
+    // during the window; finalizing into it would throw on the journal
     // write. The reloaded instance's own reconciler owns the rows now.
     if (disposed) return;
     let live: Record<string, { type: string }> = {};
