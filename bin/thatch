@@ -1054,15 +1054,19 @@ switch (command) {
       }
 
       // Tier 1: extraction nudge. Peek (don't drain) - the queue persists
-      // until the agent calls memory_remember, which triggers consumeQueue.
-      // If the agent ignores the nudge, the payload grows on the next flush.
-      // The nudge carries the session ID, not the full payload — the
-      // sub-agent fetches it via get_extraction_payload.
+      // until the extractor completes (extraction_done with the parent's
+      // session_id) or the parent writes a memory itself. The parent's
+      // dispatch-time ack resets the escalation counter but does NOT drain:
+      // a drain at ack time deleted the queue before the sub-agent fetched
+      // (the accept-before-fetch loss). If the agent ignores the nudge, the
+      // payload grows on the next flush. The nudge carries the session ID,
+      // not the full payload - the sub-agent fetches it via
+      // get_extraction_payload.
       const interactions = sessionID ? peekQueue(sessionID) : [];
       if (interactions.length > 0) {
         const missed = sessionID ? getMissedCount(sessionID) : 0;
         if (sessionID) incrementMissedCount(sessionID);
-        const output = extractionNudge(interactions.length, missed, "mcp__thatch__memory_remember", sessionID ?? "");
+        const output = extractionNudge(interactions.length, missed, sessionID ?? "");
         emit(output, versionWarning, isJson, chatLine);
         break;
       }

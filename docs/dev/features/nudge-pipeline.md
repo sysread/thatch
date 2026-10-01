@@ -2,7 +2,7 @@
 
 Unless noted, `client.*` names below are the opencode v1 mapping; the v2 equivalents and degrades are in [opencode-plugin.md](opencode-plugin.md).
 
-Runs on every user message. Four priority tiers share one embedding
+Runs on every user message. Priority tiers share one embedding
 computation. The pipeline injects *synthetic parts*---text the model sees in
 the conversation but the user does not see in the TUI. This is the inverse of
 toast notifications, which are TUI-visible but model-invisible.
@@ -10,16 +10,18 @@ toast notifications, which are TUI-visible but model-invisible.
 The nudge pipeline is thatch's core innovation. It is not a passive
 store-and-retrieve system. It is a nudge layer that changes agent behavior by
 injecting context at the right moment. See [extraction.md](extraction.md) for
-the extraction nudge, [prediction-engine.md](prediction-engine.md) for the
+the extraction pipeline (plugin-driven on opencode; nudged on MCP hosts only),
+[prediction-engine.md](prediction-engine.md) for the
 prediction auto-fire, and [behavior-engine.md](behavior-engine.md) for the
 behavior auto-fire.
 
 ## What it does
 
-On every user message, thatch runs through four priority tiers:
+On every user message, thatch runs through the priority tiers:
 
-1. **Extraction nudge**---if tool interactions are buffered, tell the agent to
-   extract memories.
+1. **Extraction nudge** (MCP hosts only)---if tool interactions are queued,
+   tell the agent to dispatch an extractor. There is deliberately no
+   opencode extraction nudge: extraction is plugin-driven at session idle.
 2. **Recall nudge**---semantically search stored memories for context
    relevant to the user's prompt.
 3. **Prediction nudge**---surface user decision-model predictions relevant to
@@ -28,14 +30,16 @@ On every user message, thatch runs through four priority tiers:
    current situation.
 
 Tiers 2--4 fire independently and share one embedding computation. Tier 1
-returns early, skipping tiers 2--4.
+(extraction) exists only on the MCP path.
 
 ## How it works
 
-Two host paths deliver the same four tiers through different mechanisms. The
-opencode path runs in-process with direct event hooks. The MCP path runs via
-external CLI hook processes that communicate with the long-lived MCP server
-through the sideband socket.
+Two host paths deliver the tiers through different mechanisms. The opencode
+path runs in-process with direct event hooks and has THREE tiers (recall,
+prediction, behavior - extraction is plugin-driven at session idle, not
+nudged). The MCP path runs via external CLI hook processes that communicate
+with the long-lived MCP server through the sideband socket and keeps all
+four.
 
 ### opencode path (`src/runtime.ts`, `onChatMessage` - v1 `chat.message` hook, v2 `session.hook("prompt")`)
 
@@ -53,28 +57,25 @@ See [compaction-recovery.md](compaction-recovery.md).
 
 If the session is a child in `childToParent` but not in `extractionChildren`
 (a task-dispatched sub-agent), all nudge tiers are skipped and the hook
-returns before tier 1. Dispatched sub-agents may have restricted tool lists
+returns early. Dispatched sub-agents may have restricted tool lists
 that exclude the thatch tools, and even where the tools exist the child is
 driven by its dispatch prompt, so a nudge only produces "No tool named"
-error rounds or noise. `extraction.requeueStaleAccepted()` still runs before
-the guard - it is session-independent maintenance. See
+error rounds or noise. See
 [session-lifecycle.md](session-lifecycle.md) for the `extractionChildren`
 distinction.
 
-#### Tier 1---Extraction nudge (fallback path)
+#### Tier 1---Extraction nudge: REMOVED from opencode
 
-Fires only when direct extraction was never triggered or threw (the session is
-not in the `extracting` set) **and** the in-memory buffer has pending
-interactions.
-
-- Injects `extractionNudge(count, missed, "thatch_memory_remember", sessionID)`
-  as a synthetic text part.
-- Increments the `missedNudges` counter for escalation: polite at 0, insistent
-  at 2, ALL-CAPS shouting at 3+.
-- Returns early. Tiers 2--4 are skipped.
-
-See [extraction.md](extraction.md) for the full extraction pipeline, including
-the accept/complete/requeue lifecycle and the `extracting` set.
+There is deliberately no extraction nudge on the opencode path. The old
+model-driven handshake (nudge → model dispatches a sub-agent → parent acks
+with `thatch_extraction_done` → child fetches by a model-copied session ID)
+raced its own state machine: the parent's ack accepted the buffer before
+the child fetched, a no-claim completion wiped the accepted set, and
+mis-targeted IDs made every transition a silent no-op - so the same queued
+count re-fired forever while buffered interactions were silently lost (the
+September 2026 dispatch-loop report, both defects). Extraction on opencode
+is now plugin-driven end-to-end (`triggerExtraction` at session idle); see
+[extraction.md](extraction.md). The MCP path keeps its nudge - see below.
 
 #### Tier 2---Recall nudge
 
@@ -127,8 +128,7 @@ and the self-discipline rule data model.
 #### Tier independence
 
 Tiers 2, 3, and 4 all fire independently. Any subset may inject. All share
-one embedding computation. The embedding is computed once, after the
-extraction tier returns early, and is reused across three cosine scans against
+one embedding computation, reused across three cosine scans against
 different tables.
 
 ### MCP path (`bin/thatch`, `flush-tools` subcommand)
@@ -156,10 +156,14 @@ Three priority tiers, first match wins:
 #### Tier 1---Extraction nudge
 
 - `peekQueue(sessionID)` peeks the file-backed JSONL queue without draining
-  it. The queue persists until the agent calls `memory_remember`, which
-  triggers `consumeQueue`.
+  it. The queue persists until the extractor completes
+  (`extraction_done` with the parent's session id) or the agent calls
+  `memory_remember`, which triggers `consumeQueue`. The parent's
+  dispatch-time ack resets the escalation counter but does NOT drain - a
+  drain at ack time deleted the queue before the sub-agent fetched (the
+  accept-before-fetch loss).
 - If interactions are pending: increments the missed count, prints
-  `extractionNudge(count, missed, "mcp__thatch__memory_remember", sessionID)`.
+  `extractionNudge(count, missed, sessionID)`.
 - Breaks. Tiers 2--3 are skipped.
 
 See [extraction.md](extraction.md) for the file-backed queue and the
@@ -253,9 +257,10 @@ TUI display. The opencode framework's history serializer filters on
 
 ## Interactions with other features
 
-- **Extraction pipeline** ([extraction.md](extraction.md)): tier 1 is the
-  extraction nudge. The `extracting` set suppresses tier 1 when direct
-  extraction is active.
+- **Extraction pipeline** ([extraction.md](extraction.md)): the MCP tier 1
+  is the extraction nudge. On opencode there is no extraction
+  nudge - extraction is plugin-driven at session idle, so `chat.message`
+  runs the recall/prediction/behavior tiers only.
 - **Memory store** ([memory-store.md](memory-store.md)): tier 2 searches
   stored memories via `db.search()`. This path records no telemetry---the
   agent has not read the memories yet.
@@ -272,21 +277,21 @@ TUI display. The opencode framework's history serializer filters on
   the nudge pipeline is suppressed during compaction. The compaction guard
   clears stale flags when compaction fails.
 - **Session lifecycle** ([session-lifecycle.md](session-lifecycle.md)):
-  direct extraction (`triggerExtraction`) suppresses tier 1 by adding the
-  session to the `extracting` set.
+  direct extraction (`triggerExtraction`) is triggered by session idle;
+  there is no extraction tier to suppress on opencode.
 
 ## Source files
 
 | File | Role |
 |------|------|
-| `src/runtime.ts` | opencode: per-message nudges (all 4 tiers), compaction guard, extraction fallback |
-| `bin/thatch` | MCP: `flush-tools` and `flush-predictions` subcommands |
+| `src/runtime.ts` | opencode: per-message nudges (recall/prediction/behavior tiers; no extraction nudge), compaction guard |
+| `bin/thatch` | MCP: `flush-tools` and `flush-predictions` subcommands (all 4 tiers) |
 | `src/sideband.ts` | MCP: sideband client helpers (`sidebandMatch`, `sidebandPredictions`, `sidebandBehaviors`) |
 | `src/prompts.ts` | All nudge formatting functions (`recallNudge`, `claudeRecallNudge`, `predictionNudge`, `behaviorNudge`, `extractionNudge`, `claudeWriteNudge`) |
 
 ## Key invariants
 
-- Tier 1 (extraction) returns early. Tiers 2-4 are skipped when tier 1 fires.
+- Tier 1 (extraction, MCP only) returns early. Tiers 2-4 are skipped when tier 1 fires.
 - Tiers 2-4 share one embedding computation. One embed, three cosine scans against different tables.
 - Each tier is wrapped in its own try/catch. A failure in one tier does not block the others.
 - The recall nudge uses `db.search()`, not `db.recall()`, to avoid inflating telemetry. The agent has not read the memories yet.

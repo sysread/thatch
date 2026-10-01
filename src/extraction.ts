@@ -342,9 +342,10 @@ export class ExtractionPipeline {
    * Requeues accepted entries that have waited longer than maxAgeMs for a
    * completion signal that never came: the extractor sub-agent crashed
    * without acking, or the completion ack was lost. Without this, accepted
-   * entries linger unprocessed AND un-nudged - silent loss. Returns the session ids that had entries
-   * requeued; the regular nudge path picks them up from pending on the
-   * session's next message.
+   * entries linger unprocessed with nothing to re-extract them - silent
+   * loss. Returns the session ids that had entries requeued; on opencode
+   * the idle trigger re-extracts them, on MCP hosts the next flush-tools
+   * nudge picks them up.
    */
   requeueStaleAccepted(maxAgeMs = ACCEPTED_STALE_MS): string[] {
     const stale = [...this.#acceptedAt.entries()]

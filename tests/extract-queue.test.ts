@@ -213,7 +213,13 @@ describe("missed-nudge counter", () => {
     expect(peekQueue("echo-session").length).toBe(0);
   });
 
-  test("appendBatch drains queue when extraction_done is in the batch", () => {
+  test("appendBatch does NOT drain the queue on extraction_done (accept-before-fetch race)", () => {
+    // The parent's dispatch-time ack must not delete the queue: a drain
+    // here removed the queued interactions BEFORE the sub-agent's
+    // get_extraction_payload fetch - silent interaction loss. The ack only
+    // resets the escalation counter; the queue is consumed by the
+    // extractor's completion (extraction_done with the parent's session_id
+    // -> drainExtractionQueue) or the parent's own memory_remember.
     incrementMissedCount("drain-session");
     expect(getMissedCount("drain-session")).toBe(1);
     appendBatch("drain-session", [
@@ -224,7 +230,7 @@ describe("missed-nudge counter", () => {
       call("mcp__thatch__extraction_done", {}, "ok"),
     ]);
     expect(getMissedCount("drain-session")).toBe(0);
-    expect(peekQueue("drain-session").length).toBe(0);
+    expect(peekQueue("drain-session").length).toBe(1);
   });
 });
 

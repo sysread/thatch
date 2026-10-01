@@ -93,9 +93,7 @@ describe("hook/server version skew (issue #6)", () => {
 
     const nudge = extractionNudge(
       interactions.length,
-      0,
-      "mcp__thatch__memory_remember",
-      "skew-session",
+      0,"skew-session",
     );
 
     // The nudge tells the model to call extraction tools.
@@ -120,7 +118,6 @@ describe("hook/server version skew (issue #6)", () => {
     const nudge = extractionNudge(
       1,
       0,
-      "mcp__thatch__memory_remember",
       "skew-session",
     );
 
@@ -163,7 +160,6 @@ describe("hook/server version skew (issue #6)", () => {
         const nudge = extractionNudge(
           interactions.length,
           missed,
-          "mcp__thatch__memory_remember",
           "escalation-session",
         );
 
@@ -197,7 +193,6 @@ describe("hook/server version skew (issue #6)", () => {
     const nudge = extractionNudge(
       1,
       0,
-      "mcp__thatch__memory_remember",
       "same-version",
     );
 

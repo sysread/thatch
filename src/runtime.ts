@@ -9,7 +9,6 @@ import {
   compactionContext,
   sessionStartReminder,
   recallNudge,
-  extractionNudge,
   extractionDirectPrompt,
   predictionNudge,
   behaviorNudge,
@@ -497,12 +496,6 @@ export async function createRuntime(input: {
   // degradation: nudges stay off for that session, but no crash).
   const compacting = new Set<string>();
 
-  // Per-session count of consecutive extraction nudges delivered without any
-  // memory_remember call in between. Drives nudge escalation: the agent gets
-  // a couple of polite chances, then the tone shifts to directive, then to
-  // all-caps shouting. Reset to 0 whenever the agent writes a memory.
-  const missedNudges = new Map<string, number>();
-
   // Parent-child session mapping for cross-session buffer drain. opencode
   // creates real child sessions with their own IDs for sub-agents; without
   // this map, a memory_remember call in a child (e.g. a background
@@ -531,24 +524,21 @@ export async function createRuntime(input: {
 
   // Parent sessions with an active direct-extraction child. When the parent
   // goes idle with pending tool interactions, the plugin creates a child
-  // session and prompts it directly through the host's prompt capability
-  // instead of injecting a nudge into the next user message. This set
-  // suppresses the nudge path
-  // while the child runs, and prevents re-triggering if the parent goes idle
-  // again before the child finishes. Cleared when the child goes idle, errors,
-  // or is deleted. If direct extraction fails, the set is cleared so the nudge
-  // path takes over as a fallback on the next chat.message.
+  // session and prompts it directly through the host's prompt capability.
+  // This set prevents re-triggering if the parent goes idle again before
+  // the child finishes. Cleared when the child goes idle, errors, or is
+  // deleted. If direct extraction fails, the set is cleared so the next
+  // idle retries - there is no model-facing nudge fallback.
   const extracting = new Set<string>();
 
   // Child session IDs created by triggerExtraction (direct extraction only).
   // The child idle handler uses this to distinguish plugin-created extraction
-  // children from task-dispatched sub-agents (code review specialists, the
-  // nudge-path fact-extractor, any model-dispatched task). Only extraction
-  // children get the full cleanup: buffer drain, session deletion, toast.
-  // Non-extraction children get claim-scoped completion (a no-op for a
-  // child that never fetched a payload) + missedNudges.reset so their
-  // sessions are not deleted out from under the task tool that dispatched
-  // them.
+  // children from task-dispatched sub-agents (code review specialists, any
+  // model-dispatched task). Only extraction children get the full cleanup:
+  // buffer drain, session deletion, toast. Non-extraction children get
+  // claim-scoped completion (a no-op for a child that never fetched a
+  // payload) so their sessions are not deleted out from under the task tool
+  // that dispatched them.
   const extractionChildren = new Set<string>();
 
   // Per-child-session extraction metrics for the toast notification. When the
@@ -876,7 +866,6 @@ export async function createRuntime(input: {
       // that crashed before its payload call) has no claim and must not
       // drop the accepted set - another extractor may hold it in flight.
       extraction.completeClaimed(sessionID);
-      missedNudges.delete(parentID);
       extracting.delete(parentID);
       childKinds.delete(sessionID);
       childToParent.delete(sessionID);
@@ -899,7 +888,6 @@ export async function createRuntime(input: {
       // fetched leaves its entries held; requeueStaleAccepted bounds the
       // linger.
       extraction.completeClaimed(sessionID);
-      missedNudges.delete(parentID);
     }
   };
 
@@ -971,13 +959,16 @@ export async function createRuntime(input: {
 
   // Direct extraction: create a child session linked to the parent and prompt
   // it with the extraction payload. The child runs the fact-extractor skill,
-  // writes memories, and goes idle. The existing childToParent / snapshot
-  // drain machinery handles buffer cleanup. The nudge path is a fallback if
-  // this throws.
+  // writes memories, and goes idle. The childToParent / claim machinery
+  // handles buffer cleanup. If this throws, the entries stay pending and
+  // the next idle retries.
   //
-  // Does NOT call extraction.accept - entries stay in pending so consumeSnapshot
-  // can drain them by reference identity when the child writes a memory. The
-  // extracting set (not accept) suppresses the nudge in chat.message.
+  // Does NOT call extraction.accept - entries stay in pending. The child's
+  // payload fetch claims them (the fetch is the delivery record); entries
+  // that arrive after the fetch stay pending for the next idle. The
+  // extracting set (not accept) suppresses nothing any more - there is no
+  // model-facing extraction nudge - but it still gates re-triggering while
+  // a child runs.
   //
   // The child ID is added to extractionChildren so the idle handler can
   // distinguish plugin-created extraction children from task-dispatched
@@ -1065,7 +1056,6 @@ export async function createRuntime(input: {
   // same logic, so the bodies live here instead of inline in the hook.
   const toolMemoryRemember = async (sessionID: string, overwrite: unknown) => {
     extraction.consume(sessionID);
-    missedNudges.delete(sessionID);
     // A session that fetched its own payload (direct parent-side fetch or a
     // child's payload call) completes its claim when it writes a memory -
     // the write proves the delivered entries were processed.
@@ -1084,52 +1074,56 @@ export async function createRuntime(input: {
       // Complete the parent's accepted entries (the extractor confirmed
       // it is alive and saving). Completion is scoped to THIS child's
       // claimed delivery - the fetch IS the delivery record, so whatever
-      // the child received is consumed here and nothing else. Pending
-      // entries the child never received (post-fetch arrivals, or a child
-      // that never fetched) stay pending and re-nudge: no silent loss.
-      // (The old dispatch-time snapshot drain was either a no-op under
-      // claim semantics or a silent-loss vector for children that never
-      // fetched - removed September 2026. The journal's snapshot field
-      // remains for restart recovery.)
+      // the child received is consumed here and nothing else. Accepted
+      // entries the child never received stay held; requeueStaleAccepted
+      // bounds their linger: no silent loss, no whole-set wipe.
       extraction.completeClaimed(sessionID);
       journalChild(sessionID);
-      missedNudges.delete(parentID);
-      journalChild(sessionID);
-      missedNudges.delete(parentID);
     }
   };
   const toolExtractionDone = (sessionID: string, targetID?: string) => {
     const parentID = childToParent.get(sessionID);
     if (parentID) {
-      // The child's completion consumes its own claimed delivery. The
-      // whole-set fallback covers a child that acks without ever fetching
-      // (its payload call errored) - rare, and the ack is a deliberate
-      // processed signal, unlike the automatic idle path which is
-      // claim-scoped only.
-      if (!extraction.completeClaimed(sessionID)) {
-        extraction.completeAccepted(parentID);
-      }
-      missedNudges.delete(parentID);
+      // The child's completion consumes its own claimed delivery. A child
+      // that acks without ever fetching (its payload call errored, or it
+      // acked before fetching) has no claim - it processed NOTHING, so its
+      // ack must be a no-op here, never a whole-set drop: the accepted set
+      // may be another extractor's in-flight delivery. Held entries without
+      // a completer requeue via requeueStaleAccepted (15 min bound).
+      extraction.completeClaimed(sessionID);
       extraction.consume(sessionID);
     } else if (targetID && targetID !== sessionID) {
       // A completion ack for ANOTHER session - the fact-extractor sub-agent
       // naming its parent. v2 links no parentID on dispatched sessions
       // (SessionCreateInput has none), so childToParent cannot know this
       // relationship and the explicit session_id is the only signal that
-      // the target's accepted entries are accounted for. Without this
-      // branch the accepted queue lingers forever and a tool-dense session
-      // re-nudges every idle on never-draining exhaust. Completion is
-      // scoped to the child's claimed delivery; the whole-set fallback
-      // covers the no-claim case (a fetch that errored, or the MCP path
-      // where the file-backed queue was drained instead).
-      if (!extraction.completeClaimed(sessionID)) {
-        extraction.completeAccepted(targetID);
-      }
-      missedNudges.delete(targetID);
+      // the target's accepted entries are accounted for. Completion is
+      // scoped to the child's claimed delivery; a no-claim ack is a no-op
+      // for the same reason as above - the ack proves nothing was
+      // processed, so it must not drop entries another extractor holds.
+      // (The old whole-set completeAccepted fallback here was the
+      // accept-before-fetch interaction loss: a child acking - or mis-
+      // targeting - before its fetch wiped the accepted set the new
+      // extractor was about to claim, silently, every round. September
+      // 2026 dispatch-loop report, defect 1.)
+      extraction.completeClaimed(sessionID);
     } else {
-      extraction.accept(sessionID);
+      // A top-level session acking its own buffer. Two legitimate shapes:
+      // - The wrap-up checklist (/thatch/compact, /thatch/exit): the
+      //   parent fetched its OWN payload (recording a claim on itself),
+      //   processed it inline, and acks - a no-save run writes no memory,
+      //   so this ack is the only completion signal for that claim.
+      // - A legacy dispatch-time ack (MCP-style habit, or an in-flight
+      //   nudge from an older plugin version) with no claim: accept is
+      //   non-destructive - entries move to the holding area and a
+      //   crashed extractor's entries requeue via requeueStaleAccepted.
+      // Note the opencode plugin no longer ASKS the parent to ack after a
+      // dispatch - direct extraction (triggerExtraction at idle) owns the
+      // whole lifecycle; the accept branch is tolerance, not protocol.
+      if (!extraction.completeClaimed(sessionID)) {
+        extraction.accept(sessionID);
+      }
     }
-    missedNudges.delete(sessionID);
   };
   const toolMemoryForget = (sessionID: string) => {
     const metrics = childMetrics.get(sessionID) ?? { new: 0, updated: 0, deleted: 0 };
@@ -1145,9 +1139,21 @@ export async function createRuntime(input: {
         // signal consumes only them (claim semantics). Without a fetcher
         // (no host session context) the fetch is a pure peek - legacy
         // behavior.
+        //
+        // An omitted (or self-named) target resolves to the fetcher's own
+        // session - which for a child is the WRONG key: the buffer belongs
+        // to the parent. When the plugin knows the parent link
+        // (childToParent - populated for plugin-created extraction
+        // children, and for v1 model-dispatched ones), retarget to the
+        // parent so the model never has to copy a session ID at all. v2
+        // model-dispatched sub-agents carry no parentID, so no link exists
+        // for them and the explicit-ID path remains the only signal.
+        const resolved = (fetcherID && targetID === fetcherID && childToParent.has(fetcherID))
+          ? childToParent.get(fetcherID)!
+          : targetID;
         const all = fetcherID
-          ? extraction.claim(targetID, fetcherID)
-          : [...extraction.peekAccepted(targetID), ...extraction.peek(targetID)];
+          ? extraction.claim(resolved, fetcherID)
+          : [...extraction.peekAccepted(resolved), ...extraction.peek(resolved)];
         if (all.length === 0) return null;
         return extraction.buildPayload(all, repo);
       },
@@ -1177,7 +1183,7 @@ export async function createRuntime(input: {
     },
 
     // 3. Tool buffering - feeds the extraction pipeline (direct extraction
-    //    via SDK or nudge fallback). Excluded tools:
+    //    via SDK at session idle). Excluded tools:
     //    - thatch_*: extracting facts from memory ops would echo the store
     //    - skill/task: meta-tools that orchestrate agent behavior (loading
     //      skills, dispatching sub-agents). Buffering them creates a feedback
@@ -1476,48 +1482,34 @@ export async function createRuntime(input: {
         // Best-effort. Version check failure must not block nudges.
       }
 
-      // Extraction nudge (fallback path). Skipped when the extracting set
-      // is active - that means a direct-extraction child session is running
-      // and the plugin is handling extraction via the SDK. The nudge fires
-      // here only when direct extraction was never triggered or threw.
-      // Accepted entries whose completion signal never came (crashed
-      // extractor, or a v2 dispatch whose ack never named the parent)
-      // requeue here so they are honestly re-extracted instead of lingering
-      // as silent loss.
-      extraction.requeueStaleAccepted();
+      // Extraction is plugin-driven on opencode (triggerExtraction at
+      // session idle) - there is deliberately NO model-facing extraction
+      // nudge here. The old nudge-driven handshake (model dispatches a
+      // sub-agent, parent acks with extraction_done, child fetches by
+      // copied session id) raced its own state machine: acks landed before
+      // fetches, no-claim completions wiped in-flight accepted sets, and
+      // mis-targeted ids made every transition a silent no-op - the
+      // buffered count then re-fired identically forever (the September
+      // 2026 dispatch-loop report, defects 1 and 2). Accepted entries whose
+      // completion signal never came (crashed extractor, a v2 dispatch
+      // whose ack never named the parent) requeue at the idle site, the
+      // only consumer of pending state now.
       // Nudges skip injected prompts. A background-task completion, chat
       // notification, or watcher notification arrives as a prompt whose
       // parts are all synthetic - it is not user input, and nudging on it
       // feeds the pipeline its own exhaust: an extractor sub-agent's
-      // completion would otherwise fire a fresh extraction nudge for the
+      // completion would otherwise re-trigger the nudge machinery for the
       // entries the handling turn itself queued (the circular-nudge
       // pattern). Real user messages carry at least one non-synthetic
       // part, and an empty-parts message keeps nudging (unchanged
       // behavior).
       if (output.parts.length > 0 && (output.parts as any[]).every((p) => p.synthetic)) return;
       // Task-dispatched sub-agent sessions may have restricted tool lists
-      // that exclude the thatch tools, and even where the tools exist the
-      // child is driven by its dispatch prompt, so nudges only burn "No
-      // tool named ..." error rounds or add noise there. Extraction
-      // children are excluded: they run with full tools and are driven by
-      // extractionDirectPrompt.
+      // that exclude the thatch tools, so recall/prediction/behavior
+      // nudges there only burn "No tool named ..." error rounds or add
+      // noise. Extraction children are excluded: they run with full tools
+      // and are driven by extractionDirectPrompt.
       if (childToParent.has(input.sessionID) && !extractionChildren.has(input.sessionID)) return;
-      if (!extracting.has(input.sessionID) && extraction.pending(input.sessionID)) {
-        const batch = extraction.peek(input.sessionID);
-        const missed = missedNudges.get(input.sessionID) ?? 0;
-        const text = extractionNudge(batch.length, missed, "thatch_memory_remember", input.sessionID);
-        missedNudges.set(input.sessionID, missed + 1);
-
-        output.parts.push({
-          id: `prt_thatch_${Math.random().toString(36).slice(2)}`,
-          sessionID: input.sessionID,
-          messageID: input.messageID ?? output.message.id,
-          type: "text",
-          text,
-          synthetic: true,
-        });
-        return;
-      }
 
       // No extraction pending - try the prompt-aware recall nudge. Extract
       // the user's prompt text from the message parts, embed it with the
@@ -1635,8 +1627,8 @@ export async function createRuntime(input: {
     // entries go back to pending. Only extraction children (created by
     // triggerExtraction, tracked in extractionChildren) get the full cleanup
     // (buffer drain, session deletion, toast). Task-dispatched sub-agents
-    // get the old behavior (completeAccepted + missedNudges.reset) so their
-    // sessions are not deleted out from under the task tool.
+    // get claim-scoped completion only, so their sessions are not deleted
+    // out from under the task tool.
     onEvent: async (event) => {
       // Pause alerts: the LLM blocked on a human decision. Both lines
       // publish these on the bus; v2's adapter translates them into the
@@ -1719,13 +1711,14 @@ export async function createRuntime(input: {
         if (parentID && sessionID) {
           // A child session went idle. Two cases:
           // - Extraction child (created by triggerExtraction, tracked in
-          //   extractionChildren): drain the parent's snapshot, fire a toast
-          //   with metrics, delete the child session, clean up all maps.
-          // - Task-dispatched sub-agent (code review specialist, nudge-path
-          //   fact-extractor, any model-dispatched task): complete the
-          //   parent's accepted entries and reset missedNudges. Do NOT drain
-          //   the buffer or delete the session - the task tool that
-          //   dispatched the sub-agent needs to read its output.
+          //   extractionChildren): fire a toast with metrics, delete the
+          //   child session, clean up all maps. Completion of the parent's
+          //   accepted entries is claim-scoped inside.
+          // - Task-dispatched sub-agent (code review specialist, any
+          //   model-dispatched task): complete what THIS child claimed via
+          //   its payload fetch, nothing more. Do NOT drain the buffer or
+          //   delete the session - the task tool that dispatched the
+          //   sub-agent needs to read its output.
           await finishExtractionChild(sessionID, parentID);
           return;
         }
@@ -1849,8 +1842,13 @@ export async function createRuntime(input: {
           })();
         }
         // Parent went idle - trigger direct extraction if there are pending
-        // tool interactions and no extraction is already running. Falls
-        // back to the nudge path on the next chat.message if this throws.
+        // tool interactions and no extraction is already running. This is
+        // the ONLY extraction trigger on opencode: no model-facing nudge
+        // exists any more. Stale accepted entries (a crashed extractor,
+        // a v2 dispatch whose ack never named the parent) requeue first so
+        // this same idle re-extracts them instead of leaving them held
+        // until the next idle.
+        extraction.requeueStaleAccepted();
         if (
           sessionID &&
           !compacting.has(sessionID) &&

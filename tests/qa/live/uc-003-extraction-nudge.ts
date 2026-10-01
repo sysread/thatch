@@ -3,8 +3,10 @@ import { registerUseCase, type UseCase } from "../runner";
 /**
  * UC-003: Fact extraction from tool activity.
  *
- * Automatable: buffer/peek/escalation contract could be tested with the mock
- * client and a synthetic tool call sequence.
+ * Automatable: the buffer/claim/completion contract is covered by
+ * tests/plugin.test.ts against the mock client. This live case verifies the
+ * end-to-end shape in a real session: tool work -> idle -> plugin-created
+ * child -> memories -> toast, with NO nudge text in the user's conversation.
  */
 
 const useCase: UseCase = {
@@ -14,29 +16,29 @@ const useCase: UseCase = {
   ].join("\n"),
   steps: [
     "1. Do some real work: have the agent read files, run commands, edit code —",
-    "   any non-`thatch_*`, non-`skill`, non-`task` tool activity.",
+    "   any non-`thatch_*`, non-`skill`, non-`task`/`subagent` tool activity.",
     "2. The agent's turn ends and the session goes idle.",
+    "3. Send another message to the session.",
   ].join("\n"),
   expected: [
-    "**Expected (opencode — direct extraction, primary path)**",
-    "- The plugin's `event` hook catches `session.status` idle with pending tool interactions and calls `triggerExtraction`: creates a child session via `client.session.create({ parentID })` and prompts it via `client.session.promptAsync` (or `client.session.prompt` fire-and-forget if the env var is unset).",
-    "- The `extracting` set suppresses the nudge in `chat.message` while the child runs — no nudge text appears in the user's conversation.",
-    "- The child loads `thatch-fact-extractor` and saves durable facts via `thatch_memory_remember` — or saves nothing if the activity was routine.",
-    "- A `thatch_memory_remember` call in the child drains the parent's snapshot entries from the buffer (via `consumeSnapshot` with `parentSnapshots`).",
-    "- When the child goes idle, the parent's snapshot entries are drained (covering no-save runs where no memory was written), the child session is deleted, and a toast notification fires with the extraction metrics (`[thatch] new: N, updated: M, deleted: K`, or `[thatch] extraction complete — nothing to save`).",
-    "- If `triggerExtraction` throws, the `extracting` set is cleared and the nudge fires as a fallback on the next `chat.message` (see below).",
+    "**Expected (opencode — direct extraction, the ONLY opencode path)**",
+    "- The plugin's `event` hook catches `session.status` idle with pending tool interactions and calls `triggerExtraction`: creates a child session via the host's session-create capability and prompts it with `extractionDirectPrompt` (the plugin interpolates the parent's session ID — the model never has to copy one).",
+    "- The child loads `thatch-fact-extractor`, calls `thatch_get_extraction_payload` (the fetch records the child's CLAIM on the delivered entries — an omitted or self-named `session_id` resolves to the parent automatically), and saves durable facts via `thatch_memory_remember` — or saves nothing if the activity was routine.",
+    "- Each `thatch_memory_remember` (or the child's `thatch_extraction_done`) completes the child's claimed delivery — consuming only what it received.",
+    "- When the child goes idle, the plugin finalizes the claim-scoped completion, deletes the child session (v1; v2 has no delete capability — documented gap), and fires a toast with the extraction metrics (`[thatch] new: N, updated: M, deleted: K`) when memories were written.",
+    "- Step 3's message carries NO `[thatch]` extraction nudge — on opencode there is no model-facing extraction nudge at all. (A recall/prediction/behavior nudge may appear if the prompt matches stored memories; that is a different tier.)",
+    "- If `triggerExtraction` throws, the `extracting` set is cleared and the next idle retries from the same pending buffer. If the child errors or is deleted before completing, what it held returns to pending; if its completion signal never arrives, the 15-minute stale reaper requeues the accepted entries. Either way the next idle re-extracts — no interaction is silently lost.",
     "",
-    "**Expected (fallback nudge path — opencode when direct extraction fails,",
-    "and all MCP hosts)**",
-    "- The agent's context for the next message includes a `[thatch]` nudge carrying the session ID and a fetch tool name — the sub-agent calls `get_extraction_payload` with that session ID to retrieve the queued tool interactions as a tool response, keeping the full payload out of the main session's context window.",
-    "- The buffer is **not** drained on nudge delivery — it persists until the agent writes a memory or accepts it by calling `thatch_extraction_done`. Accepting quiets the nudge while holding the entries until the extractor completes; a child extractor that errors or is deleted requeues them. If the nudge is ignored, the next message carries a repeat nudge, escalating in urgency:",
+    "**Expected (MCP hosts — Claude Code, Cursor: nudge-driven)**",
+    "- The agent's context for the next message includes a `[thatch]` nudge carrying the session ID and a fetch tool name — the sub-agent calls `mcp__thatch__get_extraction_payload` with that session ID to retrieve the queued tool interactions as a tool response.",
+    "- The file-backed queue is **not** drained on nudge delivery, and NOT drained by the parent's dispatch-time `extraction_done` ack either (the ack only resets the escalation counter — a drain at ack time deleted the queue before the sub-agent fetched). It persists until the extractor completes (`extraction_done` with the parent's `session_id`) or the parent writes a memory itself. If the nudge is ignored, the next prompt carries a repeat nudge, escalating in urgency:",
     "  - 1st-2nd miss: polite tone",
     "  - 3rd consecutive miss (missedCount=2): insistent (directive) tone",
     "  - 4th+ consecutive miss (missedCount>=3): ALL-CAPS tone",
-    "  The counter resets when the buffer drains (memory write) or is accepted (`thatch_extraction_done`).",
-    "- A `thatch_memory_remember` call in a child sub-agent session also drains the parent's buffer (via the `childToParent` Map), so dispatching the fact-extractor as a background task clears the parent's queue.",
-    "- Two concurrent sessions never see each other's interactions in a nudge.",
-    "- The agent's own `thatch_*` tool calls never appear in the queued interactions (no feedback loop). `skill` and `task` tool calls are also excluded (buffering them would create a nudge → skill load → buffer → nudge loop).",
+    "",
+    "**Both paths**",
+    "- Two concurrent sessions never see each other's interactions.",
+    "- The agent's own `thatch_*` tool calls never appear in the queued interactions (no feedback loop). `skill`, `task`, `subagent`, and `agent` tool calls are also excluded (buffering a dispatch feeds the pipeline its own exhaust).",
   ].join("\n"),
 };
 

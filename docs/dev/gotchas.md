@@ -67,32 +67,26 @@ here first. These are the things that have already cost time.
 - **Hook failures are logged with a `[thatch]` prefix and never swallowed.** Two
   hooks were dead for weeks before failures were made visible. If you add a
   hook, log on failure.
-- **`chat.message` has two priority tiers**: extraction nudge first (returns
-  early), then the prompt-aware recall nudge. Don't run both in one turn.
-- **The extraction nudge peeks, never flushes.** The buffer is NOT drained
-  on nudge delivery (`extraction.peek()` in `triggerExtraction`, src/runtime.ts). It persists until the
-  agent writes a memory or calls `thatch_extraction_done`. Ignored nudges
-  accumulate; the `missedNudges` counter escalates the tone (polite at 0-1
-  misses, insistent at 2, ALL-CAPS at 3+). The counter resets when the
-  buffer drains. The primary opencode path doesn't use the nudge at all:
-  `triggerExtraction` creates a child session directly, and the `extracting`
-  set suppresses the nudge in `chat.message` while a direct-extraction child
-  is active. The peek-not-drain semantics still hold for the fallback nudge
-  path (MCP hosts and any `triggerExtraction` failure).
-- **A child sub-agent's `thatch_memory_remember` drains the parent's buffer**
-  via the `childToParent` Map in src/runtime.ts (declaration plus `.get()`
-  lookups in the idle and remember handlers). Two paths reach this machinery: (a) the **plugin-initiated child
-  session** — `triggerExtraction` calls `client.session.create` with a
-  `parentID`, the primary opencode path; (b) the **agent-initiated background
-  task** — the model dispatches the fact-extractor via the `task` tool after
-  receiving the nudge, the fallback path still used by MCP hosts. Both use
-  the same `childToParent`/`parentSnapshots`/`consumeSnapshot` plumbing.
-  Without this, either path would write memories in the child but never
-  clear the parent's queue — the nudge would replay every turn.
-  `thatch_extraction_done` is the belt-and-suspenders explicit
-  acknowledgment: it drains the buffer without requiring a memory write
-  (covers cases where the sub-agent errors out or the host doesn't expose
-  parent-child session relationships).
+- **There is no model-facing extraction nudge on opencode.** The old
+  `chat.message` extraction nudge (and its `missedNudges` escalation) drove
+  a model-driven handshake that raced its own state machine: parent acks
+  landed before the child's payload fetch, no-claim completions wiped
+  in-flight accepted sets, and mis-targeted session ids made every
+  transition a silent no-op - so the same buffered count re-fired forever
+  (the September 2026 dispatch-loop report). Extraction is now plugin-driven
+  end-to-end: `triggerExtraction` at session idle creates the child and
+  interpolates the session ID itself; the child's payload fetch records the
+  claim; completions are claim-scoped; the 15-minute stale reaper bounds
+  crashed extractors. The nudge survives on MCP hosts only, where no plugin
+  can create sessions and the file-backed queue is durable until the
+  extractor completes.
+- **A child's `thatch_memory_remember` completes only its claimed delivery**
+  via the `childToParent` Map and the claim recorded by its payload fetch.
+  A child that never fetched has no claim, and its memory write (or idle
+  signal, or ack) consumes nothing - the entries stay held/pending for the
+  real extractor. `thatch_extraction_done` is the explicit no-save
+  completion: claim-scoped like everything else, so a mis-ordered or
+  mis-targeted ack can never drop another extractor's in-flight delivery.
 - **The no-save drain runs in the child-idle handler regardless of writes.**
   When the extraction child goes idle after a no-save run (nothing worth
   extracting), the parent's snapshot entries must still be drained from the

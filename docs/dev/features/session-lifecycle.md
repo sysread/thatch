@@ -27,7 +27,10 @@ Subscribes to all session bus events. Dispatches based on `event.type`.
 2. Snapshot the parent's current pending buffer: `parentSnapshots.set(childID, [...extraction.peek(parentID)])`
 3. Return early -- child sessions don't get the session-start reminder
 
-This snapshot is used by `consumeSnapshot` for snapshot-aware drain: when the child writes memories, only the snapshot entries are removed from the parent's buffer, preserving interleaved-turn entries that were added after the snapshot was taken.
+The snapshot is journal-recovery data only (restored child bookkeeping
+after a reload); live delivery is claim-based: the child's payload fetch
+records exactly which entries it received, and its completion signal
+consumes only those.
 
 ### session.created without parentID (top-level session)
 
@@ -39,20 +42,22 @@ This snapshot is used by `consumeSnapshot` for snapshot-aware drain: when the ch
 
 When a child created by `triggerExtraction` goes idle:
 
-1. Drain the parent's snapshot from pending buffer via `consumeSnapshot` (if still present -- a no-save run's entries need draining so they don't replay; a save run already drained them via `tool.execute.after`)
-2. Never drains the entire buffer -- interleaved-turn entries survive
-3. Fire a toast with extraction metrics (new/updated/deleted counts) -- only if memories were actually written
-4. `completeAccepted(parentID)`, reset `missedNudges`
-5. Clean up all maps: `extracting`, `childToParent`, `parentSnapshots`, `childMetrics`, `extractionChildren`
-6. `consume(childID)` -- drain child's own buffer
-7. Delete the child session via `client.session.delete`
+1. `completeClaimed(childID)` -- consume only the entries this child
+   claimed via its payload fetch. A no-claim idle is a no-op: a child that
+   never fetched processed nothing, and its idle signal must not drop
+   entries another extractor holds. Held entries with no completer are
+   bounded by the 15-minute stale reaper
+2. Fire a toast with extraction metrics (new/updated/deleted counts) -- only if memories were actually written
+3. Clean up all maps: `extracting`, `childToParent`, `parentSnapshots`, `childMetrics`, `extractionChildren`
+4. `consume(childID)` -- drain child's own buffer
+5. Delete the child session via `client.session.delete`
 
 ### session.status idle -- task-dispatched sub-agent
 
 When a task-dispatched sub-agent (not created by `triggerExtraction`) goes idle:
 
-- `completeAccepted(parentID)` -- complete the parent's accepted entries (from the nudge-path `extraction_done` accept)
-- Reset `missedNudges`
+- `completeClaimed(childID)` -- complete only what THIS child claimed via
+  its payload fetch (a no-claim idle consumes nothing)
 - Does NOT drain the buffer or delete the session -- the task tool that dispatched the sub-agent needs to read its output
 
 ### session.status idle -- parent session
@@ -60,8 +65,9 @@ When a task-dispatched sub-agent (not created by `triggerExtraction`) goes idle:
 When a parent session (no parentID) goes idle:
 
 - Wrap-up resolution first (below): a pending `/thatch/compact` or `/thatch/exit` resolves here, and a greenlit action returns early
+- `requeueStaleAccepted()` first: accepted entries whose completion signal never came (15 min) return to pending
 - If not compacting, not already extracting, and buffer has pending interactions: `triggerExtraction(sessionID)`
-- On failure: log error, clear `extracting` flag (nudge path takes over as fallback on next chat.message)
+- On failure: log error, clear `extracting` flag (the next idle retries -- there is no model-facing nudge fallback)
 
 ### Wrap-up commands (`/thatch/compact`, `/thatch/exit`)
 
@@ -84,12 +90,21 @@ first-ever install is invisible until the next server start.
 
 ### session.error (child session)
 
-- `requeueAccepted(parentID)` -- move parent's accepted entries back to pending (the extractor never processed them)
+- `requeueClaimed(childID)` if it fetched (the delivery was never
+  processed), else `requeueAccepted(parentID)` -- the error is a terminal
+  death signal, so a claim-less child falls back to whole-set requeue for
+  immediate recovery
+- Clear `extracting` for the parent (the next idle re-triggers)
 - Clean up all maps for the child
 
 ### session.deleted -- child
 
-- `requeueAccepted(parentID)` -- entries go back to pending (never processed)
+- Extraction child: `requeueClaimed(childID)`, else
+  `requeueAccepted(parentID)` (never processed)
+- Task-kind child: `requeueClaimed(childID)` only -- task children are
+  deleted ROUTINELY, so a claim-less task child's deletion must not requeue
+  the whole accepted set (it would yank an in-flight extractor's payload
+  back to pending for duplicate extraction)
 - Clean up all maps for the child
 
 ### session.deleted -- parent
@@ -106,21 +121,20 @@ first-ever install is invisible until the next server start.
 ### Internal state maps
 
 - **childToParent**: `Map<childID, parentID>` -- maps child sessions to their parents
-- **parentSnapshots**: `Map<childID, Interaction[]>` -- snapshot of parent's buffer at child creation time
+- **parentSnapshots**: `Map<childID, Interaction[]>` -- snapshot of parent's buffer at child creation time (journal recovery only; live delivery is claim-based)
 - **childMetrics**: `Map<childID, {new, updated, deleted}>` -- extraction metrics per child
-- **extracting**: `Set<parentID>` -- parent IDs with an active direct-extraction child (suppresses nudge)
+- **extracting**: `Set<parentID>` -- parent IDs with an active direct-extraction child (gates re-triggering)
 - **extractionChildren**: `Set<childID>` -- distinguishes extraction children from task-dispatched sub-agents
 - **compacting**: `Set<sessionID>` -- sessions currently being compacted (suppresses nudges)
 - **pendingWrapUp**: `Map<sessionID, {token, kind}>` -- wrap-up commands awaiting their greenlight check; armed by `command.execute.before`, resolved on the next idle, cleared on session deletion
-- **missedNudges**: `Map<sessionID, number>` -- extraction nudge escalation counter
 
 ## Interactions with other features
 
 - Extraction pipeline ([extraction.md](extraction.md)): direct extraction is triggered by `session.status idle`; child lifecycle managed here
-- Nudge pipeline ([nudge-pipeline.md](nudge-pipeline.md)): `extracting` set suppresses tier 1; `compacting` set suppresses all tiers; task-dispatched sub-agents (in `childToParent`, not in `extractionChildren`) suppress all tiers
+- Nudge pipeline ([nudge-pipeline.md](nudge-pipeline.md)): `compacting` set suppresses all nudges; task-dispatched sub-agents (in `childToParent`, not in `extractionChildren`) suppress all tiers
 - Hygiene ([hygiene.md](hygiene.md)): hygiene report runs at `session.created` for top-level sessions
 - Compaction recovery ([compaction-recovery.md](compaction-recovery.md)): `session.compacted` event clears the compacting flag
-- Memory store ([memory-store.md](memory-store.md)): child sessions write memories via `memory_remember`, which triggers drain via `tool.execute.after`
+- Memory store ([memory-store.md](memory-store.md)): child sessions write memories via `memory_remember`, which completes their claimed delivery via `tool.execute.after`
 
 ## Source files
 
@@ -130,7 +144,7 @@ first-ever install is invisible until the next server start.
 ## Key invariants
 
 - Child sessions don't get the session-start reminder (early return in `session.created` with parentID).
-- `consumeSnapshot` is snapshot-aware: removes only entries captured at dispatch time, preserving interleaved-turn entries.
+- Delivery is claim-based: the payload fetch records what the fetcher received; only the fetcher's completion consumes it. A no-claim completion is a no-op, never a whole-set drop.
 - Extraction children are deleted after going idle; task-dispatched sub-agents are NOT deleted (task tool reads output).
-- Child errors requeue the parent's accepted entries (never processed). Child deletion also requeues.
+- Child errors requeue what the child held (never processed). Child deletion also requeues.
 - Parent deletion completes accepted entries (takes them with it).

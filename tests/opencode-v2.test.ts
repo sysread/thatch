@@ -229,9 +229,10 @@ describe("opencode v2 adapter", () => {
     expect(toolAfterHook).toBeDefined();
     expect(contextHook).toBeDefined();
     // Buffer a tool interaction through the v2 execute.after hook, then
-    // send a prompt: the extraction nudge must NOT touch prompt.text (v2
-    // stores prompt text as the user message - injecting there would echo
-    // the nudge into the visible transcript).
+    // send a prompt: nothing may touch prompt.text (v2 stores prompt text
+    // as the user message - injecting there would echo any injection into
+    // the visible transcript). There is no extraction nudge on opencode at
+    // all any more - extraction is plugin-driven at idle.
     await toolAfterHook!({
       tool: "Read",
       sessionID: "ses_v2_nudge",
@@ -243,13 +244,8 @@ describe("opencode v2 adapter", () => {
     await promptHook!({ sessionID: "ses_v2_nudge", messageID: "msg_n", prompt });
     expect(prompt.text).toBe("what do we know about this");
 
-    // The context hook (kind "primary": every model request of the turn)
-    // appends the nudge to the outbound request's last user message - v2's
-    // wire Message carries parts in `content` (there is no `parts` field,
-    // so writing there would be a stray property the provider formatter
-    // never reads). The extraction nudge's wording varies with the
-    // background-subagents env, but both variants reference the payload
-    // fetch tool.
+    // The context hook must not inject an extraction nudge into the
+    // outbound request either: the model-facing handshake is gone.
     const request = {
       sessionID: "ses_v2_nudge",
       system: [],
@@ -257,9 +253,8 @@ describe("opencode v2 adapter", () => {
     };
     await contextHook!(request);
     const parts = request.messages[0].content as { type: string; text: string }[];
-    expect(parts.length).toBe(2);
-    expect(parts[1].type).toBe("text");
-    expect(parts[1].text).toContain("thatch_get_extraction_payload");
+    expect(parts.length).toBe(1);
+    expect(parts[0].text).not.toContain("thatch_get_extraction_payload");
   });
 
   test("event pump drops events from other directories and serves matching ones", async () => {
@@ -534,6 +529,113 @@ describe("opencode v2 adapter", () => {
       data: { sessionID: "ses_v2_alive" },
     });
     await waitFor("extraction after a handler throw", () => sessionCreateCalls.length === 1);
+  });
+
+  test("v2 end-to-end: idle-triggered extraction child completes with zero session ids", async () => {
+    // The whole opencode v2 lifecycle through the real adapter, with the
+    // model passing NO session ids anywhere: parent work buffers -> parent
+    // idle (session.execution.succeeded) creates the child via
+    // sessionCreate (childToParent set eagerly - v2 create has no parentID)
+    // -> the child fetches with no id (auto-resolves to the parent via
+    // childToParent) -> the child acks with no id -> the parent's buffer is
+    // drained. No prompt-hook injection ever carried an extraction nudge.
+    const context = makeContext();
+    cleanup = (await setup(context as any)) as () => Promise<void>;
+    const fetchTool = addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
+    expect(fetchTool).toBeDefined();
+
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_v2_e2e",
+      input: { command: "git log" },
+      status: "completed",
+      result: { content: "abc123 real work" },
+    });
+
+    // Parent idle: the plugin creates the extraction child itself.
+    await queueEvent({
+      type: "session.execution.succeeded",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_v2_e2e" },
+    });
+    await waitFor("child created", () => sessionCreateCalls.length === 1);
+    // The child was prompted with the parent's id interpolated by the
+    // plugin - but the child below never uses it.
+    await waitFor("child prompted", () => sessionPromptCalls.length >= 1);
+    expect(sessionPromptCalls[0].text).toContain("thatch-fact-extractor");
+
+    // The child fetches with NO session_id: the host supplies the child's
+    // own id, and the provider retargets to the parent via childToParent.
+    const served = await fetchTool.execute({}, { sessionID: "v2-test-child", agent: "general" });
+    expect(String((served as any).content)).toContain("abc123");
+
+    // The child acks with NO session_id: parentID is known, the claim
+    // completes, and the parent's buffer is gone.
+    await toolAfterHook!({
+      tool: "thatch_extraction_done",
+      sessionID: "v2-test-child",
+      input: {},
+      status: "completed",
+      result: { content: "[acknowledged]" },
+    });
+    const drained = await fetchTool.execute({ session_id: "ses_v2_e2e" }, { sessionID: "ses_v2_other", agent: "general" });
+    expect(String((drained as any).content)).not.toContain("abc123");
+
+    // The prompt hook never injected an extraction nudge for the parent.
+    const prompt = { text: "and now what" };
+    await promptHook!({ sessionID: "ses_v2_e2e", messageID: "msg_e2e", prompt });
+    const request = {
+      sessionID: "ses_v2_e2e",
+      system: [],
+      messages: [{ role: "user", content: [{ type: "text", text: "and now what" }] }],
+    };
+    await contextHook!(request);
+    expect((request.messages[0].content as any[]).length).toBe(1);
+  });
+
+  test("v2 end-to-end: a model-dispatched sub-agent (info.parentID link) extracts with zero ids", async () => {
+    // v2's session.created carries info.parentID for task-tool-dispatched
+    // sub-agents (translateEvent). Such a child is linked in childToParent
+    // the same way, so the auto-resolution and claim-scoped completion
+    // cover it too - even though no plugin-side triggerExtraction created
+    // it. Its memory write (not an ack) is the completion signal here.
+    const context = makeContext();
+    cleanup = (await setup(context as any)) as () => Promise<void>;
+    const fetchTool = addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
+
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_v2_task_parent",
+      input: { command: "ls" },
+      status: "completed",
+      result: { content: "payload-xyz" },
+    });
+    await queueEvent({
+      type: "session.created",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_v2_task_child", info: { id: "ses_v2_task_child", parentID: "ses_v2_task_parent" } },
+    });
+    // The pump's handler is async: poll until the link is live, then fetch
+    // with NO session_id - the child's own id retargets to the parent.
+    let linked = "";
+    const end = Date.now() + 5000;
+    while (!linked.includes("payload-xyz")) {
+      if (Date.now() > end) throw new Error("timed out waiting for: child linked");
+      const r = await fetchTool.execute({}, { sessionID: "ses_v2_task_child", agent: "general" });
+      linked = String((r as any).content);
+      if (!linked.includes("payload-xyz")) await new Promise((res) => setTimeout(res, 25));
+    }
+
+    // Memory write in the linked child completes its claim.
+    await toolAfterHook!({
+      tool: "thatch_memory_remember",
+      sessionID: "ses_v2_task_child",
+      input: { label: "x", content: "y" },
+      status: "completed",
+      result: { content: "[saved]" },
+    });
+    const drained = await fetchTool.execute({ session_id: "ses_v2_task_parent" }, { sessionID: "ses_v2_other2", agent: "general" });
+    expect(String((drained as any).content)).not.toContain("payload-xyz");
   });
 
   test("child-session events pass the directory filter on below-root launches", async () => {

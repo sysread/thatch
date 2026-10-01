@@ -15,19 +15,23 @@ directly for conversation-derived knowledge.
 
 - Buffers every non-`thatch_*`, non-`skill`, non-`task` tool call for later
   extraction
-- Two paths: **direct extraction** via a child session (opencode, primary) and
-  **nudge-based extraction** (all hosts, fallback for opencode, primary for
-  MCP)
-- The extraction nudge escalates: polite (0–1 missed), insistent (2),
-  all-caps shouting (3+)
+- Two paths: **direct extraction** via a plugin-created child session (the
+  only opencode path) and **nudge-based extraction** (MCP hosts only)
+- The MCP extraction nudge escalates: polite (0–1 missed), insistent (2),
+  all-caps shouting (3+). There is deliberately no opencode nudge: the
+  model-driven handshake it required raced its own state machine (acks
+  before fetches, no-claim completions wiping in-flight sets, mis-targeted
+  session ids making every transition a silent no-op) and was removed —
+  see "Key invariants"
 - `thatch_get_extraction_payload` fetches queued interactions as JSON,
-  keeping the full payload out of the main session's context window
-- `thatch_extraction_done` acknowledges and quiets the nudge
+  keeping the full payload out of the main session's context window; the
+  fetch is also the **delivery record** (it claims the entries for that
+  fetcher)
+- `thatch_extraction_done` completes only the calling child's claimed
+  delivery — never the whole accepted set
 - AMQP-style buffer lifecycle for opencode: pending → accepted → completed,
   with requeue on failure
 - File-backed JSONL queue for MCP hosts (no cross-call state)
-- Parent-child session drain: the child drains the parent's snapshot,
-  preserving interleaved-turn entries added after the snapshot was taken
 
 ## How it works
 
@@ -71,57 +75,70 @@ calls are buffered for later extraction.
 - Filters the same tools as opencode (`mcp__thatch__memory_remember`,
   `mcp__thatch__extraction_done`, `mcp__thatch__*`, `skill`, `task`, `agent`)
 
-### Direct extraction (opencode, primary path)
+### Direct extraction (opencode, the only opencode path)
 
 When a parent session goes idle (`session.status` idle event) with pending
-buffer interactions:
+buffer interactions — after `requeueStaleAccepted()` has returned any
+timed-out accepted entries to pending:
 
 1. `triggerExtraction` adds the parent ID to the `extracting` set — this
-   suppresses the nudge in `chat.message`
+   gates re-triggering while a child runs
 2. Peeks the buffer to count pending interactions
 3. Creates a child session via
    `client.session.create({ parentID, title: "thatch-extraction" })`
 4. The `session.created` event fires, populating `childToParent` and
-   `parentSnapshots` (a snapshot of the full pending buffer at dispatch time)
+   `parentSnapshots` (a snapshot of the full pending buffer at dispatch
+   time — journal-recovery data only; claims subsumed the snapshot drain)
 5. Adds the child ID to the `extractionChildren` set
-6. Prompts the child with `extractionDirectPrompt(count, sessionID)`
+6. Prompts the child with `extractionDirectPrompt(count, sessionID)` — the
+   plugin interpolates the parent's session ID into the prompt, so no
+   model ever has to copy one
 7. If background sub-agents are enabled
    (`OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS`): `promptAsync`. Otherwise:
    fire-and-forget `prompt`
 8. On prompt failure: `cleanupChild` removes the child from all maps and
-   deletes the child session
+   deletes the child session. The entries stay pending; the next idle
+   retries (there is no nudge fallback)
 
 The child session then:
 
-- Calls `thatch_get_extraction_payload` to fetch the queued interactions
+- Calls `thatch_get_extraction_payload` — the fetch **claims** the entries
+  for this fetcher (claim = accept + delivery record)
 - Runs the [thatch-fact-extractor](../skills.md) skill
 - Writes memories via `thatch_memory_remember`
 - Goes idle
 
 On child idle (`session.status` idle event, extraction child):
 
-1. Drains the parent's snapshot from the pending buffer via
-   `consumeSnapshot` — removes only entries captured at dispatch time by
-   reference identity, preserving interleaved-turn entries
+1. `completeClaimed(childID)` — consumes only the entries this child
+   claimed via its fetch. A no-claim idle is a no-op: a child that never
+   fetched processed nothing, and its idle signal must not drop entries
+   another extractor holds
 2. Fires a toast with extraction metrics (only if memories were actually
    written)
-3. `completeAccepted(parentID)`, resets `missedNudges`
-4. Cleans up all maps
-5. `consume(childID)` — drains the child's own buffer
-6. Deletes the child session
+3. Cleans up all maps
+4. `consume(childID)` — drains the child's own buffer
+5. Deletes the child session
 
-### Nudge-based extraction (fallback for opencode, primary for MCP)
+If the extraction child is deleted before completing,
+`requeueClaimed`/`requeueAccepted` returns what it held to pending. If its
+completion signal never comes at all, `requeueStaleAccepted` (15 min)
+returns the accepted entries to pending — the next idle re-extracts them.
 
-If direct extraction was never triggered or threw an error (session not in
-the `extracting` set) **and** the buffer has pending interactions:
+### Nudge-based extraction (MCP hosts only)
 
-- The next user message (`chat.message` for opencode,
-  `UserPromptSubmit`/`beforeSubmitPrompt` for MCP) gets an extraction nudge
+Claude Code and Cursor have no SDK client to create child sessions and no
+plugin lifecycle (each hook invocation is a fresh process), so extraction
+there is still model-driven. When the buffer has pending interactions, the
+next user prompt (`UserPromptSubmit`/`beforeSubmitPrompt`) gets an
+extraction nudge telling the agent to spawn a sub-agent for the
+fact-extractor skill.
+
 - The nudge carries the session ID and fetch tool name — not the full
   payload — so the sub-agent calls `thatch_get_extraction_payload` to
   retrieve the interactions as a tool response
 
-**Nudge escalation** (via the `missedNudges` counter):
+**Nudge escalation** (via the file-backed missed counter):
 
 | Missed count | Tone |
 |--------------|------|
@@ -129,26 +146,29 @@ the `extracting` set) **and** the buffer has pending interactions:
 | 2 | Insistent |
 | 3+ | All-caps shouting |
 
-The buffer persists until the agent writes a memory or calls
-`thatch_extraction_done`. Ignored nudges repeat and escalate.
-
-- **opencode**: in-memory `missedNudges` map
-- **MCP hosts**: file-backed `.count` file per session
+The file-backed queue persists until the extractor completes
+(`extraction_done` with the parent's `session_id`) or the parent writes a
+memory itself. The parent's dispatch-time ack resets the escalation
+counter but does NOT drain the queue — a drain at ack time deleted the
+queue before the sub-agent fetched (the accept-before-fetch loss; the
+opencode path removed the handshake for the same failure class).
 
 ### Buffer lifecycle (opencode, AMQP-style)
 
 Buffered interactions move through four states in `ExtractionPipeline`
 (`src/extraction.ts`):
 
-- **pending** — interactions in the ring buffer. The nudge fires on
-  `chat.message`.
-- **accepted** — moved from pending by `accept()`. The nudge quiets, but
-  entries are not dropped yet.
-- **completed** — dropped by `completeAccepted()`. Triggered by a
-  `memory_remember` or `extraction_done` call in the child, or the child
-  going idle.
-- **requeued** — moved back to pending by `requeueAccepted()`. Triggered by
-  the child session erroring or being deleted before completing.
+- **pending** — interactions in the ring buffer. The idle trigger
+  (`triggerExtraction`) fires on them; there is no model-facing nudge.
+- **accepted** — moved from pending by `accept()` (a parent's legacy ack,
+  or a fetcher's claim). Entries are held, not dropped, and are still
+  served by the payload provider.
+- **completed** — dropped by `completeClaimed()` (the fetcher's completion
+  signal) or `completeAccepted()` (the parent session being deleted —
+  nothing exists to replay into).
+- **requeued** — moved back to pending by `requeueClaimed()` /
+  `requeueAccepted()` (child error or deletion before completing) or
+  `requeueStaleAccepted()` (15-minute completion timeout).
 
 Key methods:
 
@@ -157,36 +177,42 @@ Key methods:
 | `push()` | Add interaction to pending buffer (capped at 20) |
 | `peek()` | Read without clearing |
 | `consume()` | Delete the session's pending buffer (called on memory write) |
-| `accept()` | Move pending to accepted — quiet the nudge, hold entries |
-| `completeAccepted()` | Drop accepted entries — extractor finished |
-| `requeueAccepted()` | Move accepted back to pending — extractor died |
-| `consumeSnapshot()` | Remove only entries that were in the snapshot (by reference identity). Used for child-parent drain. |
+| `accept()` | Move pending to accepted — hold entries (non-destructive) |
+| `claim()` | Accept + record WHICH fetcher received the entries — the delivery record |
+| `completeClaimed()` | Drop only the completing fetcher's claimed entries |
+| `completeAccepted()` | Drop accepted entries — used on parent deletion |
+| `requeueClaimed()` / `requeueAccepted()` | Move held entries back to pending — extractor died |
+| `requeueStaleAccepted()` | Requeue accepted entries held longer than 15 min |
 
-### Parent-child session drain
+### Parent-child delivery (claim semantics)
 
-When a child session writes a memory via `thatch_memory_remember`:
+The payload fetch is the delivery record:
 
-1. `tool.execute.after` detects the memory write
-2. If in a child session (`childToParent.has(sessionID)`): track metrics,
-   `completeAccepted(parentID)`, drain the parent's snapshot via
-   `consumeSnapshot`, reset the parent's `missedNudges`
-3. `consume(sessionID)` — drains the child's own buffer
-
-`consumeSnapshot` is **snapshot-aware**: it removes only entries that were
-in the parent's buffer at dispatch time (by reference identity).
-Interleaved-turn entries — added after the snapshot was taken, while the
-child was extracting — survive. This prevents data loss when the parent
-continues working while the child extracts.
+1. `thatch_get_extraction_payload` with a fetcher identity calls
+   `claim(parentID, fetcherID)`: the pending buffer is accepted and the
+   fetcher's claim records exactly which entries it received
+2. The fetcher's completion signal (`extraction_done` or
+   `memory_remember` from that child) calls `completeClaimed(fetcherID)` —
+   consuming only the claimed entries, by reference identity
+3. A completion from a fetcher with no claim is a **no-op** — it processed
+   nothing, so it must not drop entries another extractor holds (a sibling
+   sub-agent going idle, or a mis-ordered ack, once wiped the whole
+   accepted set this way — the accept-then-racing-completion loss)
+4. Entries that arrived after the fetch stay pending; the next idle
+   re-extracts them
 
 ### MCP file-backed queue drain
 
 - `drainExtractionQueue(sessionID)` calls `resetMissedCount` +
   `consumeQueue` (deletes the JSONL file)
 - Triggered by: `thatch_extraction_done` called with the parent's
-  `session_id`, or `thatch_memory_remember` called
-- `appendBatch` in `extract-queue.ts` self-detects
-  `memory_remember`/`extraction_done` calls and resets the counter +
-  consumes the queue inline
+  `session_id` (the extractor's completion), or `thatch_memory_remember`
+  called by the parent itself
+- `appendBatch` in `extract-queue.ts` self-detects `memory_remember` and
+  resets the counter + consumes the queue inline. It detects
+  `extraction_done` too, but only resets the counter — draining at the
+  parent's dispatch-time ack deleted the queue before the sub-agent
+  fetched (the accept-before-fetch loss)
 
 ### The `extraction_done` tool
 
@@ -197,6 +223,10 @@ continues working while the child extracts.
 - The real state transitions happen in the host's post-tool hook
   (`tool.execute.after` for opencode, `PostToolBatch`/`appendBatch` for MCP)
 - The tool exists primarily so the model has a recognizable name to key on
+- On opencode there is no parent ack any more: a parent-side
+  `extraction_done` is tolerated as a non-destructive accept (entries
+  held, not dropped) for backward compatibility with an in-flight older
+  nudge
 
 ### The `get_extraction_payload` tool
 
@@ -226,14 +256,15 @@ continues working while the child extracts.
 - [Memory store](memory-store.md) — extraction writes memories via
   `thatch_memory_remember`
 - [Nudge pipeline](nudge-pipeline.md) — the extraction nudge is tier 1
-  (highest priority, returns early)
+  (highest priority, returns early) on MCP hosts; opencode's
+  `chat.message` runs the recall tier only
 - [Session lifecycle](session-lifecycle.md) — direct extraction is triggered
   by `session.status` idle; child lifecycle is managed by the event handler
 - [Skills](../skills.md) — the thatch-fact-extractor skill is dispatched to
   child sessions
 - [Multi-host](multi-host.md) — in-memory ring buffer for opencode,
   file-backed queue for MCP hosts
-- [Compaction recovery](compaction-recovery.md) — extraction nudge is
+- [Compaction recovery](compaction-recovery.md) — nudges are
   suppressed during compaction (tools are blocked)
 
 ## Source files
@@ -242,25 +273,33 @@ continues working while the child extracts.
 |------|----------------|
 | `src/extraction.ts` | In-memory ring buffer (`ExtractionPipeline`), shared payload builders (`buildExtractionPayload`, `deriveTitle`, `summarizeArgs`) |
 | `src/extract-queue.ts` | File-backed JSONL queue for MCP hosts |
-| `src/runtime.ts` | opencode hooks: `tool.execute.after`, `session.status` idle, `session.created`, `session.error`, `session.deleted`, `chat.message` (nudge tier 1) -- shared by the v1/v2 adapters |
+| `src/runtime.ts` | opencode hooks: `tool.execute.after`, `session.status` idle (direct extraction trigger), `session.created`, `session.error`, `session.deleted`, `chat.message` (recall/prediction/behavior nudges; no extraction nudge) -- shared by the v1/v2 adapters |
 | `bin/thatch` | `buffer-batch`, `buffer-tool`, `flush-tools` subcommands |
 | `src/prompts.ts` | `extractionNudge` (with escalation), `extractionDirectPrompt` |
 
 ## Key invariants
 
-1. **Tool filtering is absolute.** `thatch_*`, `skill`, and `task` tools are
-   never buffered. Buffering them would echo the store into itself or create
-   a feedback loop.
-2. **The nudge peeks, never flushes.** The buffer persists until a memory
-   write or `extraction_done`. Ignored nudges repeat and escalate.
-3. **`consumeSnapshot` is snapshot-aware.** It removes only entries captured
-   at dispatch time (by reference identity), preserving interleaved-turn
-   entries added while the child was extracting.
+1. **Tool filtering is absolute.** `thatch_*`, `skill`, `task`, and
+   `subagent` tools are never buffered. Buffering them would echo the store
+   into itself or create a feedback loop.
+2. **Extraction never depends on model cooperation on opencode.** The
+   plugin creates the extraction child, interpolates the session ID, and
+   drives the lifecycle from events. The old model-driven handshake (model
+   dispatches, parent acks, child copies the ID) raced its own state
+   machine — the September 2026 dispatch-loop report (accept-before-fetch
+   loss + never-terminating re-nudge) — and was removed. The opencode
+   `chat.message` hook computes no extraction nudge.
+3. **Completion is claim-scoped.** Only a fetcher that recorded a claim
+   (via `get_extraction_payload`) can consume entries, and only the entries
+   it received. No-claim completions are no-ops; no transition drops
+   entries another extractor holds. The stale reaper bounds any orphan
+   linger at 15 minutes.
 4. **`tool.execute.after` is a plugin hook, not a bus event.** The event bus
    has no such event. Moving the buffering logic into the `event` handler
    silently never fires it.
 5. **MCP host hooks must be silent.** `PostToolBatch`/`postToolUse` produce
    no stdout — only `flush-tools` prints. Any stdout delays the agent loop.
-6. **The no-save drain runs unconditionally.** The child-idle handler drains
-   the remaining snapshot regardless of whether the child wrote memories,
-   covering no-save extraction runs.
+6. **The MCP queue is durable until the extractor completes.** The
+   parent's dispatch-time ack must not drain it (see the invariant above);
+   the drain happens at the extractor's completion or the parent's own
+   memory write.

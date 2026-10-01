@@ -602,7 +602,9 @@ const getExtractionPayloadDef: ToolDef = {
     "the session_id from the extraction nudge to get the JSON payload " +
     "(interactions, projectStore, globalStore). Then run the " +
     "thatch-fact-extractor skill on the returned payload. Omit session_id " +
-    "when acting on the session you are running in.",
+    "when acting on the session you are running in. If you are an " +
+    "extraction child whose parent link the plugin knows, an omitted or " +
+    "self-named session_id resolves to the parent's queue automatically.",
   args: {
     session_id: z.string().optional().describe(
       "The session whose tool interactions are queued for extraction. " +
@@ -632,45 +634,47 @@ const getExtractionPayloadDef: ToolDef = {
 };
 
 /**
- * Extraction-buffer acknowledgment, with AMQP-style accept/complete roles.
+ * Extraction-buffer acknowledgment.
  *
- * Called in a PARENT session after dispatching the fact-extractor, it accepts
- * the buffer: entries move to a holding area and the nudge quiets, but they
- * are not dropped until the extractor completes. Called in a CHILD extractor
- * at the end of its run, it completes the entries THAT child claimed via its
- * payload fetch - never the whole accepted set, so a sibling sub-agent's
- * completion cannot drop another extractor's in-flight payload. Completion
- * includes no-save runs that write no memory. If the child errors or is
+ * In the fact-extractor sub-agent, call at the end of the run to mark the
+ * entries THIS child claimed via its payload fetch complete - never the
+ * whole accepted set, so a sibling sub-agent's completion cannot drop
+ * another extractor's in-flight payload. Completion includes no-save runs
+ * that write no memory. Pass session_id (the parent's) to drain the
+ * parent's file-backed queue on the MCP path. If the child errors or is
  * deleted before either signal, the host requeues the entries so the facts
  * are not lost.
+ *
+ * On the MCP path the parent session may also call this after dispatching
+ * the fact-extractor, to reset the nudge escalation counter. The ack does
+ * NOT drain the parent's queue - a drain at ack time deleted the queue
+ * before the sub-agent's payload fetch (the accept-before-fetch loss); the
+ * queue is consumed by the extractor's completion instead.
  *
  * The actual state changes happen in the host's post-tool hook
  * (tool.execute.after for opencode, PostToolBatch/appendBatch for MCP) -
  * this tool's execute function is a no-op confirmation. The tool exists so
- * the model has a recognizable tool name to key on. In the MCP path the
- * file-backed queue is consumed on this call (or on any memory_remember),
- * which is durable across interruption because the queue persists on disk
- * until then.
+ * the model has a recognizable tool name to key on.
  *
- * The optional session_id parameter lets a sub-agent drain the PARENT's
- * file-backed queue on the MCP path, where the sub-agent's session ID
- * differs from the parent's and appendBatch's self-detection would drain
- * the wrong (empty) queue.
+ * On the opencode plugin path there is no parent ack any more: the plugin
+ * drives extraction end-to-end (triggerExtraction at session idle), so the
+ * model never runs the dispatch handshake. A parent-side extraction_done
+ * there is tolerated as a non-destructive accept (entries held, not
+ * dropped) for backward compatibility with an in-flight older nudge.
  */
 const extractionDoneDef: ToolDef = {
   name: "extraction_done",
   description:
-    "Acknowledge extraction-buffer work. In a parent session, call after " +
-    "dispatching the fact-extractor to a sub-agent: accepts the buffer " +
-    "(quiets the nudge) while keeping entries until the extractor completes. " +
-    "In the fact-extractor sub-agent, call at the end of the run to mark the " +
-    "entries complete, even when nothing was worth saving. Pass session_id " +
-    "when running as a sub-agent to drain the parent session's queue.",
+    "Acknowledge extraction-buffer work. In the fact-extractor sub-agent, " +
+    "call at the end of the run to mark the entries you claimed complete, " +
+    "even when nothing was worth saving. Pass session_id (the parent " +
+    "session's ID from the extraction nudge) to drain the parent's queue.",
   args: {
     session_id: z.string().optional().describe(
-      "The parent session's ID, when called from a sub-agent on the MCP " +
-      "path. Drains the parent's file-backed queue. Omit when called from " +
-      "the parent session itself (opencode path handles drain via hooks).",
+      "The parent session's ID, when called from a sub-agent. Drains the " +
+      "parent's file-backed queue (MCP path) and completes the entries " +
+      "this sub-agent claimed. Omit when called from the parent session " +
+      "itself.",
     ),
   },
   async execute(args, ctx) {

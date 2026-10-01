@@ -1,16 +1,16 @@
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 import { ExtractionPipeline, type ToolInteraction } from "../../../src/extraction";
-import { extractionNudge } from "../../../src/prompts";
 
 /**
  * UC-039: Direct extraction failure.
  *
- * Automatable: the fallback nudge path is exercised when triggerExtraction
- * throws (client.session.create rejects or client.session.prompt fails).
- * The extracting set clears, and on the next chat.message, the buffer has
- * pending entries with no extracting flag, so the nudge fallback fires.
- * This test simulates that state directly: buffer is populated, extracting
- * is not set (simulating the throw + catch), and the nudge text is verified.
+ * Automatable: when triggerExtraction throws (client.session.create rejects
+ * or client.session.prompt fails), the extracting set clears and the buffer
+ * keeps its pending entries. There is NO model-facing nudge fallback on
+ * opencode any more - the plugin itself retries at the next idle, and the
+ * entries are never dropped in the meantime. This test simulates that
+ * lifecycle directly: buffer populated, a simulated throw + catch, then a
+ * simulated retry that completes the extraction via the claim path.
  */
 
 function makeInteraction(sessionID: string, i: number): ToolInteraction {
@@ -32,16 +32,16 @@ const useCase: UseCase = {
   steps: [
     "1. Generate non-thatch tool interactions in the session.",
     "2. Let the session go idle — triggerExtraction is called and throws.",
-    "3. Send another chat message.",
+    "3. Let the session go idle again (the retry).",
   ].join("\n"),
   expected: [
     "- triggerExtraction adds the parent ID to the extracting set, then attempts to create and prompt the child session.",
     "- When the attempt throws, the catch block removes the parent ID from extracting.",
     "- No child session is created. No toast fires.",
-    "- On the next chat.message: extracting.has(sessionID) is false, extraction.pending(sessionID) is true → the fallback nudge fires.",
-    "- The nudge carries the session ID and the fetch tool name (get_extraction_payload), not the full payload.",
-    "- The missedNudges counter starts at 0 and increments by 1 for this first fallback nudge.",
-    "- The buffer is NOT drained — it persists until the agent writes a memory or calls thatch_extraction_done.",
+    "- The buffered entries are NOT dropped while nothing is extracting: the pipeline holds them (pending) across the failed attempt.",
+    "- There is no model-facing extraction nudge on opencode - chat.message stays clean.",
+    "- On the next idle, the plugin re-triggers extraction from the same pending buffer (self-heal without model cooperation).",
+    "- A retried extractor that fetches (claim) and completes consumes the delivery - no silent loss anywhere in the cycle.",
   ].join("\n"),
 
   async run(_ctx: QaContext) {
@@ -67,60 +67,39 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // Verify: buffer has pending entries.
+    // Verify: buffer still has the pending entries - nothing was dropped
+    // by the failed attempt.
     if (!pipeline.pending(sessionID)) {
-      console.log("  FAIL: buffer should have pending entries");
+      console.log("  FAIL: buffer should still have pending entries after the failed trigger");
       return "FAIL";
     }
 
-    // Step 3: simulate the chat.message fallback nudge path.
-    // The hook checks: !extracting.has(sessionID) && extraction.pending(sessionID)
-    // If true, it calls extractionNudge and pushes a synthetic part.
-    const shouldFireNudge = !extracting.has(sessionID) && pipeline.pending(sessionID);
-    if (!shouldFireNudge) {
-      console.log("  FAIL: fallback nudge should fire (extracting not set, pending is true)");
+    // Verify: no model-facing extraction nudge exists on the opencode path.
+    // The nudge text used to be injected into chat.message here; the
+    // model-driven handshake it drove raced its own state machine (the
+    // September 2026 dispatch-loop report) and was removed. The runtime's
+    // chat.message block no longer imports or calls extractionNudge - the
+    // behavioral pin lives in tests/plugin.test.ts (no-nudge assertions);
+    // here we assert the pipeline contract the retry relies on.
+    if (typeof pipeline.peek(sessionID) !== "object") {
+      console.log("  FAIL: peek should expose the pending buffer for the retry");
       return "FAIL";
     }
 
-    // The nudge fires with missedNudges = 0 (first fallback).
+    // Step 3: the retry. The next idle re-triggers extraction from the same
+    // pending buffer. The retried extractor fetches (the fetch IS the
+    // accept + claim in the real pipeline)...
     const batch = pipeline.peek(sessionID);
-    const missed = 0;
-    const nudgeText = extractionNudge(batch.length, missed, "thatch_memory_remember", sessionID);
-
-    // Verify: nudge carries the session ID.
-    if (!nudgeText.includes(sessionID)) {
-      console.log(`  FAIL: nudge text should contain session ID "${sessionID}"`);
+    if (batch.length !== 5) {
+      console.log(`  FAIL: retry should see all 5 entries, got ${batch.length}`);
       return "FAIL";
     }
 
-    // Verify: nudge references the fetch tool name.
-    if (!nudgeText.includes("get_extraction_payload")) {
-      console.log("  FAIL: nudge text should reference get_extraction_payload");
-      return "FAIL";
-    }
-
-    // Verify: nudge references fact-extractor skill.
-    if (!nudgeText.includes("fact-extractor")) {
-      console.log("  FAIL: nudge text should reference fact-extractor skill");
-      return "FAIL";
-    }
-
-    // Verify: nudge is tier-0 (polite, not ALL-CAPS) for missed=0.
-    if (nudgeText.includes("IGNORING") || nudgeText.includes("NOT PROCESSED")) {
-      console.log("  FAIL: first fallback nudge should be polite (tier-0), not escalated");
-      return "FAIL";
-    }
-
-    // Verify: buffer is NOT drained after nudge delivery.
-    // The hook peeks (does not consume) — the buffer persists.
-    if (!pipeline.pending(sessionID)) {
-      console.log("  FAIL: buffer should NOT be drained after nudge delivery");
-      return "FAIL";
-    }
-
-    const remainingBatch = pipeline.peek(sessionID);
-    if (remainingBatch.length !== 5) {
-      console.log(`  FAIL: buffer should still have 5 entries, got ${remainingBatch.length}`);
+    // ...and completes: the claim-scoped completion consumes the delivery.
+    pipeline.accept(sessionID);
+    pipeline.completeAccepted(sessionID);
+    if (pipeline.pending(sessionID) || pipeline.peekAccepted(sessionID).length > 0) {
+      console.log("  FAIL: buffer and accepted set should be empty after completion");
       return "FAIL";
     }
 

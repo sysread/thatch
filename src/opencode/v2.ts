@@ -529,8 +529,9 @@ function buildCapabilities(context: V2Context, worktree: string, childSessions: 
       // returns the created SessionInfo directly.
       const result = await session.create({ location: { directory: worktree }, title: input.title });
       const id = result?.id;
-      // A shape mismatch must fail into the runtime's extraction fallback
-      // (the nudge path), not silently corrupt the child-session maps.
+      // A shape mismatch must fail loudly: the runtime logs it and retries
+      // extraction at the next idle. It must not silently corrupt the
+      // child-session maps.
       if (!id) throw new Error(`v2 session.create returned no id: ${JSON.stringify(result)?.slice(0, 200)}`);
       // Register for event forwarding: the child's events carry the project
       // directory, which the pump's directory filter would otherwise drop.
@@ -539,7 +540,7 @@ function buildCapabilities(context: V2Context, worktree: string, childSessions: 
     },
     // No delete on the v2 SessionDomain: extraction child sessions are not
     // cleaned up on v2 (documented gap; the bookkeeping maps still keep the
-    // nudge path consistent). Two user-visible consequences: the session
+    // claim/completion lifecycle consistent). Two user-visible consequences: the session
     // picker accumulates one thatch-extraction entry per extraction, and
     // "continue last session" (-c) logic that picks the newest top-level
     // session will land in an extraction child after any session that

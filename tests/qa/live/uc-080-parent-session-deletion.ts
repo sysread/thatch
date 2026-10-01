@@ -15,7 +15,7 @@ const useCase: UseCase = {
   ].join("\n"),
   steps: [
     "1. Simulate a parent session with pending interactions.",
-    "2. Simulate an extraction_done nudge accepting the entries.",
+    "2. Simulate an extraction child fetching them (claim -> accepted).",
     "3. Simulate session.deleted for the parent session.",
     "4. Verify completeAccepted(parentID) is called — accepted entries are dropped (not requeued).",
     "5. Verify the extracting flag is cleared for the parent.",
@@ -24,8 +24,8 @@ const useCase: UseCase = {
   expected: [
     "- completeAccepted drops the parent's accepted entries. They are not requeued to pending.",
     "- The extracting flag is cleared.",
-    "- No orphaned state remains in missedNudges, parentSnapshots, or other maps referencing the parent.",
-    "- Unlike child deletion (requeueAccepted), parent deletion uses completeAccepted because there is no session to replay into.",
+    "- No orphaned state remains in parentSnapshots, claims, or other maps referencing the parent.",
+    "- Unlike child deletion (claim-scoped requeue), parent deletion uses completeAccepted — the one remaining whole-set drop — because there is no session to replay into.",
   ].join("\n"),
 };
 

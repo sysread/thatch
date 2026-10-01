@@ -78,28 +78,27 @@ and the nudge (fallback):
 2. When the parent session goes idle (`session.status` idle event) with pending
    buffer entries, the plugin calls `triggerExtraction`: creates a child session
    via `client.session.create` (with `parentID`), then prompts it via
-   `client.session.promptAsync` (or `prompt`) with the extraction payload. The
-   `extracting` set suppresses the nudge in `chat.message` while the child runs.
+   `client.session.promptAsync` (or `prompt`) with the extraction prompt (the
+   parent's session ID is interpolated into the prompt by the plugin). The
+   `extracting` set gates re-triggering while the child runs.
 3. The child session runs the `thatch-fact-extractor` skill, writes memories via
-   `thatch_memory_remember`. A memory write in the child drains the parent's
-   buffer snapshot (via the `childToParent` Map and `consumeSnapshot`) and
-   resets the missed-nudge counter.
-4. When the child goes idle, the handler drains any remaining snapshot entries
-   (covers no-save runs), deletes the child session, and fires a toast via
+   `thatch_memory_remember`. The child's payload fetch records its claim; its
+   memory write (or `extraction_done`) completes that claim - consuming only
+   the entries it received.
+4. When the child goes idle, the handler finalizes the claim-scoped
+   completion, deletes the child session, and fires a toast via
    `client.tui.showToast`.
 
-**Nudge (fallback path):**
+**Failure recovery (no model-facing nudge exists on opencode):**
 
 1. If `triggerExtraction` throws (session creation or prompt fails), the catch
-   block clears the `extracting` flag. On the next `chat.message`, the buffer is
-   **peeked** (not drained) and a synthetic text part carrying the JSON payload
-   is injected into the conversation. The buffer persists until the agent writes
-   a memory or calls `thatch_extraction_done`, so ignored nudges repeat and
-   escalate (polite → insistent → ALL-CAPS) via the `missedNudges` counter.
-2. The agent sees the nudge, loads the `thatch-fact-extractor` skill, and saves
-   durable facts via `thatch_memory_remember`. A memory write in the session
-   (or a child sub-agent via the `childToParent` Map) or `thatch_extraction_done`
-   drains the buffer and resets the missed-nudge counter.
+   block clears the `extracting` flag. The pending buffer is untouched, and
+   the next idle re-triggers extraction - the plugin retries without any
+   model cooperation.
+2. If the child errors or is deleted before completing, what it held is
+   requeued to pending. If its completion signal never comes at all, the
+   15-minute stale reaper returns accepted entries to pending. Either way
+   the next idle re-extracts - no interaction is silently lost.
 
 Claude Code and Cursor use a **file-backed** queue (`src/extract-queue.ts`)
 because hooks fire one-shot with no cross-call state:

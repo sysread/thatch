@@ -56,10 +56,25 @@ export function appendBatch(sessionID: string, toolCalls: BatchToolCall[]): void
   const additions: ToolInteraction[] = [];
   for (const tc of toolCalls) {
     const lower = tc.tool_name.toLowerCase();
-    if (lower === "mcp__thatch__memory_remember" || lower === "mcp__thatch__extraction_done") {
+    if (lower === "mcp__thatch__memory_remember") {
+      // The session that writes a memory has processed its queued
+      // interactions itself - drain. This is the parent's self-serve path.
       resetMissedCount(sessionID);
       consumeQueue(sessionID);
       existing.length = 0;
+    } else if (lower === "mcp__thatch__extraction_done") {
+      // An extraction_done ack must NOT drain the queue. When the PARENT
+      // acks after dispatching (per the nudge), a drain here deletes the
+      // queue before the sub-agent's get_extraction_payload fetch - the
+      // accept-before-fetch race, which on this path is a hard delete
+      // (silent interaction loss). The queue is consumed instead by the
+      // extractor's completion: extraction_done with the parent's
+      // session_id (drainExtractionQueue in mcp.ts), or the parent's own
+      // memory_remember above. A no-drain ack only resets the escalation
+      // counter - the queue persists on disk (durable across
+      // interruption), and an extractor that dies without completing
+      // leaves it in place for the next nudge to re-dispatch.
+      resetMissedCount(sessionID);
     }
     if (lower.startsWith("mcp__thatch__")) continue;
     if (lower === "skill" || lower === "task" || lower === "agent") continue;

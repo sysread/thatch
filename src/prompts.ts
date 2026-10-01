@@ -802,46 +802,25 @@ export function reflectCore(tool: ToolNamer): string {
 }
 
 /**
- * Extraction nudge with escalation. Both the opencode plugin (src/runtime.ts)
- * and the Claude Code/Cursor CLI (bin/thatch flush-tools) call this with
- * their respective tool name prefix. The missedCount parameter tracks
- * consecutive nudges delivered without any memory_remember call in between,
- * escalating the tone from polite to insistent to shouting.
+ * Extraction nudge with escalation - MCP hosts only (Claude Code / Cursor).
+ * There is deliberately no opencode variant: the opencode plugin extracts via
+ * its own child sessions (triggerExtraction at session idle) and no longer
+ * asks the model to run the handshake. Only hosts with no plugin lifecycle
+ * (each hook a fresh process, no session-creation API) still need a model-
+ * driven dispatch, and their file-backed queue (extract-queue.ts) is durable
+ * until the extractor's completion, so the handshake cannot lose entries
+ * there.
+ *
+ * The missedCount parameter tracks consecutive nudges delivered without any
+ * memory_remember call in between, escalating the tone from polite to
+ * insistent to shouting.
  *
  * The sessionID replaces the inline payload: the nudge tells the model to
  * dispatch a sub-agent that calls get_extraction_payload to fetch the queued
  * interactions as a tool response. This keeps the full payload out of the
  * main session's context window.
- *
- * Call extractionNudgeOpencode for the opencode plugin path (task tool with
- * background parameter) or extractionNudgeMcp for the Claude Code/Cursor
- * CLI path (generic sub-agent wording).
  */
 export function extractionNudge(
-  count: number,
-  missedCount: number,
-  toolName: string,
-  sessionID: string,
-): string {
-  const isOpencode = toolName.startsWith("thatch_");
-  return isOpencode
-    ? extractionNudgeOpencode(count, missedCount, sessionID)
-    : extractionNudgeMcp(count, missedCount, sessionID);
-}
-
-function extractionNudgeOpencode(
-  count: number,
-  missedCount: number,
-  sessionID: string,
-): string {
-  const plural = count === 1 ? "" : "s";
-  const dispatch = 'Dispatch a task with background: true and subagent_type: "general" (required for thatch tool access)';
-  const drainTool = "thatch_extraction_done";
-  const fetchTool = "thatch_get_extraction_payload";
-  return buildExtractionNudge(count, missedCount, plural, dispatch, drainTool, fetchTool, sessionID);
-}
-
-function extractionNudgeMcp(
   count: number,
   missedCount: number,
   sessionID: string,
