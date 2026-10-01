@@ -704,6 +704,37 @@ export async function fetchBranchState(gh: GhRunner, repo: string, branch: strin
 const MAX_EVENTS_PER_DIFF = 10;
 
 /**
+ * Describes the check runs already present on a head at watcher creation,
+ * for the registration response. The diff only fires on a not-completed ->
+ * completed transition, so runs that are ALREADY completed in the baseline
+ * can never produce a CI event for this head - a watcher registered after a
+ * fast CI (one that finishes in under a minute) is silently dead for the
+ * head it was meant to cover. Saying so at creation lets the caller just
+ * read the result instead of waiting on a notification that cannot come.
+ * Returns null when there is nothing to say: no runs yet, or some still
+ * running (those WILL transition and notify).
+ */
+export function describeBaselineCheckRuns(checkRuns: Record<string, CheckRunRef>, headSha: string): string | null {
+  const runs = Object.values(checkRuns);
+  if (runs.length === 0) return null;
+  const completed = runs.filter((r) => r.status === "completed");
+  if (completed.length < runs.length) return null;
+  const counts = new Map<string, number>();
+  for (const r of completed) {
+    const key = r.conclusion ?? "no conclusion";
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const breakdown = [...counts.entries()].map(([k, n]) => `${n} ${k}`).join(", ");
+  return (
+    `NOTE: all ${completed.length} check run${completed.length === 1 ? "" : "s"} on ${headSha.slice(0, 7)} ` +
+    `${completed.length === 1 ? "has" : "have"} already completed (${breakdown}). ` +
+    `CI events fire only on a running -> completed transition, so this watcher will NOT notify for this head's CI - ` +
+    `read the result now (gh api repos/<owner>/<repo>/commits/${headSha.slice(0, 7)}/check-runs) ` +
+    `rather than waiting. To catch a push's CI, register the watcher BEFORE pushing.`
+  );
+}
+
+/**
  * Shared check-run diff: emits one event per run that reaches a completed
  * status. A run that was already completed before produces nothing; a run
  * that appears between polls already completed produces one.

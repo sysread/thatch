@@ -73,6 +73,15 @@ gh setup fails registration with a real error instead of producing a
 watcher that never fires. Watch creation is also gated on a cached
 `gh --version` availability check.
 
+CI events (`pr_ci`, `branch_ci`) fire only on a running -> completed
+check-run transition, so a watcher registered after a fast pipeline has
+already finished holds completed runs in its baseline and can never
+notify for that head. When every check run on the head is already
+completed at registration, the tool response says so, with the
+conclusion breakdown (`describeBaselineCheckRuns`), so the caller reads
+the result instead of waiting on a notification that cannot come. The
+rule for catching a push's CI: register the watcher before pushing.
+
 ### Polling
 
 A `setInterval` loop (unref'd - it never keeps the process alive)

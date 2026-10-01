@@ -16,6 +16,12 @@ baseline, then polls the GitHub API through the `gh` CLI once a
 minute. When the target changes in a way the watcher cares about, the
 plugin prompts the agent with a notification.
 
+Register before you push. CI notifications fire when a check run goes
+from running to completed, so a watcher created after a fast pipeline
+has already finished will never fire for that commit. If every check on
+the head is already done when the watcher is created, the response says
+so and reports the results directly.
+
 PR watched events:
 
 - `pr_comment` - new top-level comments on the PR

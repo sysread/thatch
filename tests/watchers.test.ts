@@ -10,6 +10,7 @@ import {
   diffBranchState,
   fetchPrState,
   fetchBranchState,
+  describeBaselineCheckRuns,
   commandTargetLabel,
   COMMAND_EVENT_TYPES,
   PR_EVENT_TYPES,
@@ -608,6 +609,45 @@ describe("diffBranchState", () => {
     ]);
     // No repeats when nothing changes.
     expect(diffBranchState(after, after, TGT, "acme/widgets")).toEqual([]);
+  });
+});
+
+describe("describeBaselineCheckRuns", () => {
+  // The dead-watcher trap: a CI watcher registered AFTER a fast pipeline
+  // already finished holds completed runs in its baseline, and the diff
+  // (running -> completed only) can never fire for that head. The
+  // registration response must say so, with the conclusions, so the
+  // caller reads the result instead of waiting on a notification that
+  // cannot come.
+  test("all runs already completed: names the count, breaks down conclusions, says it will not notify", () => {
+    const note = describeBaselineCheckRuns({
+      "1": { name: "test", status: "completed", conclusion: "success", url: null },
+      "2": { name: "lint", status: "completed", conclusion: "success", url: null },
+      "3": { name: "e2e", status: "completed", conclusion: "failure", url: null },
+    }, "4d5ed14abcdef");
+    expect(note).toContain("all 3 check runs on 4d5ed14");
+    expect(note).toContain("2 success");
+    expect(note).toContain("1 failure");
+    expect(note).toContain("will NOT notify");
+    expect(note).toContain("BEFORE pushing");
+  });
+
+  test("some runs still in progress: nothing to warn about (they will transition)", () => {
+    expect(describeBaselineCheckRuns({
+      "1": { name: "test", status: "completed", conclusion: "success", url: null },
+      "2": { name: "e2e", status: "in_progress", conclusion: null, url: null },
+    }, "4d5ed14")).toBeNull();
+  });
+
+  test("no runs yet: nothing to warn about", () => {
+    expect(describeBaselineCheckRuns({}, "4d5ed14")).toBeNull();
+  });
+
+  test("a single completed run uses singular grammar and the no-conclusion fallback", () => {
+    const note = describeBaselineCheckRuns({
+      "1": { name: "test", status: "completed", conclusion: null, url: null },
+    }, "4d5ed14");
+    expect(note).toContain("all 1 check run on 4d5ed14 has already completed (1 no conclusion)");
   });
 });
 

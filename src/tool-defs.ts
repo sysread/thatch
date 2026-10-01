@@ -24,7 +24,7 @@ import {
 import { sendNotification, defaultSpawner, type NotifyChannel, type Spawner } from "./notify";
 import { predictionVerb, formatWhenLine, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
-import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, type WatcherRegistry, type Watcher, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
+import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, describeBaselineCheckRuns, type WatcherRegistry, type Watcher, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
 import { CHAT_STALE_MS, chatLiveness, humanAge, renderChatParticipant, sortChatRoster, splitChatRoster, type ChatHostKind } from "./chat";
 import { detectWorktreeKind } from "./git";
 
@@ -1527,12 +1527,14 @@ const watchCreateDef: ToolDef = {
     const result = await ctx.watchers.createPr(host.sessionID, repo, args.pr as number, events, { once: args.once === true });
     if (!result.ok) return `Watcher not created: ${result.error}`;
     const w = result.watcher;
+    const ciNote = w.events.includes("pr_ci") ? describeBaselineCheckRuns(w.state.checkRuns, w.state.headSha) : null;
     return (
       `[watching] ${w.repo}#${w.pr}\n` +
       `id: ${w.id}\n` +
       `events: ${w.events.join(", ")}\n` +
       (w.once ? `mode: one-shot - auto-cancels after the first event\n` : "") +
       `head: ${w.state.headSha.slice(0, 7)} (${w.state.state}${w.state.merged ? ", merged" : ""})\n\n` +
+      (ciNote ? `${ciNote}\n\n` : "") +
       `The baseline is captured now - only changes from this point notify, ` +
       `and the first poll lands within ~${ctx.watchers.pollSeconds}s. ` +
       `You will receive a system notification in this session when a watched event happens. ` +
@@ -1640,6 +1642,7 @@ const watchBranchCreateDef: ToolDef = {
     );
     if (!result.ok) return `Watcher not created: ${result.error}`;
     const w = result.watcher;
+    const ciNote = w.events.includes("branch_ci") ? describeBaselineCheckRuns(w.state.checkRuns, w.state.headSha) : null;
     return (
       `[watching] ${w.repo}@${w.branch}\n` +
       `id: ${w.id}\n` +
@@ -1647,6 +1650,7 @@ const watchBranchCreateDef: ToolDef = {
       (w.workflows.length > 0 ? `workflow filter: ${w.workflows.join(", ")}\n` : "") +
       (w.once ? `mode: one-shot - auto-cancels after the first event\n` : "") +
       `head: ${w.state.headSha.slice(0, 7)}\n\n` +
+      (ciNote ? `${ciNote}\n\n` : "") +
       `The baseline is captured now - only changes from this point notify, ` +
       `and the first poll lands within ~${ctx.watchers.pollSeconds}s. ` +
       `You will receive a system notification in this session when a watched event happens. ` +
