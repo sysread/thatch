@@ -25,7 +25,7 @@ import { sendNotification, defaultSpawner, type NotifyChannel, type Spawner } fr
 import { predictionVerb, formatWhenLine, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, describeBaselineCheckRuns, type WatcherRegistry, type Watcher, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
-import { CHAT_STALE_MS, chatLiveness, humanAge, renderChatParticipant, sortChatRoster, splitChatRoster, type ChatHostKind } from "./chat";
+import { CHAT_STALE_MS, MAX_BODY_LEN, chatLiveness, humanAge, renderChatParticipant, sortChatRoster, splitChatRoster, type ChatHostKind } from "./chat";
 import { detectWorktreeKind } from "./git";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
@@ -2047,7 +2047,7 @@ const chatSendDef: ToolDef = {
     "sessions on other machines cannot be reached.",
   args: {
     to: z.string().describe("Recipient display name (see chat_list)."),
-    body: z.string().describe("Message body. Keep it short and self-contained - the recipient may lack your context."),
+    body: z.string().describe(`Message body, at most ${MAX_BODY_LEN} characters (longer is refused, not truncated). Keep it short and self-contained - the recipient may lack your context.`),
     as: mcpIdentityArg(),
   },
   async execute(args, ctx, host) {
@@ -2152,8 +2152,8 @@ const chatBroadcastDef: ToolDef = {
     "turn on it.",
   args: {
     body: z.string().describe(
-      "Message body, delivered to every other registered session. Keep it " +
-      "short and self-contained - the recipients may lack your context.",
+      `Message body, delivered to every other registered session, at most ${MAX_BODY_LEN} characters ` +
+      "(longer is refused, not truncated). Keep it short and self-contained - the recipients may lack your context.",
     ),
     as: mcpIdentityArg(),
   },

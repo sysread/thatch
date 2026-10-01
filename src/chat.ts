@@ -212,7 +212,7 @@ export type ChatHostKind = "opencode" | "mcp";
 // Display names appear inside wake prompts and chat_list output, so they are
 // capped tight. Bodies are capped so a runaway sender cannot turn a nudge
 // into a context bomb; the reader fetches full content via chat_read anyway.
-const MAX_BODY_LEN = 10_000;
+export const MAX_BODY_LEN = 10_000;
 
 // Assigned names are lowercase slugs of a pool name with a numeric counter
 // suffix ("al-go-rithm-00001"), which satisfies NAME_CHARSET. The charset
