@@ -166,6 +166,7 @@ describe("runtime rehydration through server()", () => {
           promptAsync: async () => {},
           create: async () => ({ data: { id: "test-child" } }),
           delete: async () => {},
+          get: async () => ({ data: { title: "Test session" } }),
           messages: async () => ({ data: [] }),
           status: async () => ({ data: {} }),
           list: async () => ({ data: [] }),
@@ -223,7 +224,8 @@ describe("runtime rehydration through server()", () => {
       const mockClient = {
         session: {
           prompt: async () => {}, promptAsync: async () => {}, create: async () => ({ data: { id: "c" } }),
-          delete: async () => {}, messages: async () => ({ data: [] }), status: async () => ({ data: {} }), list: async () => ({ data: [] }),
+          delete: async () => {}, get: async () => ({ data: { title: "Test session" } }),
+          messages: async () => ({ data: [] }), status: async () => ({ data: {} }), list: async () => ({ data: [] }),
         },
         tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
       };
@@ -416,7 +418,8 @@ describe("dormant watcher recovery through server()", () => {
   const mockClient = {
     session: {
       prompt: async () => {}, promptAsync: async () => {}, create: async () => ({ data: { id: "c" } }),
-      delete: async () => {}, messages: async () => ({ data: [] }), status: async () => ({ data: {} }), list: async () => ({ data: [] }),
+      delete: async () => {}, get: async () => ({ data: { title: "Test session" } }),
+      messages: async () => ({ data: [] }), status: async () => ({ data: {} }), list: async () => ({ data: [] }),
     },
     tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
   };
