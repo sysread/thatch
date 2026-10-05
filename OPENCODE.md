@@ -8,3 +8,4 @@
 - Run `mise run lint-md` before committing doc changes. The gate lints `README.md` and `docs/**/*.md`.
 - After every user-visible change, update existing QA test cases and add new ones as appropriate. A task is not complete until the QA tests are updated and passing.
 - Before you claim a coding task complete in this repo, load the `thatch-dev-done` skill. These bullets are its summary; the skill is the working checklist.
+- ALWAYS use the `dev-done` skill before claiming that a code task is complete.
