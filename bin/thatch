@@ -8,7 +8,7 @@ import { detectRepo } from "../src/git";
 import { BgeEmbeddingModel } from "../src/embeddings";
 import { hygieneReport } from "../src/hygiene";
 import { claudeSessionStartReminder } from "../src/prompts";
-import { setupClaudeCode, setupCursor, registerClaudeMcpServer } from "../src/setup";
+import { setupClaudeCode, setupCursor, setupSkillsOnly, registerClaudeMcpServer } from "../src/setup";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
 import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
@@ -38,8 +38,10 @@ function usage(): never {
   thatch flush-tools [--json]      Peek the queue + print an extraction nudge (hook only)
   thatch chat-notify               Print a chat follow-up message when mail is unread (Cursor stop hook)
   thatch flush-predictions [--json] Query predictions for the prompt (hook only)
-  thatch setup --claude [--cursor] [--local|--global]
-                                   Install config + instructions + hooks + skills
+  thatch setup --claude [--cursor] [--local|--global] [--skills-only]
+                                   Install config + instructions + hooks + skills.
+                                   --skills-only refreshes just the skill files
+                                   (skips MCP config, instructions, hooks, commands)
   thatch session list -s <id> [--after T] [--before T]
                                    JSONL timeline of a session's parts (one line per part)
   thatch session get --id <part_id|msg_id>
@@ -839,6 +841,10 @@ switch (command) {
     const isLocal = args.includes("--local");
     const isClaude = args.includes("--claude");
     const isCursor = args.includes("--cursor");
+    // --skills-only narrows the run to the skill install: same host and
+    // scope rules, but MCP config, instructions, hooks, and commands are
+    // left untouched.
+    const skillsOnly = args.includes("--skills-only");
 
     if (isGlobal && isLocal) {
       console.error("Choose one scope: --local or --global.");
@@ -875,52 +881,73 @@ switch (command) {
     };
 
     if (isClaude) {
-      const result = setupClaudeCode(thatchBin, isGlobal, dir);
+      if (skillsOnly) {
+        const result = setupSkillsOnly("claude", isGlobal, dir);
 
-      console.log(`Thatch setup complete for Claude Code (${isGlobal ? "global" : "project-local"}).`);
-      console.log();
-      if (result.mcpConfig) {
-        console.log(`  MCP config:    ${result.mcpConfig}`);
-      }
-      console.log(`  Instructions:  ${result.claudeMd}`);
-      console.log(`  Hooks:         ${result.settings}`);
-      printSkills(result);
-      if (result.commands.length > 0) {
-        console.log(`  Commands:      ${result.commands.length} written (${result.commands.map((p) => p.split("/").pop()).join(", ")})`);
-      }
-      console.log();
-      if (result.mcpAddCommand) {
-        // Global setup cannot write ~/.claude.json directly, so run the
-        // registration on the user's behalf. Idempotent: an existing
-        // registration is left alone; a missing or failing claude CLI
-        // falls back to printing the manual command.
-        const reg = await registerClaudeMcpServer(thatchBin);
-        if (reg.status === "registered") {
-          console.log(`  MCP server:    ${reg.detail}`);
-        } else if (reg.status === "already-registered") {
-          console.log(`  MCP server:    already registered (claude mcp get thatch to inspect)`);
-        } else {
-          console.log("To register the MCP server globally, run:");
-          console.log(`  ${result.mcpAddCommand}`);
-          console.log(`  (${reg.detail})`);
+        console.log(`Thatch skills updated for Claude Code (${isGlobal ? "global" : "project-local"}).`);
+        console.log();
+        printSkills(result);
+        console.log();
+        console.log("Restart Claude Code for the changes to take effect.");
+      } else {
+        const result = setupClaudeCode(thatchBin, isGlobal, dir);
+
+        console.log(`Thatch setup complete for Claude Code (${isGlobal ? "global" : "project-local"}).`);
+        console.log();
+        if (result.mcpConfig) {
+          console.log(`  MCP config:    ${result.mcpConfig}`);
+        }
+        console.log(`  Instructions:  ${result.claudeMd}`);
+        console.log(`  Hooks:         ${result.settings}`);
+        printSkills(result);
+        if (result.commands.length > 0) {
+          console.log(`  Commands:      ${result.commands.length} written (${result.commands.map((p) => p.split("/").pop()).join(", ")})`);
         }
         console.log();
+        if (result.mcpAddCommand) {
+          // Global setup cannot write ~/.claude.json directly, so run the
+          // registration on the user's behalf. Idempotent: an existing
+          // registration is left alone; a missing or failing claude CLI
+          // falls back to printing the manual command.
+          const reg = await registerClaudeMcpServer(thatchBin);
+          if (reg.status === "registered") {
+            console.log(`  MCP server:    ${reg.detail}`);
+          } else if (reg.status === "already-registered") {
+            console.log(`  MCP server:    already registered (claude mcp get thatch to inspect)`);
+          } else {
+            console.log("To register the MCP server globally, run:");
+            console.log(`  ${result.mcpAddCommand}`);
+            console.log(`  (${reg.detail})`);
+          }
+          console.log();
+        }
+        console.log("Restart Claude Code for the changes to take effect.");
       }
-      console.log("Restart Claude Code for the changes to take effect.");
     }
 
     if (isCursor) {
-      const result = setupCursor(thatchBin, isGlobal, dir);
+      if (skillsOnly) {
+        const result = setupSkillsOnly("cursor", isGlobal, dir);
 
-      console.log();
-      console.log(`Thatch setup complete for Cursor (${isGlobal ? "global" : "project-local"}).`);
-      console.log();
-      console.log(`  MCP config:    ${result.mcpConfig}`);
-      console.log(`  Instructions:  ${result.agentsMd}`);
-      console.log(`  Hooks:         ${result.hooks}`);
-      printSkills(result);
-      console.log();
-      console.log("Restart Cursor for the changes to take effect.");
+        console.log();
+        console.log(`Thatch skills updated for Cursor (${isGlobal ? "global" : "project-local"}).`);
+        console.log();
+        printSkills(result);
+        console.log();
+        console.log("Restart Cursor for the changes to take effect.");
+      } else {
+        const result = setupCursor(thatchBin, isGlobal, dir);
+
+        console.log();
+        console.log(`Thatch setup complete for Cursor (${isGlobal ? "global" : "project-local"}).`);
+        console.log();
+        console.log(`  MCP config:    ${result.mcpConfig}`);
+        console.log(`  Instructions:  ${result.agentsMd}`);
+        console.log(`  Hooks:         ${result.hooks}`);
+        printSkills(result);
+        console.log();
+        console.log("Restart Cursor for the changes to take effect.");
+      }
     }
     break;
   }

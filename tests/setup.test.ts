@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import yaml from "yaml";
-import { setupClaudeCode, setupCursor, checkSetup, registerClaudeMcpServer } from "../src/setup";
+import { setupClaudeCode, setupCursor, setupSkillsOnly, checkSetup, registerClaudeMcpServer } from "../src/setup";
 import {
   claudeInstructions,
   cursorInstructions,
@@ -575,6 +575,81 @@ describe("other-scope skills note", () => {
 
     expect(result.otherScopeSkills).toEqual({ dir: projectSkills, count: 1 });
     expect(readFileSync(join(projectSkills, "thatch-local", "SKILL.md"), "utf8")).toBe("project copy");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Skills-only setup
+// ---------------------------------------------------------------------------
+
+describe("setupSkillsOnly", () => {
+  test("claude local: installs skills and nothing else", () => {
+    const result = setupSkillsOnly("claude", false, projectDir, fakeHome);
+
+    expect(result.global).toBe(false);
+    expect(result.skills.dir).toBe(join(projectDir, ".claude", "skills"));
+    expect(result.skills.added.map((s) => s.name).sort()).toEqual(
+      SHARED_SKILLS.map((s) => s.name).sort(),
+    );
+    expect(existsSync(join(projectDir, ".claude", "skills", SHARED_SKILLS[0].name, "SKILL.md"))).toBe(true);
+
+    // Everything else full setup would write is skipped.
+    expect(existsSync(join(projectDir, ".mcp.json"))).toBe(false);
+    expect(existsSync(join(projectDir, "CLAUDE.md"))).toBe(false);
+    expect(existsSync(join(projectDir, ".claude", "settings.json"))).toBe(false);
+    expect(existsSync(join(projectDir, ".claude", "commands"))).toBe(false);
+  });
+
+  test("claude global: writes to the config dir and skips instructions/hooks", () => {
+    const result = setupSkillsOnly("claude", true, projectDir, fakeHome);
+
+    expect(result.global).toBe(true);
+    expect(result.skills.dir).toBe(join(fakeHome, ".claude", "skills"));
+    expect(existsSync(join(fakeHome, ".claude", "skills", SHARED_SKILLS[0].name, "SKILL.md"))).toBe(true);
+    expect(existsSync(join(fakeHome, ".claude", "CLAUDE.md"))).toBe(false);
+    expect(existsSync(join(fakeHome, ".claude", "settings.json"))).toBe(false);
+  });
+
+  test("cursor local: installs skills and nothing else", () => {
+    const result = setupSkillsOnly("cursor", false, projectDir, fakeHome);
+
+    expect(result.skills.dir).toBe(join(projectDir, ".cursor", "skills"));
+    expect(result.skills.added.length).toBe(SHARED_SKILLS.length);
+    expect(existsSync(join(projectDir, ".cursor", "mcp.json"))).toBe(false);
+    expect(existsSync(join(projectDir, "AGENTS.md"))).toBe(false);
+    expect(existsSync(join(projectDir, ".cursor", "hooks.json"))).toBe(false);
+  });
+
+  test("cursor global: writes to ~/.cursor/skills", () => {
+    const result = setupSkillsOnly("cursor", true, projectDir, fakeHome);
+
+    expect(result.skills.dir).toBe(join(fakeHome, ".cursor", "skills"));
+    expect(existsSync(join(fakeHome, ".cursor", "skills", SHARED_SKILLS[0].name, "SKILL.md"))).toBe(true);
+    expect(existsSync(join(fakeHome, ".cursor", "AGENTS.md"))).toBe(false);
+  });
+
+  test("still surfaces the other scope without touching it", () => {
+    const userSkills = join(fakeHome, ".claude", "skills");
+    mkdirSync(join(userSkills, "thatch-legacy"), { recursive: true });
+    writeFileSync(join(userSkills, "thatch-legacy", "SKILL.md"), "old copy");
+
+    const result = setupSkillsOnly("claude", false, projectDir, fakeHome);
+
+    expect(result.otherScopeSkills).toEqual({ dir: userSkills, count: 1 });
+    // The user-scope copy is left exactly as it was.
+    expect(readFileSync(join(userSkills, "thatch-legacy", "SKILL.md"), "utf8")).toBe("old copy");
+  });
+
+  test("honors CLAUDE_CONFIG_DIR in global scope", () => {
+    const customDir = mkdtempSync(join(tmpdir(), "thatch-custom-config-"));
+    process.env.CLAUDE_CONFIG_DIR = customDir;
+    try {
+      const result = setupSkillsOnly("claude", true, projectDir, fakeHome);
+      expect(result.skills.dir).toBe(join(customDir, "skills"));
+      expect(existsSync(join(customDir, "skills", SHARED_SKILLS[0].name, "SKILL.md"))).toBe(true);
+    } finally {
+      rmSync(customDir, { recursive: true, force: true });
+    }
   });
 });
 

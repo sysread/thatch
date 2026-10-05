@@ -18,6 +18,8 @@ resolution fit together.
   hooks, and skills for Cursor
 - `--global` flag --- installs to user-scoped config dirs instead of
   project-local
+- `--skills-only` flag --- refreshes just the skill files (same host and
+  scope rules), skipping MCP config, instructions, hooks, and commands
 - **Marker system** --- idempotent replacement of the thatch instruction block
   in `CLAUDE.md` or `AGENTS.md` via start/end markers
 - **`checkSetup`** --- detects installed, not-installed, or markers-broken at
@@ -35,6 +37,11 @@ resolution fit together.
 
 At least one of `--claude` or `--cursor` is required. Both can be passed
 together. `--global` applies to whichever host or hosts are selected.
+`--skills-only` narrows the run to the skill install (`setupSkillsOnly`
+in `src/setup.ts`): it reuses the same path resolution and other-scope
+probe as the full setup paths but only calls `installSkills`, so it is
+safe to run in an already-set-up host when only the skill files need
+refreshing.
 
 ### Claude Code setup (`setupClaudeCode` in `src/setup.ts`)
 

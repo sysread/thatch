@@ -60,6 +60,16 @@ Skills follow the install scope: project-local installs them to the
 repo's `.claude/skills/` so they version with the project; `--global`
 installs them to `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills/`).
 
+To refresh just the skill files without rewriting anything else, add
+`--skills-only`:
+
+```bash
+thatch setup --claude --skills-only
+```
+
+This skips the MCP config, instructions, hooks, and commands, and
+reports the same skills directory and install counts as a full run.
+
 `bun` must be on PATH (the thatch binary runs under bun). Setup is
 idempotent. Re-running it updates drifted content without clobbering
 unrelated config, and reports what it did: the skills directory plus
@@ -83,6 +93,9 @@ thatch setup --cursor --global   # user-scoped (~/.cursor/)
 
 Skills follow the install scope: project-local installs them to the
 repo's `.cursor/skills/`; `--global` installs them to `~/.cursor/skills/`.
+
+As with Claude Code, `--skills-only` refreshes just the skill files and
+skips the MCP config, instructions, and hooks.
 
 Cursor uses a flat hooks format (`{version, hooks:{event:[{command}]}}`)
 and `--json` output for hook commands.

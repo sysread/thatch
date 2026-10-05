@@ -644,6 +644,56 @@ export function setupCursor(
 }
 
 // ---------------------------------------------------------------------------
+// Skills-only setup - refresh skill files without touching anything else
+// ---------------------------------------------------------------------------
+
+export interface SkillsOnlyResult {
+  /** Skill install report for the directory this run wrote to. */
+  skills: InstallReport;
+  /** Thatch skills in the opposite scope's dir, if any; never written by this run. */
+  otherScopeSkills: OtherScopeSkills | null;
+  global: boolean;
+}
+
+/**
+ * Installs only the skill files, skipping MCP config, instructions, hooks,
+ * and commands. Intended for refreshing skills in an already-set-up host
+ * without rewriting the rest of the configuration. Same scope rules as full
+ * setup: project-local runs write to the repo's host skills dir, global runs
+ * to the host config dir, and the other scope is probed (surfaced in the
+ * report) but never written.
+ */
+export function setupSkillsOnly(
+  host: HostKind,
+  global: boolean,
+  projectDir: string,
+  homeDir?: string,
+): SkillsOnlyResult {
+  const { homedir } = require("node:os");
+  const home = homeDir ?? homedir();
+
+  const skillsDir = host === "claude"
+    ? resolvePaths(global, projectDir, home).skillsDir
+    : resolveCursorPaths(global, projectDir, home).skillsDir;
+
+  // Same other-scope logic as the full setup paths: surface skills this run
+  // did not touch so the CLI can warn about leftovers.
+  const otherDir = host === "claude"
+    ? (global
+      ? join(projectDir, ".claude", "skills")
+      : join(claudeConfigDir(home), "skills"))
+    : (global
+      ? join(projectDir, ".cursor", "skills")
+      : join(cursorConfigDir(home), "skills"));
+
+  return {
+    skills: installSkills(skillsDir),
+    otherScopeSkills: otherScopeInfo(otherDir),
+    global,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Setup detection - check whether setup was completed for the current host
 // ---------------------------------------------------------------------------
 

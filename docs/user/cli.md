@@ -148,7 +148,8 @@ thatch buffer-batch             # append tool batch to queue (Claude Code hook)
 thatch buffer-tool              # append single tool to queue (Cursor hook)
 thatch flush-tools [--json]     # peek queue + print nudges (hook)
 thatch flush-predictions [--json]  # prediction-only nudge (hook)
-thatch setup --claude [--cursor] [--global]  # install config + hooks + skills
+thatch setup --claude [--cursor] [--global]     # install config + hooks + skills
+thatch setup --claude --skills-only             # refresh just the skill files
 ```
 
 ## Environment variables
