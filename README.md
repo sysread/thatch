@@ -1,6 +1,7 @@
 # Thatch
 
 [![CI](https://github.com/sysread/thatch/actions/workflows/ci.yml/badge.svg)](https://github.com/sysread/thatch/actions/workflows/ci.yml)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/sysread/thatch)
 
 Persistent memory and operational methodology for AI coding agents. Works with
 **OpenCode** (as a plugin), **Claude Code** (as a local MCP server), and
