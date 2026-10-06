@@ -1,13 +1,13 @@
 # Thatch
 
-[![CI](https://github.com/sysread/thatch/actions/workflows/ci.yml/badge.svg)](https://github.com/sysread/thatch/actions/workflows/ci.yml)
+[![CI](https://github.com/sysread/thatch/actions/workflows/ci.yml/badge.svg)](https://github.com/sysread/thatch/actions/workflows/ci.yml) [![Ask DeepWiki](https://raw.githubusercontent.com/sysread/thatch/main/docs/assets/deepwiki-badge.svg)](https://deepwiki.com/sysread/thatch)
+
 <!-- Experiment (Oct 2026): deepwiki.com/badge.svg 429-challenges non-browser
      fetchers, so the hotlinked badge rendered broken. The wiki indexed us
      anyway ("featured in the repository"), so this vendored copy tests
      whether DeepWiki keeps reindexing without any request to their domain.
      If freshness holds, the hotlink never mattered; if the wiki goes stale,
      restore https://deepwiki.com/badge.svg when their challenge lifts. -->
-[![Ask DeepWiki](https://raw.githubusercontent.com/sysread/thatch/main/docs/assets/deepwiki-badge.svg)](https://deepwiki.com/sysread/thatch)
 
 Persistent memory and operational methodology for AI coding agents. Works with
 **OpenCode** (as a plugin), **Claude Code** (as a local MCP server), and
