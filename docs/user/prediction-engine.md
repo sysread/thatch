@@ -59,6 +59,7 @@ surface it to you, or ignore it. You never see the nudge directly.
 | `thatch_prediction_update` | Create, reinforce, or weaken a prediction. Takes a matcher (situation), prediction (preference), signal (confirm/disconfirm/soft/create), and rationale. |
 | `thatch_prediction_list` | List all predictions with matchers, confidence, evidence count, and provenance history. |
 | `thatch_prediction_delete` | Delete a prediction by semantic match. Edges and provenance are cascade-deleted. |
+| `thatch_prediction_mark_checked` | Record a verdict (duplicate/distinct) on a pair the hygiene nudge flagged, so it stops resurfacing. |
 
 ## Configuration
 
@@ -82,6 +83,16 @@ surface it to you, or ignore it. You never see the nudge directly.
 - Predictions are per-store. A preference learned in one project's
   store does not automatically apply to other projects. The global
   store is shared across projects.
+
+## Keeping the model tidy
+
+If the same preference gets recorded twice in different words, the hygiene
+nudge reports `prediction duplicate pairs pending review`. The agent reads
+both, then either merges them (moves the loser's matchers onto the winner
+with `thatch_prediction_update`, deletes the loser with
+`thatch_prediction_delete`) or judges them distinct — and records the
+verdict with `thatch_prediction_mark_checked` either way, so an adjudicated
+pair never nags again.
 
 See [memory.md](memory.md) for the base memory system and
 [behavior-engine.md](behavior-engine.md) for the self-discipline rules.

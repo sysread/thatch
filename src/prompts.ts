@@ -150,7 +150,7 @@ Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
         thatch_find_duplicates, thatch_dedup_mark_checked,
         thatch_extraction_done, thatch_get_extraction_payload,
         thatch_prediction_query, thatch_prediction_update, thatch_prediction_list,
-        thatch_prediction_delete,
+        thatch_prediction_delete, thatch_prediction_mark_checked,
         thatch_behavior_codify, thatch_behavior_feedback, thatch_behavior_list,
         thatch_behavior_delete, thatch_config_get, thatch_config_set,
         thatch_notify_user, thatch_get_session_info,
@@ -314,6 +314,13 @@ about their preferences:
 2. Use thatch_prediction_update to create, reinforce, or weaken a prediction
 3. Use thatch_prediction_delete to remove a prediction created in error
 
+When the hygiene nudge reports "prediction duplicate pairs pending review",
+read both predictions, then either merge them (thatch_prediction_update with
+the winner's statement against the loser's matcher texts to move the edges
+over, then thatch_prediction_delete the loser) or judge them distinct - and
+record the verdict with thatch_prediction_mark_checked either way so the pair
+stops resurfacing.
+
 Code review discussions are high-signal prediction material. When working
 through potential review comments with the user, watch for preferences about
 review threshold, severity, tone, evidence, scope, false positives, or what is
@@ -470,6 +477,7 @@ Tools are prefixed in ${host}: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__get_extraction_payload\`,
 \`mcp__thatch__prediction_query\`, \`mcp__thatch__prediction_update\`,
 \`mcp__thatch__prediction_list\`, \`mcp__thatch__prediction_delete\`,
+\`mcp__thatch__prediction_mark_checked\`,
 \`mcp__thatch__behavior_codify\`, \`mcp__thatch__behavior_feedback\`,
 \`mcp__thatch__behavior_list\`, \`mcp__thatch__behavior_delete\`,
 \`mcp__thatch__config_get\`, \`mcp__thatch__config_set\`,
@@ -583,6 +591,13 @@ about their preferences:
 1. Use prediction_query to check for existing matchers and predictions
 2. Use prediction_update to create, reinforce, or weaken a prediction
 3. Use prediction_delete to remove a prediction created in error
+
+When the hygiene nudge reports "prediction duplicate pairs pending review",
+read both predictions, then either merge them (mcp__thatch__prediction_update
+with the winner's statement against the loser's matcher texts to move the
+edges over, then mcp__thatch__prediction_delete the loser) or judge them
+distinct - and record the verdict with mcp__thatch__prediction_mark_checked
+either way so the pair stops resurfacing.
 
 Code review discussions are high-signal prediction material. When working
 through potential review comments with the user, watch for preferences about

@@ -1,8 +1,10 @@
 # Plan: prediction dedup (corpus-level consolidation pass)
 
 Status: consensus design, split out of prediction-consolidation.md (Oct 2026,
-after five refinement rounds there plus a scoring-path review session). Not
-yet implemented. Needs no fire data — independent of the compounds plan.
+after five refinement rounds there plus a scoring-path review session).
+IMPLEMENTED October 2026 — the shipped design is documented in
+docs/dev/features/prediction-engine.md ("Dedup pass") and exercised by
+tests/qa/auto/uc-113-prediction-dedup.ts.
 
 ## Synopsis
 

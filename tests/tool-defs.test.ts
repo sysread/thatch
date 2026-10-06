@@ -32,8 +32,8 @@ afterEach(() => {
 });
 
 describe("TOOL_DEFS", () => {
-  test("exports all 36 tools", () => {
-    expect(TOOL_DEFS.length).toBe(36);
+  test("exports all 37 tools", () => {
+    expect(TOOL_DEFS.length).toBe(37);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -50,6 +50,7 @@ describe("TOOL_DEFS", () => {
       "prediction_update",
       "prediction_list",
       "prediction_delete",
+      "prediction_mark_checked",
       "behavior_codify",
       "behavior_feedback",
       "behavior_list",
@@ -537,6 +538,26 @@ describe("prediction tool execute functions", () => {
       statement: "this prediction does not exist at all",
     }, ctx);
     expect(result).toContain("No prediction matching");
+  });
+
+  test("prediction_mark_checked records a verdict and the pair stops surfacing", async () => {
+    const text = "prefer minimal dependencies";
+    const embed = await model.passageEmbed(text);
+    const idA = db.createPrediction(defaultStore, text, "first wording", embed, model.name);
+    const idB = db.createPrediction(defaultStore, "keep the dependency list small", "reworded later", embed, model.name);
+
+    // Identical embeddings -> cosine 1.0 -> one candidate pair.
+    expect(db.findPredictionDuplicates(defaultStore).length).toBe(1);
+
+    // Reversed argument order: the pair row is canonical (sorted ids), so
+    // this must still suppress the pair.
+    const result = await findTool("prediction_mark_checked").execute({
+      id_a: idB,
+      id_b: idA,
+      status: "distinct",
+    }, ctx);
+    expect(result).toContain("[marked distinct]");
+    expect(db.findPredictionDuplicates(defaultStore)).toEqual([]);
   });
 
   test("prediction_list includes provenance entries", async () => {

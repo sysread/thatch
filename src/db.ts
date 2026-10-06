@@ -11,7 +11,7 @@ import { PREDICTION_K, PREDICTION_P0, PREDICTION_W_SOFT } from "./scoring-engine
 import type { RepoPathCache, RepoPathRow } from "./git";
 
 export { cosineSimilarity } from "./vector-math";
-export type { PredictionNudgeItem, MatcherRow, PredictionRow, ScoredPrediction } from "./prediction";
+export type { PredictionNudgeItem, MatcherRow, PredictionRow, ScoredPrediction, PredictionDedupCandidate } from "./prediction";
 export type { BehaviorNudgeItem, BehaviorRow, ScoredBehavior } from "./behavior";
 export type { ChatSessionRow, ChatInboxItem, ChatNotificationRow, ChatWorktreeKind } from "./chat";
 
@@ -246,6 +246,22 @@ export class ThatchDB {
         detail        TEXT,
         created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
         FOREIGN KEY (prediction_id) REFERENCES predictions(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Pairwise dedup verdicts for predictions (the prediction-side analog of
+    // dedup_pairs). findPredictionDuplicates skips pairs recorded here;
+    // prediction_mark_checked writes them. The id pair is stored in canonical
+    // sorted order so (A,B) and (B,A) are the same row - readers must sort
+    // identically.
+    this.#db.run(`
+      CREATE TABLE IF NOT EXISTS prediction_dedup_pairs (
+        store      TEXT NOT NULL,
+        id_a       TEXT NOT NULL,
+        id_b       TEXT NOT NULL,
+        status     TEXT NOT NULL,
+        checked_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        PRIMARY KEY (store, id_a, id_b)
       )
     `);
 
@@ -905,6 +921,14 @@ export class ThatchDB {
 
   scorePredictionNudge(stores: string[], embedding: Float32Array, threshold: number, limit = 5) {
     return this.#predictions.scorePredictionNudge(stores, embedding, threshold, limit);
+  }
+
+  findPredictionDuplicates(store: string, threshold = 0.70) {
+    return this.#predictions.findPredictionDuplicates(store, threshold);
+  }
+
+  markPredictionPairChecked(store: string, idA: string, idB: string, status: string): void {
+    this.#predictions.markPairChecked(store, idA, idB, status);
   }
 
   findNearestMatcher(store: string, embedding: Float32Array, threshold: number) {

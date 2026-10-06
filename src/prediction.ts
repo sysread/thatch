@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { blobToVector, cosineSimilarity } from "./vector-math";
 import { ScoringEngine, type NudgeItem, PREDICTION_K, PREDICTION_P0, PREDICTION_W_SOFT } from "./scoring-engine";
 
 export { PREDICTION_K, PREDICTION_P0, PREDICTION_W_SOFT };
@@ -26,6 +27,17 @@ export interface PredictionRow {
 }
 
 export interface PredictionNudgeItem extends NudgeItem {}
+
+/** A pair of predictions that are cosine-close enough to be wordings of the
+ *  same preference. Returned by findPredictionDuplicates for agent review. */
+export interface PredictionDedupCandidate {
+  store: string;
+  predictionA: string;
+  statementA: string;
+  predictionB: string;
+  statementB: string;
+  cosine: number;
+}
 
 export interface ScoredPrediction {
   matcher_id: string;
@@ -55,8 +67,13 @@ const config = {
  */
 export class PredictionEngine {
   #engine: ScoringEngine;
+  // Kept for the dedup pass, whose tables are prediction-only (the shared
+  // ScoringEngine stays unaware of them; the behavior engine has no pair
+  // verdicts yet).
+  #db: Database;
 
   constructor(db: Database) {
+    this.#db = db;
     this.#engine = new ScoringEngine(db, config);
   }
 
@@ -123,5 +140,78 @@ export class PredictionEngine {
 
   listPredictions(store: string) {
     return this.#engine.listItems(store);
+  }
+
+  /**
+   * Corpus-level dedup: pairwise cosine over the store's predictions,
+   * skipping pairs already adjudicated in prediction_dedup_pairs. The
+   * cosine-only counterpart of the memory side's findDuplicates
+   * (src/db.ts) - the co-fire refinement in the compounds plan layers
+   * behavioral evidence on top of this same method later. Threshold 0.70
+   * because [0.85, 1] is already caught at write time
+   * (findNearestPrediction) and below 0.70 short-statement embeddings get
+   * too noisy to call duplicates.
+   */
+  findPredictionDuplicates(store: string, threshold = 0.70): PredictionDedupCandidate[] {
+    const rows = this.#db
+      .query(
+        "SELECT id, statement, embedding FROM predictions WHERE store = ? AND embedding IS NOT NULL ORDER BY id",
+      )
+      .all(store) as any[];
+
+    if (rows.length < 2) return [];
+
+    const preds = rows.map((r: any) => ({
+      id: r.id as string,
+      statement: r.statement as string,
+      embedding: blobToVector(r.embedding),
+    }));
+
+    const checked = this.#checkedPairs(store);
+    const candidates: PredictionDedupCandidate[] = [];
+    for (let i = 0; i < preds.length; i++) {
+      for (let j = i + 1; j < preds.length; j++) {
+        const key = [preds[i].id, preds[j].id].sort().join("|");
+        if (checked.has(key)) continue;
+        if (preds[i].embedding.length !== preds[j].embedding.length) continue;
+
+        const cosine = cosineSimilarity(preds[i].embedding, preds[j].embedding);
+        if (cosine >= threshold) {
+          candidates.push({
+            store,
+            predictionA: preds[i].id,
+            statementA: preds[i].statement,
+            predictionB: preds[j].id,
+            statementB: preds[j].statement,
+            cosine: Math.round(cosine * 1000) / 1000,
+          });
+        }
+      }
+    }
+
+    candidates.sort((a, b) => b.cosine - a.cosine);
+    return candidates;
+  }
+
+  /**
+   * Record a pair verdict (duplicate | distinct) so findPredictionDuplicates
+   * stops surfacing it. The id pair is stored in canonical sorted order -
+   * the same contract as dedup_pairs - so (A,B) and (B,A) are one row.
+   */
+  markPairChecked(store: string, idA: string, idB: string, status: string): void {
+    const [a, b] = [idA, idB].sort();
+    this.#db.run(
+      `INSERT INTO prediction_dedup_pairs (store, id_a, id_b, status, checked_at)
+       VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+       ON CONFLICT (store, id_a, id_b) DO UPDATE SET status = excluded.status, checked_at = excluded.checked_at`,
+      [store, a, b, status],
+    );
+  }
+
+  #checkedPairs(store: string): Set<string> {
+    const rows = this.#db
+      .query("SELECT id_a, id_b FROM prediction_dedup_pairs WHERE store = ?")
+      .all(store) as any[];
+    return new Set(rows.map((r: any) => [r.id_a, r.id_b].sort().join("|")));
   }
 }

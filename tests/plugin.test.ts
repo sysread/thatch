@@ -174,6 +174,7 @@ describe("plugin entry", () => {
       "thatch_notify_user",
       "thatch_prediction_delete",
       "thatch_prediction_list",
+      "thatch_prediction_mark_checked",
       "thatch_prediction_query",
       "thatch_prediction_update",
       "thatch_session_get",

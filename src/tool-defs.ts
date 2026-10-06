@@ -892,6 +892,37 @@ const predictionDeleteDef: ToolDef = {
   },
 };
 
+const predictionMarkCheckedDef: ToolDef = {
+  name: "prediction_mark_checked",
+  description:
+    "Record a verdict on a prediction dedup pair so it stops resurfacing " +
+    "in the hygiene nudge. Use after reviewing a pair from the 'prediction " +
+    "duplicate pairs pending review' line: status 'duplicate' once you have " +
+    "merged them (prediction_update with the winner's statement against the " +
+    "loser's matcher texts to move the edges over, then prediction_delete " +
+    "the loser), or 'distinct' to leave both in place.",
+  args: {
+    id_a: z.string().describe(
+      "First prediction id of the pair (from the dedup candidate).",
+    ),
+    id_b: z.string().describe(
+      "Second prediction id of the pair.",
+    ),
+    status: z.enum(["duplicate", "distinct"]).describe(
+      "duplicate: merged or should be treated as one preference; " +
+      "distinct: both are legitimate, leave them.",
+    ),
+    store: z.string().optional().describe(
+      "Store the pair lives in. Defaults to the project store.",
+    ),
+  },
+  async execute(args, ctx) {
+    const store = resolveStore(args, ctx);
+    ctx.db.markPredictionPairChecked(store, args.id_a as string, args.id_b as string, args.status as string);
+    return `[marked ${args.status}] (${args.id_a}, ${args.id_b}) in "${store}"`;
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Behavior engine: LLM self-discipline rules with ham/spam feedback
 // ---------------------------------------------------------------------------
@@ -2238,6 +2269,7 @@ export const TOOL_DEFS: ToolDef[] = [
   predictionUpdateDef,
   predictionListDef,
   predictionDeleteDef,
+  predictionMarkCheckedDef,
   behaviorCodifyDef,
   behaviorFeedbackDef,
   behaviorListDef,

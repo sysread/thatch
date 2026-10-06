@@ -49,6 +49,16 @@ describe("hygieneReport", () => {
     expect(report).toContain("1 duplicate-candidate pair pending review");
   });
 
+  test("counts prediction duplicate pairs", async () => {
+    const reworded = new Float32Array(emb);
+    reworded[0] += 0.001;
+    db.createPrediction(repo, "prefer minimal diffs", "", emb, "m");
+    db.createPrediction(repo, "prefer small diffs", "", reworded, "m");
+
+    const report = await hygieneReport(db, repo, dir);
+    expect(report).toContain("1 prediction duplicate pair pending review");
+  });
+
   test("counts stale memories", async () => {
     db.remember(repo, "ancient", "content", emb, "m");
     const raw = new Database(dbPath);

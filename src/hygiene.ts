@@ -24,6 +24,11 @@ export async function hygieneReport(
     parts.push(`${dupes} duplicate-candidate pair${dupes === 1 ? "" : "s"} pending review`);
   }
 
+  const predDupes = db.findPredictionDuplicates(repo).length;
+  if (predDupes > 0) {
+    parts.push(`${predDupes} prediction duplicate pair${predDupes === 1 ? "" : "s"} pending review`);
+  }
+
   const cutoff = new Date(Date.now() - STALE_DAYS * 86_400_000).toISOString();
   const stale = db.staleEntryCount(repo, cutoff);
   if (stale > 0) {

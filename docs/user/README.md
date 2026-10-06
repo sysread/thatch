@@ -138,6 +138,7 @@ Stores are created automatically. No setup required.
 | `thatch_prediction_update` | Create, reinforce, or weaken a prediction. Takes a matcher (context description), a prediction (preference statement), and a signal (confirm/disconfirm/soft/create). |
 | `thatch_prediction_list` | List all predictions in a store with matchers, confidence, and provenance. |
 | `thatch_prediction_delete` | Delete a prediction by semantic match. Edges and provenance are cascade-deleted. |
+| `thatch_prediction_mark_checked` | Record a verdict (duplicate/distinct) on a pair the hygiene nudge flagged, so it stops resurfacing. |
 
 ### Behavior tools
 

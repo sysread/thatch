@@ -6,8 +6,9 @@ calls and updates it based on user feedback.
 
 ## What it does
 
-- Four tools: `prediction_query`, `prediction_update`, `prediction_list`,
-  `prediction_delete`. All defined in `src/tool-defs.ts`.
+- Tools: `prediction_query`, `prediction_update`, `prediction_list`,
+  `prediction_delete`, `prediction_mark_checked`. All defined in
+  `src/tool-defs.ts`.
 - Auto-fires at every user message: embeds the prompt, cosine-matches against
   matchers, injects scored predictions as a synthetic nudge part.
 - Bayesian confidence model — a graded score that is reinforced or weakened
@@ -101,6 +102,33 @@ Runs in a single DB transaction:
 Returns a status line with final confidence and confirm/disconfirm counts.
 Embeds both the matcher and prediction text.
 
+### Dedup pass (corpus-level consolidation)
+
+Write-time dedup (0.85, both stores) catches near-identical statements at
+creation. Wording-different duplicates — the same preference restated weeks
+later — land below that floor and accumulate. The dedup pass finds them:
+
+- `findPredictionDuplicates(store, threshold = 0.70)` in `src/prediction.ts`:
+  pairwise cosine over the store's predictions, skipping pairs already
+  adjudicated in `prediction_dedup_pairs`. The threshold is band placement:
+  [0.85, 1] is write-time territory, below 0.70 short-statement embeddings
+  are too noisy to call duplicates.
+- Pairs are keyed on the canonical SORTED id pair — (A,B) and (B,A) are one
+  row, the same contract as the memory side's `dedup_pairs`.
+- `prediction_mark_checked(id_a, id_b, status)` records the verdict:
+  `duplicate` (merged or treat as one) or `distinct` (both legitimate).
+  Distinct verdicts are the load-bearing case — a destroyed duplicate is
+  gone, but a judged-distinct pair re-surfaces every session start unless
+  recorded.
+- The hygiene report surfaces `N prediction duplicate pairs pending review`;
+  the agent merges (fold the loser's matchers with `prediction_update`, then
+  `prediction_delete` the loser) or judges distinct, and marks the pair
+  either way. Scans are per-store: cross-store writes are edge-linked at
+  write time instead of duplicated.
+- The co-fire refinement (behavioral evidence layered onto this method once
+  fire tracking exists) is designed in
+  [../../plans/prediction-consolidation.md](../../plans/prediction-consolidation.md).
+
 ### Auto-fire (opencode: `chat.message` hook)
 
 - Reuses the prompt embedding already computed for the recall nudge — no extra
@@ -190,11 +218,11 @@ that user preferences are stable, not time-sensitive.
 
 | File | Role |
 |------|------|
-| `src/prediction.ts` | Thin wrapper around `ScoringEngine` with prediction-specific table names |
+| `src/prediction.ts` | Thin wrapper around `ScoringEngine` with prediction-specific table names, plus the corpus dedup pass (`findPredictionDuplicates`, pair verdicts) |
 | `src/scoring-engine.ts` | Generic four-table scoring engine with Bayesian confidence (shared base for prediction and behavior) |
 | `src/db.ts` | Prediction tables, `scorePredictionNudge` |
-| `src/tool-defs.ts` | Four prediction tools (`query`, `update`, `list`, `delete`) |
-| `src/prompts.ts` | `predictionNudge` formatting, verb selection |
+| `src/tool-defs.ts` | Five prediction tools (`query`, `update`, `list`, `delete`, `mark_checked`) |
+| `src/prompts.ts` | `predictionNudge` formatting, verb selection, dedup-merge guidance |
 | `src/sideband.ts` | `predictions` method for the MCP path |
 
 ## Database tables
@@ -241,6 +269,15 @@ prediction_provenance(
     created_at   TEXT,
     FOREIGN KEY (prediction_id) REFERENCES predictions(id) ON DELETE CASCADE
 )
+
+prediction_dedup_pairs(
+    store      TEXT,
+    id_a       TEXT,
+    id_b       TEXT,
+    status     TEXT,
+    checked_at TEXT,
+    PRIMARY KEY (store, id_a, id_b)
+)
 ```
 
 ## Key invariants
@@ -254,3 +291,5 @@ prediction_provenance(
    `chat.message` hook and MCP sideband) prevents scoring drift.
 5. **Matcher text is embedded raw.** No header prepend — unlike
    `memory_remember`, which prepends `# label\n\n` before embedding.
+6. **Adjudicated dedup pairs never re-surface.** Verdict rows are keyed on
+   the canonical sorted id pair; `findPredictionDuplicates` skips them.

@@ -40,6 +40,61 @@ describe("prediction engine schema", () => {
   });
 });
 
+describe("prediction dedup", () => {
+  test("findPredictionDuplicates surfaces reworded pairs above the threshold", () => {
+    const base = makeEmbed(21);
+    const reworded = new Float32Array(base);
+    reworded[0] += 0.01; // tiny perturbation: cosine stays well above 0.70
+    const idA = db.createPrediction(store, "prefer minimal dependencies", "user said", base, "m");
+    const idB = db.createPrediction(store, "keep the dependency list small", "user said later", reworded, "m");
+    const idC = db.createPrediction(store, "prefer tabs for indentation", "user said", makeEmbed(22), "m");
+
+    const dupes = db.findPredictionDuplicates(store);
+    expect(dupes.length).toBe(1);
+    expect([dupes[0].predictionA, dupes[0].predictionB].sort()).toEqual([idA, idB].sort());
+    expect(dupes[0].store).toBe(store);
+    expect(dupes[0].cosine).toBeGreaterThanOrEqual(0.70);
+    // A/B assignment follows id order, not insertion order - assert on the
+    // unordered statement pair.
+    const pairStatements = [dupes[0].statementA, dupes[0].statementB].sort();
+    expect(pairStatements[0]).toBe("keep the dependency list small");
+    expect(pairStatements[1]).toBe("prefer minimal dependencies");
+    void idC; // present so the scan has a non-candidate in the pool
+  });
+
+  test("pairs below the threshold are not candidates", () => {
+    db.createPrediction(store, "prefer early returns", "", makeEmbed(31), "m");
+    db.createPrediction(store, "prefer guard clauses", "", makeEmbed(32), "m");
+    expect(db.findPredictionDuplicates(store)).toEqual([]);
+  });
+
+  test("marking a pair checked stops it resurfacing, in either argument order", () => {
+    const base = makeEmbed(41);
+    const reworded = new Float32Array(base);
+    reworded[1] -= 0.02;
+    const idA = db.createPrediction(store, "prefer bun test", "", base, "m");
+    const idB = db.createPrediction(store, "prefer the bun test runner", "", reworded, "m");
+    expect(db.findPredictionDuplicates(store).length).toBe(1);
+
+    // Reversed argument order: the verdict row is keyed on the SORTED pair,
+    // so marking (B,A) suppresses (A,B) too.
+    db.markPredictionPairChecked(store, idB, idA, "distinct");
+    expect(db.findPredictionDuplicates(store)).toEqual([]);
+  });
+
+  test("scans are per-store; a pair across stores is not reported", () => {
+    const base = makeEmbed(51);
+    const reworded = new Float32Array(base);
+    reworded[2] += 0.01;
+    db.createPrediction(store, "prefer minimal diffs", "", base, "m");
+    db.createPrediction("global", "prefer minimal diffs too", "", reworded, "m");
+    // Single prediction in the store: nothing to pair with, and the scan
+    // never looks at the global store (cross-store writes are linked at
+    // write time instead).
+    expect(db.findPredictionDuplicates(store)).toEqual([]);
+  });
+});
+
 describe("matcher creation and lookup", () => {
   test("createMatcher returns an id and findMatchers finds it", () => {
     const embed = makeEmbed(42);

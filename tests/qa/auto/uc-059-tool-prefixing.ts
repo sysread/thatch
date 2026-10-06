@@ -54,6 +54,7 @@ const useCase: UseCase = {
       "prediction_update",
       "prediction_list",
       "prediction_delete",
+      "prediction_mark_checked",
       "behavior_codify",
       "behavior_feedback",
       "behavior_list",
