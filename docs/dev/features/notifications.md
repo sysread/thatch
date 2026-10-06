@@ -10,8 +10,7 @@ Two delivery paths share the dispatcher and the config file:
 - **Agent-initiated**: the LLM calls `notify_user`. Works on every host.
 - **Automatic alerts** (opencode-only): the plugin runtime watches session
   events and notifies when the LLM pauses for human input or finishes a
-  round of real work. See the Alerts section below and
-  `docs/plans/llm-alerts.md` for the design decisions.
+  round of real work. See the Alerts section below for the design decisions.
 
 ## Source files
 

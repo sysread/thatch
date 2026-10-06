@@ -221,7 +221,7 @@ export async function createRuntime(input: {
   // process may deliver chat mail to - the map's keys).
   const sessionStatus = new Map<string, string>();
 
-  // LLM alerts (docs/plans/llm-alerts.md): notify when the LLM pauses for
+  // LLM alerts (docs/dev/features/notifications.md): notify when the LLM pauses for
   // human input or finishes a round of real work. Plain in-memory state -
   // a v2 reload mid-turn loses that turn's transition and stays silent
   // (accepted). Delivery reuses the notify_user dispatcher; the alerts

@@ -10,7 +10,7 @@
 // deduplication is exact by construction - delivering from the TUI side
 // instead would fire once per attached TUI. State is rebuilt empty on
 // plugin setup: a v2 reload mid-turn loses that turn's transition and the
-// alert stays silent (accepted; see docs/plans/llm-alerts.md).
+// alert stays silent (accepted; see docs/dev/features/notifications.md).
 //
 // What makes a round "real work" is split across two sources, on purpose:
 // - the TOOL side comes from live bookkeeping: the runtime marks real work

@@ -63,10 +63,10 @@ describe("sync-wiki", () => {
   test("excludes plans and in-progress docs", () => {
     const out = render({
       "docs/user/memory.md": "# memory",
-      "docs/plans/intuition-drives.md": "# plan",
+      "docs/plans/prediction-consolidation.md": "# plan",
       "docs/in-progress/wip.md": "# wip",
     });
-    expect(existsSync(path.join(out, "Intuition-drives.md"))).toBe(false);
+    expect(existsSync(path.join(out, "Prediction-consolidation.md"))).toBe(false);
     expect(existsSync(path.join(out, "Wip.md"))).toBe(false);
   });
 
