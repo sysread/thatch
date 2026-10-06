@@ -1,11 +1,17 @@
-# Prediction Consolidation and Compound Predictions
+# Fire Tracking and Compound Predictions
 
 ## Synopsis
 
-Post-processing layers for the prediction engine: fire tracking, co-fire-based
-consolidation (dedup), and compound (tier-2) predictions minted from
-co-firing constellations of existing predictions. Uses nudge-driven detection
-and the existing edge model for fire behavior. No cron, no separate backend.
+Post-processing layers for the prediction engine: fire tracking and compound
+(tier-2) predictions minted from co-firing constellations of existing
+predictions. Uses nudge-driven detection and the existing edge model for fire
+behavior. No cron, no separate backend.
+
+The consolidation (dedup) half was split into
+[prediction-dedup.md](prediction-dedup.md) — cosine-only, needs no fire data,
+can ship independently. What remains here is the fire-tracking prerequisite
+and the co-fire refinements (behavioral dedup, compound detection) that
+consume the accumulated data.
 
 ## Background
 
@@ -14,10 +20,9 @@ auto-fires at chat.message and updates via agent tool calls. What it lacks
 relative to nak's samskara system:
 
 - **Fire tracking** -- no record of which predictions fire together on the same
-  turn. This is the prerequisite for both co-fire dedup and compound detection.
-- **Consolidation** -- no corpus-level dedup pass. Write-time dedup
-  (findNearestPrediction at 0.85) catches near-identical statements at creation,
-  but behavioral duplicates (same preference, different wording) accumulate.
+  turn. This is the prerequisite for co-fire dedup and compound detection.
+- **Consolidation** -- moved to [prediction-dedup.md](prediction-dedup.md):
+  a cosine-only dedup pass over the prediction corpus, no prerequisites.
 - **Compound predictions** -- no mechanism to mint a higher-order prediction
   from a constellation of predictions that reliably co-fire. Nak's tier-2
   samskaras fire at 77% genuine-engagement vs tier-1's 21% because compound
@@ -43,10 +48,13 @@ existing edge model.
 The co-fire data is for *deciding what to compound*, not for *making the
 compound fire*. This means:
 
-1. A compound needs no tier column, no special scoring path, no fire-path
-   changes. It is a prediction with multiple matcher edges.
-2. The existing `scorePredictions` already follows all edges and deduplicates by
-   prediction_id. A compound scores through its children's edges.
+1. A compound needs no tier column and no fire-path changes. It is a
+   prediction with multiple matcher edges. The scoring path does get one
+   addition: dynamic child suppression (see the compound-domination risk).
+2. The existing `scoreNudge`/`scoreItems` already follow all edges and
+   deduplicate by prediction_id. A compound scores through its children's
+   edges. Minting records the compound-to-children relation (Phase 4) so
+   suppression can tell parent from child.
 3. The existing `prediction_update` tool already finds existing matchers by
    cosine (0.85 threshold) and creates edges. Calling it multiple times with
    different matcher texts but the same prediction statement creates a
@@ -111,14 +119,16 @@ pass null or derive from the socket connection.
 tables. Same conventions (uuid PK, store column, idempotent CREATE TABLE IF
 NOT EXISTS).
 
-### Phase 2: Consolidation (Co-fire Dedup)
+### Phase 2: Co-fire refinement of dedup
 
-**New DB method: `findPredictionDuplicates(store, threshold)`**
+The cosine-only dedup pass (`findPredictionDuplicates`, the
+`prediction_dedup_pairs` table, the hygiene line, the merge flow) lives in
+[prediction-dedup.md](prediction-dedup.md) and ships without this plan. Once
+fire data accumulates, this plan upgrades that same method with behavioral
+evidence, mirroring nak's `samskara_collapse_by_cofiring`:
 
-Two-pass, mirroring nak's `samskara_collapse_by_cofiring`:
-
-**Primary pass (behavioral):** For each pair of predictions (A, B) in the store
-where both have fire_count > 0:
+**Behavioral pass (added to `findPredictionDuplicates`):** For each pair of
+predictions (A, B) in the store where both have fire_count > 0:
 
 ```
 cofires(A, B) >= 3
@@ -131,26 +141,11 @@ when either fires are duplicates. Two that co-fire but also fire independently
 are adjacent-but-distinct. Cosine is a sanity floor against spurious co-fires.
 
 **Safety cap (cosine-only):** If the prediction count exceeds a target (e.g.,
-100), fall through to pure embedding-cosine greedy merge (cosine >= 0.60)
-regardless of co-fire data. This catches accumulation when the behavioral pass
-finds nothing but the pool is still growing.
+100), the pure cosine pass from prediction-dedup.md already covers the pool;
+no behavioral evidence is required to keep dedup moving.
 
-**Output:** A list of candidate merge pairs with {predictionA, predictionB,
-cofires, ratio, cosine, firesA, firesB}. Surfaced via the hygiene nudge, not
-auto-merged. The agent reviews and merges via prediction_delete + (optionally)
-prediction_update to fold the loser's matchers into the winner.
-
-The merge itself is agent-driven: the agent sees the candidate pair, reads both
-predictions, deletes the weaker one (or uses a future `prediction_merge` tool
-if one is added). This matches the memory dedup pattern
-(`find_duplicates` + `dedup_mark_checked`).
-
-**Integration point:** `hygiene.ts` -- add a line to `hygieneReport`:
-`N prediction duplicate pairs pending review` when candidates exist.
-
-**Nudge throttling:** Runs at session start only, same as the existing hygiene
-report. The analysis is O(n^2) over the predictions table but n is small
-(tens, not hundreds) so the cost is negligible.
+**Output:** the dedup plan's candidate shape extended with {cofires, ratio,
+firesA, firesB} per pair.
 
 ### Phase 3: Compound Prediction Detection
 
@@ -216,7 +211,14 @@ first child's matcher. Subsequent calls find the existing compound by
 `findNearestPrediction` (0.85 store-wide dedup) and add edges from the other
 children's matchers.
 
-This works with the existing tool surface. No new tools needed for minting.
+This works with the existing tool surface. One addition: minting must also
+record WHICH predictions the compound supersedes, because child suppression
+(see the compound-domination risk) needs the parent-to-children relation at
+scoring time -- shared matcher edges are implicit and cannot distinguish a
+compound from a busy multi-matcher prediction. `prediction_update` gains an
+optional `supersedes` arg (array of prediction ids), carried on the first
+mint call, writing one `prediction_compounds(compound_id, child_id)` row per
+child. No tier column; the compound is still an ordinary prediction.
 
 **Prompt instructions addition** (in prompts.ts, all three host variants):
 
@@ -225,8 +227,9 @@ After the existing prediction instructions, add guidance for compounds:
 - When the hygiene nudge reports co-fire constellations, consider whether the
   members share a generalizable behavior.
 - If so, synthesize a compound statement and call `prediction_update` once per
-  child matcher with the compound statement. The tool handles matcher dedup and
-  edge creation.
+  child matcher with the compound statement, passing the child prediction ids
+  as `supersedes` on the first call. The tool handles matcher dedup and edge
+  creation.
 - A compound should be strictly more general than any single child. If you
   cannot generalize, do not compound.
 - The compound inherits the fire coverage of its children's matchers. It will
@@ -258,7 +261,7 @@ chat.message (user text)
 session.created (top-level)
   → hygieneReport
     → findDuplicates (memories, existing)
-    → findPredictionDuplicates (NEW: co-fire dedup candidates)
+    → findPredictionDuplicates (prediction-dedup.md, co-fire-refined here)
     → findCoFireConstellations (NEW: compound candidates)
     → inject hygiene nudge with all signals
 
@@ -276,44 +279,48 @@ computation, same as existing prediction methods.
 db.ts.
 
 **Code changes by file:**
-- `src/db.ts` -- new table, 4-5 new methods (recordFires, fireCount,
-  cofireCount, totalCohorts, findPredictionDuplicates, findCoFireConstellations)
+- `src/db.ts` -- one new table (`prediction_fires`) + 4 new methods
+  (recordFires, fireCount, cofireCount, totalCohorts, findCoFireConstellations);
+  the co-fire refinement extends the `findPredictionDuplicates` method added
+  by prediction-dedup.md
 - `src/runtime.ts` -- generate cohort_id, pass to recordFires in auto-fire path
 - `src/sideband.ts` -- same for MCP path
-- `src/hygiene.ts` -- add prediction dedup + constellation counts to report
+- `src/hygiene.ts` -- add constellation count to report (the dedup count came
+  with prediction-dedup.md)
 - `src/prompts.ts` -- compound minting guidance in all three prompt variants
 - `tests/prediction.test.ts` -- tests for new DB methods
 - `tests/plugin.test.ts` -- test that fire tracking records cohorts
 
 ## Implementation Order
 
+0. **Cosine dedup** -- split out and detailed in prediction-dedup.md. Needs
+   no fire tracking. If that plan has not landed yet, it goes FIRST.
 1. **Fire tracking** (table + recordFires + caller wiring). Foundation for
-   everything else. Ship and let fire data accumulate.
-2. **Cosine dedup** (findPredictionDuplicates + hygiene integration). Does not
-   need fire tracking. Can ship in parallel with phase 1. Immediate value:
-   catches behavioral duplicates the write-time 0.85 dedup misses.
-3. **Co-fire dedup** (add co-fire ratio + cosine filter to
-  findPredictionDuplicates). Needs fire data to accumulate first. Wait a few
-   weeks after phase 1 ships.
-4. **Compound detection** (findCoFireConstellations + hygiene integration).
+   everything else here. Ship and let fire data accumulate.
+2. **Co-fire dedup** (add the behavioral pass to findPredictionDuplicates).
+   Needs fire data plus the prediction-dedup.md method and table. Wait a few
+   weeks after fire tracking ships.
+3. **Compound detection** (findCoFireConstellations + hygiene integration).
    Needs more fire data than dedup (p_min_cofires = 10). Wait longer.
-5. **Compound minting** (prompt instructions + agent-driven via existing
-  tools). Ships with phase 4 -- the nudge surfaces candidates, the agent
-   compounds.
+4. **Compound minting** (prompt instructions + agent-driven via existing
+  tools). Ships with compound detection -- the nudge surfaces candidates,
+   the agent compounds.
 
-Phases 1-2 can ship together. Phases 3-5 follow once fire data accumulates.
+Fire tracking ships immediately; the rest follow once fire data accumulates.
 
 ## Test Plan
 
 - `prediction.test.ts`: test recordFires, fireCount, cofireCount,
-  totalCohorts with synthetic cohorts. Test findPredictionDuplicates with
-  known co-firing pairs. Test findCoFireConstellations with lift thresholds.
+  totalCohorts with synthetic cohorts, the co-fire refinement of
+  findPredictionDuplicates with known co-firing pairs, and
+  findCoFireConstellations with lift thresholds.
   Use the existing `makeEmbed(seed, dim=384)` helper.
 - `plugin.test.ts`: test that chat.message auto-fire records a cohort.
   Follow the recall-nudge test pattern (mock.module transformers + server
   hooks).
 - `hygiene.test.ts` (if exists) or `plugin.test.ts`: test that hygiene report
-  includes prediction dedup/constellation counts when candidates exist.
+  includes the constellation count when candidates exist (the dedup count
+  tests ride prediction-dedup.md).
 
 ## Risks and Mitigations
 
@@ -324,11 +331,18 @@ precondition gate (minimum prediction count, minimum fire count) before running
 the analysis.
 
 **Risk: Compound predictions fire too much, dominating the nudge.**
-Mitigation: The existing `scorePredictionNudge` deduplicates by prediction_id
-and slices to limit=5. A compound competes on equal footing with its children.
-If a compound and a child both fire, the higher-scoring one wins the slot. The
-compound's score is `cosine(matcher) * edge.weight * confidence` -- same
-formula. No special treatment.
+Mitigation (nak-proven): dynamic child suppression, not equal-footing
+competition. When a compound and its child both score in the same round and
+the compound's score is higher, the child is skipped. The rule resolves
+during the scoring pass, per query -- not as a stored flag -- so the
+surviving set adjusts as it searches and freed slots refill from the
+remaining scored list. If the child outscores the compound (it matched a
+matcher the compound did not inherit), both surface. Implementation: the
+per-round dedup filter in `scoreItems` (src/scoring-engine.ts:153-178)
+gains the suppression check, using the compound-to-children relation
+recorded at mint time. Plain prediction_id dedup and the limit=5 slice are
+unchanged. Fire rows record post-suppression survivors only, so co-fire
+data means co-surfaced.
 
 **Risk: Agent creates poor compounds (too generic, not useful).**
 Mitigation: The prompt instructions include the "strictly more general" guard
@@ -351,9 +365,11 @@ this becomes a concern. Low priority.
   a separate improvement, not part of this plan, but worth doing alongside
   phase 1.
 - The existing write-time dedup (`findNearestPrediction` at 0.85) catches
-  near-identical statements at creation. The co-fire dedup in phase 3 catches
-  behavioral duplicates that differ in wording. The two are complementary:
-  write-time catches semantic twins, co-fire catches behavioral twins.
+  near-identical statements at creation. The dedup pass in
+  prediction-dedup.md (cosine) and its co-fire refinement here catch
+  behavioral duplicates that differ in wording. The layers are
+  complementary: write-time catches semantic twins, the dedup passes catch
+  behavioral twins.
 - Nak's tier-2 decline ledger (`samskara_tier2_declines`, TTL'd 7 days) prevents
   re-offering a declined constellation every sweep. Thatch's equivalent: a
   `prediction_constellation_declines` table or a `dedup_pairs`-style
