@@ -52,6 +52,34 @@ Opencode-driven use cases run one leg per installed opencode major
 
 Override the model with `QA_MODEL=venice/<model-id>`.
 
+## Sandbox isolation
+
+Every spawned opencode process (runner, live sessions) runs inside a
+per-fixture sandbox. The runner sets all four XDG surfaces in the child
+env (`runner.ts` fixture env):
+
+| Surface | Override | What it isolates |
+|---------|----------|------------------|
+| `XDG_STATE_HOME` | `dir/home/.local/state` | **Daemon discovery.** The background daemon registers itself at `$XDG_STATE_HOME/opencode/service.json` (url, pid, password). This is the easy one to miss: without it a spawned `opencode run` JOINS THE REAL DAEMON - sessions land in the real session store and the plugin executes in the real daemon's env (real memories, real chat roster). |
+| `XDG_DATA_HOME` | `dir/home/.local/share` | The session database. `--standalone` private servers still share the XDG-scoped session db, so data isolation needs its own override. |
+| `XDG_CONFIG_HOME` | `dir/config` | Thatch's db/config + the plugin shim + installed skills. |
+| `THATCH_DB_PATH` | `dir/thatch.db` | Thatch's own db directly (the plugin resolves this before the XDG default). |
+
+Anything spawning opencode OUTSIDE this runner (a manual reproduction of a
+live scenario, a sandboxed TUI smoke) must set the same four. `--standalone`
+is a useful addition for a manual TUI session: a private child server that
+dies with the TUI (stdin-lease), never joining a shared daemon. The
+session-tab plan's live-smoke section carries a worked example.
+
+Known coupling: the fixture PRE-COPIES skills from the real
+`~/.config/opencode/skills`, so count assertions there can lag the checkout
+until the real config installs the newest skill (uc-014 asserts a floor
+while the real config is behind, strict once it catches up). Clear a stale
+master cache with `rm -rf "$TMPDIR/thatch-qa-master"`.
+
+Run against v1 while v2 is the default binary:
+`PATH="$(brew --cellar)/opencode/1.18.32/bin:$PATH" mise run qa-auto`.
+
 ## Adding a use case
 
 1. Create `tests/qa/auto/uc-NNN-name.ts` or
