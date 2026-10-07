@@ -27,7 +27,7 @@ import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
 import { WatcherRegistry, ghApiRun, ghAvailable, runWatchedCommand, watcherTarget, withCwdFallback, type Watcher } from "./watchers";
 import { watcherNotificationNudge, watcherRearmNotice, watcherDeathNotice, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
-import { ChatPoller, createWakeGate, hostedSessionIds, isDefaultSessionTitle, unexpiredGraceRehosts } from "./chat";
+import { ChatPoller, createWakeGate, EXTRACTION_CHILD_TITLE, hostedSessionIds, isDefaultSessionTitle, isMachinerySessionTitle, unexpiredGraceRehosts } from "./chat";
 import { chatEnabled, chatAutoRegister, loadConfig, alertMode, notificationDefaults } from "./config";
 import { sendNotification } from "./notify";
 import { osProcessArgs, startupSessionId, continuesLastSessionFromArgv, continuesLastSessionId } from "./os-args";
@@ -982,13 +982,22 @@ export async function createRuntime(input: {
 
     const result = await caps.sessionCreate({
       parentID,
-      title: "thatch-extraction",
+      title: EXTRACTION_CHILD_TITLE,
     });
     // session.created event fires here, setting childToParent and
     // parentSnapshots (snapshot of the full pending buffer, since we
     // have not called accept).
     const childId = result.id;
     extractionChildren.add(childId);
+    // Durable machinery marker: the in-memory maps below are lost to a
+    // plugin reload or daemon restart, and without a durable signal the
+    // chat auto-registration paths would register the child as a chat
+    // participant the moment its events land in an instance that lost the
+    // mapping (the thatch-extraction corpse rows, 81 by 2026-10-07). The
+    // marker is never removed on child cleanup - ids are never reused, so
+    // it can only ever refer to this machinery session, and it ages out
+    // with the auto-row TTL.
+    db.markChatMachinery(childId, "extraction");
     // v2's session API cannot create a CHILD session (no parentID in its
     // create input), so the adapter returns a top-level session and no
     // session.created event carries the parent mapping. Set both here
@@ -1409,6 +1418,7 @@ export async function createRuntime(input: {
         chatAutoRegister(loadConfig(dbPath).config) &&
         input.sessionID &&
         !childToParent.has(input.sessionID) &&
+        !db.isChatMachinery(input.sessionID) &&
         !db.hasChatLeaveTombstone(input.sessionID)
       ) {
         try {
@@ -1804,7 +1814,10 @@ export async function createRuntime(input: {
         // task sub-agents) are machinery, not chat participants - without
         // this check every fact-extractor run registered a roster row
         // (the "thatch-extraction" corpse flood, September 2026). The
-        // prompt-register path above has the same check.
+        // prompt-register path above has the same check. The childToParent
+        // map alone is not enough: it is in-memory and lost to a plugin
+        // reload or daemon restart, so the IIFE below also checks the
+        // durable chat_machinery marker and the fetched title.
         if (
           chatOn &&
           chatAutoRegister(loadConfig(dbPath).config) &&
@@ -1814,10 +1827,23 @@ export async function createRuntime(input: {
         ) {
           void (async () => {
             try {
+              // Machinery marker check first: a plugin-created extraction
+              // child whose in-memory mapping was lost (reload/restart
+              // window) must not register - and a corpse row an earlier
+              // race did register is deleted here (self-healing).
+              if (db.isChatMachinery(sessionID)) {
+                db.unregisterChatSession(sessionID);
+                return;
+              }
               const data = await caps.sessionGet(sessionID);
               const title = data?.title ?? "";
               // Placeholder titles never become topics (the real one
               // converges on a later idle via refreshChatTopic).
+              // Machinery titles (the extraction child) never register at
+              // all - the durable marker above is the primary guard; this
+              // title check covers a marked session whose marker aged out
+              // or was never written.
+              if (isMachinerySessionTitle(title)) return;
               const topic = title && !isDefaultSessionTitle(title) ? title : null;
               const res = db.registerChatSession(sessionID, repo, topic, "opencode", null, detectWorktreeKind(worktree));
               // The topic converges as the auto-titler lands a real title:

@@ -293,3 +293,20 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   renderer quotes every description (`yamlQuote` in src/commands.ts) and a
   unit test pins the quoted form. Keep it that way for any new frontmatter
   field whose value is free-form prose.
+
+## In-memory maps gate nothing durable: reloads and restarts wipe them
+
+- **Any guard whose correctness depends on a runtime.ts Map silently
+  disappears for sessions whose events arrive after a plugin reload or a
+  daemon restart.** The chat auto-registration child check learned this the
+  hard way: `childToParent` kept extraction children out of the roster, but
+  an instance that lost the map to a reload registered every event-bearing
+  child, and v2 cannot delete sessions (sessionDelete is a no-op), so the
+  poller heartbeat those corpse rows forever and the stale-row reaper never
+  reaped them (81 `thatch-extraction` rows by 2026-10-07). The fix pattern:
+  the plugin writes a DURABLE marker at creation time
+  (`chat_machinery`, src/db.ts), and every registration path checks the
+  marker plus a stable title (`isMachinerySessionTitle`) instead of
+  trusting in-memory state alone. If you add a new plugin-created session
+  kind, mark it in the same table and route its events through the same
+  guards - do not rely on Maps surviving a reload.

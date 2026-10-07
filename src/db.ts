@@ -396,6 +396,20 @@ export class ThatchDB {
       )
     `);
 
+    // Sessions the plugin itself created as machinery (direct-extraction
+    // children). The in-memory child maps that keep these sessions out of
+    // the chat directory are lost on plugin reloads and daemon restarts;
+    // a marker here is durable, so the auto-registration paths refuse the
+    // session even when the maps were lost. Markers age out with the
+    // auto-row TTL (session ids are never reused).
+    this.#db.run(`
+      CREATE TABLE IF NOT EXISTS chat_machinery (
+        session_id TEXT PRIMARY KEY,
+        reason     TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+      )
+    `);
+
     // Hook-parent-process -> session mapping (Claude Code identity anchor):
     // hooks learn the true session id from the host's hook payload and run
     // as children of the same process that spawned the MCP server, so the
@@ -1057,6 +1071,14 @@ export class ThatchDB {
 
   clearChatLeaveTombstone(sessionID: string) {
     return this.#chat.clearLeaveTombstone(sessionID);
+  }
+
+  markChatMachinery(sessionID: string, reason: string) {
+    return this.#chat.markMachinery(sessionID, reason);
+  }
+
+  isChatMachinery(sessionID: string) {
+    return this.#chat.isMachinery(sessionID);
   }
 
   chatLeaveSuperseded(sessionID: string, project: string | null) {

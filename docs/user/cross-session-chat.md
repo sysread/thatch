@@ -11,7 +11,9 @@ between tabs all afternoon.
 opencode sessions join the directory automatically, the moment their
 first user message arrives (before the assistant responds), and a session
 resumed with `opencode -c` or `opencode -s <id>` is back in the directory
-at harness start with its old name. Names are assigned by thatch, never chosen: a name drawn from a
+at harness start with its old name. Sessions thatch itself creates in the
+background - like the fact-extraction runs - are machinery, not chat
+participants, and never appear in the roster. Names are assigned by thatch, never chosen: a name drawn from a
 built-in pool plus a counter (`al-go-rithm-00001`). The counter only ever
 increments, so a name is
 minted exactly once per machine - pruning an old session never reissues its

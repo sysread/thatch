@@ -271,6 +271,24 @@ export function isDefaultSessionTitle(title: string): boolean {
   return /^New session - /.test(title) || /^Child session - /.test(title);
 }
 
+// The title of child sessions the plugin itself creates for direct
+// extraction (triggerExtraction). They are machinery, not chat participants:
+// they must never auto-register. The title is the one DURABLE,
+// host-owned signal - in-memory child maps are lost to plugin reloads and
+// daemon restarts, which is exactly how the September/October 2026
+// thatch-extraction corpse rows entered the registry (81 rows by 2026-10-07).
+export const EXTRACTION_CHILD_TITLE = "thatch-extraction";
+
+/**
+ * Whether a session title belongs to plugin machinery rather than a chat
+ * participant. Both auto-registration paths check this (the idle path has
+ * the live title in hand); explicit chat_register is unaffected - a model
+ * deliberately joining the directory is never machinery.
+ */
+export function isMachinerySessionTitle(title: string): boolean {
+  return title === EXTRACTION_CHILD_TITLE;
+}
+
 // Poller cadence. A hosting harness beats each of its sessions once per
 // interval and delivers their mail on the same tick.
 export const CHAT_POLL_INTERVAL_MS = 30_000;
@@ -527,6 +545,24 @@ export class ChatStore {
   }
 
   /**
+   * Marks a plugin-created session as machinery (reason names the creator,
+   * e.g. "extraction"). Unlike the in-memory child maps, the marker survives
+   * plugin reloads and daemon restarts, so the auto-registration paths can
+   * refuse the session even when the maps were lost. Markers age out with
+   * the auto-row TTL in pruneStaleAuto - session ids are never reused, so an
+   * expired marker cannot resurrect a row for a live session.
+   */
+  markMachinery(sessionID: string, reason: string): void {
+    this.#db.run("INSERT OR IGNORE INTO chat_machinery (session_id, reason) VALUES (?, ?)", [sessionID, reason]);
+  }
+
+  /** Whether the session was marked machinery (see markMachinery). */
+  isMachinery(sessionID: string): boolean {
+    const row = this.#db.query("SELECT 1 FROM chat_machinery WHERE session_id = ?").get(sessionID);
+    return row !== null && row !== undefined;
+  }
+
+  /**
    * Whether the leave tombstone for `sessionID` has been superseded: a
    * newer registration exists in the same project (registered after the
    * leave). The hook uses this to stop announcing a stale leave once the
@@ -601,6 +637,11 @@ export class ChatStore {
     // session), but the sweep keeps the table from growing monotonically
     // forever.
     this.#db.run("DELETE FROM chat_leave_tombstones WHERE left_at < ?", [cutoff]);
+    // Machinery markers age out on the same TTL. They only need to outlive
+    // the marked session's possible events; ids are never reused, so an
+    // expired marker cannot let a row come back for a live session (the
+    // title guard in the registration paths covers the residue).
+    this.#db.run("DELETE FROM chat_machinery WHERE created_at < ?", [cutoff]);
     return result.changes;
   }
 

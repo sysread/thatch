@@ -86,6 +86,29 @@ worktree, a `.git` directory means the project root, no `.git` reads as
 undetected. The roster shows it as a `loc:` token so sessions coordinating
 on a shared tree can tell who sits where.
 
+### Machinery sessions never auto-register
+
+Sessions the plugin itself creates as machinery are not chat
+participants and never join the directory: the direct-extraction child
+(`triggerExtraction`, titled `thatch-extraction`) is the current case.
+The primary guard is durable, not in-memory: child creation writes a
+`chat_machinery` row (src/db.ts), and both auto-register paths (prompt
+and idle) refuse a marked session. This matters because the in-memory
+`childToParent` mapping that normally keeps children out is lost to a
+plugin reload or daemon restart - an instance that processes the child's
+events without the mapping would otherwise register it, and since v2
+cannot delete sessions (see docs/dev/features/opencode-plugin.md), the
+row never cleans up. The poller heartbeats every registered row of the
+project it serves, so a machinery corpse stayed fresh forever and the
+stale-row reaper could not reap it (81 corpse rows by 2026-10-07). The
+idle path deletes any corpse row it finds for a marked session
+(self-healing) and additionally refuses a session whose fetched title is
+the machinery title (`isMachinerySessionTitle`, src/chat.ts) - the title
+is the one signal that survives even a lost marker. Markers age out with
+the 7-day auto-row TTL; session ids are never reused, so an expired
+marker cannot resurrect a row. Explicit `chat_register` is unaffected:
+a model deliberately joining the directory is never machinery.
+
 ### Startup registration and reclaim
 
 A session continued via `opencode -s <id>` gets no event when it comes

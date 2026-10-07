@@ -54,6 +54,7 @@ import {
   extractionDirectPrompt,
   type NudgeMatch,
 } from "../src/prompts";
+import { EXTRACTION_CHILD_TITLE } from "../src/chat";
 
 let hooks: Awaited<ReturnType<typeof server>>;
 let dbDir: string;
@@ -1077,6 +1078,13 @@ describe("plugin entry", () => {
     expect(promptAsyncCalled).toBe(true);
     expect(promptAsyncArgs.path.id).toBe("child_direct1");
     expect(promptAsyncArgs.body.parts[0].text).toContain("thatch-fact-extractor");
+
+    // Child creation writes the durable chat machinery marker, so the chat
+    // auto-registration paths refuse the child even when a plugin reload
+    // or daemon restart wiped the in-memory childToParent mapping.
+    const directDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    expect(directDb.isChatMachinery("child_direct1")).toBe(true);
+    directDb.close();
 
     delete process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS;
 
@@ -2716,6 +2724,60 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
       prDb.close();
     } finally {
       prHooks.dispose?.();
+    }
+  });
+
+  test("machinery marker blocks auto-registration on both paths and self-heals a corpse row", async () => {
+    // The childToParent map is in-memory and lost to a plugin reload or
+    // daemon restart; the observed thatch-extraction corpse rows (81 by
+    // 2026-10-07) came from an instance whose mapping was gone when the
+    // extraction child's events landed. The durable chat_machinery marker
+    // (written by triggerExtraction at child creation) closes that window:
+    // it must block the prompt path, and the idle path must also delete a
+    // corpse row an earlier race already registered.
+    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-machinery" } as any);
+    try {
+      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+      prDb.markChatMachinery("ses_mach", "extraction");
+
+      // Prompt path: the marker alone refuses registration (no row, no
+      // tombstone - this session never left, it was never a participant).
+      await prHooks["chat.message"]!({ sessionID: "ses_mach", messageID: "msg_mach" } as any, promptOutput("msg_mach"));
+      expect(prDb.listChatSessions().find((r) => r.session_id === "ses_mach")).toBeUndefined();
+
+      // Idle path, corpse variant: a row exists from the mapping-less race.
+      // The marker short-circuits registration AND deletes the corpse.
+      prDb.registerChatSession("ses_mach", "thatch-machinery", EXTRACTION_CHILD_TITLE, "opencode");
+      await prHooks.event!({ event: {
+        type: "session.status",
+        properties: { sessionID: "ses_mach", status: { type: "idle" } } } as any,
+      });
+      await settle();
+      expect(prDb.listChatSessions().find((r) => r.session_id === "ses_mach")).toBeUndefined();
+      prDb.close();
+    } finally {
+      prHooks.dispose?.();
+    }
+  });
+
+  test("idle auto-register skips a session titled as the extraction child even without a marker", async () => {
+    // Belt-and-suspenders for a machinery session whose marker aged out or
+    // was never written: the fetched title alone refuses registration.
+    const savedTitle = arTitle;
+    arTitle = EXTRACTION_CHILD_TITLE;
+    const arHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-ar-title" } as any);
+    try {
+      await arHooks.event!({ event: {
+        type: "session.status",
+        properties: { sessionID: "ses_title_mach", status: { type: "idle" } } } as any,
+      });
+      await settle();
+      const arDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+      expect(arDb.listChatSessions().find((r) => r.session_id === "ses_title_mach")).toBeUndefined();
+      arDb.close();
+    } finally {
+      arTitle = savedTitle;
+      arHooks.dispose?.();
     }
   });
 
