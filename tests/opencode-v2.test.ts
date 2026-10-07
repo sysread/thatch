@@ -369,7 +369,7 @@ describe("opencode v2 adapter", () => {
     const { ThatchDB } = await import("../src/db");
     const { MockEmbeddingModel } = await import("./mocks/embeddings");
     const def = TOOL_DEFS.find((d) => d.name === "session_tab")!;
-    const db = new ThatchDB(`file:${join(dbDir, "test.db")}`);
+    const db = new ThatchDB(join(dbDir, "test.db"));
     try {
       const ctx = buildCoreContext(db, new MockEmbeddingModel(), "test-owner/test-repo");
       expect(await def.execute({ prompt: "p", title: "t" }, ctx, undefined)).toContain("did not provide a session context");

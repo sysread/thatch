@@ -187,7 +187,7 @@ describe("session_tab registration invariants", () => {
   test("the execute refuses when no host session context is supplied", async () => {
     const def = TOOL_DEFS.find((d) => d.name === "session_tab")!;
     let dbDir = mkdtempSync(join(tmpdir(), "thatch-session-tab-"));
-    const db = new ThatchDB(`file:${join(dbDir, "test.db")}`);
+    const db = new ThatchDB(join(dbDir, "test.db"));
     const ctx = buildCoreContext(db, new MockEmbeddingModel(), "test-owner/test-repo");
     const result = await def.execute({ prompt: "p", title: "t" }, ctx, undefined);
     expect(result).toContain("unavailable");
@@ -198,7 +198,7 @@ describe("session_tab registration invariants", () => {
   test("the execute refuses when the host wired no sessionTabHost seam", async () => {
     const def = TOOL_DEFS.find((d) => d.name === "session_tab")!;
     let dbDir = mkdtempSync(join(tmpdir(), "thatch-session-tab-"));
-    const db = new ThatchDB(`file:${join(dbDir, "test.db")}`);
+    const db = new ThatchDB(join(dbDir, "test.db"));
     const ctx = buildCoreContext(db, new MockEmbeddingModel(), "test-owner/test-repo");
     const result = await def.execute({ prompt: "p", title: "t", directory: "/tmp" }, ctx, {
       sessionID: "ses_test",
