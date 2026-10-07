@@ -25,9 +25,9 @@ import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommand
 import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
-import { WatcherRegistry, ghApiRun, ghAvailable, runWatchedCommand, watcherTarget, withCwdFallback, type Watcher } from "./watchers";
+import { WatcherRegistry, ghApiRun, ghAvailable, runWatchedCommand, watcherTarget, withCwdFallback, type Watcher, type WatcherEvent } from "./watchers";
 import { watcherNotificationNudge, watcherRearmNotice, watcherDeathNotice, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
-import { ChatPoller, createWakeGate, EXTRACTION_CHILD_TITLE, hostedSessionIds, isDefaultSessionTitle, isMachinerySessionTitle, unexpiredGraceRehosts } from "./chat";
+import { ChatPoller, createWakeGate, EXTRACTION_CHILD_TITLE, hostedSessionIds, isDefaultSessionTitle, isMachinerySessionTitle, nowIso, unexpiredGraceRehosts } from "./chat";
 import { chatEnabled, chatAutoRegister, loadConfig, alertMode, notificationDefaults } from "./config";
 import { sendNotification } from "./notify";
 import { osProcessArgs, startupSessionId, continuesLastSessionFromArgv, continuesLastSessionId } from "./os-args";
@@ -294,6 +294,38 @@ export async function createRuntime(input: {
     console.error(`[thatch] project directory ${from} deleted; watcher falling back to main checkout ${to}`);
   });
 
+  /** Tells one live same-project session about a dead session's watchers
+   *  (promptAsync, the watcher-notification path) and clears the durable
+   *  death row on success. No live peer = the row waits for the next
+   *  prompt-time surfacing pass. */
+  const deliverWatcherDeathNotices = async (deadSessionID: string, death: { chatName: string | null; targets: string[] }) => {
+    if (death.targets.length === 0) {
+      // A watchless tab closing is nobody's news.
+      db.runtimeStateDelete("watcher_death", deadSessionID);
+      return;
+    }
+    const deadRow = db.findChatSession(deadSessionID);
+    const deadProject = deadRow?.project ?? null;
+    if (!deadProject) return; // unplaceable death - the row waits for surfacing
+    for (const peerID of sessionStatus.keys()) {
+      if (peerID === deadSessionID) continue;
+      const peerRow = db.findChatSession(peerID);
+      if (!peerRow || peerRow.project !== deadProject) continue;
+      if (!(await canPromptSession(peerID))) continue;
+      try {
+        await caps.promptSession(
+          peerID,
+          { parts: [{ type: "text", text: watcherDeathNotice(death.targets, { name: death.chatName, sessionID: deadSessionID }), synthetic: true }] },
+          "async",
+        );
+        db.runtimeStateDelete("watcher_death", deadSessionID);
+        return;
+      } catch (err) {
+        console.error(`[thatch] death-notice delivery to ${peerID} failed: ${err}`);
+      }
+    }
+  };
+
   const watchers = new WatcherRegistry({
     // Journal watcher definitions so a v2 plugin reload (same process) can
     // re-arm them; the registry journals after every membership change.
@@ -340,6 +372,35 @@ export async function createRuntime(input: {
     canDeliver: canPromptSession,
     ghRunner: ghApiRun,
     commandRunner: watchedCommandRunner,
+    journalPending: (sessionID, pending) => {
+      if (pending === undefined) db.runtimeStateDelete("watcher_pending", sessionID);
+      else db.runtimeStatePut("watcher_pending", sessionID, pending, directory);
+    },
+    isHostedSession: (sessionID) =>
+      hostedSessionIds({
+        statusKeys: sessionStatus.keys(),
+        resumedSessions,
+        rehostedSessions: [...rehostedSessions, ...unexpiredGraceRehosts(rehostGrace, Date.now())],
+        exclude: childToParent.keys(),
+      }).includes(sessionID),
+    onSessionDeath: (deadSessionID, death) => {
+      // The dead tab's chat-hosting state dies with it - the session.deleted
+      // cleanup minus the chat unregister (the session is not deleted, only
+      // its tab: unregistering would tombstone a legitimate resume, and the
+      // roster row ages out through the reaper).
+      sessionStatus.delete(deadSessionID);
+      rehostGrace.delete(deadSessionID);
+      const hostedRow = db.runtimeStateAll().find((r) => r.kind === "hosted" && r.sessionID === directory);
+      if (hostedRow && Array.isArray(hostedRow.value)) {
+        db.runtimeStatePut("hosted", directory, (hostedRow.value as string[]).filter((sid) => sid !== deadSessionID), directory);
+      }
+      // Durable death record first, then best-effort live delivery - the
+      // row is deleted when a live same-project session has the news.
+      const deadRow = db.findChatSession(deadSessionID);
+      const deadProject = deadRow?.project ?? null;
+      db.runtimeStatePut("watcher_death", deadSessionID, { name: death.chatName, targets: death.targets, project: deadProject, at: nowIso() }, directory);
+      void deliverWatcherDeathNotices(deadSessionID, death);
+    },
   });
   // gh presence decides whether watch_create and watch_branch_create work;
   // checked lazily by the tools, but log once at startup so misconfiguration
@@ -645,6 +706,13 @@ export async function createRuntime(input: {
         }
         continue;
       }
+      if (row.kind === "watcher_pending" || row.kind === "watcher_death") {
+        // Durable pending events and death records survive restarts: the
+        // pending queue rides a resumed session's rearm, the death record
+        // surfaces at a live session's next prompt. Both are deleted on
+        // consumption.
+        continue;
+      }
       db.runtimeStateDelete(row.kind, row.sessionID);
       continue;
     }
@@ -783,6 +851,34 @@ export async function createRuntime(input: {
       return (err as NodeJS.ErrnoException).code !== "ESRCH";
     }
   };
+  /** Surfaces persisted watcher-death rows to this session (same project
+   *  only), deleting each row on surfacing. Runs per prompt - deaths are
+   *  rare and the row read is cheap - so the once-per-process
+   *  dormantScanned guard deliberately does NOT apply: a death row
+   *  persisted after this session's first prompt must still surface. */
+  const surfaceWatcherDeaths = (forSessionID: string): string[] => {
+    const ownRow = db.findChatSession(forSessionID);
+    const project = ownRow?.project ?? null;
+    if (!project) return [];
+    const notices: string[] = [];
+    for (const row of db.runtimeStateAll()) {
+      if (row.kind !== "watcher_death" || row.directory !== directory) continue;
+      const death = (row.value ?? {}) as { name?: string | null; targets?: string[]; project?: string | null };
+      if (!Array.isArray(death.targets) || death.targets.length === 0) {
+        // Malformed or fully-consumed row - clean it up.
+        db.runtimeStateDelete("watcher_death", row.sessionID);
+        continue;
+      }
+      // Only the dead session's own project hears the death. The "global"
+      // project matches globally - the same accepted class as the identity
+      // binding's unknown-to-global mapping.
+      if ((death.project ?? "global") !== project) continue;
+      notices.push(watcherDeathNotice(death.targets, { name: death.name ?? null, sessionID: row.sessionID }));
+      db.runtimeStateDelete("watcher_death", row.sessionID);
+    }
+    return notices;
+  };
+
   const scanDormantWatchers = async (sessionID: string): Promise<string[]> => {
     if (dormantScanned.has(sessionID)) return [];
     dormantScanned.add(sessionID);
@@ -814,6 +910,14 @@ export async function createRuntime(input: {
       const notices: string[] = [];
       if (own.length > 0) {
         const { rearmed, expired, failed } = await watchers.rearm(sessionID, own);
+        // Durable pending events ride along: the reload-loss fix journals
+        // the pending queue separately from the definitions, and a resumed
+        // session's undelivered notifications must still deliver.
+        const pendingRow = db.runtimeStateAll().find((r) => r.kind === "watcher_pending" && r.sessionID === sessionID);
+        if (pendingRow && Array.isArray(pendingRow.value)) {
+          watchers.hydratePending(sessionID, pendingRow.value as { event: WatcherEvent; queuedAt: number }[]);
+          db.runtimeStateDelete("watcher_pending", sessionID);
+        }
         // This session came back to life: its own previous death notice is
         // obsolete - a future death deserves a fresh one.
         notifiedWatcherDeaths.delete(sessionID);
@@ -1393,8 +1497,12 @@ export async function createRuntime(input: {
       // nudges take, so the model sees them on every call of the turn -
       // plus a best-effort toast for the human.
       const rearmNotices = !childToParent.has(input.sessionID) ? await scanDormantWatchers(input.sessionID) : [];
-      if (rearmNotices.length > 0) {
-        for (const text of rearmNotices) {
+      // Death records surface per prompt, not once-per-process: a death
+      // row persisted after this session's first prompt must still reach
+      // it.
+      const deathNotices = surfaceWatcherDeaths(input.sessionID);
+      if (rearmNotices.length + deathNotices.length > 0) {
+        for (const text of [...rearmNotices, ...deathNotices]) {
           output.parts.push({
             id: `prt_thatch_watch_${Math.random().toString(36).slice(2)}`,
             sessionID: input.sessionID,
@@ -1710,6 +1818,14 @@ export async function createRuntime(input: {
           extractionChildren.delete(childID);
           journalChild(childID);
         }
+        return;
+      }
+      if (event.type === "session.tab_closed") {
+        // The session-tab tool's TUI plugin confirmed a tab close (tool-
+        // initiated only). CONFIRMED death: skip the delivery-persistence
+        // heuristic entirely and run the death path now.
+        const props = event.properties as { sessionID?: string; chatName?: string | null };
+        if (props.sessionID) watchers.sessionDied(props.sessionID, { chatName: props.chatName ?? null });
         return;
       }
       if (event.type === "session.status") {

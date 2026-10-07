@@ -140,6 +140,12 @@ restarts:
   that the watched condition never occurred - it is not a signal
   that whatever the watch was gating finished. Re-register the watch
   if notifications are still wanted.
+- A watch also dies with its session: on opencode v2, a closed tab's
+  watchers are cancelled automatically once its undelivered events
+  have aged past 2 hours (THATCH_WATCH_DEATH_MINUTES) while delivery
+  keeps failing, and live sessions in the same project hear a death
+  notice naming the dead session and its watch targets. A coordinator
+  can use that notice to mark a subordinate's task failed and respawn.
 - Each session can hold up to 5 active watchers (all sources share
   the budget).
 - A one-shot watch cancels itself after its first event - a single

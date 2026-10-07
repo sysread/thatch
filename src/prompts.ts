@@ -1048,11 +1048,21 @@ No re-registration is needed; notifications will arrive here as usual. This is a
  * harness and has not been resumed. Delivered as a synthetic part to a live
  * session in the same project, so a watch that will never fire is at least
  * heard about instead of silently vanishing. Pointer-only: target labels,
- * never event content.
+ * never event content. The dead session's chat name and session id ride
+ * the notice when known, so a coordinator session (thatch-coordination
+ * skill) can mark its task-list entry failed and respawn keyed by chat
+ * name without an SDK lookup.
  */
-export function watcherDeathNotice(targets: string[]): string {
+export function watcherDeathNotice(
+  targets: string[],
+  owner?: { name: string | null; sessionID: string },
+): string {
   const list = targets.join(", ");
-  return `[thatch] ${targets.length} watcher${targets.length === 1 ? " died" : "s died"} with session${targets.length === 1 ? "" : "s"} that are no longer running: ${list}.
+  const ownerLine =
+    owner === undefined
+      ? ""
+      : `\nDead session: ${owner.name ?? "(unregistered)"} (${owner.sessionID}).`;
+  return `[thatch] ${targets.length} watcher${targets.length === 1 ? " died" : "s died"} with session${targets.length === 1 ? "" : "s"} that are no longer running: ${list}.${ownerLine}
 ${targets.length === 1 ? "It" : "They"} will re-arm automatically if ${targets.length === 1 ? "that session is" : "those sessions are"} resumed. This is a system notice, not user input - carry on with the user's request.`;
 }
 

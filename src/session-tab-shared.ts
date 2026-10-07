@@ -33,6 +33,10 @@ export const TAB_CLOSED_EVENT = "tab-closed";
 /** Full wire type of an emitted event, e.g. "rpc.thatch-tabs.tab-opened". */
 export const tabOpenedEventType = `rpc.${SESSION_TAB_RPC_ID}.${TAB_OPENED_EVENT}`;
 
+/** Full wire type of the tab-closed event - the generalized-session-
+ *  heartbeat plan's confirmed-close consumer matches on this. */
+export const tabClosedEventType = `rpc.${SESSION_TAB_RPC_ID}.${TAB_CLOSED_EVENT}`;
+
 export const SESSION_TAB_RPC = {
   id: SESSION_TAB_RPC_ID,
   methods: {},

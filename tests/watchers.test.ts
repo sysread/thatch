@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { watcherNotificationNudge } from "../src/prompts";
+import { watcherNotificationNudge, watcherDeathNotice } from "../src/prompts";
 import { runWatchedCommand, drainStreamOutput, withCwdFallback, type CommandRunResult } from "../src/watchers";
 import {
   WatcherRegistry,
@@ -22,6 +22,7 @@ import {
   type Watcher,
   type WatcherEvent,
   type WatcherEventType,
+  type WatcherRegistryOptions,
 } from "../src/watchers";
 
 // ---------------------------------------------------------------------------
@@ -560,6 +561,170 @@ describe("WatcherRegistry", () => {
     // Watcher 7 failed (no state change anyway), watcher 8 delivered.
     expect(delivered).toHaveLength(1);
     expect(delivered[0].events[0].type).toBe("pr_commit");
+  });
+});
+
+describe("watcher death detection", () => {
+  let clock = 1_000_000;
+  const now = () => clock;
+  let errorLog: typeof console.error;
+  // The death path logs each failed delivery; silence the expected errors
+  // so the test output stays readable.
+  beforeEach(() => {
+    errorLog = console.error;
+    console.error = () => {};
+  });
+  afterEach(() => {
+    console.error = errorLog;
+  });
+  const notFound = () => {
+    const e = new Error("HTTP 404: session not found") as Error & { statusCode: number };
+    e.statusCode = 404;
+    return e;
+  };
+
+  const makeRegistry = (overrides: Partial<WatcherRegistryOptions> = {}) => {
+    const reg = new WatcherRegistry({
+      deliver: async () => {},
+      canDeliver: () => true,
+      ghRunner: mockGh([[RE_PULL, prResponse()], ...quietRoutes()]),
+      pollIntervalMs: 60_000,
+      now,
+      ...overrides,
+    });
+    return reg;
+  };
+
+  const seedPending = async (reg: WatcherRegistry, sessionID = "s1") => {
+    await reg.createPr(sessionID, "acme/widgets", 7, ["pr_commit"]);
+    const w = reg.listForSession(sessionID)[0];
+    if (w.source !== "pr") throw new Error("expected a pr watcher");
+    w.state.headSha = "old";
+    await reg.poll(); // detect + queue + (throwing) delivery attempt
+  };
+
+  test("aged pending + consecutive 404 deliveries declare death once", async () => {
+    const deaths: Array<{ sessionID: string; death: { chatName: string | null; targets: string[] } }> = [];
+    const reg = makeRegistry({
+      deliver: async () => { throw notFound(); },
+      onSessionDeath: (sessionID, death) => deaths.push({ sessionID, death }),
+      isHostedSession: () => true,
+      deathMinutes: 120,
+    });
+    await seedPending(reg);
+    expect(deaths).toHaveLength(0);
+    clock += 121 * 60_000;
+    for (let i = 0; i < 5; i++) await reg.poll(); // throws accumulate to MIN_DEATH_THROWS
+    expect(deaths).toHaveLength(1);
+    expect(deaths[0].sessionID).toBe("s1");
+    expect(deaths[0].death.targets).toContain("acme/widgets#7");
+    expect(reg.listForSession("s1")).toHaveLength(0);
+    expect(reg.pendingCount("s1")).toBe(0);
+    await reg.poll();
+    expect(deaths).toHaveLength(1); // fires once
+  });
+
+  test("skipped deliveries reset the chain - a busy or compacting session never dies", async () => {
+    let deliverable = true;
+    const deaths: unknown[] = [];
+    const reg = makeRegistry({
+      deliver: async () => { throw notFound(); },
+      canDeliver: () => deliverable,
+      onSessionDeath: (sessionID, death) => deaths.push({ sessionID, death }),
+      isHostedSession: () => true,
+      deathMinutes: 1,
+    });
+    await seedPending(reg);
+    for (let i = 0; i < 12; i++) {
+      await reg.poll(); // alternates throw / skip - every skip resets
+      deliverable = !deliverable;
+      clock += 10 * 60_000;
+    }
+    expect(deaths).toHaveLength(0);
+  });
+
+  test("5xx delivery errors never declare death (a wedged server is not a dead session)", async () => {
+    const deaths: unknown[] = [];
+    const reg = makeRegistry({
+      deliver: async () => { throw new Error("HTTP 502: bad gateway"); },
+      onSessionDeath: (sessionID, death) => deaths.push({ sessionID, death }),
+      isHostedSession: () => true,
+      deathMinutes: 1,
+    });
+    await seedPending(reg);
+    clock += 3 * 60 * 60_000;
+    for (let i = 0; i < 8; i++) await reg.poll();
+    expect(deaths).toHaveLength(0);
+  });
+
+  test("sessions this process does not host are never declared dead", async () => {
+    const deaths: unknown[] = [];
+    const reg = makeRegistry({
+      deliver: async () => { throw notFound(); },
+      onSessionDeath: (sessionID, death) => deaths.push({ sessionID, death }),
+      isHostedSession: () => false,
+      deathMinutes: 1,
+    });
+    await seedPending(reg);
+    clock += 3 * 60 * 60_000;
+    for (let i = 0; i < 8; i++) await reg.poll();
+    expect(deaths).toHaveLength(0);
+    // The watcher survives (the death path must not have touched it).
+    expect(reg.listForSession("s1")).toHaveLength(1);
+  });
+
+  test("the confirmed-close fast path (sessionDied) skips the threshold", async () => {
+    const deaths: Array<{ sessionID: string; death: { chatName: string | null; targets: string[] } }> = [];
+    const reg = makeRegistry({
+      onSessionDeath: (sessionID, death) => deaths.push({ sessionID, death }),
+    });
+    await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
+    clock += 1000; // no aging at all
+    reg.sessionDied("s1", { chatName: "rosie-unit-one-00007" });
+    expect(deaths).toHaveLength(1);
+    expect(deaths[0].death.chatName).toBe("rosie-unit-one-00007");
+    expect(reg.listForSession("s1")).toHaveLength(0);
+  });
+
+  test("pending events survive a reload through the pending journal", async () => {
+    const watcherJournals: Array<{ sessionID: string; watchers: Watcher[] }> = [];
+    const pendingJournals: Array<{ sessionID: string; pending: { event: WatcherEvent; queuedAt: number }[] | undefined }> = [];
+    const delivered: Array<{ sessionID: string; events: WatcherEvent[] }> = [];
+    const build = () =>
+      new WatcherRegistry({
+        deliver: async (sessionID, events) => { delivered.push({ sessionID, events }); },
+        canDeliver: () => false, // the session is busy - the queue never drains
+        ghRunner: mockGh([[RE_PULL, prResponse()], ...quietRoutes()]),
+        pollIntervalMs: 60_000,
+        journal: (sessionID, watchers) => watcherJournals.push({ sessionID, watchers }),
+        journalPending: (sessionID, pending) => pendingJournals.push({ sessionID, pending }),
+        now,
+      });
+    const reg = build();
+    await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
+    const w = reg.listForSession("s1")[0];
+    if (w.source !== "pr") throw new Error("expected a pr watcher");
+    w.state.headSha = "old";
+    await reg.poll();
+    expect(pendingJournals.at(-1)?.pending).toBeDefined();
+
+    // The reload: a fresh registry rehydrates definitions AND pending.
+    reg.dispose();
+    const lastWatchers = watcherJournals.at(-1);
+    const lastPending = pendingJournals.at(-1);
+    if (!lastWatchers || !lastPending || !lastPending.pending) throw new Error("journal rows missing");
+    const rebuilt = new WatcherRegistry({
+      deliver: async (sessionID, events) => { delivered.push({ sessionID, events }); },
+      canDeliver: () => true, // the session goes idle after the reload
+      ghRunner: mockGh([[RE_PULL, prResponse()], ...quietRoutes()]),
+      pollIntervalMs: 60_000,
+      now,
+    });
+    rebuilt.hydrate(lastWatchers.watchers);
+    rebuilt.hydratePending(lastPending.sessionID, lastPending.pending);
+    await rebuilt.poll();
+    expect(delivered.at(-1)?.events[0].type).toBe("pr_commit");
+    rebuilt.dispose();
   });
 });
 
@@ -1210,8 +1375,15 @@ describe("watcherNotificationNudge", () => {
     expect(text).not.toContain("conclusions are in the summaries above");
   });
 
-  test("an all-expiry delivery uses the expiry framing and drops the gating carve-out", () => {
-    const text = watcherNotificationNudge("acme/widgets#7", [
+  test("watcherDeathNotice carries the dead session's identity when known", () => {
+    const text = watcherDeathNotice(["acme/widgets#7"], { name: "rosie-unit-one-00007", sessionID: "ses_ee7ec0" });
+    expect(text).toContain("acme/widgets#7");
+    expect(text).toContain("Dead session: rosie-unit-one-00007 (ses_ee7ec0)");
+    // Without the owner the notice stays as it was.
+    expect(watcherDeathNotice(["acme/widgets#7"])).not.toContain("Dead session");
+  });
+
+  test("an all-expiry delivery uses the expiry framing and drops the gating carve-out", () => {    const text = watcherNotificationNudge("acme/widgets#7", [
       { type: "watch_expired", summary: "watch on acme/widgets#7 expired after 480 min - no further notifications will arrive from it", url: URL },
     ]);
     expect(text).toContain("- watch_expired: watch on acme/widgets#7 expired after 480 min");

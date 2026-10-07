@@ -144,6 +144,26 @@ never read as "the wait is over". Watches that expire while a session
 is away are a separate path: they are not re-armed, and the re-arm
 notice reports the expired count.
 
+### Death detection (closed v2 tabs)
+
+A closed opencode v2 tab fires no `session.deleted`, so its watchers
+would poll until the TTL with deliveries queued forever. The registry
+declares death when ALL of: the session's pending queue has been
+non-empty longer than the threshold (`THATCH_WATCH_DEATH_MINUTES`,
+default 120), its delivery attempts have THROWN consecutively (a skip -
+busy or compacting - resets the chain; skips are never death evidence),
+the throw is 404-class (verified live 2026-10-07: prompt_async to a
+closed v2 tab returns 404 while the session row persists; a 5xx loop is
+a wedged server, never death), and the session is hosted by this
+process (sibling v1 processes and MCP sessions are never touched).
+MCP-owner watches keep TTL-only death: their turn-driven heartbeat
+cannot distinguish a closed Cursor tab from a parked one. On death:
+watchers and pending drop, and live same-project sessions get a
+`watcherDeathNotice` carrying the dead session's chat name and session
+id (the thatch-coordination loop's respawn key); a durable
+`watcher_death` runtime_state row covers sessions that were busy at
+death time, surfaced and cleared at other sessions' next prompt.
+
 ### Command watches
 
 The command source stretches the fetch/diff recipe in two ways:
@@ -254,6 +274,8 @@ src/watchers.ts, test-enforced).
 - `THATCH_WATCH_TTL_MINUTES` - watcher time-to-live (default 480)
 - `THATCH_WATCH_MAX_PER_SESSION` - active watchers per session
   (default 5; all sources share the budget)
+- `THATCH_WATCH_DEATH_MINUTES` - pending-age threshold before a dead
+  session's watchers are cancelled and announced (default 120)
 - `THATCH_WATCH_COMMAND_TIMEOUT_SECONDS` - per-run kill timeout for
   watched commands (default 30)
 
@@ -275,6 +297,8 @@ src/watchers.ts, test-enforced).
   against a mocked command runner
 - `tests/qa/auto/uc-114-watcher-expiry-replay.ts` - expiry notification
   and the no-replay guarantee across journal rehydration
+- `tests/qa/auto/uc-118-watcher-death-detection.ts` - closed-tab death
+  detection (404-class delivery persistence) and the once-only notice
 - `tests/qa/auto/uc-115-watch-list-pending-events.ts` - pending-event
   visibility in watch_list while the session is busy
 

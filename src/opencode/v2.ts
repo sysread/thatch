@@ -8,7 +8,7 @@ import { createRuntime } from "../runtime";
 import { wrapUpCommandContent } from "../commands";
 import { deriveTitle } from "../extraction";
 import { detectRepo, detectWorktreeKind } from "../git";
-import { SESSION_TAB_RPC, TAB_OPENED_EVENT, buildSubordinatePrompt } from "../session-tab-shared";
+import { SESSION_TAB_RPC, TAB_OPENED_EVENT, buildSubordinatePrompt, tabClosedEventType } from "../session-tab-shared";
 import { TOOL_DEFS, trimHostContext, type HostToolContext, type SessionTabHost, type SessionTabSpawnInput, type SessionTabSpawnResult } from "../tool-defs";
 
 // The opencode v2 adapter (opencode 2.x, plugin API @opencode/plugin 2.x).
@@ -332,6 +332,14 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
           if (!eventDir && data.sessionID) eventDir = await resolveSessionDir(data.sessionID);
           runtime.debug("v2:pump", `event ${located.type} dir=${eventDir} self=${directory}`);
           if (eventMatchesInstance(eventDir, data.sessionID, directory, childSessions)) {
+            // The session-tab tool's confirmed tab close: translated here
+            // rather than in translateEvent because the payload shape is
+            // tab-domain, and the death path is runtime-domain.
+            if (located.type === tabClosedEventType) {
+              const closed = (data ?? {}) as { sessionID?: string; chatName?: string | null };
+              if (closed.sessionID) await runtime.onEvent({ type: "session.tab_closed", properties: { sessionID: closed.sessionID, chatName: closed.chatName ?? null } });
+              continue;
+            }
             for (const translated of translateEvent(located)) {
               await runtime.onEvent(translated);
             }

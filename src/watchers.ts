@@ -296,6 +296,48 @@ export interface WatcherRegistryOptions {
   maxPerSession?: number;
   /** Persistence hook: called after membership changes with the session's watcher list. */
   journal?: (sessionID: string, watchers: Watcher[]) => void;
+  /**
+   * Persistence hook for the PENDING event queue (the reload-loss fix):
+   * called whenever a session's queue changes. undefined clears the
+   * session's row. Without this, a plugin reload between detection and
+   * delivery silently eats the notification (observed 2026-10-07:
+   * watch_qn449jio's CI notice lost in the 09b805f reload window).
+   */
+  journalPending?: (sessionID: string, pending: { event: WatcherEvent; queuedAt: number }[] | undefined) => void;
+  /**
+   * Death callback: the registry declares a session dead (pending queue
+   * aged out with consecutive thrown deliveries, 404-class re-check
+   * passed) and has already cancelled its watchers and dropped its queue.
+   * The runtime removes the chat hosting state and tells live same-project
+   * sessions. A pending `watcher_death` row is the runtime's durable
+   * fallback for sessions that were busy at death time.
+   */
+  onSessionDeath?: (sessionID: string, death: { chatName: string | null; targets: string[] }) => void;
+  /** Eligibility for death detection: only sessions this process hosts are eligible (sibling v1 processes and MCP sessions never qualify). */
+  isHostedSession?: (sessionID: string) => boolean;
+  /** Pending-age threshold for death detection in minutes; defaults to THATCH_WATCH_DEATH_MINUTES or 120. */
+  deathMinutes?: number;
+  /** Clock for the pending-age test; injectable for tests. */
+  now?: () => number;
+}
+
+/**
+ * Minimum consecutive THROWN deliveries before the death scan may fire -
+ * a lone 404 (a transient blip mid-outage) must not kill watches.
+ */
+const MIN_DEATH_THROWS = 5;
+
+/**
+ * Whether a delivery error is the "session's route is gone" class - the
+ * closed-tab signature (verified live 2026-10-07: prompt_async to a closed
+ * v2 tab returns 404 while the session row persists). 5xx loops are a
+ * wedged server - an outage must never mass-cancel watches.
+ */
+export function isNotFoundClass(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { statusCode?: number; status?: number; message?: string };
+  if (e.statusCode === 404 || e.status === 404) return true;
+  return /404|not found/i.test(String(e.message ?? ""));
 }
 
 // ---------------------------------------------------------------------------
@@ -884,9 +926,14 @@ export class WatcherRegistry {
   #watchers = new Map<string, Watcher>();
   /** sessionID -> events detected but not yet delivered. */
   #pending = new Map<string, WatcherEvent[]>();
+  /** sessionID -> queuedAt of the oldest still-pending event (death-test clock). */
+  #firstPendingAt = new Map<string, number>();
+  /** sessionID -> consecutive THROWN delivery attempts; skips and successes reset. */
+  #consecutiveDeliveryThrows = new Map<string, number>();
   #timer: ReturnType<typeof setInterval> | null = null;
   #delivering = false;
   #polling = false;
+  #now: () => number;
   /**
    * Persistence hook (optional): called after every membership change with
    * the session's current watcher list, so the runtime can journal the
@@ -894,12 +941,19 @@ export class WatcherRegistry {
    * (tests, MCP) keeps the registry in-memory only.
    */
   #journal?: (sessionID: string, watchers: Watcher[]) => void;
+  /** Persistence hook for the pending queue - see WatcherRegistryOptions. */
+  #journalPending?: WatcherRegistryOptions["journalPending"];
+  /** Death callback - see WatcherRegistryOptions. */
+  #onSessionDeath?: WatcherRegistryOptions["onSessionDeath"];
+  /** Hosting eligibility - see WatcherRegistryOptions. */
+  #isHostedSession?: WatcherRegistryOptions["isHostedSession"];
   readonly #opts: WatcherRegistryOptions & {
     pollIntervalMs: number;
     ttlMinutes: number;
     maxPerSession: number;
     commandRunner: CommandRunner;
     commandTimeoutMs: number;
+    deathThresholdMs: number;
   };
   /**
    * The most recently constructed instance in this process. opencode v2
@@ -915,15 +969,21 @@ export class WatcherRegistry {
   static #live: WatcherRegistry | undefined;
 
   constructor(options: WatcherRegistryOptions) {
+    const envDeathMinutes = Number(process.env.THATCH_WATCH_DEATH_MINUTES ?? 0) || 120;
     this.#opts = {
       pollIntervalMs: Number(process.env.THATCH_WATCH_POLL_SECONDS ?? 0) * 1000 || 60_000,
       ttlMinutes: Number(process.env.THATCH_WATCH_TTL_MINUTES ?? 0) || 480,
       maxPerSession: Number(process.env.THATCH_WATCH_MAX_PER_SESSION ?? 0) || 5,
       commandRunner: runWatchedCommand,
       commandTimeoutMs: defaultCommandTimeoutMs(),
+      deathThresholdMs: (options.deathMinutes ?? envDeathMinutes) * 60_000,
       ...options,
     };
+    this.#now = options.now ?? Date.now;
     this.#journal = options.journal;
+    this.#journalPending = options.journalPending;
+    this.#onSessionDeath = options.onSessionDeath;
+    this.#isHostedSession = options.isHostedSession;
     WatcherRegistry.#live?.stop();
     WatcherRegistry.#live = this;
   }
@@ -965,6 +1025,8 @@ export class WatcherRegistry {
     this.stop();
     this.#watchers.clear();
     this.#pending.clear();
+    this.#firstPendingAt.clear();
+    this.#consecutiveDeliveryThrows.clear();
   }
 
   // -- CRUD ----------------------------------------------------------------
@@ -1197,6 +1259,9 @@ export class WatcherRegistry {
       if (w.sessionID === sessionID) this.#watchers.delete(id);
     }
     this.#pending.delete(sessionID);
+    this.#firstPendingAt.delete(sessionID);
+    this.#consecutiveDeliveryThrows.delete(sessionID);
+    this.#journalPending?.(sessionID, undefined);
     this.#emit(sessionID);
   }
 
@@ -1240,6 +1305,7 @@ export class WatcherRegistry {
             const queue = this.#pending.get(watcher.sessionID) ?? [];
             queue.push(...events);
             this.#pending.set(watcher.sessionID, queue);
+            this.#journalPendingNow(watcher.sessionID);
             // One-shot watchers end at first detection, not first delivery:
             // the queued events deliver through the normal pending path even
             // if the session is busy. Cancellation at detection time keeps
@@ -1323,7 +1389,10 @@ export class WatcherRegistry {
   /**
    * Delivers pending events for every session that can accept a prompt.
    * Failed deliveries stay pending and retry on the next cycle or the next
-   * idle event.
+   * idle event. A THROWN delivery is death evidence: consecutive throws
+   * with the pending queue aged past the threshold (and a 404-class error)
+   * declare the session dead. A skipped attempt (busy/compacting) is the
+   * OPPOSITE - alive by definition - and resets the throw chain.
    */
   async deliverPending(): Promise<void> {
     if (this.#delivering) return;
@@ -1340,17 +1409,97 @@ export class WatcherRegistry {
         } catch (err) {
           console.error(`[thatch] canDeliver gate failed for ${sessionID}: ${err}`);
         }
-        if (!deliverable) continue;
+        if (!deliverable) {
+          // A skipped attempt is never death evidence - a busy or
+          // compacting session is alive by definition.
+          this.#consecutiveDeliveryThrows.delete(sessionID);
+          continue;
+        }
         try {
           await this.#opts.deliver(sessionID, events);
           this.#pending.delete(sessionID);
+          this.#firstPendingAt.delete(sessionID);
+          this.#consecutiveDeliveryThrows.delete(sessionID);
+          this.#journalPending?.(sessionID, undefined);
         } catch (err) {
           console.error(`[thatch] watcher delivery to ${sessionID} failed: ${err}`);
+          this.#maybeDeclareDeath(sessionID, err);
         }
       }
     } finally {
       this.#delivering = false;
     }
+  }
+
+  /**
+   * Death scan for one failed delivery. Death requires ALL of: the
+   * session's pending queue aged past the threshold, a run of CONSECUTIVE
+   * thrown attempts, a 404-class throw (a wedged server's 5xx loop is not
+   * death - an outage must not mass-cancel watches), and hosting
+   * eligibility (sibling v1 processes and MCP sessions are never declared
+   * dead here). On death the watchers and queue are dropped and the
+   * runtime's death callback carries the notice.
+   */
+  #maybeDeclareDeath(sessionID: string, err: unknown): void {
+    const firstAt = this.#firstPendingAt.get(sessionID);
+    const throws = (this.#consecutiveDeliveryThrows.get(sessionID) ?? 0) + 1;
+    this.#consecutiveDeliveryThrows.set(sessionID, throws);
+    if (!firstAt || this.#now() - firstAt < this.#opts.deathThresholdMs) return;
+    if (throws < MIN_DEATH_THROWS) return;
+    if (this.#isHostedSession && !this.#isHostedSession(sessionID)) return;
+    if (!isNotFoundClass(err)) return;
+    this.sessionDied(sessionID);
+  }
+
+  /**
+   * Declares a session dead: cancels its watchers, drops its pending
+   * queue, and hands the runtime the death summary. Two callers: the
+   * delivery-persistence heuristic (above) and the session-tab
+   * `tab-closed` event (a CONFIRMED close skips the heuristic entirely -
+   * instant path).
+   */
+  sessionDied(sessionID: string, death: { chatName?: string | null } = {}): void {
+    const watchers = this.listForSession(sessionID);
+    const pending = this.#pending.get(sessionID) ?? [];
+    for (const w of watchers) this.#watchers.delete(w.id);
+    this.#pending.delete(sessionID);
+    this.#firstPendingAt.delete(sessionID);
+    this.#consecutiveDeliveryThrows.delete(sessionID);
+    this.#emit(sessionID); // empty list - the runtime's journal callback deletes the row
+    this.#journalPending?.(sessionID, undefined);
+    const targets = [...new Set([...watchers.map(watcherTarget), ...pending.map((e) => e.target)])];
+    this.#onSessionDeath?.(sessionID, { chatName: death.chatName ?? null, targets });
+  }
+
+  /**
+   * Restores persisted pending events (reload rehydration, or a resumed
+   * session's dormant scan rehydrating its own queue). Dedups by event
+   * fingerprint and keeps the OLDEST queuedAt so the death-test clock
+   * stays honest.
+   */
+  hydratePending(sessionID: string, pending: { event: WatcherEvent; queuedAt: number }[]): void {
+    if (!pending || pending.length === 0) return;
+    const queue = this.#pending.get(sessionID) ?? [];
+    const seen = new Set(queue.map((e) => `${e.type}:${e.target}:${e.summary}`));
+    for (const { event, queuedAt } of pending) {
+      if (seen.has(`${event.type}:${event.target}:${event.summary}`)) continue;
+      queue.push(event);
+      const existing = this.#firstPendingAt.get(sessionID);
+      if (existing === undefined || queuedAt < existing) this.#firstPendingAt.set(sessionID, queuedAt);
+    }
+    this.#pending.set(sessionID, queue);
+  }
+
+/** Journals the session's current pending queue, or clears the row when empty. */
+  #journalPendingNow(sessionID: string): void {
+    const queue = this.#pending.get(sessionID);
+    if (!queue || queue.length === 0) {
+      this.#journalPending?.(sessionID, undefined);
+      return;
+    }
+    if (!this.#firstPendingAt.has(sessionID)) this.#firstPendingAt.set(sessionID, this.#now());
+    const queuedAt = this.#firstPendingAt.get(sessionID)!;
+    this.#journalPending?.(sessionID, queue.map((event) => ({ event, queuedAt })));
   }
 
   /** Snapshot of the events waiting for a session, oldest first. */
