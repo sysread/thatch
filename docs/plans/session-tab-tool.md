@@ -515,7 +515,18 @@ Unit (bun test, no host needed):
   documented refusal message.
 - MCP surface: `thatch_session_tab` absent from `compileTools()`.
 
-Live smoke (manual, `mise run qa-live` style, v2 binary on PATH):
+Live smoke (manual, sandboxed — see below, v2 binary on PATH):
+
+> **Sandbox requirement**: the smoke spawns real subordinates that
+> chat-register and write memories — run it against a THROWAWAY config and
+> db, never the real ones. Reuse the QA fixture's isolation model: point
+> `XDG_CONFIG_HOME` and `THATCH_DB_PATH` at a scratch config/db (the
+> simplest is the QA master's config, which already carries the plugin shim
+> + skills + node_modules symlink), and launch the TUI from a scratch
+> directory. A different config dir means a different daemon socket, so the
+> sandboxed TUI runs its own daemon — nothing touches the real
+> `~/.config/thatch` db, the real roster, or real memories. The only real
+> surface is the tab strip on screen (the point of the smoke).
 
 1. Tool visible on v2; absent from `tools/list` on v1 and from the MCP server
    surface.
