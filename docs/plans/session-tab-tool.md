@@ -517,16 +517,36 @@ Unit (bun test, no host needed):
 
 Live smoke (manual, sandboxed — see below, v2 binary on PATH):
 
-> **Sandbox requirement**: the smoke spawns real subordinates that
-> chat-register and write memories — run it against a THROWAWAY config and
-> db, never the real ones. Reuse the QA fixture's isolation model: point
-> `XDG_CONFIG_HOME` and `THATCH_DB_PATH` at a scratch config/db (the
-> simplest is the QA master's config, which already carries the plugin shim
-> + skills + node_modules symlink), and launch the TUI from a scratch
-> directory. A different config dir means a different daemon socket, so the
-> sandboxed TUI runs its own daemon — nothing touches the real
-> `~/.config/thatch` db, the real roster, or real memories. The only real
-> surface is the tab strip on screen (the point of the smoke).
+> **Sandbox requirement** (and the reason it is easy to get wrong): the
+> smoke spawns real subordinates that chat-register and write memories.
+> Daemon discovery is keyed on **XDG_STATE_HOME** (the registration file is
+> `$XDG_STATE_HOME/opencode/service.json`, carrying the URL and password -
+> `packages/client/src/effect/service.ts`), NOT the config dir - overriding
+> only the config dir would JOIN THE REAL DAEMON: sessions land in the real
+> session store and the plugin runs in the real daemon's env, writing real
+> memories. The working recipe is all four:
+>
+> ```bash
+> SMOKE=$TMPDIR/thatch-tab-smoke
+> mkdir -p $SMOKE/config $SMOKE/data $SMOKE/state $SMOKE/work
+> # copy the QA master's config (plugin shim + skills + node_modules symlink)
+> cd $SMOKE/work
+> XDG_CONFIG_HOME=$SMOKE/config XDG_DATA_HOME=$SMOKE/data \
+>   XDG_STATE_HOME=$SMOKE/state opencode --standalone
+> ```
+>
+> - `--standalone`: a private child server (random password, stdin-lease:
+>   it dies with the TUI) - never joins the shared daemon.
+> - `XDG_DATA_HOME`: a private session db - the one surface --standalone
+>   does NOT isolate (daemon and standalone servers share the XDG-scoped
+>   db).
+> - `XDG_CONFIG_HOME`: thatch's db/config plus the plugin shim; the env
+>   propagates to the spawned server, so the plugin's writes stay in the
+>   sandbox.
+>
+> Nothing touches the real `~/.config/thatch` db, the real roster, or real
+> memories. The only real surface is the tab strip on screen (the point of
+> the smoke).
 
 1. Tool visible on v2; absent from `tools/list` on v1 and from the MCP server
    surface.
