@@ -23,8 +23,8 @@ The description is not a design doc, changelog, or implementation journal. It is
 
 Each section has one job:
 - SYNOPSIS: orient to the class of change and affected area.
-- PURPOSE: make the reader agree there is a problem worth solving.
-- DESCRIPTION: teach the system's current behavior and how this change alters it.
+- PURPOSE: state the premise (the defect, or the pivot the change serves) and teach the feature-level mechanism that makes the diff legible.
+- DESCRIPTION: teach the system's current behavior and how this change alters it; end with a NEXT STEPS subsection when a follow-up ticket continues the work.
 - WALK-THROUGH (when needed): walk the reviewer through the new workflow step by step.
 - NOTES: flag scope limits, intentional regressions, and things AI reviewers will misread.
 - robots.txt (when needed): dense, machine-addressed context that heads off recurring false positives from automated reviewers.
@@ -35,7 +35,7 @@ AI-authored PRs tend to be large. The description is the reader's lever against 
 
 ## Structure
 
-Sections, in order: SYNOPSIS, PURPOSE, DESCRIPTION, WALK-THROUGH (conditional), NOTES (conditional), robots.txt (conditional, always last).
+Sections, in order: SYNOPSIS, PURPOSE, DESCRIPTION (optionally ending with a `### NEXT STEPS` subsection), WALK-THROUGH (conditional), NOTES (conditional), robots.txt (conditional, always last).
 
 **SYNOPSIS, PURPOSE, and DESCRIPTION are mandatory** - even for a one-line, single-concern change. A tiny PR gets short sections, not fewer sections. WALK-THROUGH and NOTES appear only when warranted; omit them when empty. robots.txt appears only after an automated reviewer has produced a false positive worth heading off (see its section); it is always the final section.
 
@@ -44,6 +44,8 @@ Sections, in order: SYNOPSIS, PURPOSE, DESCRIPTION, WALK-THROUGH (conditional), 
 ### SYNOPSIS
 
 One to two lines. Orient only. The reader should come away knowing the class of change (bugfix, refactor, feature, revert, infra, cleanup) and the affected area.
+
+Lead with the change: what it does or enables. A very brief statement of the problem it fixes may follow, after the change - do X to fix Y, never Y alone. Even a safety fix describes itself by behavior, not by certification: "the schema lets the worker clean up after itself", not "makes the schema safe to deploy".
 
 SYNOPSIS may use subsystem-specific terms as scan anchors (that is its job). It does not define them. The first teaching section (PURPOSE or DESCRIPTION) picks up that burden. An outsider who does not know the terms should still be able to orient from the plain-English nouns around them. Do not force all project context into SYNOPSIS; it is a TLDR, not the teaching section.
 
@@ -59,7 +61,7 @@ Do not fabricate ticket IDs. If no signal exists and the user says `none`, omit 
 
 ### PURPOSE
 
-Frame the problem. Lead with the conclusion, then provide the evidence, not the other way around. State what is wrong, then explain why. For example:
+Frame the premise: the defect, or the pivot the change serves. Lead with the conclusion, then provide the evidence, not the other way around. State what is wrong, then explain why. For example:
 
 - "The export endpoint loads every row into memory before serializing, so a large tenant runs the pod out of memory" not "the endpoint allocates a slice per row, and with enough rows... which is why the pod runs out of memory."
 - "This handler runs one query per result row, so a page of 50 items fires 51 queries" not "the handler loops over results issuing a query each time... resulting in an N+1 query pattern."
@@ -67,11 +69,11 @@ Frame the problem. Lead with the conclusion, then provide the evidence, not the 
 
 The reader should know what the problem is before they read why it happens.
 
-No solution yet. The reader should finish this section agreeing there is something to address, even with zero code knowledge.
+State the premise in one sentence: what is wrong (the defect), or what the change is for (the pivot it serves). Then teach, at the feature level, how the affected thing works - the shortest version that makes DESCRIPTION's details parse. For a defect, the reader finishes the section agreeing there is something to address, even with zero code knowledge. For a foundation or preventive change, the reader finishes understanding what this is and how the feature works; that understanding is the motivation.
 
-Separate the problem from its context. The problem statement is one paragraph. Hazard rating and prior-work context go in a separate paragraph. The reader who already agrees there is a problem can skip the rating; the reader who does not should not have to wade through it to find the problem.
+PURPOSE stays at feature altitude. Table-level mechanics, column lists, and function names belong to DESCRIPTION.
 
-If the change is preventive (no current defect), say why it is worth fixing despite the low risk. "No incident has hit this shape" is a demotivation, not a motivation. Answer "why now?": a prior PR identified it as a follow-up, the API still permits a failure shape, or the next planned change would make it worse. The reviewer's question is "should I spend time on this?" - give them the answer.
+No failure narratives and no urgency arguments. Do not narrate a sequence of failures to justify the change, and do not argue that it must land before something else exists. State the harm as fact where it belongs: harm evidence lives in DESCRIPTION layer 1 as existing behavior, and hazard facts live in NOTES.
 
 When a ticket description is available, use its problem statement as the seed for PURPOSE. But verify it against the actual code. Ticket descriptions can be stale or wrong. If the ticket says "the frobnicator crashes on null input" but the diff shows you fixing a race condition in the frobnicator, the PURPOSE describes the race condition, not the null input. Flag the discrepancy to the user.
 
@@ -79,19 +81,23 @@ When a ticket description is available, use its problem statement as the seed fo
 
 How much structure DESCRIPTION needs depends on the PR's complexity.
 
+The spine of DESCRIPTION is the walkthrough: what the change does and how it works, readable straight through. Justify only where the overall behavior is unintuitive, and keep the why to one brief, high-level sentence: "The constraints had to be applied in a follow-up migration, because the ORM cannot express database-level referential actions." Never interleave defenses with the mechanics - a paragraph where every change sentence is followed by two or three sentences of workaround detail makes the reader skip around to reconstruct the what-and-how, like business logic buried under `if err != nil` blocks. Detailed workaround narratives are NOTES bullets, stated as facts; prose does not repeat NOTES. Factual scope stays in prose.
+
 **Small, self-evident change** (add a flag, guard a branch, rename a symbol, bump a constant): collapse to a sentence or two stating what the PR adds/changes. Do not manufacture a "how the code behaves today" paragraph for a change whose intent already makes the diff obvious. That is padding, not scaffolding.
 
 **Medium change with non-obvious before/after mechanics**: three layers, in order. Each layer is as short as possible while remaining honest.
 
 1. **How the existing code behaves.** High-level narrative, not a function walk. Name the key components, their contract, and the specific behavior that matters for this change. Introduce decision points explicitly - they become anchors for layer 2.
 2. **What this PR changes.** For each decision point named in layer 1, say what it does now. Keep parallelism: same names, same order. The reader's mental model from layer 1 is the load-bearing structure here.
-3. **Why that fixes PURPOSE.** One or two sentences linking the mechanics in layer 2 to the harm named in PURPOSE. If the fix has limits (doesn't cover case Z, follow-up needed), call them out here in one line.
+3. **Why that fixes PURPOSE** (when PURPOSE names a defect). One or two sentences stating the net effect as fact, linking the mechanics in layer 2 to the harm named in PURPOSE. When PURPOSE is a pivot statement - the change is the feature itself - omit this layer. If the fix has limits (doesn't cover case Z, follow-up needed), call them out here in one line.
 
 The structure is simple: PURPOSE names a harm, layer 1 names the mechanism, layer 2 changes the mechanism, layer 3 shows the harm is gone. Names carry through. The reader builds one model, not four.
 
 **Large change with a workflow or lifecycle**: keep DESCRIPTION to root-cause and design concept only (what is wrong, what is the approach). Use a separate WALK-THROUGH section for the step-by-step mechanics of the new flow.
 
 Organize by **workflow or data-flow**, not by touched symbol. A bullet list of API changes reads as disconnected touchpoints. A walkthrough following one object through the system reads as a story. If the change touches a request lifecycle, follow the request. If it touches a data pipeline, follow the data.
+
+**Forward scope: `### NEXT STEPS`.** When the PR hands off to a planned follow-up ticket, do not leave it inline in DESCRIPTION prose. End DESCRIPTION with a `### NEXT STEPS` subsection: what the follow-up does, framed by the economic property that justifies the split ("amortizing the cost of updates to the cache"), not just the raw number. Link the ticket when one exists. NOTES `Remaining work:` stays for unfinished work inside this PR.
 
 ### WALK-THROUGH
 
@@ -143,7 +149,7 @@ Always a `## NOTES` markdown header. Never a bare `Notes:` line ending a section
 Use NOTES for:
 - Intentional behavior changes that look like regressions.
 - Scope disclaimers (what this PR does NOT do) - max two sentences, no hedging.
-- Deferred follow-up items (`Remaining work:` bullet list).
+- Deferred follow-up items (`Remaining work:` bullet list) - planned forward work with its own ticket goes in a DESCRIPTION `### NEXT STEPS` subsection instead.
 - Ticket scope mismatches (when the PR partially addresses the ticket).
 - Anything AI reviewers (Cursor BugBot, CodeRabbit) will misread.
 
@@ -398,8 +404,8 @@ That reading alone conveys the shape and scope of both changes. The prose is for
 1. **Gather**: `git log $MERGE_BASE..HEAD`, `git diff $MERGE_BASE..HEAD --stat`, commit messages, current branch name. Apply the ticket resolution order (SYNOPSIS section) - infer first, ask only if nothing matches. Skim the diff; identify decision points (components or branches where behavior differs before vs after). Identify the workflow or lifecycle path if the change has one.
 2. **Read ticket context**: if a ticket is resolved, fetch its description. Use it to seed PURPOSE and identify reviewer-relevant plan changes: revisions, pivots caused by code reality, discoveries after the ticket was written, and deferred or unnecessary ticket items.
 3. **Read project context for stacked work**: if the PR refers to related PRs, follow-ups, deferred design, upstream dependencies, or unexplained project terms, read the linked source material before drafting. Build a private term map. If a term controls the PR and you cannot resolve it, ask the user.
-4. **Draft PURPOSE first**, in one breath, without looking at code. If you cannot state the harm in two sentences, you do not understand the PR yet. Go back and read. When a ticket is available, seed PURPOSE from its problem statement, but verify against the code.
-5. **Write DESCRIPTION**: choose the right depth (collapsed for small, three-layer for medium, root-cause + concept for large with WALK-THROUGH). Name everything you will refer to later. Organize by workflow/data-flow, not by touched symbol. Add a one- or two-sentence context bridge only when stacked-project context is needed to understand this PR's delta.
+4. **Draft PURPOSE first**, in one breath, without looking at code. If you cannot state the premise in one sentence and the feature story in a few more, you do not understand the PR yet. Go back and read. When a ticket is available, seed PURPOSE from its problem statement, but verify against the code.
+5. **Write DESCRIPTION**: choose the right depth (collapsed for small, three-layer for medium, root-cause + concept for large with WALK-THROUGH). Name everything you will refer to later. Organize by workflow/data-flow, not by touched symbol. Add a one- or two-sentence context bridge only when stacked-project context is needed to understand this PR's delta. End with a `### NEXT STEPS` subsection when a follow-up ticket continues the work.
 6. **Write WALK-THROUGH** (if needed): numbered steps in execution order. Bold the step leads. State what changed, not what you did.
 7. **Write SYNOPSIS last** - it is a compression of PURPOSE + the core mechanic.
 8. **Bold and italicize the save points** in the allowed locations. Bold phrases that name the change (components, mechanisms, behaviors). Italicize phrases that orient to significance (conclusions, payoffs), at most one per paragraph. Apply the scan check: read only the bold and italic fragments and verify the shape comes through.
@@ -407,22 +413,25 @@ That reading alone conveys the shape and scope of both changes. The prose is for
 10. **robots.txt only when earned**: do not add it during initial authoring. It is added later, in response to an automated reviewer's false positive (see its section). When you do add it, use the collapsed `<details>` format with `<summary>robots.txt</summary>`, keep the editing HTML comment at the top of the block, and keep the human-warning line first after the comment.
 11. **Verify links**: check ticket/PR links, repo file links, and external docs where tooling allows. Do not claim an unverified link was verified.
 12. **Verify prose style and core principle**: check each rule in Prose style. Cut design-narration, authoring-sequence, and buzzwordy abstractions. Verify plain ASCII. Verify first-use definitions for subsystem jargon. Verify project-private labels are translated before use. Verify plain English nouns (no code-domain nouns in prose). Verify conclusion-first in PURPOSE. Verify NOTES bullets are either short pointers or self-contained. Verify one-paragraph-one-physical-line for GitHub rendering. The robots.txt section is exempt from these prose rules below its human-warning line.
-13. **Clarity pass**: read the draft as a cold reviewer skimming the PR. Rewrite before returning it; do not tell the user you performed this pass. Check: does every project-specific term get plain-English meaning before or with the label? Are ambiguous terms qualified or replaced with concrete behavior? Did you replace code/comment shorthand with reader-facing behavior when the shorthand is less clear? Does every process word name object/action/effect? Does every contrast name old and new behavior? Does every causal sentence show the middle step? Did you preserve connective tissue instead of compressing meaning into noun stacks? If the draft got longer, cut a lower-value claim instead of compressing a high-value one.
+13. **Clarity pass**: read the draft as a cold reviewer skimming the PR. Rewrite before returning it; do not tell the user you performed this pass. Check: does every project-specific term get plain-English meaning before or with the label? Are ambiguous terms qualified or replaced with concrete behavior? Did you replace code/comment shorthand with reader-facing behavior when the shorthand is less clear? Does every process word name object/action/effect? Does every contrast name old and new behavior? Does every causal sentence show the middle step? Did you preserve connective tissue instead of compressing meaning into noun stacks? Does the SYNOPSIS lead with the change (do X to fix Y, never Y alone)? Is the DESCRIPTION spine readable straight through, with no interleaved defenses? Is there any failure narrative or urgency argument left in PURPOSE? If the draft got longer, cut a lower-value claim instead of compressing a high-value one.
 14. **Verify length**: estimate the PR's complexity (see the point-based budgets in Length and style). If the body exceeds the budget, step up the abstraction ladder first (replace mechanism sequences with the principle that subsumes them). If still over, cut the lowest-value claim entirely. Do not compress terminology or cut connective tissue to hit a word count.
 15. **Submit** via `gh pr create --body "$(cat <<'EOF' ... EOF)"` to preserve formatting.
 
 ## Anti-patterns
 
 - **Burying the harm.** If PURPOSE is a paragraph of setup before the actual problem, rewrite. Problem first.
+- **Failure-saga PURPOSE.** Narrating a sequence of failures or arguing urgency ("this PR prevents X before Y exists") to justify a change. State the defect or pivot in one factual sentence, teach the mechanism, and put hazard facts in NOTES.
 - **Layer 2 introduces new names.** If layer 2 mentions components layer 1 never named, the scaffold broke. Go back, add them to layer 1, or drop them from layer 2.
 - **Emphasizing filler words.** Bolding "this", "the", "we", or adjectives produces scan noise. Bold only nouns and verbs that carry meaning.
 - **Bolding filler or context.** Bolding history, hazard detail, justification, or connective tissue creates scan noise. Bold the change itself (components, mechanisms, behaviors); italicize the significance (conclusions, payoffs). Not the scaffolding around them.
 - **Over-italicizing.** More than one italicized phrase per paragraph dilutes the signal. Pick the one phrase that carries the paragraph's point.
 - **Design-doc DESCRIPTION.** If layer 1 is a function walkthrough or architecture essay, you are writing for yourself, not the reviewer. Compress to the decision points.
+- **Interleaved defenses.** A DESCRIPTION where every change sentence is followed by two or three sentences of workaround detail. State what IS and walk the reader through; the unintuitive part earns one brief, high-level why; detailed workarounds are NOTES facts.
 - **Matching the diff line-by-line.** The description is orthogonal to the diff, not a prose projection of it.
 - **Over-claiming scope.** A fix for a sloppy implementation is "fix a sloppy implementation," not "harden the foo subsystem." Match energy to reality.
 - **Narrating your own process.** Any sentence about the order you did things, which commit does what, or what a later commit will add. Reads as AI slop. Change-as-it-stands only.
 - **Orphaned synopsis.** A bold lead paragraph with no `## SYNOPSIS` header above a body that does use headers. Add the header; it is mandatory.
+- **Problem-only synopsis.** A TLDR that describes the problem being solved without stating what the change does. Even a safety fix leads with its behavior; the problem gets a brief clause after it.
 - **Bare `Notes:` line.** Use `## NOTES` header or omit the section entirely.
 - **Organizing by touched symbol.** A bullet list of "changed X in file A, changed Y in file B" reads as disconnected touchpoints. Follow the data flow.
 - **Buzzwordy abstractions.** "identity contract", "canonical hash", "check in isolation", "shared seam" - if it sounds like it is trying to sound smart, replace it with plain concrete wording. If "seam" means a conceptual border, say "boundary". If it means common code, say "shared helper", "shared function", or "shared SQL expression".
@@ -438,7 +447,6 @@ That reading alone conveys the shape and scope of both changes. The prose is for
 - **Implementation verbs in prose.** "Publish the key" reads as jargon to someone who does not know the method is called `publish`. Say "store the key in the in-memory cache".
 - **Code-domain nouns in prose.** "Row read", "waiter", "zeroized", "backlog" (as jargon) are technically English but belong in source files, not sentences. Replace with plain English: "reading the row from the database", "a request waiting for a worker", "overwritten with zeros", "the queued scan jobs".
 - **Conclusion buried at the end.** PURPOSE that builds to its point in the last sentence forces the reader to absorb the explanation before knowing what is being explained. Lead with the problem, then explain why.
-- **Hazard rating without motivation.** "No incident has hit this shape" answers "how bad?" but not "why review this?" Answer "why now?" so the reviewer can decide whether to invest time.
 - **NOTES bullets that are both wordy and terse.** A bullet that compresses a paragraph of rationale into one dense sentence reads as a private note. Either flag the thing and point to the full explanation, or write a self-contained sentence or two. Not the middle thing.
 - **robots.txt as a suppression lever.** Writing "ignore the finding about X" or "skip checking X" in robots.txt turns it into a rubber stamp and a prompt-injection surface. Explain what X does and the intent behind it so the reviewer clears its own false positive; never instruct it to stop looking.
 - **Preemptive robots.txt.** Adding the section before any automated reviewer has actually produced a false positive. It is a response to a demonstrated misread, not scaffolding.
