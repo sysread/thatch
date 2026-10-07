@@ -77,7 +77,7 @@ export function mostRecentTopLevelSessionId(directory: string): string | null {
       .query(
         "SELECT id FROM session WHERE directory = ? AND (parent_id IS NULL OR parent_id = '') ORDER BY time_updated DESC LIMIT 1",
       )
-      .get(directory) as { id: string } | undefined;
+      .get(directory) as { id: string } | null;
     return row?.id ?? null;
   } catch {
     return null;
@@ -152,7 +152,7 @@ export class SessionDB {
       )
       .get(sessionID) as
       | { id: string; title: string; directory: string; agent: string | null; model: string | null; time_created: number; time_updated: number }
-      | undefined;
+      | null;
     if (!row) return null;
     return {
       id: row.id,
@@ -221,7 +221,7 @@ export class SessionDB {
       )
       .get(partID) as
       | { part_id: string; message_id: string; session_id: string; time_created: number; part_data: string; message_data: string }
-      | undefined;
+      | null;
     if (!row) return null;
     const partData = JSON.parse(row.part_data) as Record<string, unknown>;
     const messageData = JSON.parse(row.message_data) as Record<string, unknown>;
@@ -240,7 +240,7 @@ export class SessionDB {
   getMessage(messageID: string): { messageId: string; sessionId: string; timeCreated: number; role: MessageRole; data: Record<string, unknown>; parts: SessionPart[] } | null {
     const row = this.#db
       .query("SELECT id, session_id, time_created, data FROM message WHERE id = ?")
-      .get(messageID) as { id: string; session_id: string; time_created: number; data: string } | undefined;
+      .get(messageID) as { id: string; session_id: string; time_created: number; data: string } | null;
     if (!row) return null;
     const decoded = JSON.parse(row.data) as Record<string, unknown>;
     const parts = this.listParts(row.session_id).filter((p) => p.messageId === messageID);

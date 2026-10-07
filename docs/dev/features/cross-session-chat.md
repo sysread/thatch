@@ -178,6 +178,14 @@ The sender is excluded. It is a separate tool rather than a magic
 stale skipping, no address resolution), and a function that changes
 behavior drastically on a parameter value is two functions.
 
+Retries are idempotent within a short window: a send (or per-recipient
+broadcast row) matching an existing row on sender, recipient, body, and
+delivery kind within `CHAT_DEDUPE_WINDOW_MS` (10s) succeeds without a
+second insert, reported as deduplicated in the tool output. This exists
+because a harness that times out a chat_send which actually committed
+retries the call, and the identical body otherwise lands twice (observed
+2026-10-07). The same body outside the window is a new message.
+
 ### Polling, heartbeat, staleness
 
 A `setInterval` loop (default 30s) runs one cycle per process: heartbeat

@@ -2100,6 +2100,9 @@ const chatSendDef: ToolDef = {
     // The store returns the recipient it resolved, so no second lookup can
     // race a concurrent unregister between send and confirmation.
     const { name, session_id } = result.recipient;
+    const dedupeNote = result.deduped
+      ? `\n\nDUPLICATE SUPPRESSED: an identical message to this recipient was sent moments ago, so no second row was created - the original delivery stands. If you meant to send it again on purpose, wait a few seconds and resend.`
+      : "";
     // State the recipient's ACTUAL liveness: the boilerplate "waits until
     // idle" is only true for a live host. A stale recipient's harness is
     // probably gone - say so, so the sender can reroute instead of waiting
@@ -2114,7 +2117,7 @@ const chatSendDef: ToolDef = {
           : `NOTE: the recipient is STALE (last seen ${row ? humanAge(row.last_seen) : "unknown"}). Its harness may no longer be running - the message waits unread until that session resumes, and no wake will fire meanwhile. If you meant a different session, check chat_list and resend.`;
     return (
       `[sent] to ${name} (${session_id.slice(0, 12)})\n\n` +
-      `${delivery}`
+      `${delivery}${dedupeNote}`
     );
   },
 };
@@ -2209,6 +2212,7 @@ const chatBroadcastDef: ToolDef = {
       `recipients: ${result.recipients.length > 0 ? result.recipients.join(", ") : "(none)"}`,
     ];
     if (result.skipped.length > 0) lines.push(`skipped stale: ${result.skipped.join(", ")}`);
+    if (result.deduped > 0) lines.push(`duplicate suppressed: identical broadcast moments ago; ${result.deduped} recipient${result.deduped === 1 ? "" : "s"} kept the original delivery`);
     return (
       lines.join("\n") +
       `\n\nEach recipient's session is nudged when idle, exactly like a ` +

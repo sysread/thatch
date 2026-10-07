@@ -220,6 +220,57 @@ describe("ChatStore via ThatchDB", () => {
     expect(db.sendChatMessage("ses_b", "ses_a", "hello alice").ok).toBe(true);
   });
 
+  test("an identical resend within the dedupe window lands one row, outside it lands two", () => {
+    const bob = reg("ses_b", "bob").name;
+    reg("ses_a", "alice");
+    const rowCount = () => (raw.query("SELECT COUNT(*) AS n FROM chat_messages").get() as any).n;
+
+    // A client retry of a send that actually committed: same body, seconds
+    // apart. The retry succeeds but does not create a second row.
+    const first = db.sendChatMessage("ses_a", bob, "status: green");
+    const retry = db.sendChatMessage("ses_a", bob, "status: green");
+    expect(first.ok).toBe(true);
+    expect(retry.ok).toBe(true);
+    if (retry.ok) expect(retry.deduped).toBe(true);
+    expect(rowCount()).toBe(1);
+
+    // A different recipient or body is never deduped.
+    const carol = reg("ses_c", "carol").name;
+    const toCarol = db.sendChatMessage("ses_a", carol, "status: green");
+    expect(toCarol.ok && toCarol.deduped === true).toBe(false);
+    const toBobRed = db.sendChatMessage("ses_a", bob, "status: red");
+    expect(toBobRed.ok && toBobRed.deduped === true).toBe(false);
+    expect(rowCount()).toBe(3);
+
+    // The same body again after the window has passed is a new message:
+    // age the first row past the dedupe window, then resend.
+    raw.run(`UPDATE chat_messages SET created_at = '${cutoffAgo(1)}' WHERE body = 'status: green' AND to_session = 'ses_b'`);
+    const later = db.sendChatMessage("ses_a", bob, "status: green");
+    expect(later.ok).toBe(true);
+    if (later.ok) expect(later.deduped).toBeUndefined();
+    expect(rowCount()).toBe(4);
+  });
+
+  test("a retried broadcast suppresses per-recipient duplicates and keeps the recipient list", () => {
+    reg("ses_a", "alice");
+    reg("ses_b", "bob");
+    reg("ses_c", "carol");
+    const first = db.broadcastChatMessage("ses_a", "rebase if you are based on main");
+    expect(first.ok).toBe(true);
+    const retry = db.broadcastChatMessage("ses_a", "rebase if you are based on main");
+    expect(retry.ok).toBe(true);
+    if (retry.ok) {
+      expect(retry.deduped).toBe(2);
+      // The recipient list stays complete - each recipient DID receive the
+      // original delivery.
+      expect(retry.recipients.sort()).toEqual(["bob-00001", "carol-00001"]);
+    }
+    expect((raw.query("SELECT COUNT(*) AS n FROM chat_messages").get() as any).n).toBe(2);
+    // A different body broadcasts fresh.
+    const third = db.broadcastChatMessage("ses_a", "different body");
+    if (third.ok) expect(third.deduped).toBe(0);
+  });
+
   test("broadcast reaches every other fresh session, skipping stale ones", () => {
     reg("ses_a", "alice");
     reg("ses_b", "bob");
@@ -631,6 +682,33 @@ describe("chat transcript echo text", () => {
   test("list and unregister never echo", () => {
     expect(chatEchoText("thatch_chat_list", {}, "[chat] 2 sessions registered")).toBeNull();
     expect(chatEchoText("thatch_chat_unregister", {}, "[unregistered] this session left the chat directory.")).toBeNull();
+  });
+
+  test("chat_send surfaces the duplicate-suppression note on a retried send", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-send-dedupe-"));
+    const dedupeDb = new ThatchDB(join(dir, "dedupe.db"));
+    try {
+      const ctx = { db: dedupeDb, model: new MockEmbeddingModel(), defaultStore: "echo/rt" };
+      const call = (name: string, args: Record<string, unknown>, host = { sessionID: "ses_rt", agent: "test" }) =>
+        TOOL_DEFS.find((t) => t.name === name)!.execute(args, ctx as any, host as any);
+
+      await call("chat_register", {});
+      const otherHost = { sessionID: "ses_other", agent: "test" };
+      const other = await call("chat_register", {}, otherHost);
+      const otherName = (other.match(/\[registered\] (.+)/) ?? [])[1]!;
+
+      const first = await call("chat_send", { to: otherName, body: "once" });
+      expect(first).toContain("[sent]");
+      expect(first).not.toContain("DUPLICATE SUPPRESSED");
+      // The retried call still reports success - the harness that timed out
+      // the first attempt must not error - but says no second row landed.
+      const retry = await call("chat_send", { to: otherName, body: "once" });
+      expect(retry).toContain("[sent]");
+      expect(retry).toContain("DUPLICATE SUPPRESSED");
+    } finally {
+      dedupeDb.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("every chat tool's real success output is a chatEchoText parse target", async () => {

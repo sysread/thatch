@@ -214,6 +214,14 @@ export type ChatHostKind = "opencode" | "mcp";
 // into a context bomb; the reader fetches full content via chat_read anyway.
 export const MAX_BODY_LEN = 10_000;
 
+// Same-sender, same-recipient, same-body sends within this window are treated
+// as one logical message: a harness that times out a chat_send that actually
+// committed retries the call, and without this guard the retry lands a second
+// identical row (observed 2026-10-07: two rows 8s apart, one delivery pass).
+// The window is deliberately short and not env-tunable - two identical bodies
+// this close together are a retry; outside it, they are two messages.
+export const CHAT_DEDUPE_WINDOW_MS = 10_000;
+
 // Assigned names are lowercase slugs of a pool name with a numeric counter
 // suffix ("al-go-rithm-00001"), which satisfies NAME_CHARSET. The charset
 // stays exported for the pool conformance test. Slugs never contain
@@ -447,7 +455,7 @@ export class ChatStore {
     // is somehow taken, fall through to the counter draw.
     const claim = this.#db
       .query("SELECT name FROM chat_name_claims WHERE session_id = ?")
-      .get(sessionID) as { name: string } | undefined;
+      .get(sessionID) as { name: string } | null;
     if (claim) {
       const reclaimed = this.#insertSession(sessionID, claim.name, project, cleanTopic, kind, worktree);
       if (reclaimed.ok) {
@@ -622,7 +630,7 @@ export class ChatStore {
     fromSession: string,
     toNameOrID: string,
     body: string,
-  ): { ok: true; recipient: { session_id: string; name: string } } | { ok: false; error: string } {
+  ): { ok: true; recipient: { session_id: string; name: string }; deduped?: boolean } | { ok: false; error: string } {
     const trimmed = body.trim();
     if (!trimmed) return { ok: false, error: "Message body cannot be empty." };
     if (trimmed.length > MAX_BODY_LEN) {
@@ -636,6 +644,9 @@ export class ChatStore {
     }
     if (recipient.session_id === fromSession) {
       return { ok: false, error: "You cannot message yourself." };
+    }
+    if (this.#isRecentDuplicate(fromSession, recipient.session_id, trimmed, 0)) {
+      return { ok: true, recipient: { session_id: recipient.session_id, name: recipient.name }, deduped: true };
     }
     this.#db.run(
       "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast) VALUES (?, ?, ?, ?, 0)",
@@ -655,7 +666,7 @@ export class ChatStore {
   broadcast(
     fromSession: string,
     body: string,
-  ): { ok: true; recipients: string[]; skipped: string[] } | { ok: false; error: string } {
+  ): { ok: true; recipients: string[]; skipped: string[]; deduped: number } | { ok: false; error: string } {
     const trimmed = body.trim();
     if (!trimmed) return { ok: false, error: "Message body cannot be empty." };
     if (trimmed.length > MAX_BODY_LEN) {
@@ -665,6 +676,7 @@ export class ChatStore {
     if (!sender) return { ok: false, error: "You are not registered - call chat_register first." };
     const recipients: string[] = [];
     const skipped: string[] = [];
+    let deduped = 0;
     // One transaction: a crash mid-loop rolls the whole fan-out back
     // instead of leaving a partial broadcast where some recipients got the
     // message and others silently did not.
@@ -678,6 +690,13 @@ export class ChatStore {
           skipped.push(row.name);
           continue;
         }
+        // A retried broadcast counts as delivered (the original row
+        // stands) - the recipient list stays complete either way.
+        if (this.#isRecentDuplicate(fromSession, row.session_id, trimmed, 1)) {
+          deduped++;
+          recipients.push(row.name);
+          continue;
+        }
         this.#db.run(
           "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast) VALUES (?, ?, ?, ?, 1)",
           [fromSession, row.session_id, trimmed, nowIso()],
@@ -685,7 +704,26 @@ export class ChatStore {
         recipients.push(row.name);
       }
     })();
-    return { ok: true, recipients, skipped };
+    return { ok: true, recipients, skipped, deduped };
+  }
+
+  /**
+   * True when an identical row (same sender, recipient, body, and delivery
+   * kind) already exists inside the dedupe window - the signature of a
+   * client-side retry of a send that actually committed. Timestamps are
+   * second-resolution ISO (nowIso's format), so string comparison works.
+   */
+  #isRecentDuplicate(fromSession: string, toSession: string, body: string, viaBroadcast: 0 | 1): boolean {
+    const cutoff = new Date(Date.now() - CHAT_DEDUPE_WINDOW_MS).toISOString().replace(/\.\d{3}Z$/, "Z");
+    // bun:sqlite's .get() returns null (not undefined) when no row matches -
+    // a truthiness check, not an identity check, or every send dedupes.
+    return (
+      this.#db
+        .query(
+          "SELECT 1 AS hit FROM chat_messages WHERE from_session = ? AND to_session = ? AND body = ? AND via_broadcast = ? AND created_at >= ? LIMIT 1",
+        )
+        .get(fromSession, toSession, body, viaBroadcast, cutoff) != null
+    );
   }
 
   /**
@@ -762,7 +800,7 @@ export class ChatStore {
          JOIN chat_sessions s ON s.session_id = p.session_id
          WHERE p.ppid = ? AND p.seen_at >= ?`,
       )
-      .get(ppid, cutoff) as { session_id: string } | undefined;
+      .get(ppid, cutoff) as { session_id: string } | null;
     return row?.session_id ?? null;
   }
 

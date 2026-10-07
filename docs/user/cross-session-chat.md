@@ -29,7 +29,9 @@ explicitly with `thatch_chat_register` (no arguments) - useful after
   checked in, its project, whether it runs in the project root or a linked
   git worktree, its topic, and your unread count
 - `thatch_chat_send` delivers a message to another registered session, by
-  name or session id, and states the recipient's liveness at send time
+  name or session id, and states the recipient's liveness at send time.
+  An identical resend within a few seconds is treated as a client retry:
+  it succeeds but delivers nothing new (the tool output says so)
 - `thatch_chat_read` drains the session's inbox
 - `thatch_chat_broadcast` delivers one message to every other live
   registered session at once
