@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, afterAll } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -624,6 +624,90 @@ describe("staleness", () => {
     const rows = new Map(db.listChatSessions().map((r) => [r.session_id, r]));
     expect(isStale(rows.get("ses_hosted")!)).toBe(false);
     expect(isStale(rows.get("ses_other")!)).toBe(true);
+  });
+});
+
+describe("chat identity directory binding", () => {
+  // One shared db, two contexts with different project slugs: the MCP `as`
+  // fallback may only claim identities belonging to the caller's project.
+  const dir = mkdtempSync(join(tmpdir(), "thatch-bind-"));
+  const db = new ThatchDB(join(dir, "bind.db"));
+  const raw = new Database(join(dir, "bind.db"));
+  const model = new MockEmbeddingModel();
+  const ctxA = { db, model, defaultStore: "acme/alpha" } as any;
+  const ctxB = { db, model, defaultStore: "acme/beta" } as any;
+  // MCP-path calls: no host context - identity comes from `as`.
+  const call = (ctx: any, name: string, args: Record<string, unknown> = {}) =>
+    TOOL_DEFS.find((t) => t.name === name)!.execute(args, ctx, undefined);
+
+  const regName = async (ctx: any) => {
+    const out = (await call(ctx, "chat_register")) as string;
+    return (out.match(/\[registered\] (.+)/) ?? [])[1]!;
+  };
+
+  let alphaName: string;
+  let alphaSessionID: string;
+
+  test("setup: register an alpha-project identity", async () => {
+    alphaName = await regName(ctxA);
+    const row = (db as any).findChatSession(alphaName);
+    alphaSessionID = row.session_id;
+    expect(alphaName).toMatch(/^\S+-\d{5}$/);
+  });
+
+  test("same-project as claim resolves; cross-project is refused", async () => {
+    const peerAlpha = { db, model, defaultStore: "acme/alpha" } as any;
+    const ok = (await call(peerAlpha, "chat_status", { as: alphaName })) as string;
+    expect(ok).toContain("[chat] registered as");
+    expect(ok).not.toContain("another project");
+
+    const refused = (await call(ctxB, "chat_status", { as: alphaName })) as string;
+    expect(refused).toContain("registered to another project");
+    expect(refused).toContain("chat_register");
+  });
+
+  test("a session-ID-based as claim is bound by the same rule", async () => {
+    const refused = (await call(ctxB, "chat_status", { as: alphaSessionID })) as string;
+    expect(refused).toContain("registered to another project");
+  });
+
+  test("a claimed row with a null project is refused (fail safe)", async () => {
+    raw.run("UPDATE chat_sessions SET project = NULL WHERE session_id = ?", [alphaSessionID]);
+    const refused = (await call(ctxA, "chat_status", { as: alphaName })) as string;
+    // Restore before asserting: a failed assertion must not leave the row
+    // broken for later tests.
+    raw.run("UPDATE chat_sessions SET project = 'acme/alpha' WHERE session_id = ?", [alphaSessionID]);
+    expect(refused).toContain("registered to another project");
+    expect(refused).toContain("(none");
+  });
+
+  test("an anchor miss falls through to `as` and is bound", async () => {
+    const derivedMiss = { db, model, defaultStore: "acme/beta", chatDerivedIdentity: () => "ses_gone" } as any;
+    const refused = (await call(derivedMiss, "chat_status", { as: alphaName })) as string;
+    expect(refused).toContain("registered to another project");
+  });
+
+  test("chat_register reclaim: same project confirms, cross project registers fresh", async () => {
+    // Same project: the pre-existing reclaim confirmation.
+    const reclaim = (await call(ctxA, "chat_register", { as: alphaName })) as string;
+    expect(reclaim).toContain("You were already registered");
+
+    // Cross project: no leak, a fresh identity instead.
+    const fresh = (await call(ctxB, "chat_register", { as: alphaName })) as string;
+    expect(fresh).toContain("belongs to another project");
+    expect(fresh).toContain("[registered]");
+    expect(fresh).not.toContain("You were already registered");
+    const freshName = (fresh.match(/\[registered\] (.+)/) ?? [])[1]!;
+    expect(freshName).not.toBe(alphaName);
+
+    // A nonexistent name still teaches the assigned-names rule.
+    const ghost = (await call(ctxA, "chat_register", { as: "ghost-00001" })) as string;
+    expect(ghost).toContain("No registered session named");
+  });
+
+  afterAll(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 

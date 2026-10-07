@@ -200,10 +200,14 @@ construction. Three mitigations:
   the true session id from the host and record which process spawned them;
   the MCP server resolves its own parent process against that record, so
   the model cannot claim another session's identity there. On Cursor, chat
-  tools still trust the `as` argument the caller supplies (hooks and MCP
+  tools trust the `as` argument the caller supplies (hooks and MCP
   servers share one workspace process, so process identity is ambiguous) -
-  a local session that knows a name can act as it. opencode is immune (the
-  host supplies identity). The threat model is one user's machine.
+  but the claim is directory-bound: a session may only claim an identity
+  registered to its own project, and a cross-project claim is refused.
+  The refusal teaches the fix - register a fresh identity for the project
+  once, then reuse it; do not re-register every turn. opencode is immune
+  (the host supplies identity). The threat model is one user's machine;
+  same-project spoofing on Cursor remains possible and accepted.
 - **No external content via wake.** The wake notification names senders
   and counts only - bodies flow exclusively through the framed
   `chat_read` surface.

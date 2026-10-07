@@ -368,10 +368,22 @@ parent pid against that table (`chatDerivedIdentity` on CoreContext,
 freshness-capped at 600s to bound pid reuse). A second model-proof layer
 is `CLAUDE_CODE_SESSION_ID`, which the host sets in the stdio server's
 environment at spawn. `resolveChatIdentity` priority: opencode host
-context > ppid mapping > env id > claimed `as`. Cursor's hooks and MCP
+context > ppid mapping > env id > claimed `as`. The `as` fallback is also directory-bound: the
+claimed identity must belong to the caller's project (the store slug
+every registration writes as the row's project column) - a cross-project
+or null-project claim is refused with a re-register escape hatch.
+Cursor's hooks and MCP
 servers share one workspace process (ambiguous ppid, no per-session env),
 so Cursor keeps the claimed-`as` path, documented in the user doc's
 security model.
+
+**Server project resolution.** The MCP server resolves its own project
+directory as `THATCH_PROJECT_DIR ?? CURSOR_PROJECT_DIR ??
+CLAUDE_PROJECT_DIR ?? cwd` (a superset of detectRepo's chain), maps
+`unknown` to `global` exactly like the hook, and project-local setups
+pin `THATCH_PROJECT_DIR` into the written MCP config so the resolution
+is cwd-independent. Global-scope registrations are never pinned - one
+entry serves every project.
 
 **Continuation adoption (Claude Code).** Claude Code forks the session id
 on resume - and has been observed to fork spontaneously (agent-team

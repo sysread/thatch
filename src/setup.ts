@@ -66,7 +66,7 @@ function resolvePaths(global: boolean, projectDir: string, homeDir: string): Set
 // .mcp.json - MCP server registration
 // ---------------------------------------------------------------------------
 
-function writeMcpConfig(path: string, thatchBin: string): void {
+function writeMcpConfig(path: string, thatchBin: string, projectDir?: string): void {
   let config: any = { mcpServers: {} };
   if (existsSync(path)) {
     try {
@@ -81,6 +81,12 @@ function writeMcpConfig(path: string, thatchBin: string): void {
     type: "stdio",
     command: thatchBin,
     args: ["mcp"],
+    // Project-LOCAL configs pin the project directory so the server's
+    // identity resolution is deterministic regardless of the cwd the host
+    // spawns it with. Global-scope configs must NEVER pin: one entry serves
+    // every project, and a first-in-chain env override would clobber all
+    // of them. (setup.ts:projectDir chain in src/mcp.ts.)
+    ...(projectDir ? { env: { THATCH_PROJECT_DIR: projectDir } } : {}),
   };
 
   mkdirSync(join(path, ".."), { recursive: true });
@@ -356,7 +362,7 @@ export function setupClaudeCode(
   const paths = resolvePaths(global, projectDir, home);
 
   if (paths.mcpConfigPath) {
-    writeMcpConfig(paths.mcpConfigPath, thatchBin);
+    writeMcpConfig(paths.mcpConfigPath, thatchBin, projectDir);
   }
 
   appendInstructions(paths.claudeMdPath);
@@ -622,7 +628,7 @@ export function setupCursor(
   const home = homeDir ?? homedir();
   const paths = resolveCursorPaths(global, projectDir, home);
 
-  writeMcpConfig(paths.mcpConfigPath, thatchBin);
+  writeMcpConfig(paths.mcpConfigPath, thatchBin, global ? undefined : projectDir);
   appendCursorInstructions(paths.agentsMdPath);
   writeCursorHooks(paths.hooksPath, thatchBin);
   const skills = installSkills(paths.skillsDir);

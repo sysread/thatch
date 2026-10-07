@@ -75,6 +75,21 @@ describe("setupClaudeCode (project-local)", () => {
     expect(config.mcpServers.thatch.type).toBe("stdio");
     expect(config.mcpServers.thatch.command).toBe("/usr/local/bin/thatch");
     expect(config.mcpServers.thatch.args).toEqual(["mcp"]);
+    // Project-local configs pin the project directory so the MCP server's
+    // identity resolution (the chat `as` binding) is cwd-independent.
+    expect(config.mcpServers.thatch.env).toEqual({ THATCH_PROJECT_DIR: projectDir });
+  });
+
+  test("global setup never pins THATCH_PROJECT_DIR (one registration serves every project)", () => {
+    const result = setupClaudeCode("/usr/local/bin/thatch", true, projectDir, fakeHome);
+    // Global Claude setup writes no config file; the printed/manual command
+    // must not smuggle a project-scoped env pin either - a user-scope
+    // registration serves every project, and a first-in-chain env pin
+    // would clobber per-project resolution for all of them.
+    expect(result.mcpConfig).toBeNull();
+    if ("manualCommand" in result) {
+      expect((result as any).manualCommand).not.toContain("THATCH_PROJECT_DIR");
+    }
   });
 
   test("appends instructions to CLAUDE.md", () => {

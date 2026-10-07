@@ -98,3 +98,4 @@ import "./uc-113-prediction-dedup";
 import "./uc-114-watcher-expiry-replay";
 import "./uc-115-watch-list-pending-events";
 import "./uc-116-chat-send-dedupe";
+import "./uc-117-chat-identity-directory-binding";

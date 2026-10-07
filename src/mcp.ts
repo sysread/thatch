@@ -120,7 +120,12 @@ export function compilePrompts(): Map<string, ActionDef> {
  * prompt and search for matches without loading the model themselves.
  */
 export async function runMcpServer(): Promise<void> {
-  const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+  // Deliberate superset of detectRepo's own chain (src/git.ts): the pinned
+  // THATCH_PROJECT_DIR (written into project-local MCP configs by setup)
+  // beats ambient host vars, which beat the spawn cwd - the server's spawn
+  // cwd is the one input no in-repo test can pin.
+  const projectDir =
+    process.env.THATCH_PROJECT_DIR ?? process.env.CURSOR_PROJECT_DIR ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
 
   const home = process.env.HOME ?? "/tmp";
   const configHome = process.env.XDG_CONFIG_HOME ?? `${home}/.config`;
@@ -130,7 +135,13 @@ export async function runMcpServer(): Promise<void> {
   // The DB must exist before identity detection: detectRepo consults the
   // repo_paths cache when the project directory is gone (deleted worktree).
   const db = new ThatchDB(dbPath);
-  const repo = await detectRepo(projectDir, repoPathCache(db));
+  const detected = await detectRepo(projectDir, repoPathCache(db));
+  // unknown-to-global, matching the hook's mapping (bin/thatch): chat
+  // registration must follow the same store the tools would read, and
+  // resolveStore degrades both spellings to the global store anyway. The
+  // alignment keeps hook-registered and server-registered rows comparable
+  // by project - which the `as` identity binding depends on.
+  const repo = detected === "unknown" ? "global" : detected;
   const model = new BgeEmbeddingModel(modelName);
 
   await seedDefaultBehaviors(db, model);

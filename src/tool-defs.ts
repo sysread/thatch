@@ -1876,13 +1876,50 @@ async function resolveChatIdentity(
       error: `No registered session named "${as.trim()}" - call chat_register first (or chat_status to check).`,
     };
   }
+  // Directory binding: an unanchored caller may only claim an identity
+  // belonging to its own project. Cross-project claiming is never
+  // legitimate - each MCP server is per-directory - and a legacy row with
+  // no project is not claimable at all. The fix-teaching error doubles as
+  // the escape hatch when a host's project resolution is wrong (Cursor's
+  // spawn cwd is the one input no in-repo test can pin): re-register once,
+  // reuse the new name - do NOT re-register every turn, that orphans
+  // unread mail and churns the roster.
+  if (!claimed.project || claimed.project !== ctx.defaultStore) {
+    return {
+      ok: false,
+      error: `The identity "${as.trim()}" is registered to another project (${claimed.project ?? "none"}; this session's is ${ctx.defaultStore}). Call chat_register WITHOUT \`as\` to get a fresh identity for this project - once - then reuse the name it returns.`,
+    };
+  }
   return { ok: true, sessionID: claimed.session_id, kind: claimed.host_kind };
+}
+
+/** Registers a fresh conversation identity for an unanchored MCP caller:
+ *  a random mcp_ session id bound to the caller's project. Extracted from
+ *  chat_register so both the no-`as` path and the directory-binding
+ *  refusal (claim ignored, fresh identity minted) share one shape. */
+function registerFreshMcpIdentity(ctx: CoreContext, kind: ChatHostKind): string {
+  const sessionID = `mcp_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
+  const res = ctx.db.registerChatSession(sessionID, ctx.defaultStore, null, kind, null, detectWorktreeKind(ctx.projectDir));
+  if (!res.ok) return `Registration failed: ${res.error}`;
+  return (
+    `[registered] ${res.name}\n` +
+    `session_id: ${sessionID}\n` +
+    `project: ${ctx.defaultStore}\n` +
+    degradedDeliveryNote() +
+    `\n` +
+    `This identity is fresh for this conversation. If your host runs the ` +
+    `thatch hook, its output names your persistent identity - use that ` +
+    `as the 'as' argument on other chat tools. Use chat_list to see who ` +
+    `is available.`
+  );
 }
 
 /** The zod arg shared by chat tools whose MCP mode needs the caller's
  *  assigned name: MCP hosts have no session context, so identity is passed
  *  as the name the host's thatch hook printed (names are assigned by
- *  thatch, never claimed). opencode ignores it. */
+ *  thatch, never claimed). The claimed identity must belong to this
+ *  session's project - a cross-project claim is refused. opencode ignores
+ *  it. */
 function mcpIdentityArg() {
   return z.string().optional().describe(
     "Your assigned display name - the one your host's thatch hook printed, " +
@@ -1960,42 +1997,43 @@ const chatRegisterDef: ToolDef = {
     // assigned, so there is no claim path; a stale name from an old
     // conversation still resolves to the same row it always did.
     const asName = host ? null : typeof args.as === "string" ? args.as.trim() : null;
-    if (!host && !asName) {
-      // Fresh identity for this conversation: without session context or a
-      // hook-printed name there is nothing stable to anchor to, and a new
-      // conversation is a new peer anyway. Persistent identity on MCP hosts
-      // comes from the hook, which re-registers the same session ID and
-      // prints the assigned name each prompt.
-      const sessionID = `mcp_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
-      const res = ctx.db.registerChatSession(sessionID, ctx.defaultStore, null, kind, null, detectWorktreeKind(ctx.projectDir));
-      if (!res.ok) return `Registration failed: ${res.error}`;
+    if (!host && asName) {
+      const claimed = ctx.db.findChatSession(asName);
+      if (!claimed) {
+        return `No registered session named "${asName}" - names are assigned by thatch (your host hook prints yours); you cannot claim a new one.`;
+      }
+      // Directory binding on the reclaim path too: the claimed row must
+      // belong to this project. A mismatch must not confirm ("already
+      // registered" would leak the row's existence and project) - the
+      // claim is ignored and a fresh identity is registered instead,
+      // which doubles as the escape hatch when a host's project
+      // resolution is wrong.
+      if (claimed.project && claimed.project === ctx.defaultStore) {
+        return (
+          `[registered] ${claimed.name}\n` +
+          `session_id: ${claimed.session_id}\n` +
+          `project: ${claimed.project}\n` +
+          degradedDeliveryNote() +
+          `\n` +
+          `You were already registered. Other sessions can message you by name ` +
+          `with chat_send, or reach everyone at once with chat_broadcast; use ` +
+          `chat_list to see who else is available.`
+        );
+      }
+      const fresh = registerFreshMcpIdentity(ctx, kind);
       return (
-        `[registered] ${res.name}\n` +
-        `session_id: ${sessionID}\n` +
-        `project: ${ctx.defaultStore}\n` +
-        degradedDeliveryNote() +
-        `\n` +
-        `This identity is fresh for this conversation. If your host runs the ` +
-        `thatch hook, its output names your persistent identity - use that ` +
-        `as the 'as' argument on other chat tools. Use chat_list to see who ` +
-        `is available.`
+        `The \`as\` name "${asName}" belongs to another project (${claimed.project ?? "none"}); ` +
+        `registered a fresh identity for this project instead - use the name below from now on.\n` +
+        fresh
       );
     }
     if (!host) {
-      const row = ctx.db.findChatSession(asName!);
-      if (!row) {
-        return `No registered session named "${asName}" - names are assigned by thatch (your host hook prints yours); you cannot claim a new one.`;
-      }
-      return (
-        `[registered] ${row.name}\n` +
-        `session_id: ${row.session_id}\n` +
-        `project: ${row.project ?? ctx.defaultStore}\n` +
-        degradedDeliveryNote() +
-        `\n` +
-        `You were already registered. Other sessions can message you by name ` +
-        `with chat_send, or reach everyone at once with chat_broadcast; use ` +
-        `chat_list to see who else is available.`
-      );
+      // No `as` at all: fresh identity for this conversation. Without
+      // session context or a hook-printed name there is nothing stable to
+      // anchor to, and a new conversation is a new peer anyway. Persistent
+      // identity on MCP hosts comes from the hook, which re-registers the
+      // same session ID and prints the assigned name each prompt.
+      return registerFreshMcpIdentity(ctx, kind);
     }
     // An explicit join clears the leave tombstone BEFORE registering:
     // "I want back in" is the opposite of "I left", and the tombstone must

@@ -115,6 +115,11 @@ Cursor takes priority because Cursor also sets `CLAUDE_PROJECT_DIR` as an
 alias. Without the priority check, Cursor sessions would be misidentified as
 Claude Code.
 
+Separately, the project directory for store/chat identity resolution
+follows `THATCH_PROJECT_DIR ?? CURSOR_PROJECT_DIR ?? CLAUDE_PROJECT_DIR
+?? cwd` in the MCP server; project-local setups pin `THATCH_PROJECT_DIR`
+into the written MCP config.
+
 `checkSetup` looks for start and end markers in the host's instructions file
 --- `CLAUDE.md` for Claude Code, `AGENTS.md` for Cursor. It checks local first,
 then global. Local takes priority.

@@ -242,9 +242,11 @@ function emit(output: string, versionWarning: string | null, isJson: boolean, ch
   else console.log(output);
 }
 
-/** Resolve the project directory from host-specific env vars or cwd. */
+/** Resolve the project directory from host-specific env vars or cwd.
+ *  THATCH_PROJECT_DIR (pinned by project-local MCP configs) leads the
+ *  chain, mirroring the server's resolution in src/mcp.ts. */
 function projectDir(): string {
-  return process.env.CURSOR_PROJECT_DIR ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+  return process.env.THATCH_PROJECT_DIR ?? process.env.CURSOR_PROJECT_DIR ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
 }
 
 // ---------------------------------------------------------------------------

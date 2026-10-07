@@ -179,6 +179,11 @@ The host is determined from env vars set by the host process:
 
 Cursor takes priority because Cursor also sets `CLAUDE_PROJECT_DIR` as an alias.
 
+Separately from host detection, the project directory used for store/chat
+identity resolution resolves as `THATCH_PROJECT_DIR ?? CURSOR_PROJECT_DIR
+?? CLAUDE_PROJECT_DIR ?? cwd` in the MCP server; project-local `thatch
+setup` runs pin `THATCH_PROJECT_DIR` into the written MCP config.
+
 ### What it checks
 
 `checkSetup` looks for the instruction markers (start and end) in the host's

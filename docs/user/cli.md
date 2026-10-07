@@ -163,6 +163,7 @@ thatch setup --claude --skills-only             # refresh just the skill files
 | `THATCH_BEHAVIOR_THRESHOLD` | `0.60` | Cosine threshold for behavior auto-fire |
 | `CLAUDE_PROJECT_DIR` | `process.cwd()` | Claude Code project directory |
 | `CURSOR_PROJECT_DIR` | (falls through) | Cursor project directory |
+| `THATCH_PROJECT_DIR` | (falls through) | Project dir pinned by project-local MCP configs - first in the server's resolution chain |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code config directory |
 | `CURSOR_CONFIG_DIR` | `~/.cursor` | Cursor config directory |
 
