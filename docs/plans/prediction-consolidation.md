@@ -7,9 +7,10 @@ Post-processing layers for the prediction engine: fire tracking and compound
 predictions. Uses nudge-driven detection and the existing edge model for fire
 behavior. No cron, no separate backend.
 
-The consolidation (dedup) half was split into
-[prediction-dedup.md](prediction-dedup.md) — cosine-only, needs no fire data,
-can ship independently. What remains here is the fire-tracking prerequisite
+The consolidation (dedup) half was implemented separately and has graduated —
+the shipped design is documented in
+[../dev/features/prediction-engine.md](../dev/features/prediction-engine.md)
+("Dedup pass"). What remains here is the fire-tracking prerequisite
 and the co-fire refinements (behavioral dedup, compound detection) that
 consume the accumulated data.
 
@@ -21,8 +22,9 @@ relative to nak's samskara system:
 
 - **Fire tracking** -- no record of which predictions fire together on the same
   turn. This is the prerequisite for co-fire dedup and compound detection.
-- **Consolidation** -- moved to [prediction-dedup.md](prediction-dedup.md):
-  a cosine-only dedup pass over the prediction corpus, no prerequisites.
+- **Consolidation** -- implemented and graduated: a cosine-only dedup pass
+  over the prediction corpus, no prerequisites
+  ([../dev/features/prediction-engine.md](../dev/features/prediction-engine.md)).
 - **Compound predictions** -- no mechanism to mint a higher-order prediction
   from a constellation of predictions that reliably co-fire. Nak's tier-2
   samskaras fire at 77% genuine-engagement vs tier-1's 21% because compound
@@ -122,8 +124,10 @@ NOT EXISTS).
 ### Phase 2: Co-fire refinement of dedup
 
 The cosine-only dedup pass (`findPredictionDuplicates`, the
-`prediction_dedup_pairs` table, the hygiene line, the merge flow) lives in
-[prediction-dedup.md](prediction-dedup.md) and ships without this plan. Once
+`prediction_dedup_pairs` table, the hygiene line, the merge flow) is
+IMPLEMENTED and graduated — documented in
+[../dev/features/prediction-engine.md](../dev/features/prediction-engine.md)
+("Dedup pass"). Once
 fire data accumulates, this plan upgrades that same method with behavioral
 evidence, mirroring nak's `samskara_collapse_by_cofiring`:
 
@@ -141,7 +145,7 @@ when either fires are duplicates. Two that co-fire but also fire independently
 are adjacent-but-distinct. Cosine is a sanity floor against spurious co-fires.
 
 **Safety cap (cosine-only):** If the prediction count exceeds a target (e.g.,
-100), the pure cosine pass from prediction-dedup.md already covers the pool;
+100), the implemented pure cosine pass already covers the pool;
 no behavioral evidence is required to keep dedup moving.
 
 **Output:** the dedup plan's candidate shape extended with {cofires, ratio,
@@ -261,7 +265,7 @@ chat.message (user text)
 session.created (top-level)
   → hygieneReport
     → findDuplicates (memories, existing)
-    → findPredictionDuplicates (prediction-dedup.md, co-fire-refined here)
+    → findPredictionDuplicates (implemented; co-fire-refined here)
     → findCoFireConstellations (NEW: compound candidates)
     → inject hygiene nudge with all signals
 
@@ -281,25 +285,25 @@ db.ts.
 **Code changes by file:**
 - `src/db.ts` -- one new table (`prediction_fires`) + 4 new methods
   (recordFires, fireCount, cofireCount, totalCohorts, findCoFireConstellations);
-  the co-fire refinement extends the `findPredictionDuplicates` method added
-  by prediction-dedup.md
+  the co-fire refinement extends the implemented `findPredictionDuplicates`
+  method
 - `src/runtime.ts` -- generate cohort_id, pass to recordFires in auto-fire path
 - `src/sideband.ts` -- same for MCP path
-- `src/hygiene.ts` -- add constellation count to report (the dedup count came
-  with prediction-dedup.md)
+- `src/hygiene.ts` -- add constellation count to report (the dedup count is
+  already implemented there)
 - `src/prompts.ts` -- compound minting guidance in all three prompt variants
 - `tests/prediction.test.ts` -- tests for new DB methods
 - `tests/plugin.test.ts` -- test that fire tracking records cohorts
 
 ## Implementation Order
 
-0. **Cosine dedup** -- split out and detailed in prediction-dedup.md. Needs
-   no fire tracking. If that plan has not landed yet, it goes FIRST.
+0. **Cosine dedup** -- IMPLEMENTED and graduated (Oct 2026):
+   `findPredictionDuplicates` + `prediction_mark_checked`; nothing left to do.
 1. **Fire tracking** (table + recordFires + caller wiring). Foundation for
    everything else here. Ship and let fire data accumulate.
 2. **Co-fire dedup** (add the behavioral pass to findPredictionDuplicates).
-   Needs fire data plus the prediction-dedup.md method and table. Wait a few
-   weeks after fire tracking ships.
+   Needs fire data only -- the method and pair table already exist. Wait a
+   few weeks after fire tracking ships.
 3. **Compound detection** (findCoFireConstellations + hygiene integration).
    Needs more fire data than dedup (p_min_cofires = 10). Wait longer.
 4. **Compound minting** (prompt instructions + agent-driven via existing
@@ -320,7 +324,7 @@ Fire tracking ships immediately; the rest follow once fire data accumulates.
   hooks).
 - `hygiene.test.ts` (if exists) or `plugin.test.ts`: test that hygiene report
   includes the constellation count when candidates exist (the dedup count
-  tests ride prediction-dedup.md).
+  tests are implemented, riding UC-113).
 
 ## Risks and Mitigations
 
@@ -365,8 +369,8 @@ this becomes a concern. Low priority.
   a separate improvement, not part of this plan, but worth doing alongside
   phase 1.
 - The existing write-time dedup (`findNearestPrediction` at 0.85) catches
-  near-identical statements at creation. The dedup pass in
-  prediction-dedup.md (cosine) and its co-fire refinement here catch
+  near-identical statements at creation. The implemented dedup pass
+  (cosine, with its co-fire refinement here) catches
   behavioral duplicates that differ in wording. The layers are
   complementary: write-time catches semantic twins, the dedup passes catch
   behavioral twins.
