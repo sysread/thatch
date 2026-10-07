@@ -43,8 +43,9 @@ describe("MCP compilePrompts", () => {
     const promptNames = [...compilePrompts().keys()].sort();
     const claudeNames = claudeCommandDefs().map((d) => d.name).sort();
     expect(promptNames).toEqual(claudeNames);
-    // And opencode is strictly a superset: shared actions + wrap-ups + extract.
+    // And opencode is strictly a superset: shared actions + wrap-ups + the
+    // opencode-only actions.
     const opencodeNames = opencodeCommandDefs().map((d) => d.name).sort();
-    expect(opencodeNames).toEqual([...promptNames, "compact", "exit", "extract"].sort());
+    expect(opencodeNames).toEqual([...promptNames, "compact", "exit", "extract", "whois"].sort());
   });
 });

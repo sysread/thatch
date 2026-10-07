@@ -248,7 +248,8 @@ Beyond the tools, thatch hooks into opencode itself:
   section ahead of the checklist (say goodbye or hand off context:
   `/thatch/exit Good work - see you tomorrow`). Alongside the wrap-ups,
   on-demand actions (`/thatch/defrag`, `/thatch/extract`, `/thatch/hygiene`,
-  `/thatch/reflect`) run the memory-maintenance behaviors whenever you want,
+  `/thatch/reflect`, `/thatch/whois`) run the memory-maintenance behaviors
+  whenever you want,
   not just when a nudge fires -- see [commands.md](commands.md).
   A greenlit `/thatch/exit` also unregisters the session from the chat
   directory, so other sessions stop sending it mail. The commands

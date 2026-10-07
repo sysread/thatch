@@ -100,7 +100,7 @@ const useCase: UseCase = {
       const { compilePrompts } = await import("../../../src/mcp");
       const opencodeNames = opencodeCommandDefs().map((d) => d.name).sort();
       const promptNames = [...compilePrompts().keys()].sort();
-      const expectedOpen = [...names, "compact", "exit", "extract"].sort();
+      const expectedOpen = [...names, "compact", "exit", "extract", "whois"].sort();
       if (opencodeNames.join(",") !== expectedOpen.join(",") || promptNames.join(",") !== names.join(",")) {
         console.log(`  FAIL: command set parity broken (opencode=${opencodeNames.join(",")} prompts=${promptNames.join(",")})`);
         return "FAIL";

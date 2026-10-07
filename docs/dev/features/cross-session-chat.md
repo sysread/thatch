@@ -427,6 +427,14 @@ Staleness semantics differ by kind: an opencode row's stale age means its
 harness stopped beating (broadcast skips it), while an mcp row's age only means
 "between turns" (broadcast always delivers).
 
+The `/thatch/whois` command (opencode-only action, src/commands.ts) is the
+user-facing identity report: it relays `chat_status` for the invoking
+session's handle, then joins the roster row for topic, project, and the
+`loc:` worktree token - the topic being the live TUI session title, it is
+how the operator maps a roster handle to a visible tab. An argument looks
+up another session's row instead. It reports only; it never reads mail or
+mutates anything.
+
 ## Defaults
 
 Timing constants live in `src/chat.ts`: poll interval 30s, staleness

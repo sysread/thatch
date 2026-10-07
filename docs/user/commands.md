@@ -17,6 +17,11 @@ or you invoke it.
   The agent asks before forgetting anything that may still matter.
 - `/thatch/reflect` — run the session-reflection skill to persist what the
   current session learned.
+- `/thatch/whois` — report the current session's chat identity: its handle,
+  topic, project, and whether it runs in the project root or a worktree.
+  Text after the command looks up another session instead (by handle or
+  session id) — this is how you map a handle from the roster to the tab you
+  see: the topic is the session's live title. opencode only.
 - `/thatch/refine` — refine a plan for a code change under the current
   project type's requirements: the agent classifies the project (team,
   personal, shared library, spike, infrastructure, or open source
@@ -38,13 +43,15 @@ or you invoke it.
 | `/thatch/extract` | yes | no | no |
 | `/thatch/hygiene` | yes | yes | yes (as an MCP prompt) |
 | `/thatch/reflect` | yes | yes | yes (as an MCP prompt) |
+| `/thatch/whois` | yes | no | no |
 | `/thatch/refine` | yes | yes | yes (as an MCP prompt) |
 | `/thatch/compact`, `/thatch/exit` | yes | no | no |
 
-Why the gaps: `/thatch/extract` needs the invoking session's ID, which only
-the opencode plugin can supply. The wrap-up commands trigger TUI actions
-through the plugin. Cursor has no file-based commands; its prompts come from
-the MCP server (`prompts/list` and `prompts/get`).
+Why the gaps: `/thatch/extract` and `/thatch/whois` need the invoking
+session's ID, which only the opencode plugin can supply. The wrap-up
+commands trigger TUI actions through the plugin. Cursor has no file-based
+commands; its prompts come from the MCP server (`prompts/list` and
+`prompts/get`).
 
 ## Installation
 

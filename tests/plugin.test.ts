@@ -2985,7 +2985,7 @@ describe("installOpencodeCommands", () => {
     try {
       const first = installOpencodeCommands(home);
       const names = first.map((p) => p.split("/").pop()!.replace(/\.md$/, "")).sort();
-      expect(names).toEqual(["compact", "defrag", "exit", "extract", "hygiene", "refine", "reflect"]);
+      expect(names).toEqual(["compact", "defrag", "exit", "extract", "hygiene", "refine", "reflect", "whois"]);
       const compact = readFileSync(join(first[0]!), "utf8");
       expect(compact).toContain("description:");
       expect(compact).toContain("THATCH_COMPACT_READY");
@@ -3103,8 +3103,9 @@ describe("action commands", () => {
     const claudeNames = claudeCommandDefs().map((d) => d.name).sort();
     const promptNames = [...compilePrompts().keys()].sort();
     // Claude Code gets the shared actions only; opencode adds the wrap-ups
-    // (needs plugin arming) and extract (needs session identity).
-    expect(opencodeNames.sort()).toEqual([...claudeNames, "compact", "exit", "extract"].sort());
+    // (needs plugin arming) and the opencode-only actions (need session
+    // identity).
+    expect(opencodeNames.sort()).toEqual([...claudeNames, "compact", "exit", "extract", "whois"].sort());
     // MCP prompts match Claude Code's set: same shared actions, same bodies.
     expect(promptNames).toEqual(claudeNames);
   });

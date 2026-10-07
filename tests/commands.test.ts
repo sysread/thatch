@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { mkdtempSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommandFiles } from "../src/commands";
+import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommandFiles, claudeCommandDefs } from "../src/commands";
 
 // The v1 -> v2 upgrade path: v1 installs wrap-up command FILES; v2
 // registers the wrap-ups in code and installs only the action files. The
@@ -49,5 +49,22 @@ describe("removeWrapUpCommandFiles", () => {
     const names = opencodeActionCommandDefs().map((d) => d.name);
     expect(names).not.toContain("compact");
     expect(names).not.toContain("exit");
+  });
+});
+
+describe("whois command", () => {
+  test("opencode-only: in the opencode set, excluded from Claude Code's, description stays a quoted YAML scalar", () => {
+    const opencode = opencodeActionCommandDefs().find((d) => d.name === "whois");
+    expect(opencode).toBeDefined();
+    // The description contains ": " - it must be rendered quoted or the
+    // frontmatter is invalid YAML (the yamlQuote gotcha).
+    expect(opencode!.content).toMatch(/^---\ndescription: "/);
+    expect(opencode!.content).toContain("thatch_chat_status");
+    expect(opencode!.content).toContain("thatch_chat_list");
+
+    // Claude Code's set has no session identity for the self-report, so
+    // whois must not leak into it (or into the MCP prompt surface).
+    const claudeNames = claudeCommandDefs().map((d) => d.name);
+    expect(claudeNames).not.toContain("whois");
   });
 });
