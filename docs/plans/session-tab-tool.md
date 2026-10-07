@@ -517,6 +517,16 @@ Unit (bun test, no host needed):
 
 Live smoke (manual, sandboxed — see below, v2 binary on PATH):
 
+> **SMOKE RECORD (2026-10-07, docker sandbox `qa/opencode-sandbox`, headless
+> `opencode run` legs)**: PASSED — directory variant (create + chat-register
+> `bishop-the-synthetic-00001` + emit + prompt, response contract verbatim),
+> worktree variant (session.move persisted: session row directory AND
+> `metadata.thatch.worktree` = the worktree; chat row records worktree
+> kind), headless no-tab (zero tabs.json, no crash), and the sandbox
+> isolation itself (own daemon, own session db, own thatch db). TUI-visual
+> scenarios (tab appears unfocused in the strip via the ./tui plugin) remain
+> the manual attach - the headless legs cannot exercise a TUI process.
+
 > **Sandbox requirement** (and the reason it is easy to get wrong): the
 > smoke spawns real subordinates that chat-register and write memories.
 > Daemon discovery is keyed on **XDG_STATE_HOME** (the registration file is
