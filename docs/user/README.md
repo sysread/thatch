@@ -190,6 +190,12 @@ search` - JSONL output designed for piping to `jq` or `grep`.
 See [watchers.md](watchers.md) for the full behavior, lifetime, and
 requirements.
 
+### Session tab tools (opencode v2 only)
+
+| Tool | What it does |
+|------|-------------|
+| `thatch_session_tab` | Spawn a detached subordinate LLM session in a new TUI tab: creates the session, pre-assigns its chat name, delivers your task prompt with your coordinator-identity framing, and opens its tab beside yours (unfocused). Takes `prompt` and `title` (required) plus exactly one of `worktree` (a git worktree of the current repository) or `directory` (any existing directory). Requires opencode v2 and the `thatch-coordination` skill describes the supervisor workflow. |
+
 ### Chat tools
 
 | Tool | What it does |

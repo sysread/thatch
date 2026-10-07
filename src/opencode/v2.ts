@@ -2,11 +2,14 @@ import type { Plugin } from "@opencode/plugin";
 import { z } from "zod";
 import type { Tool } from "@opencode/schema/tool";
 import type { ToolContext as V2ToolContext } from "@opencode/plugin/promise/tool";
+import type { ThatchDB } from "../db";
 import type { HostCapabilities, PromptPart, ToastInput } from "../capabilities";
 import { createRuntime } from "../runtime";
 import { wrapUpCommandContent } from "../commands";
 import { deriveTitle } from "../extraction";
-import { TOOL_DEFS, trimHostContext, type HostToolContext } from "../tool-defs";
+import { detectRepo, detectWorktreeKind } from "../git";
+import { SESSION_TAB_RPC, TAB_OPENED_EVENT, buildSubordinatePrompt } from "../session-tab-shared";
+import { TOOL_DEFS, trimHostContext, type HostToolContext, type SessionTabHost, type SessionTabSpawnInput, type SessionTabSpawnResult } from "../tool-defs";
 
 // The opencode v2 adapter (opencode 2.x, plugin API @opencode/plugin 2.x).
 // Loaded only by v2 hosts - the dual entry (src/index.ts) lazy-imports this
@@ -39,6 +42,10 @@ import { TOOL_DEFS, trimHostContext, type HostToolContext } from "../tool-defs";
 //   {type, data, location?}. Filtered client-side the way the v1 host
 //   filters server-side: events resolve to a directory (their own, the
 //   session cache, or session.get) and drop when it is not ours.
+// - TUI reach: the ONLY server-to-TUI channel is the rpc event bridge - the
+//   session-tab rpc definition is registered at setup and its events reach
+//   the TUI CLI plugin (the package's ./tui entrypoint), which drives the
+//   tab strip (ui.tabs). Toast/command/exit pushes still have no surface.
 // - toasts, tui commands, session delete/list endpoints:
 //   no v2 surface reachable from a plugin - degrades as no-op/null.
 //   fetchStatuses returns {} because the wake gate treats an unknown session
@@ -77,13 +84,31 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   let inflightTools = 0;
 
   const capabilities = buildCapabilities(context, worktree, childSessions);
-  const runtime = await createRuntime({ capabilities, directory, worktree });
+  const runtime = await createRuntime({ capabilities, directory, worktree, v2Tools: true });
   // Seed the forwarding set from rehydrated child bookkeeping: after a
   // reload, an in-flight extraction child's maps come back from the journal,
   // but this NEW adapter instance's childSessions set starts empty - without
   // the seed, the pump's directory filter drops the child's events again
   // (the below-root launch case).
   for (const id of runtime.childSessionIds()) childSessions.add(id);
+
+  // Session-tab surface: register the rpc definition once per activation and
+  // wire the host flow into the shared CoreContext (post-construction - the
+  // seam closes over both the runtime's db and the plugin context; see
+  // CoreContext.sessionTabHost in tool-defs.ts). The events are the ONLY
+  // server-to-TUI channel on v2: the TUI CLI plugin (the package's ./tui
+  // entrypoint) consumes them and calls ui.tabs.open. A TUI that is absent
+  // (headless run, still connecting) simply never acts on them.
+  const tabRegistration = await context.rpc.register(SESSION_TAB_RPC, {});
+  const emitTabOpened = (data: { sessionID: string; directory: string }) =>
+    tabRegistration.events.emit(TAB_OPENED_EVENT, data);
+  runtime.coreContext.sessionTabHost = buildSessionTabHost({
+    context,
+    directory,
+    db: runtime.coreContext.db,
+    emitTabOpened,
+    debug: runtime.debug,
+  });
 
   // Tool registration: the same CoreContext the v1 adapter feeds to
   // createTools, registered through the v2 ToolEditor instead.
@@ -346,6 +371,7 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     registerPrompt.dispose();
     registerCompaction.dispose();
     registerCommands.dispose();
+    tabRegistration.dispose();
     await runtime.dispose();
   };
 }
@@ -504,6 +530,88 @@ export function translateEvent(located: { type: string; data?: any }): { type: s
     default:
       return [];
   }
+}
+
+/**
+ * The session-tab host flow - everything behind the CoreContext.sessionTabHost
+ * seam, host-executed end to end (the model supplies only the args; see the
+ * host-owned-handshake rule: no ids cross a prompt boundary). Order is
+ * load-bearing (docs/plans/session-tab-tool.md, Decisions):
+ *
+ *   create -> move -> register subordinate -> emit tab-opened -> prompt
+ *
+ * (The calling session's chat name is resolved by the tool definition - it
+ * has the db handle and the session context.)
+ *
+ * The emit runs AFTER the move: the event routes by THIS instance's location
+ * (the coordinator's directory) regardless of the session's directory, so
+ * tab placement is identical either way, and a failed move leaves no
+ * stranded open tab. The move targets an idle session, so its default
+ * "steer" delivery applies immediately - the subordinate's whole first turn
+ * runs in its final directory.
+ *
+ * The subordinate is chat-registered deliberately - participant semantics,
+ * like an explicit chat_register; it is NEVER marked machinery, and its
+ * title cannot collide with the machinery title (validateTitle rejects it).
+ */
+function buildSessionTabHost(input: {
+  context: V2Context;
+  /** This instance's directory - the coordinator session's cwd. */
+  directory: string;
+  db: ThatchDB;
+  emitTabOpened: (data: { sessionID: string; directory: string }) => Promise<unknown>;
+  debug(tag: string, message: string): void;
+}): SessionTabHost {
+  return {
+    directory: input.directory,
+    spawnSubordinate: async (spec: SessionTabSpawnInput): Promise<SessionTabSpawnResult> => {
+      const worktreeDir = typeof spec.worktree === "string" ? spec.worktree : undefined;
+      const isWorktreeFlow = worktreeDir !== undefined;
+      const createDirectory = isWorktreeFlow ? input.directory : spec.directory;
+      const finalDirectory = worktreeDir ?? spec.directory;
+      const created = await input.context.session.create({
+        title: spec.title,
+        metadata: {
+          thatch: {
+            coordinatedBy: spec.coordinatorChatName,
+            coordinatorSessionID: spec.coordinatorSessionID,
+            ...(worktreeDir !== undefined ? { worktree: worktreeDir } : {}),
+          },
+        },
+        location: { directory: createDirectory },
+      });
+      const sessionID = created.id;
+      if (worktreeDir !== undefined) {
+        await input.context.session.move({ sessionID, directory: worktreeDir });
+      }
+      // Pre-register the subordinate AFTER the move, so the roster row
+      // records the session's FINAL directory (right repo slug, right
+      // worktree kind) and a failed move leaves no row behind. Deliberate
+      // participant semantics - like an explicit chat_register, never marked
+      // machinery - so the response carries its chat name and the
+      // coordinator's first chat_send resolves; the later auto-register
+      // converges (same id, same name).
+      const repo = await detectRepo(finalDirectory);
+      const registered = input.db.registerChatSession(
+        sessionID,
+        repo,
+        null,
+        "opencode",
+        null,
+        detectWorktreeKind(finalDirectory),
+      );
+      input.debug(
+        "session-tab",
+        `created ${sessionID} dir=${finalDirectory} repo=${repo} chat=${registered.ok ? registered.name : registered.error}`,
+      );
+      await input.emitTabOpened({ sessionID, directory: createDirectory });
+      await input.context.session.prompt({
+        sessionID,
+        text: buildSubordinatePrompt(spec.coordinatorChatName, spec.prompt),
+      });
+      return { sessionID, chatName: registered.ok ? registered.name : null, directory: finalDirectory };
+    },
+  };
 }
 
 // The HostCapabilities implementation over the v2 promise context. Every

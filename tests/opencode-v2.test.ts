@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setup, eventMatchesInstance, flattenToolContent, mapSessionContextMessages, translateEvent } from "../src/opencode/v2";
@@ -55,21 +55,37 @@ let sessionSyntheticCalls: any[];
 let sessionCreateCalls: any[];
 let sessionGetCalls: any[];
 let sessionContextCalls: any[];
+let sessionMoveCalls: any[];
+let rpcRegistrations: any[];
+let rpcEmitted: { name: string; data: any }[];
+// Shared call log across the mocked session/rpc domains: the session-tab
+// execute flow's ordering (create -> move -> emit -> prompt) is load-bearing
+// (docs/plans/session-tab-tool.md, Decisions), and the flow spans four
+// different mocks - only a shared log can assert relative order.
+const flowLog: string[] = [];
 const eventQueue: any[] = [];
 
-function makeContext(options?: { get?: (input: any) => Promise<any>; context?: (input: any) => Promise<any> }) {
+function makeContext(options?: {
+  get?: (input: any) => Promise<any>;
+  context?: (input: any) => Promise<any>;
+  location?: { directory: string; project: { directory: string; canonical: string } };
+}) {
   addedTools = [];
   sessionPromptCalls = [];
   sessionSyntheticCalls = [];
   sessionCreateCalls = [];
   sessionGetCalls = [];
   sessionContextCalls = [];
+  sessionMoveCalls = [];
+  rpcRegistrations = [];
+  rpcEmitted = [];
+  flowLog.length = 0;
   promptHook = undefined;
   contextHook = undefined;
   toolAfterHook = undefined;
   addedCommands = [];
   return {
-    location: { directory: SESSION_DIR, project: { directory: PROJECT_DIR, canonical: PROJECT_DIR } },
+    location: options?.location ?? { directory: SESSION_DIR, project: { directory: PROJECT_DIR, canonical: PROJECT_DIR } },
     command: {
       transform: async (callback: (editor: any) => void): Promise<Registration> => {
         callback({
@@ -98,9 +114,15 @@ function makeContext(options?: { get?: (input: any) => Promise<any>; context?: (
       },
       create: async (input: any) => {
         sessionCreateCalls.push(input);
+        flowLog.push("create");
         // The real promise client returns the created SessionInfo directly
         // (the envelope types are `{data: X}["data"]` indexed - unwrapped).
         return { id: "v2-test-child" };
+      },
+      move: async (input: any) => {
+        sessionMoveCalls.push(input);
+        flowLog.push("move");
+        return {};
       },
       get: async (input: any) => {
         sessionGetCalls.push(input);
@@ -114,6 +136,7 @@ function makeContext(options?: { get?: (input: any) => Promise<any>; context?: (
       },
       prompt: async (input: any) => {
         sessionPromptCalls.push(input);
+        flowLog.push("prompt");
         return {};
       },
       synthetic: async (input: any) => {
@@ -132,6 +155,23 @@ function makeContext(options?: { get?: (input: any) => Promise<any>; context?: (
             else await new Promise((r) => setTimeout(r, 5));
           }
         })(),
+    },
+    rpc: {
+      register: async (
+        definition: any,
+        _handlers: any,
+      ): Promise<{ dispose: () => void; events: { emit: (name: string, data: any) => Promise<void> } }> => {
+        rpcRegistrations.push(definition);
+        return {
+          dispose: () => {},
+          events: {
+            emit: async (name: string, data: any) => {
+              rpcEmitted.push({ name, data });
+              flowLog.push("emit");
+            },
+          },
+        };
+      },
     },
   };
 }
@@ -199,6 +239,148 @@ describe("opencode v2 adapter", () => {
     for (const def of TOOL_DEFS) expect(names).toContain(`thatch_${def.name}`);
     for (const tool of addedTools) expect(tool.description).toBeTruthy();
   });
+
+  test("session_tab registers with a JSON Schema input and the rpc definition", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    expect(rpcRegistrations.map((d) => d.id)).toEqual(["thatch-tabs"]);
+    const tool = addedTools.find((t) => t.name === "thatch_session_tab")!;
+    expect(tool).toBeDefined();
+    // The input schema is pre-converted JSON Schema (the house zod conversion
+    // - v2's own converter drops foreign zod and leaves tools parameterless).
+    const schema = tool.input as any;
+    expect(schema.type).toBe("object");
+    expect(Object.keys(schema.properties).sort()).toEqual(["directory", "prompt", "title", "worktree"]);
+    expect(schema.required.sort()).toEqual(["prompt", "title"]);
+  });
+
+  test("session_tab directory flow: create -> emit -> prompt, one text body with the coordinator framing", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const tool = addedTools.find((t) => t.name === "thatch_session_tab")!;
+    // The tool validates directory existence against the real fs - pass a
+    // directory that exists (the test's own sandbox).
+    const raw = await tool.execute(
+      { prompt: "Run the QA suite", title: "QA run", directory: dbDir },
+      { sessionID: "ses_coordinator", agent: "build" },
+    );
+    const result = typeof raw === "string" ? raw : (raw as any)?.content;
+
+    // Order: create -> emit -> prompt (no move in the directory flow; the
+    // chat registration between move and emit is a real-db call and does not
+    // appear in the mock log).
+    expect(flowLog).toEqual(["create", "emit", "prompt"]);
+    expect(sessionCreateCalls[0].title).toBe("QA run");
+    expect(sessionCreateCalls[0].location).toEqual({ directory: dbDir });
+    expect(sessionCreateCalls[0].metadata.thatch.coordinatorSessionID).toBe("ses_coordinator");
+    expect(rpcEmitted).toEqual([
+      { name: "tab-opened", data: { sessionID: "v2-test-child", directory: dbDir } },
+    ]);
+    expect(sessionPromptCalls[0].sessionID).toBe("v2-test-child");
+    expect(sessionPromptCalls[0].text.startsWith("Your work session was created by ")).toBe(true);
+    expect(sessionPromptCalls[0].text.endsWith("Run the QA suite")).toBe(true);
+    // The tool response carries the subordinate's chat name and words the
+    // tab honestly (requested, not guaranteed).
+    expect(result).toContain("session id: v2-test-child");
+    expect(result).toContain("Tab: requested");
+  });
+
+  test("session_tab refuses a worktree of a different repo", async () => {
+    // The default location (SESSION_DIR) is not a git repo; dbDir exists but
+    // is not a worktree of anything - the identity check must refuse it.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const tool = addedTools.find((t) => t.name === "thatch_session_tab")!;
+    const raw = await tool.execute(
+      { prompt: "x", title: "t", worktree: dbDir },
+      { sessionID: "ses_coordinator", agent: "build" },
+    );
+    const result = typeof raw === "string" ? raw : (raw as any)?.content;
+    expect(result).toContain("is not a worktree of this session's repository");
+    expect(flowLog).toEqual([]);
+  });
+
+  test("session_tab worktree flow: create at the coordinator's cwd, move, emit, prompt", async () => {
+    // Real worktree: the execute validates same-main-checkout identity with
+    // real git (the tests/git-integration.test.ts pattern).
+    const base = mkdtempSync(join(tmpdir(), "thatch-tab-flow-"));
+    try {
+      const mainRepo = join(base, "main");
+      mkdirSync(mainRepo);
+      const git = async (cmd: string, dir: string) => {
+        const { $ } = await import("bun");
+        const proc = await $`git ${cmd.split(" ")}`.cwd(dir).quiet();
+        if (proc.exitCode !== 0) throw new Error(`git ${cmd} failed: ${proc.stderr.toString()}`);
+      };
+      await git("init", mainRepo);
+      await git("config user.email test@example.com", mainRepo);
+      await git("config user.name Test", mainRepo);
+      writeFileSync(join(mainRepo, ".gitkeep"), "");
+      await git("add .gitkeep", mainRepo);
+      await git("commit -m init", mainRepo);
+      const worktree = join(base, "wt-feature");
+      await git(`worktree add -b feature ${worktree}`, mainRepo);
+
+      // The seam's directory IS the coordinator's cwd - point it at the real
+      // main repo so the identity check passes.
+      cleanup = (await setup(
+        makeContext({ location: { directory: mainRepo, project: { directory: mainRepo, canonical: mainRepo } } }) as any,
+      )) as () => Promise<void>;
+      const tool = addedTools.find((t) => t.name === "thatch_session_tab")!;
+      const raw = await tool.execute(
+        { prompt: "Do the work", title: "Worktree worker", worktree },
+        { sessionID: "ses_coordinator", agent: "build" },
+      );
+      const result = typeof raw === "string" ? raw : (raw as any)?.content;
+      // Order: create -> move -> emit -> prompt (the chat registration sits
+      // between move and emit - a real-db call, not in the mock log).
+      expect(flowLog).toEqual(["create", "move", "emit", "prompt"]);
+      expect(sessionCreateCalls[0].location).toEqual({ directory: mainRepo });
+      expect(sessionMoveCalls[0]).toEqual({ sessionID: "v2-test-child", directory: worktree });
+      expect(sessionCreateCalls[0].metadata.thatch.worktree).toBe(worktree);
+      expect(sessionPromptCalls[0].text).toContain("Do the work");
+      expect(result).toContain(`directory: ${worktree}`);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("session_tab pre-registers the subordinate in chat under its final directory", async () => {
+    // Real db on the temp path: assert the roster row directly.
+    const { ThatchDB } = await import("../src/db");
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const tool = addedTools.find((t) => t.name === "thatch_session_tab")!;
+    const raw = await tool.execute(
+      { prompt: "x", title: "Named subordinate", directory: dbDir },
+      { sessionID: "ses_coordinator", agent: "build" },
+    );
+    const result = typeof raw === "string" ? raw : (raw as any)?.content;
+    const db = new ThatchDB(join(dbDir, "test.db"));
+    try {
+      const row = db.findChatSession("v2-test-child");
+      expect(row).not.toBeNull();
+      expect(row?.session_id).toBe("v2-test-child");
+      // The response's chat name matches the row's assigned name.
+      expect(result).toContain(`chat name: ${row?.name}`);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("session_tab degrade: no session context and no seam refuse cleanly", async () => {
+    const { buildCoreContext } = await import("../src/tool-defs");
+    const { ThatchDB } = await import("../src/db");
+    const { MockEmbeddingModel } = await import("./mocks/embeddings");
+    const def = TOOL_DEFS.find((d) => d.name === "session_tab")!;
+    const db = new ThatchDB(`file:${join(dbDir, "test.db")}`);
+    try {
+      const ctx = buildCoreContext(db, new MockEmbeddingModel(), "test-owner/test-repo");
+      expect(await def.execute({ prompt: "p", title: "t" }, ctx, undefined)).toContain("did not provide a session context");
+      expect(await def.execute({ prompt: "p", title: "t", directory: "/tmp" }, ctx, { sessionID: "s", agent: "build" })).toContain(
+        "did not wire the session-tab surface",
+      );
+    } finally {
+      db.close();
+    }
+  });
+
 
   test("system prompt hook injects the thatch system prompt", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;

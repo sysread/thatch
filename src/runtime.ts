@@ -138,8 +138,15 @@ export async function createRuntime(input: {
   capabilities: HostCapabilities;
   directory: string;
   worktree: string;
+  /**
+   * True on the opencode v2 adapter: the system prompt's Tools list then
+   * includes the v2-only session-tab tool. v1 and MCP hosts omit it - the
+   * tool does not exist there, and a prompt listing a nonexistent tool is
+   * the first-call-mistake class.
+   */
+  v2Tools?: boolean;
 }): Promise<ThatchRuntime> {
-  const { capabilities: caps, directory, worktree } = input;
+  const { capabilities: caps, directory, worktree, v2Tools } = input;
   // The opencode server's cwd is wherever the server happened to start;
   // `worktree` is the project this plugin instance actually serves.
   // `directory` is the session's own directory - on resume after the
@@ -954,7 +961,7 @@ export async function createRuntime(input: {
     console.error(`[thatch] command install failed: ${err}`);
   }
 
-  const sys = systemPrompt(repo, chatOn);
+  const sys = systemPrompt(repo, chatOn, v2Tools);
   const compact = compactionContext(repo);
 
   // Direct extraction: create a child session linked to the parent and prompt

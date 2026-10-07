@@ -164,6 +164,17 @@ async function doEnsureMaster(): Promise<void> {
       // named export serves v1 hosts; the default re-export (merged
       // {id, setup, server}) serves v2 hosts, which validate only the
       // default export of the module they load.
+      //
+      // FILE shape on purpose, though real installs on v2 should use the
+      // directory form (see docs/user/setup.md): v1 auto-discovers only
+      // files (config/plugin.ts globs "{plugin,plugins}/*.{ts,js}" - a
+      // directory shim is invisible and the fixture's plugin never loads,
+      // which deterministically kills UC-100's chat canary on v1), and v2
+      // auto-discovers files AND directories (source-directory.ts), so
+      // shipping both shapes here would die on "duplicate instance plugin
+      // ids". The QA suite is headless - no TUI process ever loads the
+      // ./tui entrypoint - so the directory form buys QA nothing. TUI-side
+      // loading is verified by the live smoke, not here.
       `export { server } from ${JSON.stringify(join(masterDir, "src", "index"))};\nexport { default } from ${JSON.stringify(join(masterDir, "src", "index"))};\n`,
     );
     return Promise.resolve();

@@ -45,6 +45,10 @@ OpenCode plugin path
   │                     lazy-imports the adapter matching the host
   ├── opencode/v1.ts  → v1 adapter: @opencode-ai/plugin hooks object
   ├── opencode/v2.ts  → v2 adapter: @opencode/plugin promise-context domains
+  ├── opencode/tui-plugin.ts → v2 TUI CLI plugin (./tui entrypoint):
+  │                     consumes the session-tab rpc events, drives ui.tabs
+  ├── session-tab-shared.ts → SDK-free cross-entry contract: session-tab rpc
+  │                     definition, subordinate prompt builder, validators
   ├── capabilities.ts → HostCapabilities seam: the host operations the
   │                     runtime needs; capabilitiesFromClient bridges the
   │                     v1 SDK client
@@ -85,7 +89,8 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `tools.ts` | Thin opencode wrappers. `buildCoreContext` constructs the shared per-call context; `createTools` wraps each tool-def in opencode's `tool()` with a `thatch_` prefix (v1 only). |
 | `mcp.ts` | Stdio JSON-RPC 2.0 server. Compiles zod schemas to JSON Schema via `z.toJSONSchema()` for `tools/list`. Validates args via `z.object().parse()` in `tools/call`. All logging to stderr (stdout is the transport). |
 | `index.ts` | Dual-shape OpenCode plugin entry: the merged default export (`{ id, setup, server }`) loads on opencode v1 (reads `default.server`) and v2 (reads `default.setup`, strips excess keys). Lazy-imports the host adapter so each host's SDK resolves only under its own runtime. |
-| `opencode/v1.ts` + `opencode/v2.ts` | Host adapters. v1 builds HostCapabilities from the PluginInput client and returns the hooks object; v2 registers through the promise-context domains (ToolEditor, session.hook, event.subscribe) and degrades the surfaces v2 lacks. |
+| `opencode/v1.ts` + `opencode/v2.ts` | Host adapters. v1 builds HostCapabilities from the PluginInput client and returns the hooks object; v2 registers through the promise-context domains (ToolEditor, session.hook, event.subscribe) and degrades the surfaces v2 lacks. v2 also wires the session-tab host flow (create -> move -> chat-register -> rpc emit -> prompt) through the `CoreContext.sessionTabHost` seam. |
+| `opencode/tui-plugin.ts` | The v2 TUI CLI plugin (the package's `./tui` entrypoint): listens for `rpc.thatch-tabs.tab-opened` events and opens the subordinate session's tab via `ui.tabs.open`. See [features/session-tabs.md](features/session-tabs.md). |
 | `capabilities.ts` | The `HostCapabilities` seam: the host operations the shared runtime needs (session create/prompt/get/list/messages/delete, toast, compaction trigger, app exit). `capabilitiesFromClient` bridges the v1 SDK client. |
 | `runtime.ts` | Shared plugin runtime: wires DB, model, extraction; the nudge tiers, system prompt injection, session event handling, child-session bookkeeping, wrap-up resolution. Host-agnostic: consumed by both adapters. |
 | `os-args.ts` | Pure argv / OS-command-line helpers for startup session resolution (`-s`/`-c`). SDK-free. |

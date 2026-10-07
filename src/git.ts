@@ -102,7 +102,9 @@ function canonicalWorktreeKeys(dir: string): string[] {
   return [...new Set(keys)];
 }
 
-function pathExists(dir: string): boolean {
+/** Existence check shared by git helpers and tool arg validation (the
+ *  session-tab tool validates its directory/worktree args with it). */
+export function pathExists(dir: string): boolean {
   try {
     statSync(dir);
     return true;

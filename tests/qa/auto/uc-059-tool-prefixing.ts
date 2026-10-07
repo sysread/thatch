@@ -77,6 +77,7 @@ const useCase: UseCase = {
       "chat_unregister",
       "chat_broadcast",
       "chat_status",
+      "session_tab",
     ];
 
     for (const name of expected) {
@@ -89,6 +90,17 @@ const useCase: UseCase = {
     if (TOOL_DEFS.length !== expected.length) {
       console.log(`  FAIL: expected ${expected.length} tools, got ${TOOL_DEFS.length}`);
       return "FAIL";
+    }
+
+    // v2Only tools are in TOOL_DEFS but must NOT appear in the MCP
+    // server's tools/list (compileTools filters them like opencodeOnly).
+    const { compileTools } = await import("../../../src/mcp");
+    const mcpNames = [...compileTools().keys()];
+    for (const def of TOOL_DEFS) {
+      if (def.v2Only && mcpNames.includes(def.name)) {
+        console.log(`  FAIL: v2Only tool "${def.name}" leaked into the MCP surface`);
+        return "FAIL";
+      }
     }
 
     return "PASS";

@@ -32,8 +32,8 @@ afterEach(() => {
 });
 
 describe("TOOL_DEFS", () => {
-  test("exports all 37 tools", () => {
-    expect(TOOL_DEFS.length).toBe(37);
+  test("exports all 38 tools", () => {
+    expect(TOOL_DEFS.length).toBe(38);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -73,6 +73,7 @@ describe("TOOL_DEFS", () => {
       "chat_unregister",
       "chat_broadcast",
       "chat_status",
+      "session_tab",
     ]);
   });
 
@@ -90,17 +91,33 @@ describe("TOOL_DEFS", () => {
     ]);
   });
 
-  test("opencode prompt lists every tool including opencode-only ones", () => {
-    const prompt = systemPrompt("test/repo");
+  test("opencode prompt lists every tool; the v2-only one only when v2Tools is set", () => {
+    // The Tools section is what enumerates the surface (skill-list lines
+    // elsewhere can mention tool names - slice the section for precision).
+    const toolsSection = (prompt: string) =>
+      prompt.slice(prompt.indexOf("Tools:"), prompt.indexOf("## Stores"));
+    // The v1 runtime renders the base prompt: session_tab must NOT be listed
+    // there (the tool does not exist on v1 - a prompt listing a nonexistent
+    // tool is the first-call-mistake class).
+    const base = systemPrompt("test/repo");
     for (const def of TOOL_DEFS) {
-      expect(prompt).toContain(`thatch_${def.name}`);
+      if (def.v2Only) {
+        expect(toolsSection(base)).not.toContain(`thatch_${def.name}`);
+      } else {
+        expect(toolsSection(base)).toContain(`thatch_${def.name}`);
+      }
+    }
+    // The v2 adapter sets v2Tools: the full list appears.
+    const v2 = systemPrompt("test/repo", true, true);
+    for (const def of TOOL_DEFS) {
+      expect(toolsSection(v2)).toContain(`thatch_${def.name}`);
     }
   });
 
-  test("MCP prompts list shared tools but not opencode-only ones", () => {
+  test("MCP prompts list shared tools but not opencode-only or v2-only ones", () => {
     const prompt = claudeInstructions();
     for (const def of TOOL_DEFS) {
-      if (def.opencodeOnly) {
+      if (def.opencodeOnly || def.v2Only) {
         expect(prompt).not.toContain(`mcp__thatch__${def.name}`);
       } else {
         expect(prompt).toContain(`mcp__thatch__${def.name}`);

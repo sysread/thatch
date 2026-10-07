@@ -26,7 +26,7 @@ const useCase: UseCase = {
   expected: [
     "- Claude Code: 35 thatch-* skill directories present. thatch-code-review is absent.",
     "- Cursor: 35 thatch-* skill directories present. thatch-code-review is absent.",
-    "- opencode: 36 thatch-* skill directories present. thatch-code-review is present (verified by uc-014).",
+    "- opencode: 37 thatch-* skill directories present. thatch-code-review and thatch-coordination are present (verified by uc-014).",
   ].join("\n"),
 
   async run(ctx: QaContext) {

@@ -39,6 +39,14 @@ afterEach(() => {
   rmSync(dbDir, { recursive: true, force: true });
 });
 
+describe("v1 tool surface", () => {
+  test("excludes v2Only tools (session_tab rides v2-only host surfaces)", () => {
+    expect(tools["thatch_session_tab"]).toBeUndefined();
+    // Sanity: the map itself is populated.
+    expect(tools["thatch_chat_status"]).toBeDefined();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // thatch_memory_remember
 // ---------------------------------------------------------------------------

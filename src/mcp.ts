@@ -70,7 +70,9 @@ export function compileTools(): Map<string, CompiledTool> {
   for (const def of TOOL_DEFS) {
     // opencode-only tools depend on host capabilities MCP servers don't
     // have (e.g. session identity via HostToolContext) - never expose them.
-    if (def.opencodeOnly) continue;
+    // v2-only tools ride v2 plugin surfaces (session move, rpc emit) with
+    // no MCP equivalent - same rule.
+    if (def.opencodeOnly || def.v2Only) continue;
     const schema = z.object(def.args);
     map.set(def.name, {
       def,

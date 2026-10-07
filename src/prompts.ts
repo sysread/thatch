@@ -139,7 +139,7 @@ silently; memory maintenance is not user-facing. For a deep staleness check
 of a specific memory, load the thatch-memory-verify skill.`;
 }
 
-export function systemPrompt(repo: string, chatEnabled = true): string {
+export function systemPrompt(repo: string, chatEnabled = true, v2Tools = false): string {
   return `# Persistence
 
 Thatch provides persistent memory across opencode sessions. Use it to persist
@@ -159,7 +159,7 @@ Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
         thatch_watch_command_create, thatch_watch_list, thatch_watch_cancel,
         thatch_chat_register, thatch_chat_list, thatch_chat_send,
         thatch_chat_read, thatch_chat_unregister, thatch_chat_broadcast,
-        thatch_chat_status
+        thatch_chat_status${v2Tools ? "\n        thatch_session_tab (opencode v2 only - spawn a detached subordinate\n        LLM session in a new TUI tab and supervise it over cross-session chat)" : ""}
 
 ## Stores
 
@@ -189,6 +189,7 @@ Thatch ships skills for code review, project investigation, and memory
 workflows. The host auto-discovers them, but reach for them proactively:
 
 - \`thatch-code-review\` - full multi-agent code review (dispatches 8 specialists + synthesizer). Requires sub-agent support.
+- \`thatch-coordination\` - coordinate subordinate LLM sessions: dispatch with thatch_session_tab (opencode v2), track each in your task list, supervise over cross-session chat, verify before declaring done.
 - \`thatch-review-followup\` - alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed prior findings, offers to reply on resolved items, then optionally re-runs the full structured review.
 - \`thatch-code-archaeology\` - investigate an existing feature, debug an unfamiliar area, or begin a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features) before proposing changes. The research skill; pair with \`thatch-coding-workflow\`.
 - \`thatch-plan-refinement\` - refine a plan before implementing it: fresh-context reviewer rounds until consensus, with an optional deep-mode lens fan-out (reuse, alternatives, hidden problems, safe-to-modify, archaeology). Use when a plan for a code change is about to be built or the user asks to stress-test a plan.
@@ -487,10 +488,11 @@ Tools are prefixed in ${host}: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__chat_broadcast\`, \`mcp__thatch__chat_status\`. Bare names
 used below for readability. get_session_info, session_search,
 session_get, watch_create, watch_branch_create, watch_command_create,
-watch_list, and watch_cancel are intentionally absent: they are
-opencode-only (MCP hosts
+watch_list, watch_cancel, and session_tab are intentionally absent:
+they are opencode-only (MCP hosts
 have no session concept, session database, or proactive-prompt channel),
-so do not expect them here. On MCP hosts, cross-session chat works with
+so do not expect them here. session_tab additionally requires opencode
+v2 (TUI session tabs). On MCP hosts, cross-session chat works with
 the identity your thatch hook assigned (pass its printed name as \`as\`);
 wake-up delivery is opencode-only, so check chat_status or your inbox each turn.
 

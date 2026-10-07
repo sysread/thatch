@@ -19,6 +19,8 @@ import { TOOL_DEFS, trimHostContext, type CoreContext } from "./tool-defs";
 export function createTools(coreContext: CoreContext): Record<string, ReturnType<typeof tool>> {
   const tools: Record<string, ReturnType<typeof tool>> = {};
   for (const def of TOOL_DEFS) {
+    // v2-only tools ride v2 plugin surfaces with no v1 equivalent.
+    if (def.v2Only) continue;
     tools[`thatch_${def.name}`] = tool({
       description: def.description,
       args: def.args,

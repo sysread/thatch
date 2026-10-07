@@ -92,6 +92,7 @@ function loadSharedSkills(): SkillDef[] {
 function loadOpencodeOnlySkills(): SkillDef[] {
   return [
     { name: "thatch-code-review", content: loadSkillFile("thatch-code-review") },
+    { name: "thatch-coordination", content: loadSkillFile("thatch-coordination") },
   ];
 }
 

@@ -71,8 +71,9 @@ the shared runtime needs. It is the lifecycle-level sibling of `CoreContext`
 | session messages | `client.session.messages` | `session.context` | mapped into the v1 `{info: {role}, parts}` shape, so the wrap-up greenlight check works (the promise domain has no `message` accessor) |
 | session list | `client.session.list` | none | degrade (`-c` resume listing loses its data source) |
 | compaction trigger | `client.tui.executeCommand("session_compact")` | none | degrade (no `session.compact` on the promise domain's Pick, and the built-in `/compact` is a TUI palette action calling the server endpoint directly - the server command registry only knows config/plugin-registered names; the wrap-up checklist and flush still run, the automatic compaction is skipped) |
-| toasts | `client.tui.showToast` | none reachable | degrade (the `tui.toast.show` event has no producer surface from the promise context; a `tui` companion plugin entrypoint is the known lift candidate) |
-| TUI app exit | `client.tui.publish` | none | degrade (the wrap-up exit's checklist and flush run; the exit does not - upstream [anomalyco/opencode#50984](https://github.com/anomalyco/opencode/issues/50984). On v2 the right target closes THIS session's tab (tab-scoped), not `app.exit`: the daemon hosts every tab; the `tui` companion entrypoint's `ui.tabs.close` is the known lift candidate) |
+| toasts | `client.tui.showToast` | none reachable | degrade (the `tui.toast.show` event has no producer surface from the promise context; the `./tui` companion entrypoint now EXISTS for the session-tab feature - extending it to publish toasts is the remaining lift) |
+| TUI app exit | `client.tui.publish` | none | degrade (the wrap-up exit's checklist and flush run; the exit does not - upstream [anomalyco/opencode#50984](https://github.com/anomalyco/opencode/issues/50984). On v2 the right target closes THIS session's tab (tab-scoped), not `app.exit`: the daemon hosts every tab; the `./tui` entrypoint's `ui.tabs.close` is the known lift candidate and the session-tab rpc bridge is the transport) |
+| session tabs | n/a | rpc event bridge | NEW: `thatch_session_tab` (v2Only) spawns a detached subordinate session (create -> move -> chat-register -> emit `rpc.thatch-tabs.tab-opened` -> prompt); the `./tui` CLI plugin consumes the event and calls `ui.tabs.open` (open-without-focus, idempotent). The deferred `thatch_session_tab_close` will emit `rpc.thatch-tabs.tab-closed {sessionID, chatName?}` - the shape is reserved and consumed by the generalized-session-heartbeat plan |
 | tab close | n/a | no session.deleted on v2 tab close | known gap: a closed tab's watchers keep polling until their TTL (deliveries fail their idle gate and stay pending); restart dormancy covers the daemon-restart case, not tab close |
 | wake gate after reload | `session.status` event map | map rehydrates empty | known gap: v2's fetchStatuses stub is structural (the promise context has no session.status), so in the reload window - until the session's next status event - the proactive-prompt gate is fully open |
 | dispose | `dispose` hook | cleanup returned from `setup` | must be idempotent: v2 auto-reloads plugins on file change, and a non-idempotent cleanup doubles pollers/pumps/nudges. Volatile runtime state (extraction buffer + accepted entries, child bookkeeping, wrap-up arms, watcher definitions) is journaled to the `runtime_state` table - instance-scoped by the writing location's directory - and rehydrated on the next `setup()`: rows from the same process AND directory (a reload) all restore; child rows carry a kind marker (extraction vs task-dispatched sub-agent, defaulting to extraction for pre-marker rows) so only extraction children restore the `extracting`/`extractionChildren` sets; rows from a dead process are pruned unless the session is the `-c`/`-s` startup resume, which inherits recovery-safe state only (buffer requeued, no live child bookkeeping - the child died with the old process). Exception: a dead process's watcher definitions are kept as DORMANT rows (no polling, no delivery) instead of pruned - resuming the session re-arms them on its first message (a `chat.message` scan: own rows re-arm, same-directory rows of still-dead sessions earn the live session a one-line death notice gated on the owning pid being dead, rows past the watcher TTL plus a 24h grace age out). Restored sessions on v1 get a synthetic noReply re-attach notice (v2 has no turn-free delivery and skips it). The chat poller re-hosts the instance's journaled hosted set on reload, so pending chat mail wakes sessions the reload left asleep and heartbeats keep the reaper from reaping live registrations. The embedding model is refcounted per db path, so N location instances share one resident model |
@@ -112,15 +113,29 @@ key (`plugin` vs `plugins`) is auto-migrated by v2. The only user-owned file
 with a content change is the dev-session shim, and its new dual-shape content
 loads under both hosts.
 
+The session-tab feature adds a second user-owned artifact: the TUI-side
+plugin entry. A local FILE plugin shim carries a `server` entrypoint only
+(v2's `plugin/module.ts`), and the TUI's plugin discovery loads directories
+and symlinks, never plain files - so the dev-checkout install must be a
+DIRECTORY shim: `thatch/index.ts` (the dual-shape re-export, unchanged) plus
+`thatch/tui.ts` (re-exporting the TUI plugin). DELETE the old `thatch.ts`
+file in the same step - a file and a directory shim coexisting dies with
+`duplicate instance plugin ids: thatch` before any plugin code runs (the
+duplicate check is in activation, so nothing inside the plugin can
+self-heal it).
+
 ## Source files
 
 - `src/index.ts` -- dual entry, merged default export, lazy wrappers
 - `src/opencode/v1.ts` -- v1 hooks adapter
 - `src/opencode/v2.ts` -- v2 promise-context adapter + capability impl
+- `src/opencode/tui-plugin.ts` -- v2 TUI CLI plugin (the `./tui` entrypoint: consumes the session-tab rpc events, drives `ui.tabs`)
+- `src/session-tab-shared.ts` -- the cross-entry session-tab contract (rpc definition, prompt builder, validators)
 - `src/capabilities.ts` -- `HostCapabilities`, `capabilitiesFromClient`
 - `src/runtime.ts` -- the shared runtime (all behavioral logic)
 - `src/os-args.ts` -- pure argv helpers
 - `tests/opencode-v2.test.ts` -- v2 adapter contract tests (mocked context)
+- `tests/session-tab-shared.test.ts` -- session-tab validators, rpc definition shape, TUI guard logic
 - `tests/plugin.test.ts` -- v1 adapter contract tests (mocked client)
 
 ## Interactions with other features

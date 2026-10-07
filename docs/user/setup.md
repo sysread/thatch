@@ -44,6 +44,22 @@ The same file loads on both opencode lines: opencode 1.x reads its `server`
 export, opencode 2.x reads its default export (the merged plugin
 definition). No path change when you switch opencode versions.
 
+For opencode 2.x session-tab support, the plugin must be a DIRECTORY shim
+so the TUI can load the `./tui` entrypoint:
+
+```text
+~/.config/opencode/plugins/thatch/
+  index.ts   export { server } from "<thatch-checkout>/src/index";
+             export { default } from "<thatch-checkout>/src/index";
+  tui.ts     export { default } from "<thatch-checkout>/src/opencode/tui-plugin";
+```
+
+Delete the old `thatch.ts` file shim in the same step - a file and a
+directory shim coexisting stops plugin loading entirely (duplicate plugin
+id, detected before any plugin code runs). The TUI plugin is what makes
+spawned subordinate sessions appear as tabs; without it the tool still
+works but no tab opens.
+
 Or place the thatch repo in `.opencode/plugins/` for auto-loading.
 
 ## Claude Code

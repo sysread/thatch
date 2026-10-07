@@ -310,3 +310,22 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   trusting in-memory state alone. If you add a new plugin-created session
   kind, mark it in the same table and route its events through the same
   guards - do not rely on Maps surviving a reload.
+
+## The two opencode lines discover plugins differently: no one shim shape auto-loads on both
+
+- **v1 auto-discovers plugin FILES only** - its config plugin scan globs
+  `{plugin,plugins}/*.{ts,js}`, which never matches a directory. **v2
+  auto-discovers files AND directories** (and symlinks), and its activation
+  dies on duplicate ids - so a plugins directory holding BOTH `thatch.ts`
+  and `thatch/` loads the server plugin twice on v2 and dies with
+  "duplicate instance plugin ids" before any plugin code runs. There is no
+  single on-disk shape that auto-loads on both lines as a directory-based
+  multi-entry plugin. Consequences: the dev-checkout install uses the file
+  shim for v1-only or v2-only use, or the directory shim for v2's `./tui`
+  entrypoint (session tabs) - deleting the file shim in the same step; the
+  QA fixture keeps the FILE shim because the QA suite is headless (no TUI
+  process ever loads `./tui`, and the file shape is the only one that loads
+  on both lines - a directory shim deterministically killed UC-100's v1
+  chat canary). Local plugin specs handed to a loader explicitly
+  (`"plugin": ["./path"]`) can point at a directory on v1 - it is only the
+  AUTO-discovery scan that is files-only.

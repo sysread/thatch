@@ -5,6 +5,10 @@
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tui": "./src/opencode/tui-plugin.ts"
+  },
   "bin": {
     "thatch": "./bin/thatch"
   },
@@ -38,10 +42,14 @@
     "yaml": "^2.7.0"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": "^1.17.0"
+    "@opencode-ai/plugin": "^1.17.0",
+    "@opencode/plugin": "^2.0.15"
   },
   "peerDependenciesMeta": {
     "@opencode-ai/plugin": {
+      "optional": true
+    },
+    "@opencode/plugin": {
       "optional": true
     }
   },

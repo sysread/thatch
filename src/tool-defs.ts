@@ -26,7 +26,8 @@ import { predictionVerb, formatWhenLine, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, describeBaselineCheckRuns, type WatcherRegistry, type Watcher, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
 import { CHAT_STALE_MS, MAX_BODY_LEN, chatLiveness, humanAge, renderChatParticipant, sortChatRoster, splitChatRoster, type ChatHostKind } from "./chat";
-import { detectWorktreeKind } from "./git";
+import { detectWorktreeKind, pathExists } from "./git";
+import { isSameMainCheckout, validateLocationArgs, validateTitle } from "./session-tab-shared";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
 // creation time. Matches the thatch_find_duplicates threshold (0.85).
@@ -132,6 +133,15 @@ export interface CoreContext {
    *  authoritative over the caller-claimed `as` argument. Returns null when
    *  no fresh mapping exists (Cursor, unknown server process). */
   chatDerivedIdentity?: () => string | null;
+  /** Host-executed session-tab operations, wired ONLY by the opencode v2
+   *  adapter (post-construction into the shared CoreContext, because the
+   *  implementation closes over both the runtime's db and the v2 plugin
+   *  context's session/rpc domains). The session_tab tool validates its
+   *  args and delegates the whole host flow - caller chat-name resolution
+   *  happens in the tool, session creation, chat registration, the
+   *  worktree move, the rpc emit, and prompt delivery happen here. Absent
+   *  on v1 and MCP hosts; the tool refuses with a clear message. */
+  sessionTabHost?: SessionTabHost;
 }
 
 /**
@@ -143,6 +153,46 @@ export interface CoreContext {
 export interface HostToolContext {
   sessionID: string;
   agent: string;
+}
+
+/** Input to SessionTabHost.spawnSubordinate - everything the v2 adapter's
+ *  host flow needs that arg validation already established. */
+export interface SessionTabSpawnInput {
+  /** Validated title for the created session. */
+  title: string;
+  /** Final working directory of the subordinate (the validated location arg). */
+  directory: string;
+  /** Present when the worktree arg was used - the adapter moves the session
+   *  there after creating it at the coordinator's directory. */
+  worktree?: string;
+  /** The subordinate's task prompt (preamble is composed host-side). */
+  prompt: string;
+  /** The calling session's id (HostToolContext.sessionID). */
+  coordinatorSessionID: string;
+  /** The calling session's chat name, resolved by the tool; falls back to
+   *  the session id when the caller is unregistered. */
+  coordinatorChatName: string;
+}
+
+export interface SessionTabSpawnResult {
+  sessionID: string;
+  /** The subordinate's pre-assigned chat name; null when chat registration
+   *  failed (chat off, tombstone) - the flow still succeeds. */
+  chatName: string | null;
+  /** Where the subordinate ended up (post-move for the worktree flow). */
+  directory: string;
+}
+
+/**
+ * The v2-only host surface behind thatch_session_tab. Implementation lives
+ * in src/opencode/v2.ts; the seam keeps the tool definition host-agnostic.
+ * `directory` is the serving instance's directory (the coordinator session's
+ * cwd) - the tool compares it against a worktree arg's main checkout for the
+ * same-repo validation.
+ */
+export interface SessionTabHost {
+  readonly directory: string;
+  spawnSubordinate(input: SessionTabSpawnInput): Promise<SessionTabSpawnResult>;
 }
 
 /**
@@ -163,6 +213,15 @@ export interface ToolDef {
    * capabilities MCP hosts lack (e.g. session identity).
    */
   opencodeOnly?: boolean;
+  /**
+   * When true, the tool exists only on the opencode v2 adapter path: the v1
+   * adapter's createTools and the MCP server filter it out. Used for tools
+   * whose host needs ride v2-only plugin surfaces (e.g. the session-tab
+   * tool's create/move/prompt/emit flow). The def carries v2Only only -
+   * never also opencodeOnly - so the opencodeOnly name assertions are
+   * untouched and each filter site tests `opencodeOnly || v2Only`.
+   */
+  v2Only?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -2302,6 +2361,107 @@ const chatStatusDef: ToolDef = {
 };
 
 /**
+ * Spawns a detached subordinate session in a new opencode v2 TUI tab. The
+ * coordinating LLM decomposes work, dispatches one subordinate per piece,
+ * and supervises over cross-session chat; docs/plans/session-tab-tool.md
+ * owns the design, and the thatch-coordination skill owns the role.
+ *
+ * The def validates everything it can locally (title, exactly-one location
+ * arg, directory existence, worktree-repo identity) and delegates the host
+ * flow - chat registration, session creation, the move, the rpc emit, and
+ * prompt delivery - to the v2 adapter through the sessionTabHost seam.
+ * chatName resolution for the preamble happens here because the tool has
+ * the db handle; the adapter receives it ready-made.
+ *
+ * v2Only: the whole flow rides v2 plugin surfaces (session.move, rpc emit)
+ * with no v1 or MCP equivalent.
+ */
+const sessionTabDef: ToolDef = {
+  name: "session_tab",
+  description:
+    "Spawn a detached subordinate LLM session in a new opencode v2 TUI tab and start it on a " +
+    "task prompt. opencode v2 only. The subordinate is a full peer session - it runs its own " +
+    "agent loop across many turns while you keep working; it is NOT a task-tool subagent and " +
+    "does not block your turn. Supervise it over cross-session chat (its chat name comes back " +
+    "in the response); the user sees its tab appear in the tab strip beside yours, unfocused. " +
+    "Pass exactly ONE location: `worktree` (a git worktree of the CURRENT repository - the " +
+    "preferred way to give a subordinate an isolated checkout; its tab still opens in this " +
+    "window) or `directory` (any existing directory - e.g. a temp dir for scratch work; the " +
+    "tab opens in this window regardless of where the directory is). The prompt is delivered " +
+    "as the subordinate's first user message, prefixed with your coordinator identity and " +
+    "authority framing: your instructions carry accepted priority for the subordinate, but the " +
+    "user's direct instructions always supersede yours.",
+  args: {
+    prompt: z.string().min(1).describe(
+      "The subordinate's task. Delivered as its first user message after a short coordinator-" +
+      "authority preamble. Include what the subordinate cannot infer: the goal, the relevant " +
+      "paths or worktree, and what done looks like.",
+    ),
+    title: z.string().max(80).describe(
+      "Short session title, about 50 characters - it renders in the tab strip. " +
+      "Hard max 80.",
+    ),
+    worktree: z.string().optional().describe(
+      "Path to a git worktree of the CURRENT repository. The subordinate runs there and its " +
+      "tab opens in this window's strip. Preferred for repo work - validated against this " +
+      "session's repository.",
+    ),
+    directory: z.string().optional().describe(
+      "Any existing directory. Use for unrelated locations (temp dirs, other checkouts). The " +
+      "tab opens in this window's strip regardless of where the directory is.",
+    ),
+  },
+  v2Only: true,
+  async execute(args, ctx, host) {
+    if (!host) {
+      return "Session tabs are unavailable: this host did not provide a session context.";
+    }
+    if (!ctx.sessionTabHost) {
+      return "Session tabs are unavailable: this host did not wire the session-tab surface (opencode v2 only).";
+    }
+    const title = validateTitle(args.title);
+    if (!title.ok) return title.error;
+    const location = validateLocationArgs(args);
+    if (!location.ok) return location.error;
+    if (!pathExists(location.path)) {
+      return `The ${location.kind} path does not exist: ${location.path}`;
+    }
+    if (location.kind === "worktree") {
+      const same = await isSameMainCheckout(location.path, ctx.sessionTabHost.directory);
+      if (!same) {
+        return `The worktree ${location.path} is not a worktree of this session's repository ` +
+          `(${ctx.sessionTabHost.directory}). Pass it as directory instead, or pick a worktree of this repo.`;
+      }
+    }
+    const coordinatorChatName = ctx.db.findChatSession(host.sessionID)?.name ?? host.sessionID;
+    const result: SessionTabSpawnResult = await ctx.sessionTabHost.spawnSubordinate({
+      title: title.title,
+      directory: location.path,
+      worktree: location.kind === "worktree" ? location.path : undefined,
+      prompt: args.prompt as string,
+      coordinatorSessionID: host.sessionID,
+      coordinatorChatName,
+    });
+    return [
+      "Subordinate session created:",
+      `  chat name: ${result.chatName ?? "none (chat off or registration failed - cross-session chat is unavailable for this subordinate)"}`,
+      `  session id: ${result.sessionID}`,
+      `  title: ${title.title}`,
+      `  directory: ${result.directory}`,
+      "",
+      "Tab: requested in this window's strip. If it did not appear (headless run, tabs " +
+        "disabled, or the TUI was still connecting), the session is still running - find it " +
+        "in the sessions list.",
+      result.chatName
+        ? "Supervise over cross-session chat: chat_send / chat_read with the chat name above."
+        : "Supervision over chat is unavailable for this subordinate (no chat name).",
+      "",
+      "Its first user message carries your task after the coordinator-identity framing.",
+    ].join("\n");
+  },
+};
+
+/**
  * All tool definitions, in the order they should be presented to the agent.
  * The opencode plugin wraps each in `tool()`; the MCP server exposes the
  * non-opencodeOnly ones via `tools/list` and dispatches `tools/call` to
@@ -2345,6 +2505,7 @@ export const TOOL_DEFS: ToolDef[] = [
   chatUnregisterDef,
   chatBroadcastDef,
   chatStatusDef,
+  sessionTabDef,
 ];
 
 /** Extensions a host adapter passes into the shared CoreContext. */

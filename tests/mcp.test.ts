@@ -6,19 +6,19 @@ import { actionDefs, claudeCommandDefs, opencodeCommandDefs } from "../src/comma
 describe("MCP compileTools", () => {
   test("exposes every shared tool under its bare name", () => {
     const tools = compileTools();
-    for (const def of TOOL_DEFS.filter((d) => !d.opencodeOnly)) {
+    for (const def of TOOL_DEFS.filter((d) => !d.opencodeOnly && !d.v2Only)) {
       expect(tools.has(def.name), `missing ${def.name}`).toBe(true);
     }
   });
 
   test("filters out opencode-only tools", () => {
     const tools = compileTools();
-    for (const def of TOOL_DEFS.filter((d) => d.opencodeOnly)) {
+    for (const def of TOOL_DEFS.filter((d) => d.opencodeOnly || d.v2Only)) {
       expect(tools.has(def.name), `${def.name} must not be exposed over MCP`).toBe(false);
     }
   });
 
-  test("exposes 29 shared tools", () => {
+  test("exposes 29 shared tools (session_tab is v2-opencode-only)", () => {
     expect(compileTools().size).toBe(29);
   });
 });
