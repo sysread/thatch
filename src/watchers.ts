@@ -47,7 +47,18 @@ export type BranchWatcherEventType = "branch_commit" | "branch_ci" | "branch_wor
 /** Event type for source "command": the watched shell command exited 0. */
 export type CommandWatcherEventType = "command_success";
 
-export type WatcherEventType = PrWatcherEventType | BranchWatcherEventType | CommandWatcherEventType;
+/**
+ * Lifecycle event the registry itself emits, not tied to a source: a watch
+ * passed its TTL and was dropped. Delivered to the owning session instead of
+ * vanishing silently.
+ */
+export type LifecycleWatcherEventType = "watch_expired";
+
+export type WatcherEventType =
+  | PrWatcherEventType
+  | BranchWatcherEventType
+  | CommandWatcherEventType
+  | LifecycleWatcherEventType;
 
 export const PR_EVENT_TYPES: PrWatcherEventType[] = [
   "pr_comment",
@@ -68,8 +79,13 @@ export const BRANCH_EVENT_TYPES: BranchWatcherEventType[] = [
 
 export const COMMAND_EVENT_TYPES: CommandWatcherEventType[] = ["command_success"];
 
-/** Every event type across all sources - for diagnostics and tests. */
-export const WATCHER_EVENT_TYPES: WatcherEventType[] = [...PR_EVENT_TYPES, ...BRANCH_EVENT_TYPES, ...COMMAND_EVENT_TYPES];
+/** Every event type across all sources plus registry lifecycle events - for diagnostics and tests. */
+export const WATCHER_EVENT_TYPES: WatcherEventType[] = [
+  ...PR_EVENT_TYPES,
+  ...BRANCH_EVENT_TYPES,
+  ...COMMAND_EVENT_TYPES,
+  "watch_expired",
+];
 
 /**
  * A single detected change, ready for delivery. Pointer data plus machine
@@ -1201,11 +1217,25 @@ export class WatcherRegistry {
       for (const [id, watcher] of this.#watchers) {
         if (now > watcher.expiresAt) {
           this.#watchers.delete(id);
+          // Report the expiry instead of dropping the watch silently: a
+          // notification that just stops arriving looks identical to a
+          // broken poller, and a session waiting on a watch that gated
+          // greenlit work must be told the wait ended without the event.
+          const minutes = Math.max(1, Math.round((watcher.expiresAt - watcher.createdAt) / 60_000));
+          const target = watcherTarget(watcher);
+          const queue = this.#pending.get(watcher.sessionID) ?? [];
+          queue.push({
+            type: "watch_expired",
+            target,
+            summary: `watch on ${target} expired after ${minutes} min - no further notifications will arrive from it`,
+            url: this.#watchUrl(watcher),
+          });
+          this.#pending.set(watcher.sessionID, queue);
           this.#emit(watcher.sessionID);
           continue;
         }
         try {
-          const events = await this.#pollOne(watcher);
+          const { events, stateChanged } = await this.#pollOne(watcher);
           if (events.length > 0) {
             const queue = this.#pending.get(watcher.sessionID) ?? [];
             queue.push(...events);
@@ -1218,8 +1248,15 @@ export class WatcherRegistry {
             if (watcher.once) {
               this.#watchers.delete(id);
               this.#emit(watcher.sessionID);
+              continue;
             }
           }
+          // Journal on state change, not just membership change: the poller
+          // advances watcher.state in memory, and registry rebuilds (v2
+          // reload rehydration, the watch tools' journal reconcile) hydrate
+          // the journaled state back in verbatim. A journal that lags the
+          // poller replays already-delivered events on the next diff.
+          if (stateChanged) this.#emit(watcher.sessionID);
         } catch (err) {
           console.error(`[thatch] watcher ${id} poll failed: ${err}`);
         }
@@ -1230,14 +1267,20 @@ export class WatcherRegistry {
     }
   }
 
-  /** Fetches and diffs one watcher, filtered to its watched event types. */
-  async #pollOne(watcher: Watcher): Promise<WatcherEvent[]> {
+  /**
+   * Fetches and diffs one watcher, filtered to its watched event types. Also
+   * reports whether the fetched snapshot differed from the last-seen state -
+   * the caller journals on change so a rebuild rehydrates a current baseline
+   * instead of replaying old transitions.
+   */
+  async #pollOne(watcher: Watcher): Promise<{ events: WatcherEvent[]; stateChanged: boolean }> {
     if (watcher.source === "pr") {
       const after = await fetchPrState(this.#opts.ghRunner, watcher.repo, watcher.pr);
       const events = diffPrState(watcher.state, after, watcherTarget(watcher), this.#prUrl(watcher))
         .filter((e) => watcher.events.includes(e.type as PrWatcherEventType));
+      const stateChanged = JSON.stringify(watcher.state) !== JSON.stringify(after);
       watcher.state = after;
-      return events;
+      return { events, stateChanged };
     }
     if (watcher.source === "command") {
       const result = await this.#opts.commandRunner(watcher.command, watcher.cwd, watcher.timeoutMs);
@@ -1246,17 +1289,22 @@ export class WatcherRegistry {
       // transition guard: the baseline refusal keeps lastExit non-zero at
       // registration, and the one-shot cancel in poll() removes the watcher
       // the moment this event fires.
+      const stateChanged = !result.timedOut && watcher.state.lastExit !== result.exitCode;
       if (!result.timedOut) watcher.state = { lastExit: result.exitCode };
-      if (result.timedOut || result.exitCode !== 0) return [];
-      return [{
-        type: "command_success",
-        target: watcherTarget(watcher),
-        summary: `command exited 0 (took ${(result.durationMs / 1000).toFixed(1)}s)`,
-        url: "",
-      }];
+      if (result.timedOut || result.exitCode !== 0) return { events: [], stateChanged };
+      return {
+        events: [{
+          type: "command_success",
+          target: watcherTarget(watcher),
+          summary: `command exited 0 (took ${(result.durationMs / 1000).toFixed(1)}s)`,
+          url: "",
+        }],
+        stateChanged,
+      };
     }
     const after = await fetchBranchState(this.#opts.ghRunner, watcher.repo, watcher.branch);
     const all = diffBranchState(watcher.state, after, watcherTarget(watcher), watcher.repo);
+    const stateChanged = JSON.stringify(watcher.state) !== JSON.stringify(after);
     watcher.state = after;
     // The workflow-name filter narrows branch_workflow events only -
     // commits and check runs pass through unfiltered, or a watch filtered
@@ -1265,8 +1313,11 @@ export class WatcherRegistry {
       e.type !== "branch_workflow" ||
       watcher.workflows.length === 0 ||
       watcher.workflows.some((wf) => e.summary.toLowerCase().includes(wf.toLowerCase()));
-    return all
-      .filter((e) => watcher.events.includes(e.type as BranchWatcherEventType) && matchesFilter(e));
+    return {
+      events: all
+        .filter((e) => watcher.events.includes(e.type as BranchWatcherEventType) && matchesFilter(e)),
+      stateChanged,
+    };
   }
 
   /**
@@ -1309,5 +1360,12 @@ export class WatcherRegistry {
 
   #prUrl(watcher: PrWatcher): string {
     return `https://github.com/${watcher.repo}/pull/${watcher.pr}`;
+  }
+
+  /** Best pointer for a lifecycle event about a watch: the watched target itself. */
+  #watchUrl(watcher: Watcher): string {
+    if (watcher.source === "pr") return this.#prUrl(watcher);
+    if (watcher.source === "branch") return `https://github.com/${watcher.repo}/actions`;
+    return "";
   }
 }

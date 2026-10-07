@@ -989,7 +989,9 @@ export function behaviorNudge(items: BehaviorNudgeItem[]): string {
  * background-task completion framing: a system event, not user input, not
  * approval to advance other pending work - except when the watch itself was
  * created to gate already-greenlit work, in which case the notification is
- * that work's continuation signal.
+ * that work's continuation signal. An all-expiry delivery (watch_expired)
+ * gets its own framing instead: the watch died of old age before the
+ * condition occurred, which is never a completion signal.
  */
 export function watcherNotificationNudge(
   target: string,
@@ -999,6 +1001,16 @@ export function watcherNotificationNudge(
   const lines = events.map((e) => `- ${e.type}: ${e.summary}${e.url ? ` ${e.url}` : ""}`);
   const cadence =
     pollSeconds === undefined ? "" : ` Watched targets are polled every ~${pollSeconds}s; events can lag by up to one cycle.`;
+  // An all-expiry delivery gets its own framing, and deliberately NOT the
+  // greenlit-gating carve-out below: an expired watch means the watched
+  // condition never occurred, so the notification must never read as the
+  // continuation signal for gated work.
+  if (events.length > 0 && events.every((e) => e.type === "watch_expired")) {
+    return `[thatch] Watcher expired for ${target}
+${lines.join("\n")}
+
+This is a system notification, not user input. The watch's time-to-live lapsed before the watched condition occurred - this is not a completion signal, and any work this watch was gating has not finished. Re-register the watch if notifications are still wanted, or move on. If you act, tell the user what you did and why; if not, stop and wait.${cadence}`;
+  }
   const detailHint = events.some((e) => e.type === "command_success")
     ? "A watched command's output is never delivered; re-run it or read logs yourself if you need details."
     : "Check-run and workflow conclusions are in the summaries above; fetch details with the gh CLI only if you need them.";

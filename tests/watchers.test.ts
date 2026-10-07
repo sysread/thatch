@@ -19,6 +19,7 @@ import {
   type GhRunner,
   type PrState,
   type BranchState,
+  type Watcher,
   type WatcherEvent,
   type WatcherEventType,
 } from "../src/watchers";
@@ -384,6 +385,44 @@ describe("WatcherRegistry", () => {
     expect(delivered[0].events.map((e) => e.type)).toEqual(["pr_commit"]);
   });
 
+  test("a rebuild that rehydrates the journal does not replay delivered events", async () => {
+    const journaled: Watcher[][] = [];
+    let changed = false;
+    const build = () =>
+      new WatcherRegistry({
+        deliver: async (sessionID, events) => {
+          delivered.push({ sessionID, events });
+        },
+        canDeliver: () => canDeliver,
+        ghRunner: mockGh([
+          [RE_PULL, () => (changed ? prResponse({ head: { sha: "ffff0000" } }) : prResponse())],
+          ...quietRoutes(),
+        ]),
+        journal: (_sessionID, watchers) => journaled.push([...watchers]),
+        pollIntervalMs: 60_000,
+      });
+    const reg = build();
+    await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
+    changed = true;
+    await reg.poll();
+    expect(delivered).toHaveLength(1);
+    // The poll journaled the ADVANCED state, not the creation baseline -
+    // this journal row is what a reload rehydrates.
+    const baseline = journaled.at(-1)?.[0];
+    if (!baseline || baseline.source !== "pr") throw new Error("expected a journaled pr watcher");
+    expect(baseline.state.headSha).toBe("ffff0000");
+
+    // A fresh registry (v2 reload rehydration, the watch tools' reconcile)
+    // hydrates the journal and polls again: no events may re-fire.
+    reg.dispose();
+    const rebuilt = build();
+    rebuilt.hydrate(journaled.at(-1) ?? []);
+    await rebuilt.poll();
+    expect(delivered).toHaveLength(1);
+    expect(rebuilt.pendingCount("s1")).toBe(0);
+    rebuilt.dispose();
+  });
+
   test("events for unwatched types are filtered out", async () => {
     const reg = new WatcherRegistry({
       deliver: async (s, e) => {
@@ -452,12 +491,23 @@ describe("WatcherRegistry", () => {
     }
   });
 
-  test("expired watchers are dropped silently", async () => {
-    const reg = makeRegistry({ ttlMinutes: -1 });
+  test("expired watchers report their expiry to the session and are dropped", async () => {
+    const reg = makeRegistry();
     await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
-    expect(reg.listForSession("s1")).toHaveLength(1);
+    const prWatcher = reg.listForSession("s1")[0];
+    if (prWatcher.source !== "pr") throw new Error("expected a pr watcher");
+    // Age the watch past its TTL by hand: a 480-minute life that just ended.
+    prWatcher.createdAt = Date.now() - 480 * 60_000;
+    prWatcher.expiresAt = Date.now() - 1;
     await reg.poll();
     expect(reg.listForSession("s1")).toHaveLength(0);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].events.map((e) => e.type)).toEqual(["watch_expired"]);
+    expect(delivered[0].events[0].summary).toContain("acme/widgets#7");
+    expect(delivered[0].events[0].summary).toContain("480 min");
+    // The expiry is reported once - later polls stay quiet.
+    await reg.poll();
+    expect(delivered).toHaveLength(1);
   });
 
   test("cancelSession drops watchers and pending events", async () => {
@@ -515,9 +565,9 @@ describe("WatcherRegistry", () => {
 
 describe("watcher event types", () => {
   test("covers the documented vocabulary", () => {
-    const expected: WatcherEventType[] = [...PR_EVENT_TYPES, ...BRANCH_EVENT_TYPES, ...COMMAND_EVENT_TYPES];
+    const expected: WatcherEventType[] = [...PR_EVENT_TYPES, ...BRANCH_EVENT_TYPES, ...COMMAND_EVENT_TYPES, "watch_expired"];
     expect(WATCHER_EVENT_TYPES).toEqual(expected);
-    expect(expected).toHaveLength(12);
+    expect(expected).toHaveLength(13);
   });
 });
 
@@ -1158,6 +1208,18 @@ describe("watcherNotificationNudge", () => {
     expect(text).not.toMatch(/1\.2s\s+$/m);
     expect(text).toContain("re-run it or read logs yourself");
     expect(text).not.toContain("conclusions are in the summaries above");
+  });
+
+  test("an all-expiry delivery uses the expiry framing and drops the gating carve-out", () => {
+    const text = watcherNotificationNudge("acme/widgets#7", [
+      { type: "watch_expired", summary: "watch on acme/widgets#7 expired after 480 min - no further notifications will arrive from it", url: URL },
+    ]);
+    expect(text).toContain("- watch_expired: watch on acme/widgets#7 expired after 480 min");
+    expect(text).toContain("not a completion signal");
+    expect(text).toContain("Re-register the watch");
+    // The continuation carve-out must never appear on an expiry notice: the
+    // watched condition did not occur, so this is never a signal to proceed.
+    expect(text).not.toContain("continuation signal");
   });
 });
 

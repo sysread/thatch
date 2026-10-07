@@ -132,14 +132,20 @@ restarts:
 - If a watched session is never resumed, a live session in the same
   project hears a one-line notice that the watch died with its
   session, so a watch that will never fire is at least explained.
-- A watcher expires after 8 hours by default.
+- A watcher expires after 8 hours by default, and reports its own
+  expiry: the session gets a final notification naming the watched
+  target and how long the watch lived (for example, "watch on
+  acme/widgets#7 expired after 480 min"). The notification states
+  that the watched condition never occurred - it is not a signal
+  that whatever the watch was gating finished. Re-register the watch
+  if notifications are still wanted.
 - Each session can hold up to 5 active watchers (all sources share
   the budget).
 - A one-shot watch cancels itself after its first event - a single
   "tell me when this run finishes" request leaves nothing polling
   afterwards. Standing watches (the default) keep going until they
-  are cancelled, expire, or the process ends. Command watches are
-  always one-shot.
+  are cancelled, expire (and say so), or the process ends. Command
+  watches are always one-shot.
 
 ## Requirements and limitations
 

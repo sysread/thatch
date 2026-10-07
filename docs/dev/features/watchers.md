@@ -88,9 +88,15 @@ A `setInterval` loop (unref'd - it never keeps the process alive)
 runs `poll()` every 60 seconds (configurable). Each cycle:
 fetch the current state, run `diffPrState()` against the watcher's
 last-seen state, filter events to the watched types, queue them, and
-attempt delivery. Poll errors are per-watcher; one bad PR never
-blocks the others. The diff is a pure function, so it is unit-tested
-without any network access.
+attempt delivery. When the fetched snapshot differs from the last-seen
+state, the cycle also rewrites the session's journal row: registry
+rebuilds (v2 reload rehydration, the watch tools' journal reconcile)
+hydrate the journaled state verbatim, so a journal that lags the
+poller would make the next diff re-fire already-delivered events -
+observed live in October 2026 as a watch re-delivering the same CI
+completion on every reload. Poll errors are per-watcher; one bad PR
+never blocks the others. The diff is a pure function, so it is
+unit-tested without any network access.
 
 The interval is surfaced to the model through the registry's
 `pollSeconds` getter: watch-creation output states when the first
@@ -125,6 +131,18 @@ notification. Cancellation at detection time is what keeps a "tell me
 when this run finishes" request from leaving a standing watch polling
 a target nobody is waiting on. `watch_list` marks one-shot watchers
 with a `[once]` tag, and the registration output states the mode.
+
+### Expiry
+
+A watch whose TTL passes is dropped at the next poll cycle, and the
+owning session is told: a `watch_expired` event queues through the
+normal pending path, naming the target and the watch's lifetime in
+minutes. The nudge framing for an all-expiry delivery states that the
+watched condition never occurred - deliberately without the
+greenlit-gating carve-out, because "the watch ran out of clock" must
+never read as "the wait is over". Watches that expire while a session
+is away are a separate path: they are not re-armed, and the re-arm
+notice reports the expired count.
 
 ### Command watches
 
@@ -206,9 +224,11 @@ cycle or when the session next goes idle (the event hook calls
 `pr_review_resolved`, `pr_commit`, `pr_status`, `pr_description`,
 `pr_ci`. The tool's `events` argument selects a subset; the default is
 all eight. Branch watchers add `branch_commit`, `branch_ci`, and
-`branch_workflow` (the full vocabulary is `WATCHER_EVENT_TYPES` in
-src/watchers.ts, test-enforced); command watchers register the single
-`command_success` type.
+`branch_workflow`; command watchers register the single
+`command_success` type. The registry itself emits one lifecycle type
+across all sources, `watch_expired`, which is not selectable via the
+`events` argument (the full vocabulary is `WATCHER_EVENT_TYPES` in
+src/watchers.ts, test-enforced).
 
 ## Interactions with other features
 
@@ -248,6 +268,8 @@ src/watchers.ts, test-enforced); command watchers register the single
   mocked gh runner
 - `tests/qa/auto/uc-101-command-watchers.ts` - command-watch lifecycle
   against a mocked command runner
+- `tests/qa/auto/uc-114-watcher-expiry-replay.ts` - expiry notification
+  and the no-replay guarantee across journal rehydration
 
 ## Adding a new source type
 

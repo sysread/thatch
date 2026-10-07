@@ -51,8 +51,8 @@ const useCase: UseCase = {
     }
 
     // The event vocabulary is stable and documented.
-    if (WATCHER_EVENT_TYPES.length !== 12) {
-      console.log(`  FAIL: expected 12 event types, got ${WATCHER_EVENT_TYPES.length}`);
+    if (WATCHER_EVENT_TYPES.length !== 13) {
+      console.log(`  FAIL: expected 13 event types, got ${WATCHER_EVENT_TYPES.length}`);
       return "FAIL";
     }
 
