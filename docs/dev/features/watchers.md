@@ -198,6 +198,11 @@ Events queue in an in-memory pending map keyed by session. Delivery
 is gated by a `canDeliver` predicate the plugin supplies: the session
 must be idle (tracked from `session.status` events) and not
 compacting. Proactive prompts are never injected into a running turn.
+The queue is visible to the session itself: `watch_list` appends an
+"N events detected, waiting for idle to deliver" line with a
+per-target breakdown while events sit undelivered, so a busy session
+with queued events is distinguishable from a watcher that fired
+nothing.
 
 When the gate is open, the plugin calls `client.session.promptAsync`
 on the session with a synthetic text part built by
@@ -270,6 +275,8 @@ src/watchers.ts, test-enforced).
   against a mocked command runner
 - `tests/qa/auto/uc-114-watcher-expiry-replay.ts` - expiry notification
   and the no-replay guarantee across journal rehydration
+- `tests/qa/auto/uc-115-watch-list-pending-events.ts` - pending-event
+  visibility in watch_list while the session is busy
 
 ## Adding a new source type
 

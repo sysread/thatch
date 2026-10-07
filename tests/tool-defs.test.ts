@@ -878,6 +878,35 @@ describe("watch tools", () => {
     expect(forA).not.toContain("#8");
   });
 
+  test("watch_list surfaces events queued behind the idle gate, then the count clears", async () => {
+    let deliverable = false;
+    const registry = new WatcherRegistry({
+      deliver: async () => {},
+      canDeliver: () => deliverable,
+      ghRunner: mockGhRoutes(),
+      pollIntervalMs: 60_000,
+    });
+    const watchCtx = { ...ctx, watchers: registry };
+    await findTool("watch_create").execute({ pr: 7, events: ["pr_commit"] }, watchCtx, host);
+    await findTool("watch_create").execute({ pr: 9, events: ["pr_commit"], repo: "acme/other" }, watchCtx, host);
+    const prWatchers = registry.listForSession(host.sessionID);
+    prWatchers.forEach((w) => {
+      if (w.source !== "pr") return;
+      w.state.headSha = "old";
+    });
+    await registry.poll();
+
+    const listed = await findTool("watch_list").execute({}, watchCtx, host);
+    expect(listed).toContain("2 events detected, waiting for idle to deliver");
+    expect(listed).toContain("test-owner/test-repo#7 x1");
+    expect(listed).toContain("acme/other#9 x1");
+
+    deliverable = true;
+    await registry.deliverPending();
+    const cleared = await findTool("watch_list").execute({}, watchCtx, host);
+    expect(cleared).not.toContain("waiting for idle");
+  });
+
   test("watch_cancel removes only the session's own watcher", async () => {
     const registry = registryWith();
     const watchCtx = { ...ctx, watchers: registry };

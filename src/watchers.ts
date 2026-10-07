@@ -1353,9 +1353,14 @@ export class WatcherRegistry {
     }
   }
 
+  /** Snapshot of the events waiting for a session, oldest first. */
+  pendingEvents(sessionID: string): WatcherEvent[] {
+    return [...(this.#pending.get(sessionID) ?? [])];
+  }
+
   /** Diagnostic: number of events waiting for a session. */
   pendingCount(sessionID: string): number {
-    return (this.#pending.get(sessionID) ?? []).length;
+    return this.pendingEvents(sessionID).length;
   }
 
   #prUrl(watcher: PrWatcher): string {

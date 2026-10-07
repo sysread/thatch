@@ -112,7 +112,8 @@ Other tools:
   commits, CI check runs, and workflow runs
 - `thatch_watch_command_create` - wait on any local condition via a
   shell command that exits 0 when the wait is over
-- `thatch_watch_list` - shows the session's active watchers
+- `thatch_watch_list` - shows the session's active watchers, plus any
+  detected events waiting for the session to go idle before delivery
 - `thatch_watch_cancel` - cancels one by id
 
 ## Lifetime

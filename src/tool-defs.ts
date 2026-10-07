@@ -1584,7 +1584,8 @@ const watchListDef: ToolDef = {
   name: "watch_list",
   description:
     "List this session's active watchers with their ids, targets, watched " +
-    "event types, and remaining time. opencode-only.",
+    "event types, and remaining time, plus any detected events that are " +
+    "queued waiting for this session to go idle before delivery. opencode-only.",
   args: {},
   opencodeOnly: true,
   async execute(_args, ctx, host) {
@@ -1598,15 +1599,25 @@ const watchListDef: ToolDef = {
     const watchers = ctx.watchers.listForSession(host.sessionID);
     if (watchers.length === 0) return "No active watchers.";
     const minutesLeft = (w: { expiresAt: number }) => Math.max(0, Math.round((w.expiresAt - Date.now()) / 60_000));
-    return watchers
-      .map((w) => {
-        if (w.source === "command") {
-          return `${w.id}: cmd: ${commandTargetLabel(w.command)} [${w.source}]${w.once ? " [once]" : ""} events=[${w.events.join(",")}] expires in ${minutesLeft(w)}m lastExit=${w.state.lastExit}`;
-        }
-        const target = w.source === "pr" ? `${w.repo}#${w.pr}` : `${w.repo}@${w.branch}`;
-        return `${w.id}: ${target} [${w.source}]${w.once ? " [once]" : ""} events=[${w.events.join(",")}] expires in ${minutesLeft(w)}m head=${w.state.headSha.slice(0, 7)}`;
-      })
-      .join("\n");
+    const lines = watchers.map((w) => {
+      if (w.source === "command") {
+        return `${w.id}: cmd: ${commandTargetLabel(w.command)} [${w.source}]${w.once ? " [once]" : ""} events=[${w.events.join(",")}] expires in ${minutesLeft(w)}m lastExit=${w.state.lastExit}`;
+      }
+      const target = w.source === "pr" ? `${w.repo}#${w.pr}` : `${w.repo}@${w.branch}`;
+      return `${w.id}: ${target} [${w.source}]${w.once ? " [once]" : ""} events=[${w.events.join(",")}] expires in ${minutesLeft(w)}m head=${w.state.headSha.slice(0, 7)}`;
+    });
+    // Busy-session visibility: events queue behind the canDeliver gate and
+    // deliver on idle, which has looked like a dead watcher without this
+    // count (a ~7-minute "failure" that was really the session never going
+    // idle).
+    const pending = ctx.watchers.pendingEvents(host.sessionID);
+    if (pending.length > 0) {
+      const byTarget = new Map<string, number>();
+      for (const e of pending) byTarget.set(e.target, (byTarget.get(e.target) ?? 0) + 1);
+      const breakdown = [...byTarget].map(([target, n]) => `${target} x${n}`).join(", ");
+      lines.push(`${pending.length} event${pending.length === 1 ? "" : "s"} detected, waiting for idle to deliver (${breakdown})`);
+    }
+    return lines.join("\n");
   },
 };
 
