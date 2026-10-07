@@ -56,3 +56,7 @@ run = "bin/qa-run auto"
 description = "Run only live-session QA use cases (spawns opencode, costs model tokens). Pass UC names as args to select a subset (e.g. mise run qa-live uc-001 uc-003)."
 run = "bin/qa-run live"
 
+[tasks.qa-docker]
+description = "Run the LIVE QA use cases inside the docker sandbox (qa/opencode-sandbox: pinned opencode v2, throwaway XDG tree - no host state touched). Builds the image on first use. Pass UC names as args like qa-live. The docker build itself runs on the host; use cases needing a real TUI or the host opencode binary stay on qa-live."
+run = "QA_DOCKER=1 bin/qa-run live"
+

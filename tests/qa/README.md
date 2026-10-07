@@ -80,6 +80,24 @@ master cache with `rm -rf "$TMPDIR/thatch-qa-master"`.
 Run against v1 while v2 is the default binary:
 `PATH="$(brew --cellar)/opencode/1.18.32/bin:$PATH" mise run qa-auto`.
 
+## Docker sandbox mode
+
+`mise run qa-docker` (or `QA_DOCKER=1 bin/qa-run live`) runs the live use
+cases inside the `qa/opencode-sandbox` container: a pinned opencode v2
+(2.0.23) with a throwaway XDG tree built per container. Use it when the
+host's environment would leak into spawned sessions (direnv `OPENCODE_CONFIG`
+layers, shell keys, MCP auth) or when you want the run hermetic. Details:
+
+- The image builds on first use (and on demand: `docker build -t
+  thatch-qa-opencode qa/opencode-sandbox`).
+- The fixture dir, the master copy, the checkout, and the real
+  node_modules mount at their HOST paths, and every fixture env var passes
+  into the container explicitly (`PATH` excepted - the image's own PATH
+  finds its binary).
+- The matrix collapses to a single unlabeled v2 leg: the image pins v2, so
+  host-binary discovery does not apply. v1 coverage stays on `qa-live`.
+- `startServe` use cases (UC-100) still spawn the serve process host-side.
+
 ## Adding a use case
 
 1. Create `tests/qa/auto/uc-NNN-name.ts` or

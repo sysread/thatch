@@ -333,11 +333,67 @@ export async function createFixture(name: string): Promise<QaContext> {
  * spelling), and v2 needs --standalone because its default run waits on the
  * shared background daemon, which an isolated fixture sandbox must not boot
  * or reuse. Both accept --model/--auto.
+ *
+ * QA_DOCKER=1 runs the same invocation inside the qa/opencode-sandbox
+ * container instead of the host binary: the fixture dir and the master copy
+ * mount at their HOST paths (the fixture env's absolute XDG paths stay
+ * valid in-container), and every ctx.env var is passed explicitly - a
+ * container has exactly the env it is given, which is the isolation point
+ * (a direnv'd host shell must not leak OPENCODE_CONFIG or keys into the
+ * spawned session). The master's node_modules symlink target mounts too so
+ * the shim's import chain resolves. The image builds on first use.
  */
 export function opencodeRunArgs(ctx: QaContext, prompt: string): { args: string[]; cwd: string } {
-  const major = serveMajorVersion(ctx.env);
+  // The docker image pins opencode v2 - the host's binary (possibly absent,
+  // possibly v1) is irrelevant to what actually runs.
+  const major = process.env.QA_DOCKER ? 2 : serveMajorVersion(ctx.env);
   const base = major >= 2 ? ["opencode", "run", "--standalone"] : ["opencode", "run"];
-  return { args: [...base, "--model", MODEL, "--auto", prompt], cwd: ctx.dir };
+  const args = [...base, "--model", MODEL, "--auto", prompt];
+  if (!process.env.QA_DOCKER) return { args, cwd: ctx.dir };
+  ensureQaDockerImage();
+  const mounts = [ctx.dir, MASTER_ROOT];
+  const realNodeModules = join(process.env.HOME ?? "", ".config", "opencode", "node_modules");
+  if (existsSync(realNodeModules)) mounts.push(realNodeModules);
+  const dockerArgs = ["docker", "run", "--rm"];
+  // The container's cwd = the fixture dir: v2 resolves the project (skills,
+  // git identity) from the working directory, and the fixture carries both
+  // (its own .opencode/skills from the archive + the runner's git init with
+  // a fake origin).
+  dockerArgs.push("-w", ctx.dir);
+  // The checkout at /app/thatch: the entrypoint's fixture setup reads it
+  // (package.json, the shim's import target).
+  dockerArgs.push("-v", `${REPO_ROOT}:/app/thatch`);
+  for (const dir of mounts) dockerArgs.push("-v", `${dir}:${dir}`);
+  for (const [key, value] of Object.entries(ctx.env)) {
+    // PATH stays the image's: the host PATH's directories do not exist
+    // in-container, and overriding it hides the image's opencode binary.
+    // HOME passes through (the fixture home is mounted at the same path,
+    // and the image's binary paths are absolute).
+    if (key === "PATH") continue;
+    dockerArgs.push("-e", `${key}=${value}`);
+  }
+  // The entrypoint execs `opencode` itself - the host argv's leading binary
+  // name would arrive as an unknown subcommand and print the root help.
+  dockerArgs.push(QA_DOCKER_IMAGE, ...args.slice(1));
+  return { args: dockerArgs, cwd: ctx.dir };
+}
+
+const QA_DOCKER_IMAGE = "thatch-qa-opencode";
+let qaDockerImageEnsured = false;
+
+/** Builds the qa/opencode-sandbox image once per process if it is absent. */
+function ensureQaDockerImage(): void {
+  if (qaDockerImageEnsured) return;
+  const inspect = Bun.spawnSync(["docker", "image", "inspect", QA_DOCKER_IMAGE], { stdout: "ignore", stderr: "ignore" });
+  if (inspect.exitCode !== 0) {
+    console.log("  [qa-docker] building the sandbox image (once per tree)...");
+    const build = Bun.spawnSync(["docker", "build", "-t", QA_DOCKER_IMAGE, join(REPO_ROOT, "qa", "opencode-sandbox")], {
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    if (build.exitCode !== 0) throw new Error("qa-docker: sandbox image build failed");
+  }
+  qaDockerImageEnsured = true;
 }
 
 /**
@@ -443,6 +499,12 @@ interface MatrixLeg {
  * legs when iterating against one major.
  */
 function matrixLegs(uc: UseCase): MatrixLeg[] {
+  if (process.env.QA_DOCKER) {
+    // The docker image pins opencode v2, so host-binary discovery does not
+    // apply: the matrix collapses to a single unlabeled leg through the
+    // container. (A v1 docker leg would need a v1-pinned image - not built.)
+    return [{ label: null }];
+  }
   const spawnsOpencode = !uc.run || uc.hosts !== undefined;
   if (!spawnsOpencode) return [{ label: null }];
   const discovered = discoverHostBinaries();
