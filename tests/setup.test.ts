@@ -1030,7 +1030,29 @@ describe("systemPrompt content", () => {
       // Core rules are inlined so they hold even when the skill is not loaded.
       expect(text).toContain("No made-up phrases");
       expect(text).toContain("Terse means fewer claims, never denser ones");
+      expect(text).toContain("No sycophancy. Don't open by validating the question");
+      expect(text).toContain("When you don't know, say so");
+      expect(text).toContain("No process narration. State the thing.");
     }
+  });
+
+  test("clear-writing floor stays under a byte budget", () => {
+    // The floor ships inline in every host prompt on every turn, so it must
+    // stay small. Budget covers the current line wrapping of the section;
+    // re-wrap the prose rather than raising it silently.
+    for (const text of [systemPrompt("test/repo"), claudeInstructions(), cursorInstructions()]) {
+      const floor = text.slice(text.indexOf("## Clear writing"), text.indexOf("## When to Write"));
+      expect(Buffer.byteLength(floor, "utf8")).toBeLessThan(1300);
+    }
+  });
+
+  test("clear-writing skill carries the floor rules for hosts without the inline prompt", () => {
+    // The floor points at the skill for the full rules. Pin the anchors so
+    // the skill and the floor cannot drift apart silently.
+    const skill = readFileSync(join(__dirname, "../artifacts/skills/thatch-clear-writing.md"), "utf8");
+    expect(skill).toContain("No sycophancy");
+    expect(skill).toContain("When you don't know, say so");
+    expect(skill).toContain("Session replies");
   });
 });
 

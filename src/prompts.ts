@@ -232,6 +232,9 @@ in the skill; these apply even when it is not loaded:
 - No buzzwords. "leverage" means "use". If a phrase sounds like it is trying
   to sound smart, delete it and say the thing plainly.
 - Lead with the answer, then the context, then the caveats.
+- No sycophancy. Don't open by validating the question ("Great question").
+- When you don't know, say so. When you only know part, say which part.
+- No process narration. State the thing.
 
 ## When to Write
 
@@ -574,6 +577,9 @@ in the skill; these apply even when it is not loaded:
 - No buzzwords. "leverage" means "use". If a phrase sounds like it is trying
   to sound smart, delete it and say the thing plainly.
 - Lead with the answer, then the context, then the caveats.
+- No sycophancy. Don't open by validating the question ("Great question").
+- When you don't know, say so. When you only know part, say which part.
+- No process narration. State the thing.
 
 ## When to Write
 
