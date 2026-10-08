@@ -64,7 +64,3 @@ run = "bin/qa-run auto"
 description = "Run live-session QA against the HOST opencode binary (no docker). v1 coverage lives here: PATH=\"$(brew --cellar)/opencode/1.18.32/bin:$PATH\" mise run qa-host-live."
 run = "bin/qa-run live"
 
-[tasks.qa-docker]
-description = "Run the LIVE QA use cases inside the docker sandbox (qa/opencode-sandbox: pinned opencode v2, throwaway XDG tree - no host state touched). Builds the image on first use. Pass UC names as args like qa-live. The docker build itself runs on the host; use cases needing a real TUI or the host opencode binary stay on qa-live."
-run = "QA_DOCKER=1 bin/qa-run live"
-
