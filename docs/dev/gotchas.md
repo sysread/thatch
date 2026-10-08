@@ -311,6 +311,25 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   kind, mark it in the same table and route its events through the same
   guards - do not rely on Maps surviving a reload.
 
+## A running TUI never adopts a NEW ./tui plugin entrypoint - restart the TUI
+
+- **The v2 TUI discovers its CLI plugins at process startup only.** The
+  server side hot-reloads plugin code (the digest watcher), and the TUI
+  hot-reloads the SOURCE of plugins it already loaded - but a plugin that
+  GAINS a `./tui` entrypoint (or a fresh install of one) is a discovery-
+  level change: a TUI process started before the entrypoint existed never
+  loads it. Symptom (2026-10-08, the thog TUI): `thatch_session_tab` ran
+  fine server-side (the session, the chat registration, the response all
+  real) but the tab never appeared in the strip - the TUI had no
+  `ui.tabs` consumer loaded, so the rpc event landed nowhere. The
+  persisted `tabs.json` (in `$XDG_STATE_HOME/opencode/<channel>/tui/`)
+  proved the registration logic was correct the whole time: a FRESH TUI
+  (the docker sandbox attach) showed the tab immediately.
+- **Fix**: restart the TUI window once after adopting (or changing the
+  shape of) a `./tui` entrypoint. Check `tabs.json` first when debugging
+  "tab didn't appear" reports: if the entry is in the window's cwd
+  bucket, the tool worked and the window is stale.
+
 ## The two opencode lines discover plugins differently: no one shim shape auto-loads on both
 
 - **v1 auto-discovers plugin FILES only** - its config plugin scan globs
