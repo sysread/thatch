@@ -325,6 +325,15 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   persisted `tabs.json` (in `$XDG_STATE_HOME/opencode/<channel>/tui/`)
   proved the registration logic was correct the whole time: a FRESH TUI
   (the docker sandbox attach) showed the tab immediately.
+- **Fix**: convert the install to the directory shim (docs/user/setup.md),
+  THEN restart the TUI. A restart ALONE fixes nothing when the install is
+  a FILE shim - the file shape never loads a `./tui` entrypoint, whatever
+  the process age. First diagnostic: `ls ~/.config/opencode/plugins/` -
+  a FILE (`thatch.ts`) means no TUI consumer has ever loaded there,
+  restart or not; the directory form (`thatch/index.ts` + `tui.ts`) is
+  required. (2026-10-08, the thog TUI: the restart-and-respawn test
+  DISPROVED the stale-process theory and pointed here - the conversion
+  was the missing install step.)
 - **Fix**: restart the TUI window once after adopting (or changing the
   shape of) a `./tui` entrypoint. DIAGNOSTIC WARNING: `tabs.json` cannot
   discriminate here - it is SHARED across windows and written by ANY tab
