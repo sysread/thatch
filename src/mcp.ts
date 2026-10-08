@@ -264,6 +264,27 @@ export async function runMcpServer(): Promise<void> {
   // requests. Never blocks tool calls.
   startVersionChecker(dbPath);
 
+  // Idempotent teardown, shared by the stdin-end path (the host closed the
+  // pipe - the normal shutdown) and the signal handlers (SIGINT/SIGTERM/
+  // SIGHUP kill the process mid-loop, and without handlers they skipped
+  // every teardown step). Order matters: the sideband goes first (nothing
+  // may reach the model after disposal), the model's ONNX sessions release
+  // before the db closes, and the db close runs in a finally so a disposal
+  // failure cannot leak the connection.
+  const teardown = createMcpTeardown({
+    sideband,
+    model,
+    db,
+    dbPath,
+    stopVersionChecker,
+    removeVersionFile,
+  });
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.on(signal, () => {
+      void teardown(signal).then(() => process.exit(0));
+    });
+  }
+
   // Read stdin line by line. Each line is a complete JSON-RPC message.
   const decoder = new TextDecoder();
   let buf = "";
@@ -316,10 +337,59 @@ export async function runMcpServer(): Promise<void> {
     }
   }
 
-  sideband.stop();
-  stopVersionChecker();
-  removeVersionFile(dbPath);
-  db.close();
+  await teardown("stdin-end");
+}
+
+/**
+ * Builds the idempotent MCP-server teardown. Injected deps so tests can
+ * spy on the close order without spawning anything: sideband first
+ * (nothing may reach the model after disposal), version checker + file
+ * next, the model's native ONNX sessions in a catch (a disposal failure
+ * must not skip the db close), and the db in a finally.
+ */
+export function createMcpTeardown(deps: {
+  sideband: { stop(): void };
+  model: { dispose(): Promise<void> };
+  db: { close(): void };
+  dbPath: string;
+  stopVersionChecker: () => void;
+  removeVersionFile: (dbPath: string) => void;
+}): (reason: string) => Promise<void> {
+  let torn = false;
+  return (reason: string): Promise<void> => {
+    if (torn) return Promise.resolve();
+    torn = true;
+    void reason;
+    // Every step is isolated: a teardown step's own failure must not
+    // block the remaining ones (the sideband throwing on an
+    // already-unlinked socket used to skip the model disposal and the
+    // db close entirely).
+    try {
+      deps.sideband.stop();
+    } catch (err) {
+      console.error(`[thatch] MCP sideband stop failed: ${err}`);
+    }
+    try {
+      deps.stopVersionChecker();
+    } catch (err) {
+      console.error(`[thatch] MCP version-checker stop failed: ${err}`);
+    }
+    try {
+      deps.removeVersionFile(deps.dbPath);
+    } catch (err) {
+      console.error(`[thatch] MCP version-file removal failed: ${err}`);
+    }
+    return deps.model
+      .dispose()
+      .catch((err: unknown) => console.error(`[thatch] MCP model disposal failed: ${err}`))
+      .finally(() => {
+        try {
+          deps.db.close();
+        } catch (err) {
+          console.error(`[thatch] MCP db close failed: ${err}`);
+        }
+      });
+  };
 }
 
 /**

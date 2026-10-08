@@ -1,7 +1,61 @@
 import { describe, test, expect } from "bun:test";
-import { compileTools, compilePrompts } from "../src/mcp";
+import { compileTools, compilePrompts, createMcpTeardown } from "../src/mcp";
 import { TOOL_DEFS } from "../src/tool-defs";
 import { actionDefs, claudeCommandDefs, opencodeCommandDefs } from "../src/commands";
+
+describe("MCP teardown", () => {
+  const makeDeps = () => {
+    const calls: string[] = [];
+    return {
+      calls,
+      deps: {
+        sideband: { stop: () => void calls.push("sideband.stop") },
+        model: { dispose: async () => void calls.push("model.dispose") },
+        db: { close: () => void calls.push("db.close") },
+        dbPath: "/tmp/fake-thatch.db",
+        stopVersionChecker: () => void calls.push("stopVersionChecker"),
+        removeVersionFile: (dbPath: string) => void calls.push(`removeVersionFile(${dbPath})`),
+      },
+    };
+  };
+
+  test("runs every step once, in the safe order, even when called twice", async () => {
+    const { deps, calls } = makeDeps();
+    const teardown = createMcpTeardown(deps);
+    await teardown("SIGINT");
+    await teardown("stdin-end"); // second call is a no-op
+    expect(calls).toEqual([
+      "sideband.stop",
+      "stopVersionChecker",
+      "removeVersionFile(/tmp/fake-thatch.db)",
+      "model.dispose",
+      "db.close",
+    ]);
+  });
+
+  test("a model-disposal failure still closes the db", async () => {
+    const { deps, calls } = makeDeps();
+    deps.model.dispose = async () => {
+      calls.push("model.dispose");
+      throw new Error("ORT session stuck");
+    };
+    const teardown = createMcpTeardown(deps);
+    await teardown("SIGTERM");
+    expect(calls[calls.length - 1]).toBe("db.close");
+  });
+
+  test("the db close runs last even when the sideband itself throws", async () => {
+    const { deps, calls } = makeDeps();
+    deps.sideband.stop = () => {
+      calls.push("sideband.stop");
+      throw new Error("socket already unlinked");
+    };
+    const teardown = createMcpTeardown(deps);
+    await teardown("SIGHUP");
+    expect(calls).toContain("db.close");
+    expect(calls[calls.length - 1]).toBe("db.close");
+  });
+});
 
 describe("MCP compileTools", () => {
   test("exposes every shared tool under its bare name", () => {
