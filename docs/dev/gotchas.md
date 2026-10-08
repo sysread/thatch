@@ -326,9 +326,13 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   proved the registration logic was correct the whole time: a FRESH TUI
   (the docker sandbox attach) showed the tab immediately.
 - **Fix**: restart the TUI window once after adopting (or changing the
-  shape of) a `./tui` entrypoint. Check `tabs.json` first when debugging
-  "tab didn't appear" reports: if the entry is in the window's cwd
-  bucket, the tool worked and the window is stale.
+  shape of) a `./tui` entrypoint. DIAGNOSTIC WARNING: `tabs.json` cannot
+  discriminate here - it is SHARED across windows and written by ANY tab
+  open, manual (a picker navigation) or event-driven - an entry for the
+  session proves only that SOMETHING opened it, not that the spawn-time
+  event worked. The discriminating test: restart the TUI and re-spawn; a
+  tab appearing post-restart confirms the stale-process diagnosis; a tab
+  still absent is a real bug worth a report.
 
 ## The two opencode lines discover plugins differently: no one shim shape auto-loads on both
 
