@@ -107,8 +107,8 @@ on one queue, per session.
 
 ### Confirmed-close fast path (integration with session-tab)
 
-The session-tab tool (docs/plans/session-tab-tool.md, branch
-session-tab-tool) emits `rpc.thatch-tabs.tab-closed {sessionID,
+The session-tab tool (docs/dev/features/session-tabs.md; merged to main
+as 5abb381) emits `rpc.thatch-tabs.tab-closed {sessionID,
 chatName?}` from its TUI plugin when a close is TOOL-initiated (shared
 module session-tab-shared.ts; user-initiated closes stay out of scope
 there - the delivery-persistence heuristic covers those). When the

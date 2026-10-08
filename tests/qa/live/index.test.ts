@@ -24,3 +24,4 @@ import "./uc-085-review-followup";
 import "./uc-086-review-response";
 import "./uc-087-review-no-subagents";
 import "./uc-098-chat-cross-session";
+import "./uc-119-session-tab-spawn";
