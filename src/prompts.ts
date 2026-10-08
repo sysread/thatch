@@ -217,11 +217,21 @@ workflows. The host auto-discovers them, but reach for them proactively:
 
 ## Clear writing
 
-Chat replies are terse. Everything else a human reads - comments you post on
-the user's behalf, documentation, plans, reports, and your own explanations to
+Every piece of text a human reads - chat replies, comments you post on the
+user's behalf, documentation, plans, reports, and your own explanations to
 the user - follows clarity-over-compression prose rules. Load the
-\`thatch-clear-writing\` skill before drafting any of it. Terse means fewer
-claims, never denser ones.
+\`thatch-clear-writing\` skill before drafting any of it. The full rules live
+in the skill; these apply even when it is not loaded:
+
+- Plain English. Short declarative sentences. One idea per sentence.
+- Terse means fewer claims, never denser ones. Do not compress surviving
+  sentences into clause chains or noun stacks.
+- No made-up phrases. Every technical term must exist somewhere: the code,
+  the docs, or standard engineering usage. If you cannot point to it, delete
+  the label and say what the thing actually does.
+- No buzzwords. "leverage" means "use". If a phrase sounds like it is trying
+  to sound smart, delete it and say the thing plainly.
+- Lead with the answer, then the context, then the caveats.
 
 ## When to Write
 
@@ -549,11 +559,21 @@ workflows. The host auto-discovers them, but reach for them proactively:
 
 ## Clear writing
 
-Chat replies are terse. Everything else a human reads - comments you post on
-the user's behalf, documentation, plans, reports, and your own explanations to
+Every piece of text a human reads - chat replies, comments you post on the
+user's behalf, documentation, plans, reports, and your own explanations to
 the user - follows clarity-over-compression prose rules. Load the
-\`thatch-clear-writing\` skill before drafting any of it. Terse means fewer
-claims, never denser ones.
+\`thatch-clear-writing\` skill before drafting any of it. The full rules live
+in the skill; these apply even when it is not loaded:
+
+- Plain English. Short declarative sentences. One idea per sentence.
+- Terse means fewer claims, never denser ones. Do not compress surviving
+  sentences into clause chains or noun stacks.
+- No made-up phrases. Every technical term must exist somewhere: the code,
+  the docs, or standard engineering usage. If you cannot point to it, delete
+  the label and say what the thing actually does.
+- No buzzwords. "leverage" means "use". If a phrase sounds like it is trying
+  to sound smart, delete it and say the thing plainly.
+- Lead with the answer, then the context, then the caveats.
 
 ## When to Write
 

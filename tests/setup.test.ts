@@ -1027,6 +1027,9 @@ describe("systemPrompt content", () => {
     for (const text of [systemPrompt("test/repo"), claudeInstructions(), cursorInstructions()]) {
       expect(text).toContain("thatch-clear-writing");
       expect(text).toContain("clarity-over-compression prose rules");
+      // Core rules are inlined so they hold even when the skill is not loaded.
+      expect(text).toContain("No made-up phrases");
+      expect(text).toContain("Terse means fewer claims, never denser ones");
     }
   });
 });

@@ -56,9 +56,10 @@ Hard rules. Not suggestions.
 8. **Show causal links.** If a sentence uses "so", "because", or "prevents", make the middle step visible. Cause and effect that do not obviously touch need the missing step spelled out.
 9. **Clarity wins over compression.** Brevity means fewer claims, not denser claims. Shorten by deleting whole claims. Never rewrite surviving sentences into tighter ones. Keep the connective tissue that makes a sentence parse on first read.
 10. **No invented shorthand.** Do not coin abbreviations, portmanteaus, or labels mid-text. Use the real name, or spell out the behavior. A term the reader cannot find anywhere else is a term they cannot look up.
-11. **No buzzwordy abstractions.** "leverage" -> "use". "utilize" -> "use". If you cannot say what a phrase means in plain English, it does not belong.
-12. **Plain ASCII.** No smart quotes, em dashes, or ellipsis glyphs.
-13. **No process narration.** Never describe the order you assembled things in or narrate your own actions inside the text. State the thing itself.
+11. **No made-up technical phrases.** Do not coin multi-word terms that sound technical but mean nothing: "identity contract", "canonical hash", "semantic alignment layer". Every term must exist somewhere - in the code, the docs, or standard engineering usage. If you cannot point to where it is defined, delete the label and say what the thing does: what runs, what changes, what the reader gets.
+12. **No buzzwordy abstractions.** "leverage" -> "use". "utilize" -> "use". If you cannot say what a phrase means in plain English, it does not belong.
+13. **Plain ASCII.** No smart quotes, em dashes, or ellipsis glyphs.
+14. **No process narration.** Never describe the order you assembled things in or narrate your own actions inside the text. State the thing itself.
 
 ## Length
 
@@ -74,4 +75,4 @@ For chat replies: terse is fine, illegible is not. If a two-line answer only fit
 
 Before you post, save, or send: reread the draft as a reader with zero context. Fix what they would stumble on. Do not announce the pass; just return clean prose.
 
-Check: Does every sentence parse on first read? Does every term carry its plain-English meaning before or with the label? Would a reader who has never seen this codebase, ticket, or conversation understand it? If the draft runs long, cut a claim; never tighten the grammar.
+Check: Does every sentence parse on first read? Does every term carry its plain-English meaning before or with the label? Is every technical phrase real - could you find it in the code, the docs, or common usage? If not, say what the thing does instead of naming it. Would a reader who has never seen this codebase, ticket, or conversation understand it? If the draft runs long, cut a claim; never tighten the grammar.
