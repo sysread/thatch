@@ -1,4 +1,7 @@
+import { join } from "node:path";
 import { $ } from "bun";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 
 /**
@@ -97,6 +100,51 @@ const useCase: UseCase = {
       }
     } catch {
       console.log("  FAIL: --json mode did not produce valid JSON");
+      return "FAIL";
+    }
+
+    // Skew gate: a stale SERVER version file (the hook binary is fresh)
+    // suppresses the extraction nudge - the old server's compiled tool
+    // list may lack get_extraction_payload - and emits the restart
+    // instruction instead. The queue survives (peek-not-drain) and the
+    // extraction nudge returns once the version file matches.
+    //
+    // The version file lives under tmpdir() - which is NOT stable across
+    // the env-replacing subprocess boundary: the test process resolves
+    // TMPDIR (macOS: /var/folders/...) while the `.env(env)` subprocess
+    // (no TMPDIR) resolves /tmp. Stamp BOTH candidate bases so the hook
+    // finds the file whichever side computes the path.
+    const { createHash } = await import("node:crypto");
+    const hash = createHash("sha256").update(ctx.env.THATCH_DB_PATH).digest("hex").slice(0, 16);
+    const stampSkew = (version: string) => {
+      for (const base of new Set([tmpdir(), "/tmp"])) {
+        const dir = join(base, `thatch-${hash}`);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, "version"), `${version}\n`);
+      }
+    };
+    const clearSkew = () => {
+      for (const base of new Set([tmpdir(), "/tmp"])) rmSync(join(base, `thatch-${hash}`, "version"), { force: true });
+    };
+    stampSkew("0.0.1");
+    const skewResult = await $`echo ${flushInput} | ${bin} flush-tools`.env(env).quiet().nothrow();
+    if (skewResult.exitCode !== 0) {
+      console.log("  FAIL: skew-gated flush-tools exited non-zero");
+      return "FAIL";
+    }
+    const skewOut = skewResult.stdout.toString();
+    if (!skewOut.includes("MCP server is stale") || !skewOut.toLowerCase().includes("restart")) {
+      console.log(`  FAIL: skew should emit the restart instruction: ${skewOut.slice(0, 200)}`);
+      return "FAIL";
+    }
+    if (skewOut.includes("get_extraction_payload")) {
+      console.log("  FAIL: skew must not reference the fetch tool the old server may lack");
+      return "FAIL";
+    }
+    clearSkew();
+    const postFix = await $`echo ${flushInput} | ${bin} flush-tools`.env(env).quiet().nothrow();
+    if (!postFix.stdout.toString().includes("get_extraction_payload")) {
+      console.log("  FAIL: the extraction nudge should return once the skew clears");
       return "FAIL";
     }
 

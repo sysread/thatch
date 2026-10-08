@@ -1066,7 +1066,20 @@ switch (command) {
       // This is the primary delivery channel for version warnings because
       // flush-tools fires on every prompt, including conversational turns
       // with no tool calls.
-      const versionWarning = detectSkew(dbPath) ?? readNpmCacheForUpdate(dbPath);
+      const skew = detectSkew(dbPath);
+      const versionWarning = skew ?? readNpmCacheForUpdate(dbPath);
+      // Server-stale gate (issue #6's residual): under SKEW the running
+      // MCP server predates the upgrade, so its compiled-at-start tool
+      // list may lack the tools the nudges reference. The extraction tier
+      // is the only one that names a tool for the model to call
+      // (get_extraction_payload) - it degrades to a single restart
+      // instruction, and the missed-count is not incremented (the
+      // escalation counter counts ignored nudges; none was delivered).
+      // The queue is file-backed and peek-not-drain, so nothing is lost:
+      // it extracts after the restart. Tiers 2/3 reference only
+      // long-standing tools and the sideband is the old server's own warm
+      // model - both keep firing under skew.
+      const serverStale = skew !== null;
       // Chat check: with a hook session ID this always prints the caller's
       // assigned identity (and its unread count), so the model knows who it
       // is before any chat tool call; with no mail the line says so.
@@ -1092,6 +1105,15 @@ switch (command) {
       // not the full payload - the sub-agent fetches it via
       // get_extraction_payload.
       const interactions = sessionID ? peekQueue(sessionID) : [];
+      if (interactions.length > 0 && serverStale) {
+        emit(
+          `[thatch] The MCP server is stale: the package was upgraded but this session still runs the old server, so extraction is paused until the session restarts. The ${interactions.length} queued interaction${interactions.length === 1 ? "" : "s"} are safe (file-backed) and will extract then. Restart the session to resume.`,
+          versionWarning,
+          isJson,
+          chatLine,
+        );
+        break;
+      }
       if (interactions.length > 0) {
         const missed = sessionID ? getMissedCount(sessionID) : 0;
         if (sessionID) incrementMissedCount(sessionID);

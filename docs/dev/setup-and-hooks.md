@@ -80,7 +80,7 @@ project and every contributor gets them).
 |-------|---------|--------|------|
 | `SessionStart` | `thatch reminder` | plain text to stdout (becomes context) | Recall instructions + hygiene heartbeat + chat identity/mail line (reads the hook's stdin `session_id`) |
 | `PostToolBatch` | `thatch buffer-batch` | **silent** (no stdout) | Appends a batch of tool calls to the file-backed JSONL queue |
-| `UserPromptSubmit` | `thatch flush-tools` | nudge text to stdout | Peeks queue (extraction nudge), else fires recall, prediction, and behavior nudges via sideband in parallel, else write nudge |
+| `UserPromptSubmit` | `thatch flush-tools` | nudge text to stdout | Peeks queue (extraction nudge; degraded to a restart instruction under version skew - the old server may lack the referenced tools), else fires recall, prediction, and behavior nudges via sideband in parallel, else write nudge |
 | `Stop` | `thatch chat-notify` | `{ hookSpecificOutput: { additionalContext } }` when chat mail is unread, else `{}` | Post-turn chat wake: the turn continues so the model reads its mail (Claude Code's analog of opencode's poller wake); host loop protections (`stop_hook_active`, 8-consecutive cap) plus the delivered stamp bound repeats |
 
 `PostToolBatch` is silent so the agent loop is not delayed; the buffered
@@ -122,7 +122,7 @@ is honored for symmetry and forward-compatibility. Cursor has no equivalent of
 |-------|---------|--------|------|
 | `sessionStart` | `thatch reminder --json` | `{ additional_context: "..." }` | Recall + heartbeat + chat identity/mail line, JSON-wrapped for Cursor |
 | `postToolUse` | `thatch buffer-tool` | **silent** | Appends a **single** tool call to the file-backed queue |
-| `beforeSubmitPrompt` | `thatch flush-tools --json` | JSON `additional_context` | Peeks queue, else recall, prediction, and behavior via sideband, else write nudge |
+| `beforeSubmitPrompt` | `thatch flush-tools --json` | JSON `additional_context` | Peeks queue (extraction nudge; degraded to a restart instruction under version skew), else recall, prediction, and behavior via sideband, else write nudge |
 | `stop` | `thatch chat-notify` | `{ followup_message }` or `{}` | Post-turn chat wake: when chat mail is unread, Cursor auto-submits the follow-up as the next user message (Cursor's analog of opencode's poller wake); `loop_limit: 3` bounds consecutive follow-ups |
 
 Differences from Claude Code:
