@@ -517,15 +517,21 @@ Unit (bun test, no host needed):
 
 Live smoke (manual, sandboxed — see below, v2 binary on PATH):
 
-> **SMOKE RECORD (2026-10-07, docker sandbox `qa/opencode-sandbox`, headless
-> `opencode run` legs)**: PASSED — directory variant (create + chat-register
-> `bishop-the-synthetic-00001` + emit + prompt, response contract verbatim),
-> worktree variant (session.move persisted: session row directory AND
+> **SMOKE RECORD (2026-10-07/08, docker sandbox `qa/opencode-sandbox`)**:
+> **ALL SCENARIOS PASSED.** Headless legs: directory variant (create +
+> chat-register + emit + prompt, response contract verbatim), worktree
+> variant (session.move persisted: session row directory AND
 > `metadata.thatch.worktree` = the worktree; chat row records worktree
-> kind), headless no-tab (zero tabs.json, no crash), and the sandbox
-> isolation itself (own daemon, own session db, own thatch db). TUI-visual
-> scenarios (tab appears unfocused in the strip via the ./tui plugin) remain
-> the manual attach - the headless legs cannot exercise a TUI process.
+> kind), headless no-tab (zero tabs store, no crash). TUI-visual legs
+> (live attach, v2.0.23 container): the subordinate's tab appeared
+> UNFOCUSED beside the coordinator's, the title rendered (not the
+> new-session fallback), the subordinate's LLM responded in the tab, and
+> the strip's persisted state (tabs.json) matched the visible tabs
+> exactly. BONUS verified: kill + re-attach restored BOTH tabs from the
+> persisted store (restart persistence). Sandbox note: `mkdir -p` the
+> /qa source dir BEFORE `docker run -v` - a missing host path is created
+> inside the Docker VM (invisible to the mac) and the artifacts become
+> exec-only.
 
 > **Sandbox requirement** (and the reason it is easy to get wrong): the
 > smoke spawns real subordinates that chat-register and write memories.
