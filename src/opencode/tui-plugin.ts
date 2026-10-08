@@ -20,15 +20,32 @@
 // peer).
 
 import { Plugin } from "@opencode/plugin/tui";
-import { isTabOpenedEvent, passesDirectoryGuard } from "../session-tab-shared";
+import { isTabClosedEvent, isTabOpenedEvent, passesDirectoryGuard } from "../session-tab-shared";
 
 export default Plugin.define({
   id: "jeffober-thatch-tui",
   setup(context) {
     const off = context.data.listen(({ details }) => {
-      if (!isTabOpenedEvent(details.type)) return;
       const windowDirectory = context.location?.directory ?? context.data.location.default().directory;
       if (!passesDirectoryGuard(details.location?.directory, windowDirectory)) return;
+      if (isTabClosedEvent(details.type)) {
+        // A tool-initiated close request: close the tab if THIS window has
+        // one for the session. Windows that never opened it (and windows at
+        // other directories, filtered above) return false - that is the
+        // correct no-op, not an error. The close is reopenable by the user
+        // (the strip's reopen stack), so this is tab-level, not session
+        // deletion.
+        const closeID = (details.data as { sessionID?: string }).sessionID;
+        if (!closeID) {
+          console.error("[thatch] tab-closed event without a sessionID");
+          return;
+        }
+        if (!context.ui.tabs.close(closeID)) {
+          console.error("[thatch] tab-close requested but no tab matched (or tabs are disabled)");
+        }
+        return;
+      }
+      if (!isTabOpenedEvent(details.type)) return;
       const sessionID = (details.data as { sessionID?: string }).sessionID;
       if (!sessionID) {
         console.error("[thatch] tab-opened event without a sessionID");

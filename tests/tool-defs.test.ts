@@ -33,7 +33,7 @@ afterEach(() => {
 
 describe("TOOL_DEFS", () => {
   test("exports all 38 tools", () => {
-    expect(TOOL_DEFS.length).toBe(38);
+    expect(TOOL_DEFS.length).toBe(39);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -74,6 +74,7 @@ describe("TOOL_DEFS", () => {
       "chat_broadcast",
       "chat_status",
       "session_tab",
+      "session_tab_close",
     ]);
   });
 

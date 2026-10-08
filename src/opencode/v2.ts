@@ -8,8 +8,8 @@ import { createRuntime } from "../runtime";
 import { wrapUpCommandContent } from "../commands";
 import { deriveTitle } from "../extraction";
 import { detectRepo, detectWorktreeKind } from "../git";
-import { SESSION_TAB_RPC, TAB_OPENED_EVENT, buildSubordinatePrompt, tabClosedEventType } from "../session-tab-shared";
-import { TOOL_DEFS, trimHostContext, type HostToolContext, type SessionTabHost, type SessionTabSpawnInput, type SessionTabSpawnResult } from "../tool-defs";
+import { SESSION_TAB_RPC, TAB_CLOSED_EVENT, TAB_OPENED_EVENT, buildSubordinatePrompt, tabClosedEventType } from "../session-tab-shared";
+import { TOOL_DEFS, trimHostContext, type HostToolContext, type SessionTabCloseInput, type SessionTabHost, type SessionTabSpawnInput, type SessionTabSpawnResult } from "../tool-defs";
 
 // The opencode v2 adapter (opencode 2.x, plugin API @opencode/plugin 2.x).
 // Loaded only by v2 hosts - the dual entry (src/index.ts) lazy-imports this
@@ -107,6 +107,8 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     directory,
     db: runtime.coreContext.db,
     emitTabOpened,
+    emitTabClosed: (data: { sessionID: string; chatName: string | null }) =>
+      tabRegistration.events.emit(TAB_CLOSED_EVENT, data),
     debug: runtime.debug,
   });
 
@@ -568,6 +570,7 @@ function buildSessionTabHost(input: {
   directory: string;
   db: ThatchDB;
   emitTabOpened: (data: { sessionID: string; directory: string }) => Promise<unknown>;
+  emitTabClosed: (data: { sessionID: string; chatName: string | null }) => Promise<unknown>;
   debug(tag: string, message: string): void;
 }): SessionTabHost {
   return {
@@ -618,6 +621,10 @@ function buildSessionTabHost(input: {
         text: buildSubordinatePrompt(spec.coordinatorChatName, spec.prompt),
       });
       return { sessionID, chatName: registered.ok ? registered.name : null, directory: finalDirectory };
+    },
+    closeTab: async (spec: SessionTabCloseInput): Promise<void> => {
+      await input.emitTabClosed({ sessionID: spec.sessionID, chatName: spec.chatName });
+      input.debug("session-tab", `tab-close emitted for ${spec.sessionID} (${spec.chatName ?? "unnamed"})`);
     },
   };
 }

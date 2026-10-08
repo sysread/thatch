@@ -69,7 +69,7 @@ Key properties:
 
 `src/session-tab-shared.ts` (SDK-free, per the isolation rule in
 `src/index.ts`) holds the rpc definition (`thatch-tabs`: `tab-opened`,
-`tab-closed` - the latter reserved for the deferred close tool and consumed
+`tab-closed` - the latter emitted by the close tool (below) and consumed
 by the generalized-session-heartbeat plan), the subordinate prompt builder,
 and the validators. The TUI entrypoint may import only
 `@opencode/plugin/tui` and this module.
@@ -90,6 +90,23 @@ and the validators. The TUI entrypoint may import only
   extraction children carry the marker too; treat inherited markers as
   inherited, not first-party.
 
+## Closing a subordinate's tab
+
+`thatch_session_tab_close {session}` (the target: the subordinate's chat
+name or session id, resolved name-first through the chat roster) emits
+`rpc.thatch-tabs.tab-closed {sessionID, chatName?}` over the same rpc
+bridge. The TUI plugin consumes it symmetrically with open: the directory
+guard applies, and `ui.tabs.close(sessionID)` closes the tab in every
+window showing one (windows not showing it no-op). Close is TAB-LEVEL: the
+session survives, the strip's reopen stack can restore it, and chat history
+is untouched.
+
+Two consumers ride the event: the death-detection machinery
+(generalized-session-heartbeat) treats a tool-initiated close as a
+CONFIRMED close - the closed session's watchers cancel immediately instead
+of waiting on the 2h delivery-failure heuristic - and the coordinator's own
+workflow closes dispatched subordinates once their work is verified.
+
 ## Install requirement (the `./tui` entrypoint)
 
 A local FILE plugin shim gets a `server` entrypoint only
@@ -105,9 +122,15 @@ dependency for the TUI entry's runtime resolution.
 ## Testing
 
 - Unit: `tests/session-tab-shared.test.ts` (validators, definition shape,
-  guard logic), `tests/opencode-v2.test.ts` (the execute flow's ordering via
+  guard logic), `tests/opencode-v2.test.ts` (the execute flows' ordering via
   the `makeContext` double with `session.move` + the `rpc` domain).
-- QA: uc-059 (tool list + MCP leak check), uc-014/uc-060 (skill counts).
-- Live smoke: spawn from a real TUI (tab appears, subordinate runs,
-  worktree + temp-dir cases, headless no-tab, tabs-off no-tab) - see the
-  plan's Test plan for the numbered scenarios.
+- QA: uc-059 (tool list + MCP leak check), uc-014/uc-060 (skill counts),
+  uc-119 (the live spawn flow through the docker sandbox).
+- Live smoke (recorded 2026-10-08, ALL SCENARIOS PASSED): headless legs -
+  directory variant, worktree variant (the move persisted in the session
+  row + metadata), headless no-tab; TUI-visual legs (a real container
+  attach) - the subordinate's tab appeared unfocused, the title rendered,
+  the subordinate responded, and the persisted strip state matched; kill +
+  re-attach restored both tabs (restart persistence). Sandbox note: mkdir
+  the /qa host dir BEFORE `docker run -v` - a missing host path is created
+  inside the Docker VM, invisible to the mac.

@@ -11,6 +11,7 @@ import {
   validateLocationArgs,
   isSameMainCheckout,
   isTabOpenedEvent,
+  isTabClosedEvent,
   passesDirectoryGuard,
 } from "../src/session-tab-shared";
 import { TOOL_DEFS } from "../src/tool-defs";
@@ -104,6 +105,12 @@ describe("TUI plugin guard logic", () => {
     expect(isTabOpenedEvent("rpc.other.tab-opened")).toBe(false);
     expect(isTabOpenedEvent("session.created")).toBe(false);
     expect(isTabOpenedEvent("tui.session.select")).toBe(false);
+  });
+
+  test("matches only the fully-qualified tab-closed event type", () => {
+    expect(isTabClosedEvent("rpc.thatch-tabs.tab-closed")).toBe(true);
+    expect(isTabClosedEvent("rpc.thatch-tabs.tab-opened")).toBe(false);
+    expect(isTabClosedEvent("session.deleted")).toBe(false);
   });
 
   test("directory guard: equality, and missing locations fail closed", () => {

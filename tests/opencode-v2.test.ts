@@ -342,8 +342,7 @@ describe("opencode v2 adapter", () => {
     }
   });
 
-  test("session_tab pre-registers the subordinate in chat under its final directory", async () => {
-    // Real db on the temp path: assert the roster row directly.
+  test("session_tab pre-registers the subordinate in chat under its final directory", async () => {    // Real db on the temp path: assert the roster row directly.
     const { ThatchDB } = await import("../src/db");
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const tool = addedTools.find((t) => t.name === "thatch_session_tab")!;
@@ -364,6 +363,34 @@ describe("opencode v2 adapter", () => {
     }
   });
 
+  test("session_tab_close: resolves the chat name, emits tab-closed, degrades without the seam", async () => {
+    // Seed the chat roster with a subordinate, then close it by NAME.
+    const { ThatchDB } = await import("../src/db");
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const db = new ThatchDB(join(dbDir, "test.db"));
+    try {
+      db.registerChatSession("ses_subordinate", "test-owner/test-repo", null, "opencode", null, null);
+      const row = db.findChatSession("ses_subordinate");
+      expect(row).not.toBeNull();
+      const tool = addedTools.find((t) => t.name === "thatch_session_tab_close")!;
+      const raw = await tool.execute(
+        { session: row?.name },
+        { sessionID: "ses_coordinator", agent: "build" },
+      );
+      const result = typeof raw === "string" ? raw : (raw as any)?.content;
+      // The emitted event carries the RESOLVED session id + the chat name
+      // (the death-detection consumer keys on the id; notices address by
+      // name).
+      expect(rpcEmitted).toEqual([
+        { name: "tab-closed", data: { sessionID: "ses_subordinate", chatName: row?.name } },
+      ]);
+      expect(result).toContain("Tab close requested");
+      expect(result).toContain("ses_subordinate");
+    } finally {
+      db.close();
+    }
+  });
+
   test("session_tab degrade: no session context and no seam refuse cleanly", async () => {
     const { buildCoreContext } = await import("../src/tool-defs");
     const { ThatchDB } = await import("../src/db");
@@ -374,6 +401,12 @@ describe("opencode v2 adapter", () => {
       const ctx = buildCoreContext(db, new MockEmbeddingModel(), "test-owner/test-repo");
       expect(await def.execute({ prompt: "p", title: "t" }, ctx, undefined)).toContain("did not provide a session context");
       expect(await def.execute({ prompt: "p", title: "t", directory: "/tmp" }, ctx, { sessionID: "s", agent: "build" })).toContain(
+        "did not wire the session-tab surface",
+      );
+      // The close tool rides the same seam - same refusals.
+      const closeDef = TOOL_DEFS.find((d) => d.name === "session_tab_close")!;
+      expect(await closeDef.execute({ session: "ses_x" }, ctx, undefined)).toContain("did not provide a session context");
+      expect(await closeDef.execute({ session: "ses_x" }, ctx, { sessionID: "s", agent: "build" })).toContain(
         "did not wire the session-tab surface",
       );
     } finally {

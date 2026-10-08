@@ -195,6 +195,7 @@ requirements.
 | Tool | What it does |
 |------|-------------|
 | `thatch_session_tab` | Spawn a detached subordinate LLM session in a new TUI tab: creates the session, pre-assigns its chat name, delivers your task prompt with your coordinator-identity framing, and opens its tab beside yours (unfocused). Takes `prompt` and `title` (required) plus exactly one of `worktree` (a git worktree of the current repository) or `directory` (any existing directory). Requires opencode v2 and the `thatch-coordination` skill describes the supervisor workflow. |
+| `thatch_session_tab_close` | Close a dispatched subordinate's TUI tab when its task is verified and done. Tab-level only: the session survives and the user can reopen the tab; nothing is deleted. Target: the subordinate's chat name or session id. opencode v2 only. |
 
 ### Chat tools
 

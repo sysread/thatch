@@ -183,16 +183,31 @@ export interface SessionTabSpawnResult {
   directory: string;
 }
 
+/** Input to SessionTabHost.closeTab - the resolved close target. */
+export interface SessionTabCloseInput {
+  /** The session whose tab should close (resolved id). */
+  sessionID: string;
+  /** The target's chat name when the row knows it (null for a raw-id
+   *  target or an unregistered session); rides the tab-closed event for
+   *  consumers that address by name. */
+  chatName: string | null;
+}
+
 /**
- * The v2-only host surface behind thatch_session_tab. Implementation lives
- * in src/opencode/v2.ts; the seam keeps the tool definition host-agnostic.
- * `directory` is the serving instance's directory (the coordinator session's
- * cwd) - the tool compares it against a worktree arg's main checkout for the
- * same-repo validation.
+ * The v2-only host surface behind thatch_session_tab +
+ * thatch_session_tab_close. Implementation lives in src/opencode/v2.ts; the
+ * seam keeps the tool definitions host-agnostic. `directory` is the serving
+ * instance's directory (the coordinator session's cwd) - the open tool
+ * compares it against a worktree arg's main checkout for the same-repo
+ * validation.
  */
 export interface SessionTabHost {
   readonly directory: string;
   spawnSubordinate(input: SessionTabSpawnInput): Promise<SessionTabSpawnResult>;
+  /** Emits the tab-closed rpc event; resolves once emitted. Fire-and-forget
+   *  toward the TUI: the strip close is requested, not acked (windows not
+   *  showing the tab no-op it). */
+  closeTab(input: SessionTabCloseInput): Promise<void>;
 }
 
 /**
@@ -2462,6 +2477,56 @@ const sessionTabDef: ToolDef = {
 };
 
 /**
+ * Closes a subordinate session's TUI tab. The counterpart of
+ * thatch_session_tab: the coordinator's cleanup half of the supervision
+ * lifecycle (spawn -> supervise -> verify -> close). Tab-level only - the
+ * session itself survives (the strip's reopen stack can restore it), and
+ * the death-detection machinery (generalized-session-heartbeat) consumes
+ * the emitted event as a confirmed-close signal that cancels the closed
+ * session's watchers immediately.
+ *
+ * The target resolves name-first (chat names are unique) then by session
+ * id - so the coordinator can paste either from its task list. v2Only:
+ * same surfaces as the spawn tool.
+ */
+const sessionTabCloseDef: ToolDef = {
+  name: "session_tab_close",
+  description:
+    "Close a subordinate session's TUI tab (opencode v2 only). The counterpart of " +
+    "thatch_session_tab: call it when a dispatched subordinate's task is verified and done. " +
+    "Tab-level only - the session survives and the user can reopen the tab; nothing is deleted. " +
+    "The target is the subordinate's chat name (from the spawn tool's response) or its session id.",
+  args: {
+    session: z.string().min(1).describe(
+      "Which subordinate's tab to close: the chat name assigned when it was spawned " +
+      "(e.g. 'bishop-the-synthetic-00001') or its session id (ses_...).",
+    ),
+  },
+  v2Only: true,
+  async execute(args, ctx, host) {
+    if (!host) {
+      return "Session tabs are unavailable: this host did not provide a session context.";
+    }
+    if (!ctx.sessionTabHost) {
+      return "Session tabs are unavailable: this host did not wire the session-tab surface (opencode v2 only).";
+    }
+    const target = (args.session as string).trim();
+    const row = ctx.db.findChatSession(target);
+    const sessionID = row?.session_id ?? (target.startsWith("ses_") ? target : "");
+    if (!sessionID) {
+      return `No registered session matches "${target}" - pass the subordinate's chat name (from the spawn response) or its session id.`;
+    }
+    const chatName = row?.name ?? null;
+    await ctx.sessionTabHost.closeTab({ sessionID, chatName });
+    return [
+      `Tab close requested for ${chatName ? `${chatName} (${sessionID})` : sessionID}.`,
+      "The tab closes in windows showing it (the session itself is untouched -",
+      "the user can reopen the tab). Cross-session chat history is unaffected.",
+    ].join("\n");
+  },
+};
+
+/**
  * All tool definitions, in the order they should be presented to the agent.
  * The opencode plugin wraps each in `tool()`; the MCP server exposes the
  * non-opencodeOnly ones via `tools/list` and dispatches `tools/call` to
@@ -2506,6 +2571,7 @@ export const TOOL_DEFS: ToolDef[] = [
   chatBroadcastDef,
   chatStatusDef,
   sessionTabDef,
+  sessionTabCloseDef,
 ];
 
 /** Extensions a host adapter passes into the shared CoreContext. */

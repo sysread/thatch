@@ -62,7 +62,8 @@ wishes and record the decision in the task list.
 
 ## Cleanup
 
-A finished subordinate's session stays in the sessions list; close finished
-tabs by hand (the tab-close tool is not built yet). If a subordinate strands
+A finished subordinate's tab closes with `thatch_session_tab_close` (pass
+the subordinate's chat name) once its work is verified — tab-level only:
+the session survives and the user can reopen it. If a subordinate strands
 an empty or stuck session, tell the user which session id to delete — you
 cannot delete sessions yourself.

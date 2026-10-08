@@ -162,6 +162,11 @@ export function isTabOpenedEvent(type: string): boolean {
   return type === tabOpenedEventType;
 }
 
+/** The close-request filter: same transport, opposite action. */
+export function isTabClosedEvent(type: string): boolean {
+  return type === tabClosedEventType;
+}
+
 /**
  * The directory guard mirrors the built-in tui.* handlers: an event only
  * acts on the window whose directory matches the event's location (the

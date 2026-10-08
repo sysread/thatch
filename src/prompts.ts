@@ -159,7 +159,7 @@ Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
         thatch_watch_command_create, thatch_watch_list, thatch_watch_cancel,
         thatch_chat_register, thatch_chat_list, thatch_chat_send,
         thatch_chat_read, thatch_chat_unregister, thatch_chat_broadcast,
-        thatch_chat_status${v2Tools ? "\n        thatch_session_tab (opencode v2 only - spawn a detached subordinate\n        LLM session in a new TUI tab and supervise it over cross-session chat)" : ""}
+        thatch_chat_status${v2Tools ? `\n        thatch_session_tab (opencode v2 only - spawn a detached subordinate\n        LLM session in a new TUI tab and supervise it over cross-session chat)\n        thatch_session_tab_close (opencode v2 only - close a dispatched\n        subordinate's tab when its task is verified and done)` : ""}
 
 ## Stores
 
