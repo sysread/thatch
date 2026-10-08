@@ -20,9 +20,22 @@
 #   docker run --rm -v "$(pwd)":/app/thatch -v "$SMOKE/qa:/qa" \
 #     -e VENICE_API_KEY thatch-qa-opencode run "<prompt>"
 #
+# Serve mode (a long-lived headless server: sessions live across plugin
+# reloads - what the reload-loss repro needs):
+#   docker run -d --rm -p 127.0.0.1:4096:4096 -v "$(pwd)":/app/thatch \
+#     -v "$SMOKE/qa:/qa" -e OPENCODE_SERVER_PASSWORD=qa-repro \
+#     -e VENICE_API_KEY -e THATCH_DEBUG=1 -e THATCH_WATCH_POLL_SECONDS=5 \
+#     thatch-qa-opencode serve --hostname 0.0.0.0 --port 4096
+# The SDK/scripts talk to http://127.0.0.1:4096 with basic auth
+# (opencode:$OPENCODE_SERVER_PASSWORD) + the x-opencode-directory header.
+#
 # The thatch checkout is MOUNTED (not baked) so QA always exercises the
 # current working tree - the same choice the QA runner makes with git
 # archive. VENICE_API_KEY is passed at run time, never baked.
+#
+# The reload-loss repro (automated; verifies pending-event durability
+# across a plugin reload): start the serve container as above, then
+#   bun qa/opencode-sandbox/reload-loss-repro.ts
 
 FROM oven/bun:1.4.2
 

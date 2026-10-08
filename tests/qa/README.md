@@ -97,6 +97,15 @@ the v1-binary recipe). Details:
   host-binary discovery does not apply. v1 coverage lives on
   `qa-host-live`.
 - `startServe` use cases (UC-100) still spawn the serve process host-side.
+- **Serve mode** (a long-lived headless server for live-session
+  experiments across plugin reloads): run the container with `serve
+  --hostname 0.0.0.0 --port 4096` + `-p 127.0.0.1:4096:4096` + the pinned
+  `OPENCODE_SERVER_PASSWORD` + `THATCH_DEBUG=1` +
+  `THATCH_WATCH_POLL_SECONDS=5` (the default 60s cadence makes mid-turn
+  timing non-deterministic). The SDK/scripts talk to the mapped port with
+  basic auth + the `x-opencode-directory` header. The reload-loss repro
+  (`qa/opencode-sandbox/reload-loss-repro.ts`) is the worked example: it
+  verifies pending-event durability across a plugin reload end to end.
 - The default model is `venice/z-ai-glm-5-3-flash` (cheap and fast);
   override with `QA_MODEL`. The sandbox entrypoint's fallback config must
   be kept in sync with the runner's `MODEL` default.
