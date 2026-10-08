@@ -12,15 +12,22 @@ export XDG_STATE_HOME=/qa/state
 # The caller's -w (the QA runner mounts the fixture at its host path and
 # runs there) - captured before the /qa/work init cd's around.
 INITIAL_CWD=$(pwd)
-mkdir -p "$XDG_CONFIG_HOME/opencode/plugins" "$XDG_DATA_HOME" "$XDG_STATE_HOME" /qa/work
+mkdir -p "$XDG_CONFIG_HOME/opencode/plugins/thatch" "$XDG_DATA_HOME" "$XDG_STATE_HOME" /qa/work
 
-# The thatch plugin shim: absolute paths (a plugin file's relative imports
-# resolve from its own directory - ./src/index would never load). Dual-shape:
-# v1 hosts read `server`; v2 hosts read the default export.
-cat >"$XDG_CONFIG_HOME/opencode/plugins/thatch.ts" <<'SHIM'
+# The thatch plugin shim, in DIRECTORY form: the v2 TUI's plugin discovery
+# loads directories/symlinks and SKIPS plain files, so the ./tui entrypoint
+# (the tab-strip driver) only loads from the directory shape. The container
+# is v2-only (the image pins v2), so v1's file-only discovery does not
+# apply here. Absolute paths: a plugin file's relative imports resolve from
+# its own directory - ./src/index would never load. Dual-shape index: v2's
+# server-side loader reads the default export (merged {id, setup, server}).
+cat >"$XDG_CONFIG_HOME/opencode/plugins/thatch/index.ts" <<'SHIM'
 export { server } from "/app/thatch/src/index";
 export { default } from "/app/thatch/src/index";
 SHIM
+cat >"$XDG_CONFIG_HOME/opencode/plugins/thatch/tui.ts" <<'TUI'
+export { default } from "/app/thatch/src/opencode/tui-plugin";
+TUI
 ln -sfn /app/thatch/node_modules "$XDG_CONFIG_HOME/opencode/node_modules"
 cp /app/thatch/package.json "$XDG_CONFIG_HOME/opencode/package.json"
 
