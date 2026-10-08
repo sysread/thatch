@@ -66,10 +66,12 @@ env (`runner.ts` fixture env):
 | `THATCH_DB_PATH` | `dir/thatch.db` | Thatch's own db directly (the plugin resolves this before the XDG default). |
 
 Anything spawning opencode OUTSIDE this runner (a manual reproduction of a
-live scenario, a sandboxed TUI smoke) must set the same four. `--standalone`
-is a useful addition for a manual TUI session: a private child server that
-dies with the TUI (stdin-lease), never joining a shared daemon. The
-session-tab plan's live-smoke section carries a worked example.
+live scenario, a sandboxed TUI smoke) must set the same four. Even then the
+launching shell's env leaks in (direnv's `OPENCODE_CONFIG` layers real MCP
+server configs into the sandbox, whose credentials live in the overridden
+data dir - spurious re-auth prompts). The docker sandbox
+(`qa/opencode-sandbox/`) ends that class: the container has exactly the env
+it is given.
 
 Known coupling: the fixture PRE-COPIES skills from the real
 `~/.config/opencode/skills`, so count assertions there can lag the checkout
@@ -77,16 +79,13 @@ until the real config installs the newest skill (uc-014 asserts a floor
 while the real config is behind, strict once it catches up). Clear a stale
 master cache with `rm -rf "$TMPDIR/thatch-qa-master"`.
 
-Run against v1 while v2 is the default binary:
-`PATH="$(brew --cellar)/opencode/1.18.32/bin:$PATH" mise run qa-auto`.
+## Docker mode (the default `qa-auto`/`qa-live` targets)
 
-## Docker sandbox mode
-
-`mise run qa-docker` (or `QA_DOCKER=1 bin/qa-run live`) runs the live use
-cases inside the `qa/opencode-sandbox` container: a pinned opencode v2
-(2.0.23) with a throwaway XDG tree built per container. Use it when the
-host's environment would leak into spawned sessions (direnv `OPENCODE_CONFIG`
-layers, shell keys, MCP auth) or when you want the run hermetic. Details:
+`mise run qa-auto` / `mise run qa-live` run through the
+`qa/opencode-sandbox` container: a pinned opencode v2 (2.0.23) with a
+throwaway XDG tree built per container. `mise run qa-host-auto` /
+`qa-host-live` run against the HOST binary instead (the CI-shaped mode and
+the v1-binary recipe). Details:
 
 - The image builds on first use (and on demand: `docker build -t
   thatch-qa-opencode qa/opencode-sandbox`).
@@ -95,8 +94,12 @@ layers, shell keys, MCP auth) or when you want the run hermetic. Details:
   into the container explicitly (`PATH` excepted - the image's own PATH
   finds its binary).
 - The matrix collapses to a single unlabeled v2 leg: the image pins v2, so
-  host-binary discovery does not apply. v1 coverage stays on `qa-live`.
+  host-binary discovery does not apply. v1 coverage lives on
+  `qa-host-live`.
 - `startServe` use cases (UC-100) still spawn the serve process host-side.
+- The default model is `venice/z-ai-glm-5-3-flash` (cheap and fast);
+  override with `QA_MODEL`. The sandbox entrypoint's fallback config must
+  be kept in sync with the runner's `MODEL` default.
 
 ## Adding a use case
 

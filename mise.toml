@@ -49,11 +49,19 @@ description = "List QA use cases without spawning opencode sessions"
 run = "QA_DRY_RUN=1 bun test tests/qa/auto/index.test.ts tests/qa/live/index.test.ts --concurrent --max-concurrency 5"
 
 [tasks.qa-auto]
-description = "Run only automatable QA use cases (no LLM, fast). Pass UC names as args to select a subset (e.g. mise run qa-auto uc-004 uc-008)."
-run = "bin/qa-run auto"
+description = "Run automatable QA use cases inside the docker sandbox (qa/opencode-sandbox: pinned opencode v2, throwaway XDG tree - no host state touched). Pass UC names as args to select a subset (e.g. mise run qa-auto uc-004 uc-008)."
+run = "QA_DOCKER=1 bin/qa-run auto"
 
 [tasks.qa-live]
-description = "Run only live-session QA use cases (spawns opencode, costs model tokens). Pass UC names as args to select a subset (e.g. mise run qa-live uc-001 uc-003)."
+description = "Run live-session QA use cases inside the docker sandbox (spawns opencode, costs model tokens). Pass UC names as args to select a subset (e.g. mise run qa-live uc-001 uc-003)."
+run = "QA_DOCKER=1 bin/qa-run live"
+
+[tasks.qa-host-auto]
+description = "Run automatable QA against the HOST opencode binary (no docker) - the CI-shaped mode and the v1-binary recipe: PATH=\"$(brew --cellar)/opencode/1.18.32/bin:$PATH\" mise run qa-host-auto."
+run = "bin/qa-run auto"
+
+[tasks.qa-host-live]
+description = "Run live-session QA against the HOST opencode binary (no docker). v1 coverage lives here: PATH=\"$(brew --cellar)/opencode/1.18.32/bin:$PATH\" mise run qa-host-live."
 run = "bin/qa-run live"
 
 [tasks.qa-docker]

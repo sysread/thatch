@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 const MASTER_ROOT = join(tmpdir(), "thatch-qa-master");
 const QA_ROOT = "/tmp/thatch-qa";
 const REPO_ROOT = join(import.meta.dir, "..", "..");
-export const MODEL = process.env.QA_MODEL ?? "venice/zai-org-glm-5-2";
+export const MODEL = process.env.QA_MODEL ?? "venice/z-ai-glm-5-3-flash";
 const DRY_RUN = process.env.QA_DRY_RUN === "1";
 
 // --- Types ------------------------------------------------------------------
@@ -344,12 +344,15 @@ export async function createFixture(name: string): Promise<QaContext> {
  * the shim's import chain resolves. The image builds on first use.
  */
 export function opencodeRunArgs(ctx: QaContext, prompt: string): { args: string[]; cwd: string } {
+  // Exact "1": QA_DOCKER=0 must disable, not enable (a bare truthy check
+  // would read the string "0" as on).
+  const docker = process.env.QA_DOCKER === "1";
   // The docker image pins opencode v2 - the host's binary (possibly absent,
   // possibly v1) is irrelevant to what actually runs.
-  const major = process.env.QA_DOCKER ? 2 : serveMajorVersion(ctx.env);
+  const major = docker ? 2 : serveMajorVersion(ctx.env);
   const base = major >= 2 ? ["opencode", "run", "--standalone"] : ["opencode", "run"];
   const args = [...base, "--model", MODEL, "--auto", prompt];
-  if (!process.env.QA_DOCKER) return { args, cwd: ctx.dir };
+  if (!docker) return { args, cwd: ctx.dir };
   ensureQaDockerImage();
   const mounts = [ctx.dir, MASTER_ROOT];
   const realNodeModules = join(process.env.HOME ?? "", ".config", "opencode", "node_modules");
@@ -457,8 +460,15 @@ Evidence:
     ]);
 
     const output = stdout + stderr;
-    const match = output.match(/^Result:\s*(PASS|FAIL|PARTIAL|MANUAL-ONLY|DOCS_MISMATCH)/m);
-    const status = match ? match[1] as UseCaseResult : "FAIL";
+    // The verdict is the LAST "Result:" line: an agent may echo the format
+    // spec (whose own example matches PASS) mid-transcript, and models like
+    // to bold the report ("**Result: PASS**"), which never matches a strict
+    // line-start anchor. Both tolerated here: leading emphasis is allowed
+    // and the final match wins.
+    const verdictMatches = [...output.matchAll(/\**[ \t]*Result:[ \t]*(PASS|FAIL|PARTIAL|MANUAL-ONLY|DOCS_MISMATCH)\b/g)];
+    const status = verdictMatches.length
+      ? verdictMatches[verdictMatches.length - 1][1] as UseCaseResult
+      : "FAIL";
 
     if (status !== "PASS") {
       console.log(`  ${uc.name}: ${status}\n  Output: ${output.slice(0, 2000)}`);
@@ -499,7 +509,7 @@ interface MatrixLeg {
  * legs when iterating against one major.
  */
 function matrixLegs(uc: UseCase): MatrixLeg[] {
-  if (process.env.QA_DOCKER) {
+  if (process.env.QA_DOCKER === "1") {
     // The docker image pins opencode v2, so host-binary discovery does not
     // apply: the matrix collapses to a single unlabeled leg through the
     // container. (A v1 docker leg would need a v1-pinned image - not built.)

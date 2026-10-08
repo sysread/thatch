@@ -9,6 +9,9 @@ export HOME=/qa/home
 export XDG_CONFIG_HOME=/qa/config
 export XDG_DATA_HOME=/qa/data
 export XDG_STATE_HOME=/qa/state
+# The caller's -w (the QA runner mounts the fixture at its host path and
+# runs there) - captured before the /qa/work init cd's around.
+INITIAL_CWD=$(pwd)
 mkdir -p "$XDG_CONFIG_HOME/opencode/plugins" "$XDG_DATA_HOME" "$XDG_STATE_HOME" /qa/work
 
 # The thatch plugin shim: absolute paths (a plugin file's relative imports
@@ -23,9 +26,10 @@ cp /app/thatch/package.json "$XDG_CONFIG_HOME/opencode/package.json"
 
 # The work dir: a scratch git repo so repo-identity helpers (detectRepo,
 # resolveMainCheckout) and the session-tab worktree flow have a repo to
-# resolve against. Idempotent for `run` invocations that re-exec.
-cd /qa/work
-if [ ! -d .git ]; then
+# resolve against when one is launched from here. Idempotent for `run`
+# invocations that re-exec.
+if [ ! -d /qa/work/.git ]; then
+  cd /qa/work
   git init -q
   git config user.email qa@example.com
   git config user.name QA
@@ -33,6 +37,9 @@ if [ ! -d .git ]; then
   git add .gitkeep
   git commit -qm init
 fi
+# Back to the caller's -w: the project (skills, git identity) resolves from
+# the working directory, and the QA runner points it at the mounted fixture.
+cd "$INITIAL_CWD"
 
 # Minimal opencode config: the venice provider with the key from the env
 # (never on disk), autoupdate off, no MCP servers - the sandbox has none.
@@ -41,7 +48,7 @@ cat >"$XDG_CONFIG_HOME/opencode/opencode.json" <<'CONFIG'
   "$schema": "https://opencode.ai/config.json",
   "autoupdate": false,
   "snapshot": false,
-  "model": "venice/zai-org-glm-5-2",
+  "model": "venice/z-ai-glm-5-3-flash",
   "provider": {
     "venice": {
       "options": { "apiKey": "{env:VENICE_API_KEY}" }
