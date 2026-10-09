@@ -26,10 +26,11 @@ const useCase: UseCase = {
     "1. Register two sessions through the chat_register tool.",
     "2. Send a message from one to the other twice with the same body.",
     "3. Confirm the first send reports normal delivery, the retry reports success with the duplicate-suppression note, and exactly one row exists.",
+    "4. Read the recipient's inbox, resend the identical body, and confirm it delivers (no suppression note).",
   ].join("\n"),
   expected: [
     "- The retried send returns success (a retrying harness must not error) with a DUPLICATE SUPPRESSED note.",
-    "- Only one chat_messages row exists for the pair.",
+    "- After the recipient reads, an identical repeat delivers: suppression is a read-state condition, not just a timer.",
   ].join("\n"),
 
   async run(_ctx: QaContext) {
@@ -64,12 +65,25 @@ const useCase: UseCase = {
         console.log(`  FAIL: retried send should succeed with the suppression note: ${retry}`);
         return "FAIL";
       }
+      // Read-state condition: once the recipient READ the first copy, an
+      // identical repeat delivers - it is presumptively an intentional
+      // resend, not a retried harness call.
+      const drained = await findTool("chat_read").execute({}, toolCtx, otherHost);
+      if (typeof drained !== "string" || !drained.includes("uc116 ping")) {
+        console.log(`  FAIL: the recipient's drain should show the message: ${drained}`);
+        return "FAIL";
+      }
+      const afterRead = await findTool("chat_send").execute({ to: otherName, body: "uc116 ping" }, toolCtx, host);
+      if (typeof afterRead !== "string" || !afterRead.includes("[sent]") || afterRead.includes("DUPLICATE SUPPRESSED")) {
+        console.log(`  FAIL: an identical repeat after the first was read should deliver: ${afterRead}`);
+        return "FAIL";
+      }
 
-      // The recipient's mailbox shows exactly one message - the public
-      // surface a duplicate would visibly pollute.
+      // The recipient's mailbox shows the original plus the post-read
+      // repeat - two rows, not three (the mid-window retry added nothing).
       const status = db.chatMessageStatus("ses_uc116_other");
-      if (!status.registered || status.total !== 1) {
-        console.log(`  FAIL: expected exactly 1 message in the recipient's mailbox after the retry, got registered=${status.registered} total=${status.registered ? status.total : "n/a"}`);
+      if (!status.registered || status.total !== 2) {
+        console.log(`  FAIL: expected exactly 2 messages in the recipient's mailbox, got registered=${status.registered} total=${status.registered ? status.total : "n/a"}`);
         return "FAIL";
       }
     } finally {

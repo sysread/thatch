@@ -191,23 +191,73 @@ unregistration; a departed sender degrades to an unknown name in the
 reader's view (the endpoints are deliberately not foreign keys - leaving the
 directory must not be blocked by history).
 
-`chat_broadcast` posts one message to every other registered session at
-once, one inbox row per recipient - the existing wake machinery (grouping,
-gating, rate cap) treats each as ordinary mail. Stale sessions are skipped
-and reported rather than messaged: a host that has stopped heartbeat-ing
-will never read the mail, and dead mail to a dead process is just clutter.
-The sender is excluded. It is a separate tool rather than a magic
-`chat_send` recipient because "send to all" changes the behavior (fan-out,
-stale skipping, no address resolution), and a function that changes
-behavior drastically on a parameter value is two functions.
+Bodies over the part budget are not refused: `splitChatBody` (src/chat.ts)
+auto-splits them into parts, and the first part is prefixed "(message 1 of
+N)" while every part but the last is suffixed "(continued in next
+message)", so a reader assembles the batch before acting on it. Cuts
+prefer blank-line paragraph boundaries and back off a hard cut so a
+surrogate pair never splits mid-character. The parts of one send are
+inserted in ONE transaction - a crash cannot leave a partial batch - and
+the tool output reports the split ("SENT AS N PARTS") so a caller cannot
+mistake it for a single delivery.
 
-Retries are idempotent within a short window: a send (or per-recipient
-broadcast row) matching an existing row on sender, recipient, body, and
-delivery kind within `CHAT_DEDUPE_WINDOW_MS` (10s) succeeds without a
-second insert, reported as deduplicated in the tool output. This exists
+Two budgets govern the split, and the docs state both honestly:
+
+- The part budget is `CHAT_SPLIT_PART_LEN`, default 2000 UTF-16 units
+  (`THATCH_CHAT_SPLIT_PART_LEN` to override, clamped to 500..9000). The
+  DEFAULT is sized to the worst host we have observed: a version-skewed
+  opencode install whose tool-result renderer clipped at exactly 2000
+  characters with no saved-output pointer, cutting each part off before
+  the model saw it. Current opencode v2 (pinned tag v2.0.24) passes
+  50 KiB and 2000 lines per tool result (packages/core/src/tool-output.ts
+  MAX_LINES/MAX_BYTES, host-configurable via
+  `tool_output.max_lines/max_bytes`), so a host on a known-good version
+  can safely raise the override.
+- The whole body is capped by `CHAT_MAX_BODY_CHARS`, default 20,000
+  characters (`THATCH_CHAT_MAX_BODY_CHARS`), checked up front at accept; the
+  number of parts derives from it (ceil(total/partLen)). The refusal
+  reports the attempted count so a caller can split deterministically.
+  The grouped chat_read of a split batch renders as ONE tool result, so
+  the ceiling keeps a worst-case batch read (at most ten 2000-char parts
+  plus framing) comfortably inside the 50 KiB v2 envelope while still
+  bounding the context bomb the old 10k refusal used to block.
+
+Read-side clipping: the chat_read drain shows each message up to
+`CHAT_READ_PAGE_LEN` (2000) characters; longer rows are shown clipped
+with a per-message marker that names the unit - "[clipped: showing 2000
+of 9050 characters" - and the deterministic recovery path. Every drain
+line carries the message id, and `chat_read` accepts `message` (a row id)
+and `offset` (a character offset) to page through one message a page at a
+time without draining or marking anything read. This is the recovery for
+both a drain clip and a HOST-side tool-result clip (the version-skew host
+above): even when a marker or a whole message is cut, the frame note at
+the top of the result teaches the paging call, and ids make it exact.
+
+`chat_broadcast` posts one message to every other registered session at
+once, one inbox row per recipient per part - the existing wake machinery
+(grouping, gating, rate cap) treats each as ordinary mail. Stale sessions
+are skipped and reported rather than messaged: a host that has stopped
+heartbeat-ing will never read the mail, and dead mail to a dead process is
+just clutter. The sender is excluded. It is a separate tool rather than a
+magic `chat_send` recipient because "send to all" changes the behavior
+(fan-out, stale skipping, no address resolution), and a function that
+changes behavior drastically on a parameter value is two functions.
+
+Retries are idempotent by READ STATE within a short window: a send (or
+per-recipient broadcast batch) whose content matches an existing row on
+sender, recipient, body, and delivery kind within `CHAT_DEDUPE_WINDOW_MS`
+(10s) succeeds without a second insert - but ONLY while a matching row is
+still UNREAD in the recipient's inbox. The mail is there; a retry adds
+nothing. Once every matching row was read, the identical body DELIVERS
+again: presumptively an intentional resend after the first was consumed
+(a repeated "ok", a resend the reader asked for). The tool output says
+why it suppressed ("still UNREAD in the recipient's inbox"). This exists
 because a harness that times out a chat_send which actually committed
 retries the call, and the identical body otherwise lands twice (observed
-2026-10-07). The same body outside the window is a new message.
+2026-10-07). The same body outside the window is always a new message.
+For a split batch, ANY unread part suppresses the retry - idempotent even
+while the recipient is mid-read (the poller keeps nudging the unread
+parts), and only a fully read batch lets an intentional repeat through.
 
 ### Polling, heartbeat, staleness
 
@@ -439,8 +489,11 @@ mutates anything.
 
 Timing constants live in `src/chat.ts`: poll interval 30s, staleness
 threshold two missed beats (60s), re-nudge window 15 minutes, nudge cap 6 per recipient
-per hour, auto-row TTL 7 days. There are no environment overrides yet; add
-them the way `THATCH_WATCH_POLL_SECONDS` works if a user needs them.
+per hour, auto-row TTL 7 days. Environment overrides: `THATCH_CHAT_SPLIT_PART_LEN`
+(auto-split part budget, default 2000, clamped 500..9000) and
+`THATCH_CHAT_MAX_BODY_CHARS` (whole-body acceptance ceiling, default 20000);
+both are resolved once at module load and sanitized to positive integers
+within their clamps - invalid values silently fall back to the default.
 
 ## Source files
 
@@ -469,5 +522,8 @@ them the way `THATCH_WATCH_POLL_SECONDS` works if a user needs them.
 - `tests/qa/auto/uc-097-chat.ts` - full lifecycle against a mocked poller
 - `tests/qa/auto/uc-099-chat-cli.ts` - `chat list` roster and `chat tail`
   JSONL contract over a seeded DB
+- `tests/qa/auto/uc-116-chat-send-dedupe.ts` - a retried send is suppressed
+- `tests/qa/auto/uc-119-chat-split-long-messages.ts` - an oversized body is
+  auto-split into marker-decorated parts
 - `tests/qa/live/uc-098-chat-cross-session.ts` - two real sessions exchange
   a message through the shared DB

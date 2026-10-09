@@ -210,17 +210,52 @@ export function resolveRegisteredPredecessor(
 export type ChatHostKind = "opencode" | "mcp";
 
 // Display names appear inside wake prompts and chat_list output, so they are
-// capped tight. Bodies are capped so a runaway sender cannot turn a nudge
-// into a context bomb; the reader fetches full content via chat_read anyway.
+// capped tight. MAX_BODY_LEN remains the per-ROW bound: every stored row
+// (a split part, or a body within the part budget) stays under it, so no
+// single inbox row can turn a wake nudge into a context bomb - the WHOLE
+// body is bounded separately by CHAT_MAX_BODY_CHARS.
 export const MAX_BODY_LEN = 10_000;
 
-// Same-sender, same-recipient, same-body sends within this window are treated
-// as one logical message: a harness that times out a chat_send that actually
-// committed retries the call, and without this guard the retry lands a second
-// identical row (observed 2026-10-07: two rows 8s apart, one delivery pass).
-// The window is deliberately short and not env-tunable - two identical bodies
-// this close together are a retry; outside it, they are two messages.
+// Same-sender, same-recipient, same-body sends within this window are
+// treated as one logical message: a harness that times out a chat_send that
+// actually committed retries the call, and without this guard the retry
+// lands a second identical row (observed 2026-10-07: two rows 8s apart, one
+// delivery pass). The window is deliberately short and not env-tunable -
+// two identical bodies this close together are a retry; outside it, they
+// are two messages. Read state refines this: a duplicate is suppressed
+// only while the earlier copy is still UNREAD (see #isRecentDuplicate).
 export const CHAT_DEDUPE_WINDOW_MS = 10_000;
+
+// Auto-split part budget. A body over the part budget is not refused; it
+// travels as several messages. The DEFAULT is sized to the worst host we
+// have observed: a version-skewed opencode install whose tool-result
+// renderer clipped at exactly 2000 characters with no saved-output pointer,
+// which cut each part off before the model saw it. Current opencode v2
+// (pinned tag v2.0.24) passes 50 KiB + 2000 lines per tool result
+// (packages/core/src/tool-output.ts MAX_LINES/MAX_BYTES, host-configurable
+// via tool_output.max_lines/max_bytes), so hosts on a known-good version
+// can safely raise THATCH_CHAT_SPLIT_PART_LEN.
+//
+// The markers: the FIRST part is prefixed "(message 1 of N)" so the reader
+// knows more is coming and waits before acting, and every part but the last
+// is suffixed "(continued in next message)" - no suffix means the batch is
+// done.
+function envChatInt(name: string, fallback: number, min: number, max: number): number {
+  const parsed = Number(process.env[name]);
+  if (!Number.isInteger(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+export const CHAT_SPLIT_PART_LEN = envChatInt("THATCH_CHAT_SPLIT_PART_LEN", 2000, 500, MAX_BODY_LEN - 1000);
+const SPLIT_CONTINUED = "(continued in next message)";
+
+// Acceptance ceiling on the WHOLE body, in characters, checked up front -
+// parts derive from it (ceil(total/partLen)). The grouped chat_read of a
+// split batch renders as ONE tool result, so the ceiling keeps a worst-case
+// batch read (all parts plus framing) comfortably inside the 50 KiB v2
+// envelope while still bounding the context bomb the old 10k refusal used
+// to block. At the 2000-char default part size that is at most 10 parts.
+export const CHAT_MAX_BODY_CHARS = envChatInt("THATCH_CHAT_MAX_BODY_CHARS", 20_000, 1_000, 1_000_000);
 
 // Assigned names are lowercase slugs of a pool name with a numeric counter
 // suffix ("al-go-rithm-00001"), which satisfies NAME_CHARSET. The charset
@@ -404,6 +439,98 @@ export function createWakeGate(deps: {
       return false;
     }
   };
+}
+
+// ---------------------------------------------------------------------------
+// Body auto-split (shared by send and broadcast)
+// ---------------------------------------------------------------------------
+
+/**
+ * Splits an oversized body into deliverable parts. Bodies over the part
+ * budget travel as several messages instead of being refused, so a caller
+ * never has to split by hand. Cuts prefer blank-line paragraph boundaries
+ * (a cut at "\n\n" cannot split a line, a word, or a surrogate pair), falling back to
+ * a hard cut that backs off a trailing high surrogate so emoji-heavy text
+ * never splits mid-character. Every chunk is capped at CHAT_SPLIT_PART_LEN
+ * UTF-16 units - the same unit .length counts - which leaves marker headroom
+ * inside MAX_BODY_LEN after decoration. A body within the limit comes back
+ * as the single, unmodified part. Returns [] for an empty input.
+ */
+export function splitChatBody(body: string, partLen: number = CHAT_SPLIT_PART_LEN): string[] {
+  const text = body.trim();
+  if (text.length <= partLen) return text ? [text] : [];
+  const chunks: string[] = [];
+  let rest = text;
+  while (rest.length > partLen) {
+    const cut = nextSplitPoint(rest, partLen);
+    const part = rest.slice(0, cut).trim();
+    // The cut's own break characters (and any boundary whitespace) are
+    // consumed here; the next chunk starts at real content.
+    rest = rest.slice(cut).trim();
+    if (part) chunks.push(part);
+  }
+  if (rest) chunks.push(rest);
+  const total = chunks.length;
+  if (total <= 1) return chunks;
+  return chunks.map((chunk, i) => {
+    const withPrefix = i === 0 ? `(message 1 of ${total})\n\n${chunk}` : chunk;
+    return i < total - 1 ? `${withPrefix}\n\n${SPLIT_CONTINUED}` : withPrefix;
+  });
+}
+
+// Read-side clip budget. The chat_read drain clips any single message
+// longer than this and stamps a clip marker (which names CHARS - never a
+// bare number) with a deterministic paging pointer; chat_read's message +
+// offset arguments page through the rest. Sized to the same worst-host
+// budget as the split part length.
+export const CHAT_READ_PAGE_LEN = 2000;
+
+/** Renders one message body for the drain: full when it fits one read
+ *  page, else the first page plus a clip marker that names the unit
+ *  (characters) and the deterministic recovery path. */
+export function chatReadClip(body: string, id: number, page: number = CHAT_READ_PAGE_LEN): string {
+  if (body.length <= page) return body;
+  return `${body.slice(0, page)}\n[clipped: showing ${page} of ${body.length} characters - continue with chat_read, message ${id}, offset ${page}]`;
+}
+
+/** One page of a paged single-message read (chat_read's message/offset
+ *  arguments). Deterministic recovery: names the character window and
+ *  either the next offset or "final page". Never stamps read - only the
+ *  drain marks mail read. */
+export function chatReadPage(
+  body: string,
+  id: number,
+  offset: number,
+  page: number = CHAT_READ_PAGE_LEN,
+): { ok: true; text: string } | { ok: false; error: string } {
+  if (offset < 0 || offset >= body.length) {
+    return {
+      ok: false,
+      error: `Offset ${offset} is outside message ${id} (${body.length} characters) - use an offset from 0 to ${Math.max(0, body.length - 1)}.`,
+    };
+  }
+  const end = Math.min(body.length, offset + page);
+  const pos =
+    end < body.length
+      ? `[showing characters ${offset}-${end} of ${body.length} - next page: chat_read, message ${id}, offset ${end}]`
+      : `[showing characters ${offset}-${end} of ${body.length} - final page]`;
+  return { ok: true, text: `${pos}\n${body.slice(offset, end)}` };
+}
+
+/** Where `text` (known to be longer than `partLen`) should be cut
+ *  for its first chunk: the last blank-line boundary inside the part budget,
+ *  else a surrogate-safe hard cut at the budget. */
+function nextSplitPoint(text: string, partLen: number): number {
+  const paragraph = text.slice(0, partLen).lastIndexOf("\n\n");
+  if (paragraph > 0) return paragraph;
+  let cut = partLen;
+  // A hard cut between the two UTF-16 units of a surrogate pair would
+  // corrupt the character; back off one unit so the pair stays whole on
+  // the right side.
+  const high = text.charCodeAt(cut - 1);
+  const low = text.charCodeAt(cut);
+  if (high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff) cut--;
+  return cut;
 }
 
 /**
@@ -666,17 +793,20 @@ export class ChatStore {
    * sender nudging itself). Returns the resolved recipient so callers never
    * need a second lookup - a re-lookup could race a concurrent unregister
    * and fail after the message already landed.
+   *
+   * An oversized body is auto-split into parts (splitChatBody) delivered as
+   * several rows in ONE transaction, so a crash cannot leave a partial
+   * batch in the reader's inbox. `parts` reports how many rows the send
+   * produced (or would have produced, when deduped), and the tool layer
+   * surfaces it so a caller cannot mistake a split for a single delivery.
    */
   send(
     fromSession: string,
     toNameOrID: string,
     body: string,
-  ): { ok: true; recipient: { session_id: string; name: string }; deduped?: boolean } | { ok: false; error: string } {
+  ): { ok: true; recipient: { session_id: string; name: string }; parts: number; deduped?: boolean } | { ok: false; error: string } {
     const trimmed = body.trim();
-    if (!trimmed) return { ok: false, error: "Message body cannot be empty." };
-    if (trimmed.length > MAX_BODY_LEN) {
-      return { ok: false, error: `Message too long (max ${MAX_BODY_LEN} characters).` };
-    }
+    if (!trimmed) return { ok: false, error: `Message body cannot be empty (attempted ${body.length} characters).` };
     const sender = this.#find(fromSession);
     if (!sender) return { ok: false, error: "You are not registered - call chat_register first." };
     const recipient = this.find(toNameOrID);
@@ -686,35 +816,75 @@ export class ChatStore {
     if (recipient.session_id === fromSession) {
       return { ok: false, error: "You cannot message yourself." };
     }
-    if (this.#isRecentDuplicate(fromSession, recipient.session_id, trimmed, 0)) {
-      return { ok: true, recipient: { session_id: recipient.session_id, name: recipient.name }, deduped: true };
+    // Acceptance ceiling, checked before any split: the whole body is
+    // capped in characters so a runaway sender cannot flood the inbox with
+    // parts. The attempted count rides the error so a caller can split
+    // deterministically instead of bisecting.
+    if (trimmed.length > CHAT_MAX_BODY_CHARS) {
+      return {
+        ok: false,
+        error: `Message too long: attempted ${trimmed.length} characters (max ${CHAT_MAX_BODY_CHARS}). Split the content across several messages.`,
+      };
     }
-    this.#db.run(
-      "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast) VALUES (?, ?, ?, ?, 0)",
-      [fromSession, recipient.session_id, trimmed, nowIso()],
-    );
-    return { ok: true, recipient: { session_id: recipient.session_id, name: recipient.name } };
+    const parts = splitChatBody(trimmed);
+    let deduped = false;
+    // One transaction: the whole batch lands or none of it - a crash
+    // mid-insert cannot deliver a partial message.
+    this.#db.transaction(() => {
+      // The batch's signature is its rows: the transactional insert makes
+      // the parts all-or-nothing, and the dedupe condition is READ STATE -
+      // any UNREAD part from a prior identical batch suppresses the retry
+      // (idempotent even while the recipient is mid-read), while a fully
+      // read batch lets an intentional repeat deliver. Checking parts
+      // rather than only the first also keeps two identical chunks inside
+      // one body from suppressing each other.
+      if (this.#isRecentDuplicate(fromSession, recipient.session_id, parts, 0)) {
+        deduped = true;
+        return;
+      }
+      for (const part of parts) {
+        this.#db.run(
+          "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast) VALUES (?, ?, ?, ?, 0)",
+          [fromSession, recipient.session_id, part, nowIso()],
+        );
+      }
+    })();
+    return {
+      ok: true,
+      recipient: { session_id: recipient.session_id, name: recipient.name },
+      parts: parts.length,
+      ...(deduped ? { deduped: true } : {}),
+    };
   }
 
   /**
    * Posts a message to every other registered session at once. Stale
    * sessions are skipped, not messaged - a host process that has stopped
    * heartbeat-ing will never read the mail, and a broadcast is for reaching
-   * live agents. Each recipient gets its own inbox row, so the existing
-   * wake machinery (grouping, gating, rate cap) treats the broadcast as
-   * ordinary per-recipient mail.
+   * live agents. Each recipient gets its own inbox row per part, so the
+   * existing wake machinery (grouping, gating, rate cap) treats the
+   * broadcast as ordinary per-recipient mail. An oversized body is
+   * auto-split (splitChatBody) and every recipient gets every part inside
+   * the same single transaction; `parts` reports how many rows each
+   * recipient received.
    */
   broadcast(
     fromSession: string,
     body: string,
-  ): { ok: true; recipients: string[]; skipped: string[]; deduped: number } | { ok: false; error: string } {
+  ): { ok: true; recipients: string[]; skipped: string[]; deduped: number; parts: number } | { ok: false; error: string } {
     const trimmed = body.trim();
-    if (!trimmed) return { ok: false, error: "Message body cannot be empty." };
-    if (trimmed.length > MAX_BODY_LEN) {
-      return { ok: false, error: `Message too long (max ${MAX_BODY_LEN} characters).` };
-    }
+    if (!trimmed) return { ok: false, error: `Message body cannot be empty (attempted ${body.length} characters).` };
     const sender = this.#find(fromSession);
     if (!sender) return { ok: false, error: "You are not registered - call chat_register first." };
+    // Same acceptance ceiling as send() - a broadcast fans out to every
+    // live session, so the cap matters even more here.
+    if (trimmed.length > CHAT_MAX_BODY_CHARS) {
+      return {
+        ok: false,
+        error: `Message too long: attempted ${trimmed.length} characters (max ${CHAT_MAX_BODY_CHARS}). Split the content across several messages.`,
+      };
+    }
+    const parts = splitChatBody(trimmed);
     const recipients: string[] = [];
     const skipped: string[] = [];
     let deduped = 0;
@@ -731,39 +901,56 @@ export class ChatStore {
           skipped.push(row.name);
           continue;
         }
-        // A retried broadcast counts as delivered (the original row
-        // stands) - the recipient list stays complete either way.
-        if (this.#isRecentDuplicate(fromSession, row.session_id, trimmed, 1)) {
+        // A retried broadcast counts as delivered (the original batch
+        // stands) - the recipient list stays complete either way. Same
+        // read-state rule as send(): any unread part from the prior batch
+        // suppresses the retry for THIS recipient; a fully read batch
+        // delivers again.
+        if (this.#isRecentDuplicate(fromSession, row.session_id, parts, 1)) {
           deduped++;
           recipients.push(row.name);
           continue;
         }
-        this.#db.run(
-          "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast) VALUES (?, ?, ?, ?, 1)",
-          [fromSession, row.session_id, trimmed, nowIso()],
-        );
+        for (const part of parts) {
+          this.#db.run(
+            "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast) VALUES (?, ?, ?, ?, 1)",
+            [fromSession, row.session_id, part, nowIso()],
+          );
+        }
         recipients.push(row.name);
       }
     })();
-    return { ok: true, recipients, skipped, deduped };
+    return { ok: true, recipients, skipped, deduped, parts: parts.length };
   }
 
   /**
-   * True when an identical row (same sender, recipient, body, and delivery
-   * kind) already exists inside the dedupe window - the signature of a
-   * client-side retry of a send that actually committed. Timestamps are
+   * True when an UNREAD row from a prior send still exists inside the
+   * dedupe window - the signature of a client-side retry of a send that
+   * actually committed. The condition is READ STATE, not just recency:
+   * identical content is a duplicate only while the recipient has not
+   * consumed it (the mail is there; a retry adds nothing). Once every
+   * matching row was read, the same body delivers again - presumptively an
+   * intentional resend after the first was consumed ("ok" said twice on
+   * purpose). For a split batch, `bodies` is every part and ANY unread
+   * part suppresses the retry: idempotent even while the recipient is
+   * mid-read (the poller keeps nudging the unread parts), and only a fully
+   * read batch lets an identical repeat through. Timestamps are
    * second-resolution ISO (nowIso's format), so string comparison works.
    */
-  #isRecentDuplicate(fromSession: string, toSession: string, body: string, viaBroadcast: 0 | 1): boolean {
+  #isRecentDuplicate(fromSession: string, toSession: string, bodies: string[], viaBroadcast: 0 | 1): boolean {
     const cutoff = new Date(Date.now() - CHAT_DEDUPE_WINDOW_MS).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const marks = bodies.map(() => "?").join(",");
     // bun:sqlite's .get() returns null (not undefined) when no row matches -
     // a truthiness check, not an identity check, or every send dedupes.
     return (
       this.#db
         .query(
-          "SELECT 1 AS hit FROM chat_messages WHERE from_session = ? AND to_session = ? AND body = ? AND via_broadcast = ? AND created_at >= ? LIMIT 1",
+          `SELECT 1 AS hit FROM chat_messages
+           WHERE from_session = ? AND to_session = ? AND via_broadcast = ?
+             AND body IN (${marks}) AND read_at IS NULL AND created_at >= ?
+           LIMIT 1`,
         )
-        .get(fromSession, toSession, body, viaBroadcast, cutoff) != null
+        .get(fromSession, toSession, viaBroadcast, ...bodies, cutoff) != null
     );
   }
 
@@ -805,6 +992,33 @@ export class ChatStore {
       .query("SELECT COUNT(*) AS n FROM chat_messages WHERE to_session = ? AND read_at IS NULL")
       .get(sessionID) as any;
     return row.n;
+  }
+
+  /**
+   * One message from the caller's mailbox by row id - the paging path
+   * behind chat_read's message/offset arguments. Scoped to the caller:
+   * a session cannot page another session's mail. Deliberately NO read
+   * stamp and no unread filter - paging works on read or unread rows and
+   * is side-effect-free; only the drain marks mail read.
+   */
+  messageById(sessionID: string, id: number): ChatInboxItem | null {
+    const r = this.#db
+      .query(
+        `SELECT m.id, m.from_session, s.name AS from_name, m.body, m.created_at
+         FROM chat_messages m
+         LEFT JOIN chat_sessions s ON s.session_id = m.from_session
+         WHERE m.id = ? AND m.to_session = ?`,
+      )
+      .get(id, sessionID) as any;
+    return r
+      ? {
+          id: r.id,
+          from_session: r.from_session,
+          from_name: r.from_name ?? null,
+          body: r.body,
+          created_at: r.created_at,
+        }
+      : null;
   }
 
   /**

@@ -33,16 +33,31 @@ explicitly with `thatch_chat_register` (no arguments) - useful after
 - `thatch_chat_send` delivers a message to another registered session, by
   name or session id, and states the recipient's liveness at send time.
   An identical resend within a few seconds is treated as a client retry:
-  it succeeds but delivers nothing new (the tool output says so)
-- `thatch_chat_read` drains the session's inbox
+  while the first copy is still unread it succeeds but delivers nothing
+  new (the tool output says so); once the recipient has read it, the same
+  body delivers again - a deliberate repeat, not a retry. A body over
+  2,000 characters is not refused: it is auto-split into several messages,
+  and the tool output reports the split ("SENT AS N PARTS"). The whole
+  message is capped at 20,000 characters; longer is refused with the
+  attempted count
+- `thatch_chat_read` drains the session's inbox. A message longer than
+  one page (2,000 characters) is shown clipped, with a marker naming the
+  characters ("[clipped: showing 2000 of 2047 characters]"); page through
+  the rest with the `message` and `offset` arguments (each drain line
+  carries the message id). Paging never marks anything read
 - `thatch_chat_broadcast` delivers one message to every other live
-  registered session at once
+  registered session at once (a long body is split per recipient, exactly
+  like a split `chat_send`)
 - `thatch_chat_unregister` leaves the directory
 
 When mail arrives for an idle session, thatch wakes it with a notification -
 the agent gets a model turn even with nobody at the keyboard, reads its
 inbox, and decides what to do. The notification names the senders and the
-count only; the agent reads the actual messages itself.
+count only; the agent reads the actual messages itself. A split message
+arrives as one grouped notification ("N unread messages from X"), and the
+parts carry their own markers so the reader assembles the whole before
+acting: the first part is prefixed "(message 1 of N)" and every part but
+the last is suffixed "(continued in next message)".
 
 Broadcasts are for announcements and open questions ("which of you is
 working on the payments code?", "main just moved, rebase if you are based

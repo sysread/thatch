@@ -1166,6 +1166,10 @@ export class ThatchDB {
     return this.#chat.read(sessionID);
   }
 
+  chatMessageById(sessionID: string, id: number) {
+    return this.#chat.messageById(sessionID, id);
+  }
+
   unreadChatCount(sessionID: string) {
     return this.#chat.unreadCount(sessionID);
   }
