@@ -1033,6 +1033,10 @@ describe("systemPrompt content", () => {
       expect(text).toContain("No sycophancy. Don't open by validating the question");
       expect(text).toContain("When you don't know, say so");
       expect(text).toContain("No process narration. State the thing.");
+      // The comment floor rides the same section (assertions stay within
+      // single source lines - the prose is hard-wrapped).
+      expect(text).toContain("never a metaphor standing in for");
+      expect(text).toContain("Full sentences with the cause named");
     }
   });
 
@@ -1053,6 +1057,7 @@ describe("systemPrompt content", () => {
     expect(skill).toContain("No sycophancy");
     expect(skill).toContain("When you don't know, say so");
     expect(skill).toContain("Session replies");
+    expect(skill).toContain("## Code comments");
   });
 });
 

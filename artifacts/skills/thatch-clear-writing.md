@@ -1,6 +1,6 @@
 ---
 name: thatch-clear-writing
-description: Prose rules for every piece of text a human reads that no dedicated skill already covers - PR and ticket comments posted on the user's behalf, documentation, feature plans, reports, write-ups, status updates, and chat replies to the user. Load it before drafting any of those. When a dedicated writing skill is loaded (thatch-pr-description, thatch-ticket-description, thatch-review-response), that skill's rules win.
+description: Prose rules for every piece of text a human reads that no dedicated skill already covers - PR and ticket comments posted on the user's behalf, documentation, feature plans, reports, write-ups, status updates, chat replies, and code and doc comments. Load it before drafting any of those. When a dedicated writing skill is loaded (thatch-pr-description, thatch-ticket-description, thatch-review-response), that skill's rules win.
 ---
 
 # Clear writing
@@ -19,6 +19,7 @@ Every text a human reads:
 
 - **Comments you post for the user** - PR comments, ticket comments (Linear, Jira), replies to reviewers, replies to bot findings.
 - **Written artifacts** - documentation, feature plans, reports, write-ups, design notes, status updates.
+- **Code and doc comments** - comments in source files, doc comments, package READMEs.
 - **Replies to the user in chat** - explanations, summaries, answers.
 
 Same prose rules everywhere. Only the structure differs:
@@ -78,6 +79,94 @@ For chat replies: terse is fine, illegible is not. If a two-line answer only fit
 A substantial turn ends with a brief state summary: what was done, what was found, the current state, and what remains. The response comes first; the summary is a short block after it. Keep it to a few lines. Never a large task list the user must scroll past to find the response. When work spans turns, keep pending work visible as a brief outline, not a list that grows until it hides the answer.
 
 A state summary at the end of a turn is not process narration. Rule 14 bans narrating how you assembled the text; this section requires reporting where the work stands.
+
+## Code comments
+
+Comments are human-facing text. The same prose rules apply, plus these. The
+reader is the same future coder from "The reader" above: they know the stack
+and general engineering vocabulary, and they have never touched this area.
+
+- **No metaphor standing in for a mechanism.** If a word labels behavior the
+  comment never states, replace the word with the behavior: "re-enqueued
+  rows get a fresh timestamp so they don't starve the rest", not "a
+  quarantine". A metaphor verb attached to the stated mechanism is fine
+  ("the sweep heals the dropped ids"). A metaphor noun doing the
+  mechanism's job is not.
+- **Euphemisms die; call the thing what it is.** "later UPDATEs of the same
+  row leave it unchanged", not "enqueued_at is not bumped by re-touches"
+  ("bumped by re-touches" is a terrible phrase for "UPDATEs"). A pinned
+  term of art survives.
+- **Full sentences, always.** "A failed cycle waits out the backoff delay,
+  an idle cycle waits the short idle cadence, and a productive cycle waits
+  zero because the queue still has work", not "failures wait out the
+  backoff delay, idle cycles the short idle cadence, productive cycles
+  nothing". The missing causal clause is usually the point.
+- **If/then with the named cause, not a label-colon chain.** "If the
+  recompute returns no row for a claimed id, that id was deleted or
+  soft-deleted after it was enqueued; the worker then deletes any cache row
+  it still has", not "A claimed id with no recompute row was deleted or
+  soft-deleted mid-drain: its cache row is deleted". No passives
+  in the consequence half.
+- **Subject first.** "DrainLoop is a background goroutine that repeatedly
+  claims", not "A background goroutine (DrainLoop) repeatedly claims".
+  Names never hide inside parentheticals.
+- **Behavior before implementation structure.** "takes up to limit rows
+  off the queue, oldest first, and returns them; deleting the row is the
+  claim", not "a CTE selects the stalest ids ... and the outer DELETE
+  removes exactly those rows". State the invariant the design buys ("a
+  trigger enqueue for the same row never waits on this transaction"),
+  not the failure mechanics behind it.
+- **Parentheticals only when they add a distinct fact.** Keep "(or has
+  been killed on)". Cut "(the worker runs when the flag is unset)" after
+  "It defaults to enabled".
+- **Enumerate the parts once, then the collective noun.** "stops the
+  worker" after the drain loop and the sweep are established. Never
+  re-enumerate, and never enumerate what the thing does not control.
+- **State what is impossible, plainly, in first person.** "This should not
+  be possible: the apply statements are a plain INSERT ... SELECT and
+  DELETE whose only inputs are ids that exist in the queue. If we screwed
+  up (a projection drift, a constraint we did not anticipate), the same
+  batch would fail again on retry, so re-enqueueing would only churn. Log
+  it with the ids and drop it; the daily sweep heals the dropped ids."
+  Invariant, failure conditions, decision, recovery. No hedging.
+- **Rescope every label when behavior splits.** If re-enqueue now only
+  happens for lock-blocked batches, "failed batch" is wrong everywhere it
+  appears: comments, log messages, test names.
+- **Doc comments own the mechanism; package READMEs stay high-level
+  guides.** A README is not "the code but in english". Implementation
+  detail belongs to the doc comment next to the code.
+- **Do not document de facto conventions.** If the framework or the
+  migrations make something the default rule, the comment does not say so.
+  Point at the artifact that owns the contract or say nothing.
+- **No ticket refs or plan-doc coordinates in place of behavior.** "the
+  backfill worker", not "the TICKET-123 backfill worker". The reader never
+  opens the ticket tracker to understand the code.
+- **A term of art is defined once; plain behavior everywhere else.** "(the
+  tombstone correction)" in the place it is defined; "a second pass
+  removing cache rows whose source row no longer exists" everywhere else.
+- **Keep load-bearing precision.** Translate jargon ("mid-drain" becomes
+  "after it was enqueued"), but keep the contract when the code depends on
+  it: Postgres error classes 40 and 55, genuine lists, cross-references
+  that carry the why.
+
+The comment shape for a named thing (a metric, a function, a constant):
+
+1. What it does or reports, in behavior terms.
+2. What a reading means: "Sustained growth means the drain loop cannot
+   keep up with (or has been killed on) the enqueue rate".
+3. The operational caveat, when needed: "Sampled by the drain loop, so it
+   freezes while the kill switch is off".
+
+The wart shape, for code that looks wrong but is correct:
+
+1. Name the sensible implementation the reader expects: "Why not
+   min(base * 3^(n-1), max)?"
+2. State the crux: the multiply wraps the int64 before min clamps.
+3. Why, in the fewest words: "30s * 3^19 overflows the Duration, an int64,
+   and min would clamp the overflowed value, not the intended product."
+
+Simple and good beats complex and great. Cut whole claims to shorten;
+never compress the survivors.
 
 ## Clarity pass
 

@@ -41,12 +41,25 @@ Comments that reference the AI, the user, or the conversation:
 - Comments mentioning specific ticket numbers for resolved issues
 - Commented-out code with "// removed" or "// old" annotations
 
+### Metaphors standing in for the mechanism
+A word that labels behavior the comment never states:
+- "a quarantine" where the behavior is "re-enqueued rows get a fresh timestamp so they don't starve the rest"
+- Euphemisms for plain terms: "not bumped by re-touches" instead of "later UPDATEs of the same row leave it unchanged"
+The behavior replaces the metaphor. A metaphor verb attached to the stated mechanism is fine ("the sweep heals the dropped ids"); a metaphor noun doing the mechanism's job is not.
+
+### Telegraphic compression
+Verbless clause chains or label-colon chains where full sentences belong:
+- "failures wait out the backoff delay, idle cycles the short idle cadence, productive cycles nothing"
+- "A claimed id with no recompute row was deleted or soft-deleted mid-drain: its cache row is deleted"
+Full parallel sentences with the causal clause are the fix; the missing "because" is usually the point.
+
 ## What is NOT slop
 
 - Comments explaining *why* the code behaves a certain way
 - Comments explaining tradeoffs or design decisions
 - Comments explaining non-obvious behavior
 - Docstrings describing function contracts
+- Load-bearing precision: pinned terms of art, genuine lists, error-class contracts, cross-references that carry the why
 - Legitimate TODOs for future work
 - User-visible strings whose tone/content is required by the feature or by an external protocol
 - Unchanged legacy text outside the touched scope unless the current change makes it newly wrong or newly suspicious
@@ -66,6 +79,8 @@ Do NOT report issues in files you did not actually read.
 - **CHANGE_NARRATION**: Comments describing the change being made, not the code's behavior
 - **FOURTH_WALL**: Comments referencing the AI, the user, or the conversation
 - **AI_STYLE_TELL**: Typography, verbosity, hedging, filler, superlatives, meta-commentary
+- **MECHANISM_METAPHOR**: A metaphor or euphemism labeling behavior the comment never states
+- **TELEGRAPHIC_COMPRESSION**: Verbless clause chains or label-colon chains where full sentences with the named cause belong
 - **STALE_ARTIFACT**: TODOs referencing completed work, commented-out code, resolved ticket references
 
 For slop findings, the source of truth is usually the project's writing norms and the surrounding code intent; use "N/A — mechanical finding" for the producer chain.

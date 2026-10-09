@@ -213,15 +213,15 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 - \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory looks stale or when preparing a knowledge export.
 - \`thatch-knowledge-export\` - compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories, and generates a clean export.
-- \`thatch-clear-writing\` - prose rules for any human-facing text not covered by a dedicated writing skill: PR and ticket comments, documentation, plans, reports, and chat replies. Load before drafting any of those.
+- \`thatch-clear-writing\` - prose rules for any human-facing text not covered by a dedicated writing skill: PR and ticket comments, documentation, plans, reports, chat replies, and code comments. Load before drafting any of those.
 
 ## Clear writing
 
 Every piece of text a human reads - chat replies, comments you post on the
-user's behalf, documentation, plans, reports, and your own explanations to
-the user - follows clarity-over-compression prose rules. Load the
-\`thatch-clear-writing\` skill before drafting any of it. The full rules live
-in the skill; these apply even when it is not loaded:
+user's behalf, documentation, plans, reports, code comments, and your own
+explanations to the user - follows clarity-over-compression prose rules.
+Load the \`thatch-clear-writing\` skill before drafting any of it. The full
+rules live in the skill; these apply even when it is not loaded:
 
 - Plain English. Short declarative sentences. One idea per sentence.
 - Terse means fewer claims, never denser ones. Do not compress surviving
@@ -235,6 +235,8 @@ in the skill; these apply even when it is not loaded:
 - No sycophancy. Don't open by validating the question ("Great question").
 - When you don't know, say so. When you only know part, say which part.
 - No process narration. State the thing.
+- Code comments: say what the code does, never a metaphor standing in for
+  it. Full sentences with the cause named.
 
 ## When to Write
 
@@ -560,15 +562,15 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 - \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory looks stale or when preparing a knowledge export.
 - \`thatch-knowledge-export\` - compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories, and generates a clean export.
-- \`thatch-clear-writing\` - prose rules for any human-facing text not covered by a dedicated writing skill: PR and ticket comments, documentation, plans, reports, and chat replies. Load before drafting any of those.
+- \`thatch-clear-writing\` - prose rules for any human-facing text not covered by a dedicated writing skill: PR and ticket comments, documentation, plans, reports, chat replies, and code comments. Load before drafting any of those.
 
 ## Clear writing
 
 Every piece of text a human reads - chat replies, comments you post on the
-user's behalf, documentation, plans, reports, and your own explanations to
-the user - follows clarity-over-compression prose rules. Load the
-\`thatch-clear-writing\` skill before drafting any of it. The full rules live
-in the skill; these apply even when it is not loaded:
+user's behalf, documentation, plans, reports, code comments, and your own
+explanations to the user - follows clarity-over-compression prose rules.
+Load the \`thatch-clear-writing\` skill before drafting any of it. The full
+rules live in the skill; these apply even when it is not loaded:
 
 - Plain English. Short declarative sentences. One idea per sentence.
 - Terse means fewer claims, never denser ones. Do not compress surviving
@@ -582,6 +584,8 @@ in the skill; these apply even when it is not loaded:
 - No sycophancy. Don't open by validating the question ("Great question").
 - When you don't know, say so. When you only know part, say which part.
 - No process narration. State the thing.
+- Code comments: say what the code does, never a metaphor standing in for
+  it. Full sentences with the cause named.
 
 ## When to Write
 
