@@ -10,7 +10,7 @@ describe("MCP teardown", () => {
       calls,
       deps: {
         sideband: { stop: () => void calls.push("sideband.stop") },
-        model: { dispose: async () => void calls.push("model.dispose") },
+        model: { dispose: async (): Promise<void> => void calls.push("model.dispose") },
         db: { close: () => void calls.push("db.close") },
         dbPath: "/tmp/fake-thatch.db",
         stopVersionChecker: () => void calls.push("stopVersionChecker"),
@@ -24,6 +24,31 @@ describe("MCP teardown", () => {
     const teardown = createMcpTeardown(deps);
     await teardown("SIGINT");
     await teardown("stdin-end"); // second call is a no-op
+    expect(calls).toEqual([
+      "sideband.stop",
+      "stopVersionChecker",
+      "removeVersionFile(/tmp/fake-thatch.db)",
+      "model.dispose",
+      "db.close",
+    ]);
+  });
+
+  test("a second call while the first teardown is in flight awaits the same work", async () => {
+    // L6: returning a fresh resolve() let an early process.exit(0) cut the
+    // model disposal and the db close short - the second call must await
+    // the IN-FLIGHT promise, and the steps must run exactly once.
+    const { deps, calls } = makeDeps();
+    let releaseDispose: (() => void) | undefined;
+    deps.model.dispose = () => new Promise<void>((resolve) => {
+      calls.push("model.dispose");
+      releaseDispose = () => resolve();
+    });
+    const teardown = createMcpTeardown(deps);
+    const first = teardown("SIGINT");
+    const second = teardown("stdin-end"); // concurrent re-entry
+    expect(second).toBe(first);
+    releaseDispose?.();
+    await Promise.all([first, second]);
     expect(calls).toEqual([
       "sideband.stop",
       "stopVersionChecker",

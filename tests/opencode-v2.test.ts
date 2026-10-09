@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setup, eventMatchesInstance, flattenToolContent, mapSessionContextMessages, translateEvent } from "../src/opencode/v2";
+import { tabClosedEventType, tabOpenedEventType } from "../src/session-tab-shared";
 import { TOOL_DEFS, type ToolDef } from "../src/tool-defs";
 
 // Mock @huggingface/transformers (same as tests/plugin.test.ts): without it,
@@ -60,7 +61,7 @@ let rpcRegistrations: any[];
 let rpcEmitted: { name: string; data: any }[];
 // Shared call log across the mocked session/rpc domains: the session-tab
 // execute flow's ordering (create -> move -> emit -> prompt) is load-bearing
-// (docs/plans/session-tab-tool.md, Decisions), and the flow spans four
+// (docs/dev/features/session-tabs.md, "How it works"), and the flow spans four
 // different mocks - only a shared log can assert relative order.
 const flowLog: string[] = [];
 const eventQueue: any[] = [];
@@ -69,6 +70,7 @@ function makeContext(options?: {
   get?: (input: any) => Promise<any>;
   context?: (input: any) => Promise<any>;
   location?: { directory: string; project: { directory: string; canonical: string } };
+  move?: (input: any) => Promise<any>;
 }) {
   addedTools = [];
   sessionPromptCalls = [];
@@ -122,6 +124,7 @@ function makeContext(options?: {
       move: async (input: any) => {
         sessionMoveCalls.push(input);
         flowLog.push("move");
+        if (options?.move) return options.move(input);
         return {};
       },
       get: async (input: any) => {
@@ -283,6 +286,59 @@ describe("opencode v2 adapter", () => {
     expect(result).toContain("Tab: requested");
   });
 
+  test("session_tab spawn failure names the stranded session and completed steps", async () => {
+    // L3: a mid-flow failure (move refused, prompt endpoint down) used to
+    // throw bare - the model got no session id, and the created session
+    // was stranded (v2 has no session delete, so rollback is not an
+    // option either). The error must narrate what completed. The move is
+    // the break point: the session exists, nothing else happened.
+    const base = mkdtempSync(join(tmpdir(), "thatch-tab-fail-"));
+    try {
+      const mainRepo = join(base, "main");
+      mkdirSync(mainRepo);
+      const { $ } = await import("bun");
+      const git = async (cmd: string, dir: string) => {
+        const proc = await $`git ${cmd.split(" ")}`.cwd(dir).quiet();
+        if (proc.exitCode !== 0) throw new Error(`git ${cmd} failed: ${proc.stderr.toString()}`);
+      };
+      await git("init", mainRepo);
+      await git("config user.email test@example.com", mainRepo);
+      await git("config user.name Test", mainRepo);
+      writeFileSync(join(mainRepo, ".gitkeep"), "");
+      await git("add .gitkeep", mainRepo);
+      await git("commit -m init", mainRepo);
+      const worktree = join(base, "wt-fail");
+      await git(`worktree add -b feature ${worktree}`, mainRepo);
+
+      // The worktree flow reaches the move; the location must pass the
+      // same-main-checkout check, so the coordinator sits at the main repo.
+      cleanup = (await setup(
+        makeContext({
+          location: { directory: mainRepo, project: { directory: mainRepo, canonical: mainRepo } },
+          move: async () => {
+            throw new Error("move refused: directory not idle");
+          },
+        }) as any,
+      )) as () => Promise<void>;
+      const tool2 = addedTools.find((t) => t.name === "thatch_session_tab")!;
+      let message = "";
+      try {
+        await tool2.execute(
+          { prompt: "x", title: "Broken move", worktree },
+          { sessionID: "ses_coordinator", agent: "build" },
+        );
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message).toContain("session_tab spawn failed");
+      expect(message).toContain("v2-test-child");
+      expect(message).toContain("move refused");
+      expect(message).toContain("thatch_session_tab_close");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   test("session_tab refuses a worktree of a different repo", async () => {
     // The default location (SESSION_DIR) is not a git repo; dbDir exists but
     // is not a worktree of anything - the identity check must refuse it.
@@ -358,6 +414,32 @@ describe("opencode v2 adapter", () => {
       expect(row?.session_id).toBe("v2-test-child");
       // The response's chat name matches the row's assigned name.
       expect(result).toContain(`chat name: ${row?.name}`);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("session_tab with chat disabled: no roster row, no advertised chat name", async () => {
+    // Every other registration path gates on the chat-enabled config; the
+    // spawn's pre-registration must too, or the tool advertises a chat
+    // name and supervision the roster cannot back.
+    const { ThatchDB } = await import("../src/db");
+    const { writeFileSync: wf } = await import("node:fs");
+    wf(join(dbDir, "config.json"), JSON.stringify({ chat: { enabled: false } }));
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const tool = addedTools.find((t) => t.name === "thatch_session_tab")!;
+    const raw = await tool.execute(
+      { prompt: "x", title: "Unregistered subordinate", directory: dbDir },
+      { sessionID: "ses_coordinator", agent: "build" },
+    );
+    const result = typeof raw === "string" ? raw : (raw as any)?.content;
+    const db = new ThatchDB(join(dbDir, "test.db"));
+    try {
+      expect(db.findChatSession("v2-test-child")).toBeNull();
+      expect(result).toContain("chat name: none");
+      // The spawn itself still succeeds - chat off disables supervision,
+      // not the subordinate.
+      expect(flowLog).toEqual(["create", "emit", "prompt"]);
     } finally {
       db.close();
     }
@@ -514,6 +596,142 @@ describe("opencode v2 adapter", () => {
     await waitFor("direct extraction for ses_v2_new", () => sessionCreateCalls.length === 1);
     expect(sessionCreateCalls[0].title).toBe("thatch-extraction");
     expect(sessionCreateCalls[0].location.directory).toBe(PROJECT_DIR);
+  });
+
+  test("pump: tab rpc events carry the payload's own directory, never the publisher's location stamp", async () => {
+    // Regression (M2): tab-opened/tab-closed events are stamped with the
+    // PUBLISHING instance's location. Caching that against the
+    // subordinate's sessionID pinned its location-less execution events to
+    // the coordinator's instance - the worktree instance that owns the
+    // subordinate dropped its idle signal, and the coordinator
+    // double-processed it. The payload's directory field (the subordinate's
+    // final, post-move directory) is the authoritative cache source.
+    const WORKTREE_DIR = "/tmp/thatch-v2-test-sub-worktree";
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+
+    // A tab-opened stamped by a coordinator elsewhere, carrying the
+    // subordinate's FINAL directory (here: another directory entirely -
+    // the directory-variant spawn). Its location-less idle event must
+    // resolve to that directory and be DROPPED by this instance.
+    await queueEvent({
+      type: tabOpenedEventType,
+      location: { directory: "/some/coordinator/dir" },
+      data: { sessionID: "ses_sub_wt", directory: WORKTREE_DIR },
+    });
+    await queueEvent({ type: "session.execution.succeeded", data: { sessionID: "ses_sub_wt" } });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sessionCreateCalls.length).toBe(0);
+    // The rpc envelope's location must not have leaked into the cache
+    // either: a resolver fallback would still have dropped this, so assert
+    // the resolver did not run (the cache miss fell through to get).
+    expect(sessionGetCalls.some((c: any) => c?.sessionID === "ses_sub_wt")).toBe(false);
+
+    // The positive: a tab-opened whose payload directory IS this instance's
+    // directory caches the subordinate here, so its later location-less
+    // idle event routes to this instance and drives extraction.
+    await toolAfterHook!({
+      tool: "Read",
+      sessionID: "ses_sub_local",
+      input: { file_path: "/src/app.ts" },
+      status: "completed",
+      result: { content: "const x = 1;" },
+    });
+    await queueEvent({
+      type: tabOpenedEventType,
+      location: { directory: "/some/coordinator/dir" },
+      data: { sessionID: "ses_sub_local", directory: SESSION_DIR },
+    });
+    await queueEvent({ type: "session.execution.succeeded", data: { sessionID: "ses_sub_local" } });
+    await waitFor("extraction for the locally-owned subordinate", () => sessionCreateCalls.length === 1);
+    expect(sessionCreateCalls[0].title).toBe("thatch-extraction");
+  });
+
+  test("pump: tab_closed routes by the closed session's own location - owned sessions die here", async () => {
+    // Regression (M3): the tab-closed event is stamped with the publisher's
+    // (coordinator's) directory, so only the coordinator's instance passed
+    // the instance filter and its registry held none of the subordinate's
+    // watchers - the confirmed close silently no-oped. Routing now keys on
+    // the CLOSED session's own directory.
+    const { ThatchDB } = await import("../src/db");
+    const db = new ThatchDB(join(dbDir, "test.db"));
+    db.runtimeStatePut(
+      "watchers",
+      "ses_sub_close",
+      [{
+        id: "watch_sub", source: "pr", sessionID: "ses_sub_close", repo: "acme/widgets", pr: 7,
+        events: ["pr_commit"], once: false, expiresAt: Date.now() + 600_000,
+        createdAt: Date.now(), state: { headSha: "aaaa1111" },
+      }],
+      SESSION_DIR,
+    );
+    db.close();
+
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    // The tab-opened cached the subordinate under THIS instance's directory
+    // (a directory-variant spawn: the subordinate lives here).
+    await queueEvent({
+      type: tabOpenedEventType,
+      location: { directory: "/some/coordinator/dir" },
+      data: { sessionID: "ses_sub_close", directory: SESSION_DIR },
+    });
+    // The close event: the PUBLISHER's stamp points elsewhere (the
+    // coordinator emitted it from another location); the closed session's
+    // cached location decides.
+    await queueEvent({
+      type: tabClosedEventType,
+      location: { directory: "/some/coordinator/dir" },
+      data: { sessionID: "ses_sub_close", chatName: "rosie-unit-one-00007" },
+    });
+    await waitFor("watcher_death row for the closed subordinate", () => {
+      const check = new ThatchDB(join(dbDir, "test.db"));
+      const rows = check.runtimeStateAll().filter((r) => r.sessionID === "ses_sub_close");
+      check.close();
+      return rows.some((r) => r.kind === "watcher_death");
+    });
+    const check = new ThatchDB(join(dbDir, "test.db"));
+    // The confirmed close cancelled the subordinate's watchers...
+    expect(check.runtimeStateAll().some((r) => r.kind === "watchers" && r.sessionID === "ses_sub_close")).toBe(false);
+    // ...and the death row carries the watch targets for peer surfacing.
+    const death = check.runtimeStateAll().find((r) => r.kind === "watcher_death" && r.sessionID === "ses_sub_close");
+    expect((death?.value as any)?.targets).toContain("acme/widgets#7");
+    check.close();
+  });
+
+  test("pump: tab_closed for a session owned elsewhere is ignored", async () => {
+    // The other side of the M3 routing: this instance must not run the
+    // death path for a subordinate whose owning instance lives in another
+    // directory (the old code ran it against the publisher's stamp and
+    // silently deleted a death row nobody received).
+    const { ThatchDB } = await import("../src/db");
+    const db = new ThatchDB(join(dbDir, "test.db"));
+    db.runtimeStatePut(
+      "watchers",
+      "ses_sub_foreign",
+      [{
+        id: "watch_foreign", source: "pr", sessionID: "ses_sub_foreign", repo: "acme/widgets", pr: 8,
+        events: ["pr_commit"], once: false, expiresAt: Date.now() + 600_000,
+        createdAt: Date.now(), state: { headSha: "aaaa1111" },
+      }],
+      SESSION_DIR,
+    );
+    db.close();
+
+    cleanup = (await setup(makeContext({
+      get: async () => ({ data: { title: "t", location: { directory: "/tmp/thatch-v2-test-elsewhere" } } }),
+    }) as any)) as () => Promise<void>;
+    // No cache entry: the pump resolves the closed session's directory live
+    // (a session in another location) and drops the close.
+    await queueEvent({
+      type: tabClosedEventType,
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_sub_foreign", chatName: null },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    const check = new ThatchDB(join(dbDir, "test.db"));
+    expect(check.runtimeStateAll().some((r) => r.kind === "watcher_death" && r.sessionID === "ses_sub_foreign")).toBe(false);
+    // The watcher row survives - its owning instance owns the close.
+    expect(check.runtimeStateAll().some((r) => r.kind === "watchers" && r.sessionID === "ses_sub_foreign")).toBe(true);
+    check.close();
   });
 
   test("prompt hook skips chat echoes (nudge-loop prevention on the v2 path)", async () => {

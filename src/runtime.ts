@@ -315,7 +315,7 @@ export async function createRuntime(input: {
       try {
         await caps.promptSession(
           peerID,
-          { parts: [{ type: "text", text: watcherDeathNotice(death.targets, { name: death.chatName, sessionID: deadSessionID }), synthetic: true }] },
+          { parts: [{ type: "text", text: watcherDeathNotice(death.targets, { name: death.chatName, sessionID: deadSessionID }, { rearmsOnResume: false }), synthetic: true }] },
           "async",
         );
         db.runtimeStateDelete("watcher_death", deadSessionID);
@@ -327,6 +327,10 @@ export async function createRuntime(input: {
   };
 
   const watchers = new WatcherRegistry({
+    // Scope the per-process live handoff to THIS location: a worktree
+    // subordinate's instance boots in the same serve process and must not
+    // stop this coordinator's poller (one registry polls per directory).
+    directory,
     // Journal watcher definitions so a v2 plugin reload (same process) can
     // re-arm them; the registry journals after every membership change.
     // Disposed check FIRST: a poll cycle suspended at an await can outlive
@@ -780,6 +784,28 @@ export async function createRuntime(input: {
         continue;
       }
       pendingWrapUp.set(row.sessionID, row.value as { token: string; kind: "compact" | "exit" });
+    } else if (row.kind === "watcher_pending") {
+      // Journaled pending watcher events (the reload-loss fix). On a
+      // same-process reload the plugin re-ran in place and its sessions are
+      // still live, so hand the events straight back to the rehydrated
+      // registry - before this branch they fell into "unknown kind" and
+      // notifications queued while a session was busy were stranded until a
+      // full process restart. The startup-resume case rides along: the
+      // registry rehydrated this session's watcher definitions above, and
+      // its queued events belong with them. hydratePending re-journals the
+      // queue, so the events stay durable until delivery even across
+      // repeated reloads. (Foreign-pid non-startup rows took the dormant
+      // path above; scanDormantWatchers hydrates those at the resumed
+      // session's first message.)
+      db.runtimeStateDelete("watcher_pending", row.sessionID);
+      if (Array.isArray(row.value) && row.value.length > 0) {
+        watchers.hydratePending(row.sessionID, row.value as { event: WatcherEvent; queuedAt: number }[]);
+      }
+    } else if (row.kind === "watcher_death") {
+      // Death records are surfaced at the live session's next prompt
+      // (surfaceWatcherDeaths), not through registry hydration - leave the
+      // row for that consumption to delete.
+      continue;
     } else {
       continue; // unknown kind - leave it for a future version
     }
@@ -873,7 +899,7 @@ export async function createRuntime(input: {
       // project matches globally - the same accepted class as the identity
       // binding's unknown-to-global mapping.
       if ((death.project ?? "global") !== project) continue;
-      notices.push(watcherDeathNotice(death.targets, { name: death.name ?? null, sessionID: row.sessionID }));
+      notices.push(watcherDeathNotice(death.targets, { name: death.name ?? null, sessionID: row.sessionID }, { rearmsOnResume: false }));
       db.runtimeStateDelete("watcher_death", row.sessionID);
     }
     return notices;
@@ -914,9 +940,12 @@ export async function createRuntime(input: {
         // the pending queue separately from the definitions, and a resumed
         // session's undelivered notifications must still deliver.
         const pendingRow = db.runtimeStateAll().find((r) => r.kind === "watcher_pending" && r.sessionID === sessionID);
-        if (pendingRow && Array.isArray(pendingRow.value)) {
-          watchers.hydratePending(sessionID, pendingRow.value as { event: WatcherEvent; queuedAt: number }[]);
+        if (pendingRow && Array.isArray(pendingRow.value) && pendingRow.value.length > 0) {
+          // Delete-then-hydrate: hydratePending re-journals the queue, so
+          // the events are durable again until delivery even across a
+          // second reload (hydrating without the re-journal lost them).
           db.runtimeStateDelete("watcher_pending", sessionID);
+          watchers.hydratePending(sessionID, pendingRow.value as { event: WatcherEvent; queuedAt: number }[]);
         }
         // This session came back to life: its own previous death notice is
         // obsolete - a future death deserves a fresh one.

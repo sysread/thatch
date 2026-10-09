@@ -99,32 +99,37 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // opencode: 37 (35 shared + 2 opencode-only), pre-populated by ensureMaster
-    // from the real opencode config dir. In CI (no opencode installed), this
-    // dir won't exist — skip the check rather than failing. The Claude/Cursor
-    // assertions above cover the core install + drift recovery logic.
-    //
-    // The real config can only LAG this checkout: a new opencode-only skill
-    // reaches the real config (and with it the fixture copy) when the branch
-    // lands and the user's plugin installs it. Until then the fixture holds
-    // the stale count - so the strict total is asserted only once the real
-    // config has the newest skill; below that, floor + presence checks.
+    // opencode: pre-populated by ensureMaster as a COPY of the real opencode
+    // config's skills (the plugin installed them there outside QA; no
+    // opencode session runs inside this use case to converge the fixture).
+    // So the honest assertion is COPY FIDELITY against the real config -
+    // not a hardcoded total: the real config can lag this checkout (a new
+    // skill reaches it only when the user's plugin installs it), and a
+    // hardcoded floor would silently depend on the developer's machine
+    // having installed the newest skill. The repo-side install counts are
+    // covered by setup.test.ts (unit contract) and uc-060. In CI (no
+    // opencode installed) the fixture dir never exists - skip the leg.
     const opencodeSkillsDir = join(dir, "config", "opencode", "skills");
     if (existsSync(opencodeSkillsDir)) {
       const opencodeSkills = readdirSync(opencodeSkillsDir, { withFileTypes: true })
         .filter((d) => d.isDirectory() || d.isSymbolicLink())
         .map((d) => d.name)
         .filter((n) => n.startsWith("thatch-"));
-      const realConfigCaughtUp = existsSync(
-        join(process.env.HOME ?? "", ".config", "opencode", "skills", "thatch-coordination"),
-      );
-      const floor = realConfigCaughtUp ? 37 : 36;
-      if (opencodeSkills.length < floor) {
-        console.log(`  FAIL: opencode skills count is ${opencodeSkills.length}, expected at least ${floor}`);
+      const realSkillsDir = join(process.env.HOME ?? "", ".config", "opencode", "skills");
+      const realSkills = existsSync(realSkillsDir)
+        ? readdirSync(realSkillsDir, { withFileTypes: true })
+            .filter((d) => d.isDirectory() || d.isSymbolicLink())
+            .map((d) => d.name)
+            .filter((n) => n.startsWith("thatch-"))
+        : [];
+      if (opencodeSkills.length !== realSkills.length) {
+        console.log(
+          `  FAIL: opencode skills count is ${opencodeSkills.length}, but the real config the fixture was copied from holds ${realSkills.length}`,
+        );
         return "FAIL";
       }
-      if (!opencodeSkills.includes("thatch-code-review")) {
-        console.log("  FAIL: thatch-code-review coordinator should be present for opencode");
+      if (realSkills.includes("thatch-code-review") && !opencodeSkills.includes("thatch-code-review")) {
+        console.log("  FAIL: thatch-code-review present in the real config but missing from the fixture copy");
         return "FAIL";
       }
     }

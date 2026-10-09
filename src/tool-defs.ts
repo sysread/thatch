@@ -2378,7 +2378,7 @@ const chatStatusDef: ToolDef = {
 /**
  * Spawns a detached subordinate session in a new opencode v2 TUI tab. The
  * coordinating LLM decomposes work, dispatches one subordinate per piece,
- * and supervises over cross-session chat; docs/plans/session-tab-tool.md
+ * and supervises over cross-session chat; docs/dev/features/session-tabs.md
  * owns the design, and the thatch-coordination skill owns the role.
  *
  * The def validates everything it can locally (title, exactly-one location

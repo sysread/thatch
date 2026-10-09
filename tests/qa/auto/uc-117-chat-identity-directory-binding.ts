@@ -11,8 +11,9 @@ import { TOOL_DEFS, type CoreContext } from "../../../src/tool-defs";
  *
  * Automatable: yes - the chat tools execute against a temp-dir SQLite
  * database with no host process. Without binding, any MCP conversation
- * that knew a session's display name could read its mail (known-bugs.md
- * "Chat on Cursor"). The fallback now accepts only same-project claims;
+ * that knew a session's display name could read its mail (the retired
+ * docs/plans known-bugs snapshot, "Chat on Cursor", kept in git history).
+ * The fallback now accepts only same-project claims;
  * a refused claim teaches re-registration, which doubles as the Cursor
  * escape hatch when the server's project resolution is wrong.
  */

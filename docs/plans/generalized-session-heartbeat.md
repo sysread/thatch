@@ -181,8 +181,7 @@ THATCH_DEBUG=1 repro.)
 - Docs: `docs/user/watchers.md` (death notices), `docs/dev/features/
   watchers.md` (detection subsection), `docs/dev/features/
   opencode-plugin.md` known-gaps row (bounded by death detection),
-  `docs/user/cli.md` + `docs/dev/features/cli.md` (new env var),
-  `docs/plans/known-bugs.md` (row updated/removed when it ships).
+  `docs/user/cli.md` + `docs/dev/features/cli.md` (new env var).
 
 ## Acceptance criteria
 

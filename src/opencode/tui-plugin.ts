@@ -1,5 +1,5 @@
 // The session-tab TUI CLI plugin: the TUI-side half of the session-tab
-// feature (docs/plans/session-tab-tool.md). Loaded by the opencode v2 TUI
+// feature (docs/dev/features/session-tabs.md). Loaded by the opencode v2 TUI
 // from the package's ./tui entrypoint; runs once per TUI window, next to the
 // tab primitives it drives.
 //

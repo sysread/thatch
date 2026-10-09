@@ -274,6 +274,13 @@ export function withCwdFallback(
 }
 
 export interface WatcherRegistryOptions {
+  /**
+   * The constructing instance's location directory. Scopes the per-process
+   * live handoff: a new registry stops only a same-directory predecessor,
+   * so a second per-location instance (a worktree subordinate's boot) never
+   * stops the coordinator's poller. Omitted by tests and non-plugin hosts.
+   */
+  directory?: string;
   /** Delivers a batch of events for a session. Injected so tests never spawn. */
   deliver: (sessionID: string, events: WatcherEvent[]) => Promise<void>;
   /**
@@ -956,17 +963,24 @@ export class WatcherRegistry {
     deathThresholdMs: number;
   };
   /**
-   * The most recently constructed instance in this process. opencode v2
-   * re-runs plugin setup() when the session's directory changes
+   * The most recently constructed instance per location directory. opencode
+   * v2 re-runs plugin setup() when the session's directory changes
    * (session_move between directories of the same repo) or on plugin-file
    * changes; each setup() built a fresh registry while the OLD instance's
    * poller timer kept running - the watch tools then queried an empty
    * registry ("No active watchers" / "No watcher in this session") while
    * delivery kept flowing from the orphaned poller. The handoff stops the
-   * predecessor's poller at construction so at most one registry polls per
-   * process; the watch tools' journal reconcile covers the state transfer.
+   * predecessor at construction so at most one registry polls PER LOCATION:
+   * a reload (same directory) hands off as before, while a second
+   * per-location instance (a worktree subordinate's boot) must NOT stop the
+   * coordinator's poller - one serve process hosts one instance per
+   * location, and each polls only its own directory's watchers. The watch
+   * tools' journal reconcile covers the state transfer.
    */
-  static #live: WatcherRegistry | undefined;
+  static #live = new Map<string, WatcherRegistry>();
+  /** This registry's live-map key: the instance directory, or "" when the
+   *  constructing test/host passes no directory. */
+  readonly #liveKey: string;
 
   constructor(options: WatcherRegistryOptions) {
     const envDeathMinutes = Number(process.env.THATCH_WATCH_DEATH_MINUTES ?? 0) || 120;
@@ -984,8 +998,9 @@ export class WatcherRegistry {
     this.#journalPending = options.journalPending;
     this.#onSessionDeath = options.onSessionDeath;
     this.#isHostedSession = options.isHostedSession;
-    WatcherRegistry.#live?.stop();
-    WatcherRegistry.#live = this;
+    this.#liveKey = options.directory ?? "";
+    WatcherRegistry.#live.get(this.#liveKey)?.stop();
+    WatcherRegistry.#live.set(this.#liveKey, this);
   }
 
   // -- Lifecycle -----------------------------------------------------------
@@ -1023,6 +1038,9 @@ export class WatcherRegistry {
   /** Stops polling and drops all state. Called from the plugin's dispose. */
   dispose(): void {
     this.stop();
+    // Only clear the live slot if THIS instance still owns it - a reload's
+    // replacement registered under the same key after this one.
+    if (WatcherRegistry.#live.get(this.#liveKey) === this) WatcherRegistry.#live.delete(this.#liveKey);
     this.#watchers.clear();
     this.#pending.clear();
     this.#firstPendingAt.clear();
@@ -1296,6 +1314,7 @@ export class WatcherRegistry {
             url: this.#watchUrl(watcher),
           });
           this.#pending.set(watcher.sessionID, queue);
+          this.#journalPendingNow(watcher.sessionID);
           this.#emit(watcher.sessionID);
           continue;
         }
@@ -1488,6 +1507,12 @@ export class WatcherRegistry {
       if (existing === undefined || queuedAt < existing) this.#firstPendingAt.set(sessionID, queuedAt);
     }
     this.#pending.set(sessionID, queue);
+    // Re-journal the hydrated queue. Hydration consumers delete the durable
+    // row as they hand it over (the rehydrate loop, the dormant scan), and
+    // delivery may not run before the NEXT reload - the queue must be
+    // durable again the moment it is back in memory, or a second reload
+    // loses the events.
+    this.#journalPendingNow(sessionID);
   }
 
 /** Journals the session's current pending queue, or clears the row when empty. */

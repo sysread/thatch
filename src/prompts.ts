@@ -501,10 +501,12 @@ Tools are prefixed in ${host}: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__chat_broadcast\`, \`mcp__thatch__chat_status\`. Bare names
 used below for readability. get_session_info, session_search,
 session_get, watch_create, watch_branch_create, watch_command_create,
-watch_list, watch_cancel, and session_tab are intentionally absent:
+watch_list, watch_cancel, session_tab, and session_tab_close are
+intentionally absent:
 they are opencode-only (MCP hosts
 have no session concept, session database, or proactive-prompt channel),
-so do not expect them here. session_tab additionally requires opencode
+so do not expect them here. session_tab and session_tab_close
+additionally require opencode
 v2 (TUI session tabs). On MCP hosts, cross-session chat works with
 the identity your thatch hook assigned (pass its printed name as \`as\`);
 wake-up delivery is opencode-only, so check chat_status or your inbox each turn.
@@ -1078,18 +1080,32 @@ No re-registration is needed; notifications will arrive here as usual. This is a
  * the notice when known, so a coordinator session (thatch-coordination
  * skill) can mark its task-list entry failed and respawn keyed by chat
  * name without an SDK lookup.
+ *
+ * Two death paths with different aftermaths: the dormant-scan path (a
+ * restart left the watcher rows in place) re-arms on resume, while the
+ * confirmed-death path (sessionDied: tab closed, or the delivery-failure
+ * heuristic) DELETED the watchers and journaled a watcher_death row -
+ * those are gone and only re-arming the user's attention (this notice)
+ * remains. rearmsOnResume must match the path: a notice promising an
+ * automatic re-arm that never comes strands the wait silently.
  */
 export function watcherDeathNotice(
   targets: string[],
   owner?: { name: string | null; sessionID: string },
+  opts: { rearmsOnResume?: boolean } = {},
 ): string {
   const list = targets.join(", ");
   const ownerLine =
     owner === undefined
       ? ""
       : `\nDead session: ${owner.name ?? "(unregistered)"} (${owner.sessionID}).`;
+  const it = targets.length === 1 ? "It" : "They";
+  const they = targets.length === 1 ? "that session is" : "those sessions are";
+  const aftermath = (opts.rearmsOnResume ?? true)
+    ? `${it} will re-arm automatically if ${they} resumed.`
+    : `${it} ${targets.length === 1 ? "was" : "were"} cancelled when the session died and will not re-arm; re-create ${targets.length === 1 ? "it" : "them"} with watch_create if still needed.`;
   return `[thatch] ${targets.length} watcher${targets.length === 1 ? " died" : "s died"} with session${targets.length === 1 ? "" : "s"} that are no longer running: ${list}.${ownerLine}
-${targets.length === 1 ? "It" : "They"} will re-arm automatically if ${targets.length === 1 ? "that session is" : "those sessions are"} resumed. This is a system notice, not user input - carry on with the user's request.`;
+${aftermath} This is a system notice, not user input - carry on with the user's request.`;
 }
 
 /**

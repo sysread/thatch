@@ -8,7 +8,8 @@ import { createRuntime } from "../runtime";
 import { wrapUpCommandContent } from "../commands";
 import { deriveTitle } from "../extraction";
 import { detectRepo, detectWorktreeKind } from "../git";
-import { SESSION_TAB_RPC, TAB_CLOSED_EVENT, TAB_OPENED_EVENT, buildSubordinatePrompt, tabClosedEventType } from "../session-tab-shared";
+import { chatEnabled, loadConfig } from "../config";
+import { SESSION_TAB_RPC, TAB_CLOSED_EVENT, TAB_OPENED_EVENT, buildSubordinatePrompt, tabClosedEventType, tabOpenedEventType } from "../session-tab-shared";
 import { TOOL_DEFS, trimHostContext, type HostToolContext, type SessionTabCloseInput, type SessionTabHost, type SessionTabSpawnInput, type SessionTabSpawnResult } from "../tool-defs";
 
 // The opencode v2 adapter (opencode 2.x, plugin API @opencode/plugin 2.x).
@@ -99,18 +100,29 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   // server-to-TUI channel on v2: the TUI CLI plugin (the package's ./tui
   // entrypoint) consumes them and calls ui.tabs.open. A TUI that is absent
   // (headless run, still connecting) simply never acts on them.
-  const tabRegistration = await context.rpc.register(SESSION_TAB_RPC, {});
-  const emitTabOpened = (data: { sessionID: string; directory: string }) =>
-    tabRegistration.events.emit(TAB_OPENED_EVENT, data);
-  runtime.coreContext.sessionTabHost = buildSessionTabHost({
-    context,
-    directory,
-    db: runtime.coreContext.db,
-    emitTabOpened,
-    emitTabClosed: (data: { sessionID: string; chatName: string | null }) =>
-      tabRegistration.events.emit(TAB_CLOSED_EVENT, data),
-    debug: runtime.debug,
-  });
+  //
+  // SDK-floor guard: the rpc surface is newer than some @opencode/plugin
+  // builds. An absent rpc domain must not crash setup - degrade by leaving
+  // the seam unwired; the session_tab tools refuse cleanly through it
+  // ("did not wire the session-tab surface") like any other unwired host.
+  const tabRegistration = typeof context.rpc?.register === "function"
+    ? await context.rpc.register(SESSION_TAB_RPC, {})
+    : undefined;
+  if (tabRegistration) {
+    const emitTabOpened = (data: { sessionID: string; directory: string }) =>
+      tabRegistration.events.emit(TAB_OPENED_EVENT, data);
+    runtime.coreContext.sessionTabHost = buildSessionTabHost({
+      context,
+      directory,
+      db: runtime.coreContext.db,
+      emitTabOpened,
+      emitTabClosed: (data: { sessionID: string; chatName: string | null }) =>
+        tabRegistration.events.emit(TAB_CLOSED_EVENT, data),
+      debug: runtime.debug,
+    });
+  } else {
+    console.error("[thatch] opencode v2 rpc surface unavailable - session_tab tools will report unwired");
+  }
 
   // Tool registration: the same CoreContext the v1 adapter feeds to
   // createTools, registered through the v2 ToolEditor instead.
@@ -328,20 +340,45 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
             location?: { directory?: string };
           };
           const data = located.data ?? {};
-          if (data.sessionID && located.location?.directory) sessionDirs.set(data.sessionID, located.location.directory);
-          if (data.sessionID && data.location?.directory) sessionDirs.set(data.sessionID, data.location.directory);
+          // rpc events (the session-tab bridge) stamp the PUBLISHING
+          // instance's location, not the session's - caching a tab event's
+          // location would pin the subordinate's sessionID to the
+          // coordinator's directory, and its later location-less execution
+          // events would route to the wrong instance (or be dropped by the
+          // right one). The tab-opened payload's directory IS authoritative
+          // (the subordinate's final, post-move directory) and is cached
+          // explicitly below.
+          const fromRpc = located.type.startsWith("rpc.");
+          if (!fromRpc && data.sessionID && located.location?.directory) sessionDirs.set(data.sessionID, located.location.directory);
+          if (!fromRpc && data.sessionID && data.location?.directory) sessionDirs.set(data.sessionID, data.location.directory);
+          if (located.type === tabOpenedEventType) {
+            const opened = (data ?? {}) as { sessionID?: string; directory?: string };
+            if (opened.sessionID && opened.directory) sessionDirs.set(opened.sessionID, opened.directory);
+          }
           let eventDir = located.location?.directory ?? (data.sessionID ? sessionDirs.get(data.sessionID) : undefined);
           if (!eventDir && data.sessionID) eventDir = await resolveSessionDir(data.sessionID);
           runtime.debug("v2:pump", `event ${located.type} dir=${eventDir} self=${directory}`);
-          if (eventMatchesInstance(eventDir, data.sessionID, directory, childSessions)) {
+          if (located.type === tabClosedEventType) {
             // The session-tab tool's confirmed tab close: translated here
             // rather than in translateEvent because the payload shape is
-            // tab-domain, and the death path is runtime-domain.
-            if (located.type === tabClosedEventType) {
-              const closed = (data ?? {}) as { sessionID?: string; chatName?: string | null };
-              if (closed.sessionID) await runtime.onEvent({ type: "session.tab_closed", properties: { sessionID: closed.sessionID, chatName: closed.chatName ?? null } });
-              continue;
+            // tab-domain, and the death path is runtime-domain. Routed by
+            // the CLOSED session's own location, never the event's: the rpc
+            // event carries the publishing (coordinator) instance's
+            // directory, while the watchers and status bookkeeping live in
+            // the instance that owns the session (its post-move location).
+            // A later located event repairs the cache; resolve live when
+            // nothing is cached.
+            const closed = (data ?? {}) as { sessionID?: string; chatName?: string | null };
+            if (closed.sessionID) {
+              let closedDir = sessionDirs.get(closed.sessionID);
+              if (!closedDir) closedDir = await resolveSessionDir(closed.sessionID);
+              if (eventMatchesInstance(closedDir, closed.sessionID, directory, childSessions)) {
+                await runtime.onEvent({ type: "session.tab_closed", properties: { sessionID: closed.sessionID, chatName: closed.chatName ?? null } });
+              }
             }
+            continue;
+          }
+          if (eventMatchesInstance(eventDir, data.sessionID, directory, childSessions)) {
             for (const translated of translateEvent(located)) {
               await runtime.onEvent(translated);
             }
@@ -381,7 +418,7 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     registerPrompt.dispose();
     registerCompaction.dispose();
     registerCommands.dispose();
-    tabRegistration.dispose();
+    tabRegistration?.dispose();
     await runtime.dispose();
   };
 }
@@ -546,7 +583,7 @@ export function translateEvent(located: { type: string; data?: any }): { type: s
  * The session-tab host flow - everything behind the CoreContext.sessionTabHost
  * seam, host-executed end to end (the model supplies only the args; see the
  * host-owned-handshake rule: no ids cross a prompt boundary). Order is
- * load-bearing (docs/plans/session-tab-tool.md, Decisions):
+ * load-bearing (docs/dev/features/session-tabs.md, "How it works"):
  *
  *   create -> move -> register subordinate -> emit tab-opened -> prompt
  *
@@ -580,47 +617,80 @@ function buildSessionTabHost(input: {
       const isWorktreeFlow = worktreeDir !== undefined;
       const createDirectory = isWorktreeFlow ? input.directory : spec.directory;
       const finalDirectory = worktreeDir ?? spec.directory;
-      const created = await input.context.session.create({
-        title: spec.title,
-        metadata: {
-          thatch: {
-            coordinatedBy: spec.coordinatorChatName,
-            coordinatorSessionID: spec.coordinatorSessionID,
-            ...(worktreeDir !== undefined ? { worktree: worktreeDir } : {}),
+      // Failure narration for the error below: a mid-flow throw (move
+      // refused, prompt endpoint down) must leave the calling model the
+      // session id and what already happened, or the created session is
+      // stranded with no way to name it - there is no session delete on
+      // the v2 surface, so rollback is not an option either.
+      const steps: string[] = [];
+      let sessionID: string | undefined;
+      let chatName: string | null = null;
+      try {
+        const created = await input.context.session.create({
+          title: spec.title,
+          metadata: {
+            thatch: {
+              coordinatedBy: spec.coordinatorChatName,
+              coordinatorSessionID: spec.coordinatorSessionID,
+              ...(worktreeDir !== undefined ? { worktree: worktreeDir } : {}),
+            },
           },
-        },
-        location: { directory: createDirectory },
-      });
-      const sessionID = created.id;
-      if (worktreeDir !== undefined) {
-        await input.context.session.move({ sessionID, directory: worktreeDir });
+          location: { directory: createDirectory },
+        });
+        sessionID = created.id;
+        steps.push(`created session ${sessionID ?? "(no id returned)"}`);
+        if (worktreeDir !== undefined) {
+          await input.context.session.move({ sessionID, directory: worktreeDir });
+          steps.push(`moved to ${worktreeDir}`);
+        }
+        // Pre-register the subordinate AFTER the move, so the roster row
+        // records the session's FINAL directory (right repo slug, right
+        // worktree kind) and a failed move leaves no row behind. Deliberate
+        // participant semantics - like an explicit chat_register, never marked
+        // machinery - so the response carries its chat name and the
+        // coordinator's first chat_send resolves; the later auto-register
+        // converges (same id, same name). Gated on the chat-enabled config
+        // like every other registration path: with chat off, the tool
+        // response reports no chat name and advertises no supervision.
+        const repo = await detectRepo(finalDirectory);
+        const registered = chatEnabled(loadConfig().config)
+          ? input.db.registerChatSession(
+              sessionID,
+              repo,
+              null,
+              "opencode",
+              null,
+              detectWorktreeKind(finalDirectory),
+            )
+          : { ok: false as const, error: "chat disabled in config" };
+        if (registered.ok) chatName = registered.name;
+        steps.push(registered.ok ? `registered in chat as ${registered.name}` : "chat registration skipped");
+        input.debug(
+          "session-tab",
+          `created ${sessionID} dir=${finalDirectory} repo=${repo} chat=${registered.ok ? registered.name : registered.error}`,
+        );
+        // The payload's directory is the subordinate's FINAL (post-move)
+        // directory, not this instance's: the TUI guard routes by the event
+        // envelope's location, while the pump caches this field so the
+        // subordinate's later location-less execution events resolve to the
+        // instance that owns it.
+        await input.emitTabOpened({ sessionID, directory: finalDirectory });
+        steps.push("tab-opened emitted");
+        await input.context.session.prompt({
+          sessionID,
+          text: buildSubordinatePrompt(spec.coordinatorChatName, spec.prompt),
+        });
+        steps.push("task prompt delivered");
+        return { sessionID, chatName, directory: finalDirectory };
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `session_tab spawn failed: ${reason}. Completed steps: ${steps.length > 0 ? steps.join("; ") : "none"}.` +
+            (sessionID
+              ? ` The session ${sessionID} was created and still exists - name it in your report so it can be recovered (sessions list, or thatch_session_tab_close${chatName ? ` by chat name ${chatName}` : ""}).`
+              : " No session was created."),
+        );
       }
-      // Pre-register the subordinate AFTER the move, so the roster row
-      // records the session's FINAL directory (right repo slug, right
-      // worktree kind) and a failed move leaves no row behind. Deliberate
-      // participant semantics - like an explicit chat_register, never marked
-      // machinery - so the response carries its chat name and the
-      // coordinator's first chat_send resolves; the later auto-register
-      // converges (same id, same name).
-      const repo = await detectRepo(finalDirectory);
-      const registered = input.db.registerChatSession(
-        sessionID,
-        repo,
-        null,
-        "opencode",
-        null,
-        detectWorktreeKind(finalDirectory),
-      );
-      input.debug(
-        "session-tab",
-        `created ${sessionID} dir=${finalDirectory} repo=${repo} chat=${registered.ok ? registered.name : registered.error}`,
-      );
-      await input.emitTabOpened({ sessionID, directory: createDirectory });
-      await input.context.session.prompt({
-        sessionID,
-        text: buildSubordinatePrompt(spec.coordinatorChatName, spec.prompt),
-      });
-      return { sessionID, chatName: registered.ok ? registered.name : null, directory: finalDirectory };
     },
     closeTab: async (spec: SessionTabCloseInput): Promise<void> => {
       await input.emitTabClosed({ sessionID: spec.sessionID, chatName: spec.chatName });

@@ -130,9 +130,11 @@ restarts:
   watch is still there.
 - Watch definitions whose 8-hour TTL expired while the session was
   away are not re-armed; the re-arm notice reports how many expired.
-- If a watched session is never resumed, a live session in the same
-  project hears a one-line notice that the watch died with its
-  session, so a watch that will never fire is at least explained.
+- If a watched session's tab is closed (or the watcher's deliveries fail
+  past the death threshold), its watchers are cancelled, and a live
+  session in the same project hears a one-line notice that the watch
+  died with its session - the notice says the watches were cancelled,
+  not re-armed, so a watch that will never fire is at least explained.
 - A watcher expires after 8 hours by default, and reports its own
   expiry: the session gets a final notification naming the watched
   target and how long the watch lived (for example, "watch on

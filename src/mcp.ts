@@ -355,10 +355,14 @@ export function createMcpTeardown(deps: {
   stopVersionChecker: () => void;
   removeVersionFile: (dbPath: string) => void;
 }): (reason: string) => Promise<void> {
-  let torn = false;
+  let inFlight: Promise<void> | undefined;
   return (reason: string): Promise<void> => {
-    if (torn) return Promise.resolve();
-    torn = true;
+    // Idempotent ACROSS awaits: a second call while the first teardown is
+    // still running returns the IN-FLIGHT promise, so an early
+    // process.exit(0) waits out the model disposal and the db close
+    // instead of cutting them (a fresh resolve() skipped them). `torn`
+    // tracking is subsumed: inFlight is set synchronously before any await.
+    if (inFlight) return inFlight;
     void reason;
     // Every step is isolated: a teardown step's own failure must not
     // block the remaining ones (the sideband throwing on an
@@ -379,7 +383,7 @@ export function createMcpTeardown(deps: {
     } catch (err) {
       console.error(`[thatch] MCP version-file removal failed: ${err}`);
     }
-    return deps.model
+    inFlight = deps.model
       .dispose()
       .catch((err: unknown) => console.error(`[thatch] MCP model disposal failed: ${err}`))
       .finally(() => {
@@ -389,6 +393,7 @@ export function createMcpTeardown(deps: {
           console.error(`[thatch] MCP db close failed: ${err}`);
         }
       });
+    return inFlight;
   };
 }
 

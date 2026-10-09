@@ -27,6 +27,23 @@ const DRY_RUN = process.env.QA_DRY_RUN === "1";
 
 export type UseCaseResult = "PASS" | "FAIL" | "PARTIAL" | "MANUAL-ONLY" | "DOCS_MISMATCH";
 
+/**
+ * The agent's verdict: the LAST "Result:" LINE in its output. Anchored to
+ * line start (with leading markdown emphasis tolerated - models like to
+ * bold the report, "**Result: PASS**") so quoted prose can never decide
+ * the verdict: an Evidence line like `quoted "Result: PASS | FAIL"` sits
+ * mid-line and no longer overrides a real FAIL verdict below it. Echoing
+ * the format spec on a line of its own can still match - the last match
+ * wins, and the report's verdict line is the last one by construction.
+ * Null when the agent never produced a verdict line.
+ */
+export function parseQaVerdict(output: string): UseCaseResult | null {
+  const verdictMatches = [...output.matchAll(/^[ \t]*\**[ \t]*Result:[ \t]*(PASS|FAIL|PARTIAL|MANUAL-ONLY|DOCS_MISMATCH)\b/gm)];
+  return verdictMatches.length
+    ? verdictMatches[verdictMatches.length - 1][1] as UseCaseResult
+    : null;
+}
+
 export interface QaContext {
   /** Path to the isolated repo copy for this use case. */
   dir: string;
@@ -460,15 +477,7 @@ Evidence:
     ]);
 
     const output = stdout + stderr;
-    // The verdict is the LAST "Result:" line: an agent may echo the format
-    // spec (whose own example matches PASS) mid-transcript, and models like
-    // to bold the report ("**Result: PASS**"), which never matches a strict
-    // line-start anchor. Both tolerated here: leading emphasis is allowed
-    // and the final match wins.
-    const verdictMatches = [...output.matchAll(/\**[ \t]*Result:[ \t]*(PASS|FAIL|PARTIAL|MANUAL-ONLY|DOCS_MISMATCH)\b/g)];
-    const status = verdictMatches.length
-      ? verdictMatches[verdictMatches.length - 1][1] as UseCaseResult
-      : "FAIL";
+    const status = parseQaVerdict(output) ?? "FAIL";
 
     if (status !== "PASS") {
       console.log(`  ${uc.name}: ${status}\n  Output: ${output.slice(0, 2000)}`);

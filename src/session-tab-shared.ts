@@ -17,9 +17,10 @@
  * The schemas are literal JSON Schema objects because
  * Rpc.PortableEventValueSchema accepts StandardSchemaV1 or a JSON Schema
  * object with type "object"; a literal object keeps this module
- * dependency-free. The generalized-session-heartbeat plan
- * (branch generalized-session-heartbeat) imports this definition as the
- * tab-closed consumer - change the shape jointly with that plan.
+ * dependency-free. The tab-closed consumer is live: the v2 pump
+ * (src/opencode/v2.ts) translates a confirmed close into the runtime's
+ * death path, and the TUI plugin closes the tab - change the shape
+ * jointly with both consumers (docs/dev/features/session-tabs.md).
  */
 
 import { realpathSync } from "node:fs";
@@ -72,7 +73,7 @@ export const SESSION_TAB_RPC = {
 /**
  * The coordinator-authority framing delivered as the subordinate's first
  * user message. The wording is the feature's contract with the subordinate
- * LLM (docs/plans/session-tab-tool.md): coordinator instructions outrank
+ * LLM (docs/dev/features/session-tabs.md): coordinator instructions outrank
  * nothing the user says directly.
  */
 export function buildSubordinatePrompt(coordinatorName: string, task: string): string {

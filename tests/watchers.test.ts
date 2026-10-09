@@ -726,6 +726,74 @@ describe("watcher death detection", () => {
     expect(delivered.at(-1)?.events[0].type).toBe("pr_commit");
     rebuilt.dispose();
   });
+
+  test("hydratePending re-journals the queue so it stays durable until delivery", () => {
+    // The rehydrate loop and the dormant scan delete the durable row as
+    // they hand it over; hydration must write it straight back, or a
+    // SECOND reload before delivery loses the events again.
+    const pendingJournals: Array<{ sessionID: string; pending: { event: WatcherEvent; queuedAt: number }[] | undefined }> = [];
+    const reg = new WatcherRegistry({
+      deliver: async () => {},
+      canDeliver: () => false,
+      ghRunner: mockGh([[RE_PULL, prResponse()], ...quietRoutes()]),
+      pollIntervalMs: 60_000,
+      journalPending: (sessionID, pending) => pendingJournals.push({ sessionID, pending }),
+      now,
+    });
+    reg.hydratePending("s1", [{ event: { type: "pr_commit", target: TGT, summary: "new commit", url: URL }, queuedAt: 5 }]);
+    const last = pendingJournals.at(-1);
+    expect(last?.sessionID).toBe("s1");
+    expect(last?.pending).toHaveLength(1);
+    expect(last?.pending?.[0].queuedAt).toBe(5);
+    reg.dispose();
+  });
+});
+
+describe("WatcherRegistry live handoff (per location)", () => {
+  const handoffRegistry = (directory?: string) =>
+    new WatcherRegistry({
+      deliver: async () => {},
+      canDeliver: () => false,
+      ghRunner: async () => {
+        throw new Error("no network in test");
+      },
+      pollIntervalMs: 60_000,
+      ...(directory !== undefined ? { directory } : {}),
+    });
+
+  test("a second per-location instance does not stop the coordinator's poller", () => {
+    // The worktree-subordinate flow boots a second per-location thatch
+    // instance in the SAME serve process; its registry constructor must not
+    // stop the coordinator location's poller (the old global handoff did).
+    const coordinator = handoffRegistry("/proj");
+    coordinator.start();
+    const subordinate = handoffRegistry("/proj-wt-main");
+    subordinate.start();
+    expect(coordinator.running).toBe(true);
+    expect(subordinate.running).toBe(true);
+    subordinate.dispose();
+    coordinator.dispose();
+  });
+
+  test("a same-directory reload still hands the poller off", () => {
+    const first = handoffRegistry("/proj");
+    first.start();
+    const reloaded = handoffRegistry("/proj");
+    reloaded.start();
+    expect(first.running).toBe(false);
+    expect(reloaded.running).toBe(true);
+    reloaded.dispose();
+  });
+
+  test("disposing a replaced registry does not clear the replacement's live slot", () => {
+    const first = handoffRegistry("/proj");
+    first.start();
+    const reloaded = handoffRegistry("/proj");
+    reloaded.start();
+    first.dispose();
+    expect(reloaded.running).toBe(true);
+    reloaded.dispose();
+  });
 });
 
 describe("watcher event types", () => {
@@ -1379,8 +1447,21 @@ describe("watcherNotificationNudge", () => {
     const text = watcherDeathNotice(["acme/widgets#7"], { name: "rosie-unit-one-00007", sessionID: "ses_ee7ec0" });
     expect(text).toContain("acme/widgets#7");
     expect(text).toContain("Dead session: rosie-unit-one-00007 (ses_ee7ec0)");
+    expect(text).toContain("re-arm automatically");
     // Without the owner the notice stays as it was.
     expect(watcherDeathNotice(["acme/widgets#7"])).not.toContain("Dead session");
+  });
+
+  test("watcherDeathNotice says cancelled for the sessionDied path (no automatic re-arm)", () => {
+    // The confirmed-death path DELETES the watchers - the notice must not
+    // promise a resume re-arm that will never happen.
+    const text = watcherDeathNotice(["acme/widgets#7"], { name: "rosie-unit-one-00007", sessionID: "ses_ee7ec0" }, { rearmsOnResume: false });
+    expect(text).toContain("was cancelled when the session died");
+    expect(text).toContain("watch_create");
+    expect(text).not.toContain("re-arm automatically");
+    const plural = watcherDeathNotice(["acme/widgets#7", "acme/widgets#8"], undefined, { rearmsOnResume: false });
+    expect(plural).toContain("were cancelled when the session died");
+    expect(plural).toContain("re-create them");
   });
 
   test("an all-expiry delivery uses the expiry framing and drops the gating carve-out", () => {    const text = watcherNotificationNudge("acme/widgets#7", [

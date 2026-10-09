@@ -7,7 +7,7 @@ import { registerUseCase, type UseCase } from "../runner";
  * back: the subordinate's chat name, session id, title, directory, and the
  * honest "Tab: requested" wording (the tab strip itself is TUI-local state
  * a headless run cannot show - the visual smoke lives in
- * docs/plans/session-tab-tool.md's record; this use case pins the
+ * docs/dev/features/session-tabs.md's record; this use case pins the
  * verifiable flow: the tool executes, the response names the subordinate's
  * chat registration, and the directory resolves to the requested path).
  *

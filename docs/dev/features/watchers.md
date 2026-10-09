@@ -162,7 +162,10 @@ watchers and pending drop, and live same-project sessions get a
 `watcherDeathNotice` carrying the dead session's chat name and session
 id (the thatch-coordination loop's respawn key); a durable
 `watcher_death` runtime_state row covers sessions that were busy at
-death time, surfaced and cleared at other sessions' next prompt.
+death time, surfaced and cleared at other sessions' next prompt. The
+notice says the watches were CANCELLED and points at `watch_create` -
+the re-arm-on-resume promise belongs only to the restart-dormant path,
+where the definitions survive and resuming the session re-arms them.
 
 ### Command watches
 

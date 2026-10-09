@@ -203,6 +203,63 @@ describe("runtime rehydration through server()", () => {
     }
   });
 
+  test("a same-pid reload restores journaled watcher pending events to the live registry", async () => {
+    // Regression wiring test for the reload-loss incident (watch_qn449jio):
+    // pending events journaled while the session was busy must come back
+    // through the REAL rehydrate path in server() setup - the wiring was
+    // missing once and a hand-called hydratePending unit test hid it.
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut("watcher_pending", "ses_reload", [
+      {
+        event: { type: "pr_commit", target: "sysread/thatch#16", summary: "new commit aaaa2222", url: "https://github.com/sysread/thatch/pull/16" },
+        queuedAt: Date.now(),
+      },
+    ], WORK_DIR);
+    db.close();
+
+    const prompts: Array<{ path?: { id?: string }; body?: { parts?: Array<{ text?: string }> } }> = [];
+    let hooks: { dispose?: () => Promise<void>; event?: (arg: unknown) => Promise<void> } | undefined;
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    try {
+      process.env.THATCH_DB_PATH = dbPath;
+      process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+      const mockClient = {
+        session: {
+          prompt: async () => {},
+          promptAsync: async (call: { path: { id: string }; body: { parts: Array<{ text: string }> } }) => { prompts.push(call); },
+          create: async () => ({ data: { id: "test-child" } }),
+          delete: async () => {},
+          get: async () => ({ data: { title: "Test session" } }),
+          messages: async () => ({ data: [] }),
+          status: async () => ({ data: {} }),
+          list: async () => ({ data: [] }),
+        },
+        tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
+      };
+      const started = (await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree", directory: WORK_DIR } as any)) as any;
+      hooks = started;
+
+      // The rehydrated queue delivers on the session's next idle event
+      // (deliverPending on idle) - the same trigger the live poller uses.
+      await started.event({ event: { type: "session.status", properties: { sessionID: "ses_reload", status: { type: "idle" } } } });
+      const nudge = prompts.find((p) => p.body?.parts?.some((pt) => pt.text?.includes("sysread/thatch#16")));
+      expect(nudge).toBeTruthy();
+      expect(nudge?.path?.id).toBe("ses_reload");
+
+      // Delivered events consume the durable row.
+      const check = new ThatchDB(dbPath);
+      expect(check.runtimeStateAll().some((r) => r.kind === "watcher_pending" && r.sessionID === "ses_reload")).toBe(false);
+      check.close();
+    } finally {
+      await hooks?.dispose?.();
+      if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevConfig;
+      if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+      else process.env.THATCH_DB_PATH = prevDbPath;
+    }
+  });
+
   test("a second instance on the same db does not hydrate the first's watchers", async () => {
     // Two location instances share one server process AND one db: instance
     // scoping is the directory column, not the pid. Instance B must leave

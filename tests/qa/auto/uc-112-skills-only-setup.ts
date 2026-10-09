@@ -34,7 +34,8 @@ const useCase: UseCase = {
     "  (Claude) or `.cursor/skills/` (Cursor) gets the 35 shared skills, reported via",
     "  the skills dir plus `35 added` on a fresh install and `35 unchanged` on re-run.",
     "- No MCP config (`.mcp.json` / `.cursor/mcp.json`), no instructions",
-    "  (`CLAUDE.md` / `AGENTS.md`), no hooks (`.claude/settings.json` /",
+    "  (`CLAUDE.md` written; the repo's own tracked `AGENTS.md` left",
+    "  byte-for-byte unchanged), no hooks (`.claude/settings.json` /",
     "  `.cursor/hooks.json`), and no `/thatch/*` commands are written.",
     "- The other-scope note still prints: a user-scope thatch skill is surfaced",
     "  (named with its directory) and left exactly as it was.",
@@ -117,6 +118,13 @@ const useCase: UseCase = {
 
     // --- Step 2: thatch setup --cursor --skills-only (project-local) ---
 
+    // The repo root now TRACKS an AGENTS.md (the opencode v2 rename of
+    // OPENCODE.md): full setup appends cursor instructions to it, so the
+    // skills-only assertion is content-unchanged, not absence. Snapshot
+    // before the run; absence stays the rule for files setup creates.
+    const trackedAgentsMd = join(dir, "AGENTS.md");
+    const trackedAgentsMdBefore = existsSync(trackedAgentsMd) ? readFileSync(trackedAgentsMd, "utf8") : null;
+
     const r2 = await run(["setup", "--cursor", "--skills-only"]);
     if (r2.exitCode !== 0) {
       console.log("  FAIL: `thatch setup --cursor --skills-only` exited non-zero");
@@ -130,13 +138,17 @@ const useCase: UseCase = {
     }
     for (const [label, path] of [
       [".cursor/mcp.json", join(dir, ".cursor", "mcp.json")],
-      ["AGENTS.md", join(dir, "AGENTS.md")],
       [".cursor/hooks.json", join(dir, ".cursor", "hooks.json")],
     ] as const) {
       if (existsSync(path)) {
         console.log(`  FAIL: --skills-only wrote ${label} (expected skills only)`);
         return "FAIL";
       }
+    }
+    const trackedAgentsMdAfter = existsSync(trackedAgentsMd) ? readFileSync(trackedAgentsMd, "utf8") : null;
+    if (trackedAgentsMdAfter !== trackedAgentsMdBefore) {
+      console.log("  FAIL: --skills-only modified the tracked AGENTS.md (expected skills only)");
+      return "FAIL";
     }
 
     // Idempotence: a re-run reports unchanged, not re-added.

@@ -58,12 +58,26 @@ Key properties:
 - **The subordinate is a chat participant**, deliberately never marked
   machinery: pre-registration (idempotent, like an explicit chat_register)
   gives the coordinator its chat name in the tool response, and the
-  auto-register converges on the same name. `validateTitle` rejects the
-  machinery title so `isMachinerySessionTitle` can never misfire.
+  auto-register converges on the same name. Gated on the chat-enabled
+  config like every other registration path: with chat off the
+  subordinate still spawns, but no roster row is written and the tool
+  response reports no chat name. `validateTitle` rejects the
+  machinery title so `isMachinerySessionTitle` can never misfire. A
+  mid-flow failure (create, move, emit, prompt) throws with the created
+  session id and the completed steps in the message - v2 has no session
+  delete, so the stranded session can at least be named and reported.
 - **The worktree flow boots a second per-location thatch instance** (shared
   db): the subordinate's pollers, nudges, extraction, wrap-up, and alerts
   run in the worktree location's instance, and chat wake for the idle
-  subordinate depends on that instance being alive.
+  subordinate depends on that instance being alive. The watcher poller
+  handoff is per location (`WatcherRegistry.#live` is keyed by directory):
+  the subordinate's instance booting never stops the coordinator's
+  poller - each location's instance polls only its own directory's
+  watchers. The pump caches the subordinate's location from the
+  tab-opened payload's directory field (its final, post-move directory),
+  never from the rpc envelope's location stamp (that is the publisher's
+  directory), so the subordinate's location-less execution events route
+  to the instance that owns it.
 
 ## The cross-entry contract
 
@@ -105,7 +119,12 @@ Two consumers ride the event: the death-detection machinery
 (generalized-session-heartbeat) treats a tool-initiated close as a
 CONFIRMED close - the closed session's watchers cancel immediately instead
 of waiting on the 2h delivery-failure heuristic - and the coordinator's own
-workflow closes dispatched subordinates once their work is verified.
+workflow closes dispatched subordinates once their work is verified. The
+pump routes the close by the CLOSED session's own directory (resolved from
+the pump's session-location cache, or live through the session API), not
+by the event's location stamp: the stamp names the publishing coordinator
+instance, while the watchers and status bookkeeping live in the instance
+that owns the session - its post-move location.
 
 ## Install requirement (the `./tui` entrypoint)
 
