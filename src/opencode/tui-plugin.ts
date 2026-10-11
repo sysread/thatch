@@ -20,7 +20,7 @@
 // peer).
 
 import { Plugin } from "@opencode/plugin/tui";
-import { isTabClosedEvent, isTabOpenedEvent, passesDirectoryGuard } from "../session-tab-shared";
+import { isExitTabClosedEvent, isTabClosedEvent, isTabOpenedEvent, isToastEvent, passesDirectoryGuard } from "../session-tab-shared";
 
 export default Plugin.define({
   id: "jeffober-thatch-tui",
@@ -28,21 +28,41 @@ export default Plugin.define({
     const off = context.data.listen(({ details }) => {
       const windowDirectory = context.location?.directory ?? context.data.location.default().directory;
       if (!passesDirectoryGuard(details.location?.directory, windowDirectory)) return;
-      if (isTabClosedEvent(details.type)) {
-        // A tool-initiated close request: close the tab if THIS window has
-        // one for the session. Windows that never opened it (and windows at
-        // other directories, filtered above) return false - that is the
-        // correct no-op, not an error. The close is reopenable by the user
-        // (the strip's reopen stack), so this is tab-level, not session
-        // deletion.
+      // Two close events, one TUI action: tab-closed (the session_tab_close
+      // tool's confirmed close - the pump also runs its death bookkeeping)
+      // and exit-tab-closed (the wrap-up exit's close - the runtime records
+      // the deaths itself before emitting, so the pump ignores that one).
+      if (isTabClosedEvent(details.type) || isExitTabClosedEvent(details.type)) {
+        // Close the tab if THIS window has one for the session. Windows that
+        // never opened it (and windows at other directories, filtered above)
+        // return false - that is the correct no-op, not an error. The close
+        // is reopenable by the user (the strip's reopen stack), so this is
+        // tab-level, not session deletion.
         const closeID = (details.data as { sessionID?: string }).sessionID;
         if (!closeID) {
-          console.error("[thatch] tab-closed event without a sessionID");
+          console.error("[thatch] tab-close event without a sessionID");
           return;
         }
         if (!context.ui.tabs.close(closeID)) {
           console.error("[thatch] tab-close requested but no tab matched (or tabs are disabled)");
         }
+        return;
+      }
+      // The toast request: the server-side runtime's only TUI feedback
+      // channel (alerts, extraction metrics, chat registration, blocked
+      // wrap-ups). Best-effort like every toast - the event is ephemeral,
+      // so a TUI that is absent simply never shows it.
+      if (isToastEvent(details.type)) {
+        const toast = details.data as { message?: string; variant?: string; duration?: number };
+        if (typeof toast.message !== "string") {
+          console.error("[thatch] toast event without a message");
+          return;
+        }
+        context.ui.toast.show({
+          message: toast.message,
+          variant: (toast.variant as "info" | "success" | "warning" | "error") ?? "info",
+          duration: typeof toast.duration === "number" ? toast.duration : undefined,
+        });
         return;
       }
       if (!isTabOpenedEvent(details.type)) return;

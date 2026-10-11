@@ -91,7 +91,7 @@ bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygi
 | `index.ts` | Dual-shape OpenCode plugin entry: the merged default export (`{ id, setup, server }`) loads on opencode v1 (reads `default.server`) and v2 (reads `default.setup`, strips excess keys). Lazy-imports the host adapter so each host's SDK resolves only under its own runtime. |
 | `opencode/v1.ts` + `opencode/v2.ts` | Host adapters. v1 builds HostCapabilities from the PluginInput client and returns the hooks object; v2 registers through the promise-context domains (ToolEditor, session.hook, event.subscribe) and degrades the surfaces v2 lacks. v2 also wires the session-tab host flow (create -> move -> chat-register -> rpc emit -> prompt) through the `CoreContext.sessionTabHost` seam. |
 | `opencode/tui-plugin.ts` | The v2 TUI CLI plugin (the package's `./tui` entrypoint): listens for `rpc.thatch-tabs.tab-opened` and `rpc.thatch-tabs.tab-closed` events and opens/closes the subordinate session's tab via `ui.tabs.open`/`ui.tabs.close`. See [features/session-tabs.md](features/session-tabs.md). |
-| `capabilities.ts` | The `HostCapabilities` seam: the host operations the shared runtime needs (session create/prompt/get/list/messages/delete, toast, compaction trigger, app exit). `capabilitiesFromClient` bridges the v1 SDK client. |
+| `capabilities.ts` | The `HostCapabilities` seam: the host operations the shared runtime needs (session create/prompt/get/list/messages/delete, toast, compaction trigger, session close-out - app exit on v1, the session's own tab on v2). `capabilitiesFromClient` bridges the v1 SDK client. |
 | `runtime.ts` | Shared plugin runtime: wires DB, model, extraction; the nudge tiers, system prompt injection, session event handling, child-session bookkeeping, wrap-up resolution. Host-agnostic: consumed by both adapters. |
 | `os-args.ts` | Pure argv / OS-command-line helpers for startup session resolution (`-s`/`-c`). SDK-free. |
 | `setup.ts` | `thatch setup --claude` / `--cursor` installer. Writes MCP config (`.mcp.json` / `.cursor/mcp.json`), appends to CLAUDE.md / AGENTS.md (idempotent), installs hooks in settings.json / hooks.json, installs skills. |
@@ -129,7 +129,7 @@ methods. The v1 hook shapes:
 |------|-------------|
 | `experimental.chat.system.transform` | Appends the thatch system prompt (store names, usage rules). |
 | `experimental.session.compacting` | Marks the session as compacting and appends re-familiarization context so a compacted session still knows thatch exists. |
-| `command.execute.before` | Arms the wrap-up greenlight check: `/thatch/compact` and `/thatch/exit` mark their session in `pendingWrapUp`. The next `session.status` idle resolves it by inspecting the final assistant message for the greenlight token and, when present, triggering the TUI action (`session_compact` via `executeCommand`, `app.exit` via `publish`; the exit path unregisters the session from the chat directory first). See [features/session-lifecycle.md](features/session-lifecycle.md). |
+| `command.execute.before` | Arms the wrap-up greenlight check: `/thatch/compact` and `/thatch/exit` mark their session in `pendingWrapUp`. The next `session.status` idle resolves it by inspecting the final assistant message for the greenlight token and, when present, triggering the host action (compact: v1 `session_compact` via `executeCommand`, v2 `session.compact` on the promise domain; exit: record the session's watcher deaths, unregister it from chat, then v1 `app.exit` via `publish` or v2 the exit-tab-closed rpc event closing the session's own tab). See [features/session-lifecycle.md](features/session-lifecycle.md). |
 | `experimental.compaction.autocontinue` | Clears the compacting flag so `chat.message` nudges resume. Without this, nudges that instruct tool calls would fire during summary generation where tools are blocked. The `chat.message` hook also clears the flag if it fires for a session still in the compacting set but the incoming message has no compaction-type part — this handles compaction failure, where the session would otherwise be stuck with nudges off forever. |
 | `tool.execute.after` | Buffers every non-`thatch_*`, non-`skill`, non-`task` tool call into the session's extraction buffer. (Skill/task are excluded — buffering them creates a feedback loop where the nudge triggers a skill load, which gets buffered, which triggers another nudge.) Memory writes (`thatch_memory_remember`) and `thatch_extraction_done` drain the buffer and reset the missed-nudge counter. For child sessions (`childToParent.has(sessionID)`), also tracks metrics: `remember` with `overwrite:false` → new++, `overwrite:true` → updated++, `forget` → deleted++. For `thatch_chat_*` tool calls, builds the transcript echo (`chatEchoText`) and posts it as a visible non-synthetic `noReply` part. This is a plugin hook, NOT a bus event — do not move it into the `event` handler; the event bus has no such event and it will silently never fire. |
 | `chat.message` | Recall nudge: embeds the user's prompt text with the in-process warm model, searches `db.search()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55). The same embedding also feeds the prediction auto-fire (`db.scorePredictionNudge`, injects `[thatch] User decision model`) and the behavior auto-fire (`db.scoreBehaviorNudge`, injects `[thatch] Situational behaviors`). All three nudges fire independently in separate try/catch blocks with separate synthetic parts. There is deliberately NO extraction nudge here - extraction is plugin-driven at session idle (see the extraction feature doc); the old model-driven handshake raced its own state machine and was removed. Chat transcript echoes (non-synthetic `noReply` parts whose text is entirely `[chat]`-prefixed bubbles) are skipped before any tier — no model turn reads them, so nudging them wastes an embedding. Skipped entirely while the session is compacting (tool calls are blocked during summary generation), and for task-dispatched sub-agent sessions (`childToParent` without `extractionChildren`) - their tool lists may exclude the thatch tools and their work is driven by the dispatch prompt. |
@@ -268,14 +268,16 @@ extraction cycle
   → MCP path (Claude Code/Cursor): unchanged — no SDK client, no child
     sessions; extract-queue.ts + flush-tools drives the nudge via hooks
 
-toast notifications (opencode-only, TUI-rendered)
+toast notifications (opencode-only, TUI-rendered; the bridge's toast
+  event -> the TUI plugin's ui.toast.show on v2)
   → client.tui.showToast — best-effort, silently ignored if TUI not
     connected (headless mode); model-invisible (goes to the user only,
     not the conversation history — the inverse of synthetic nudge parts,
     which are model-visible but TUI-hidden)
   → extraction metrics: `[thatch] new: N, updated: M, deleted: K` (success
-    variant, 4s) — fires when an extraction child goes idle; no-save runs
-    show `[thatch] extraction complete — nothing to save` (info variant)
+    variant, 4s) — fires when an extraction child goes idle, but ONLY when
+    memories were actually written; no-save runs show nothing (no
+    notification fatigue)
   → recall matches: `[thatch] recalled N memories` (info variant, 3s) —
     fires when chat.message matches stored memories
   → prediction matches: `[thatch] N predictions surfaced` (info variant,

@@ -29,7 +29,8 @@ import {
  *   own schedule. Each action body is a prompt core from src/prompts.ts, so
  *   nudge and command wording cannot drift.
  * - Wrap-ups (/thatch/compact, exit): greenlight-token commands that need
- *   the opencode plugin's TUI control routes, so they are opencode-only.
+ *   the opencode plugin's host action routes (the compact trigger and the
+ *   session close-out), so they are opencode-only.
  */
 
 /** Greenlight token ending /thatch/compact's assistant response when compaction is safe. */
@@ -39,11 +40,13 @@ export const COMPACT_READY_TOKEN = "THATCH_COMPACT_READY";
 export const EXIT_READY_TOKEN = "THATCH_EXIT_READY";
 
 /**
- * The plugin triggers compaction by running the TUI's compact action. The
- * execute-command route only accepts legacy alias names, and "session_compact"
- * maps to the same session.compact action the built-in /compact command runs.
- * There is no exit alias, so the exit path publishes the TUI keymap command
- * ("app.exit") directly via /tui/publish.
+ * The greenlight token's host action, per host: v1 drives the TUI
+ * (compaction via the "session_compact" legacy alias through
+ * executeCommand, the exit via the "app.exit" keymap command through
+ * /tui/publish). v2 calls session.compact on the plugin's promise domain
+ * and emits the session-tab bridge's TUI-only exit-tab-closed event; the
+ * runtime records the exiting session's watcher deaths before either host
+ * action runs (src/runtime.ts).
  */
 
 const sharedChecklist = `1. Flush pending persistence. Call thatch_get_extraction_payload; if it returns buffered tool interactions, process them now (write any memories worth keeping), then call thatch_extraction_done to mark them complete. Complete any memory writes you promised earlier but have not made.
@@ -154,8 +157,18 @@ ${userMessageSection}
 ${action.body}`;
 }
 
+/** The wrap-up command's menu/palette description. Host-neutral on purpose:
+ *  what actually happens after the greenlight differs per host (v1 exits the
+ *  app, v2 closes the session's tab), and the template text the MODEL reads
+ *  is shared verbatim by both hosts. */
+export function wrapUpCommandDescription(kind: "compact" | "exit"): string {
+  return kind === "compact"
+    ? "Flush thatch persistence, check for loose ends, then compact if clear"
+    : "Flush thatch persistence, check for loose ends, then end the session if clear";
+}
+
 const COMPACT_TEMPLATE = `---
-description: ${yamlQuote("Flush thatch persistence, check for loose ends, then compact if clear")}
+description: ${yamlQuote(wrapUpCommandDescription("compact"))}
 ---
 ${userMessageSection}
 
@@ -172,7 +185,7 @@ ${COMPACT_READY_TOKEN}
 If anything is outstanding, list the items concisely so the user can address them, and do NOT include the token. The session will only be compacted when the token is present.`;
 
 const EXIT_TEMPLATE = `---
-description: ${yamlQuote("Flush thatch persistence, check for loose ends, then exit opencode if clear")}
+description: ${yamlQuote(wrapUpCommandDescription("exit"))}
 ---
 ${userMessageSection}
 
@@ -181,13 +194,12 @@ ${userMessageSection}
 Work through this checklist before responding:
 
 ${sharedChecklist}
-3. Leave the chat directory. Call thatch_chat_unregister for this session - the session is exiting, so other sessions must stop addressing mail to it.
 
 Do not start new work beyond this checklist. If every item is handled and nothing needs the user's attention first, end your final response with exactly this token as the very last line, with no formatting around it:
 
 ${EXIT_READY_TOKEN}
 
-If anything is outstanding, list the items concisely so the user can address them, and do NOT include the token. opencode will only exit when the token is present.`;
+If anything is outstanding, list the items concisely so the user can address them, and do NOT include the token. The session will only close when the token is present.`;
 
 /** One command: the command name (minus the thatch/ prefix) and its full markdown file content. */
 export interface CommandDef {
@@ -221,7 +233,7 @@ export function opencodeCommandDefs(): CommandDef[] {
 /**
  * The Claude Code command set: the actions minus the opencode-only ones.
  * The wrap-up commands are excluded too - their greenlight check needs the
- * plugin's command.execute.before arming and TUI control routes.
+ * plugin's command.execute.before arming and host action routes.
  */
 export function claudeCommandDefs(): CommandDef[] {
   return actionDefs(mcpToolName)

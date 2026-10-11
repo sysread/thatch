@@ -297,15 +297,24 @@ export async function createRuntime(input: {
   /** Tells one live same-project session about a dead session's watchers
    *  (promptAsync, the watcher-notification path) and clears the durable
    *  death row on success. No live peer = the row waits for the next
-   *  prompt-time surfacing pass. */
-  const deliverWatcherDeathNotices = async (deadSessionID: string, death: { chatName: string | null; targets: string[] }) => {
+   *  prompt-time surfacing pass. The dead session's project is the one
+   *  captured at death time (onSessionDeath), not a re-read of the chat
+   *  roster: the wrap-up exit unregisters the row between the death record
+   *  and this delivery, and a re-read would strand a placed death as
+   *  unplaceable. */
+  const deliverWatcherDeathNotices = async (
+    deadSessionID: string,
+    death: { chatName: string | null; targets: string[] },
+    deadProject: string | null,
+  ) => {
     if (death.targets.length === 0) {
-      // A watchless tab closing is nobody's news.
-      db.runtimeStateDelete("watcher_death", deadSessionID);
+      // A watchless death is nobody's news, and onSessionDeath never
+      // writes a row for one - so there is nothing to deliver or clean
+      // here. Deleting unconditionally would erase an earlier placed row
+      // for the same session (a reopened session's second greenlit
+      // /thatch/exit); the surfacing pass cleans any legacy empty row.
       return;
     }
-    const deadRow = db.findChatSession(deadSessionID);
-    const deadProject = deadRow?.project ?? null;
     if (!deadProject) return; // unplaceable death - the row waits for surfacing
     for (const peerID of sessionStatus.keys()) {
       if (peerID === deadSessionID) continue;
@@ -318,6 +327,10 @@ export async function createRuntime(input: {
           { parts: [{ type: "text", text: watcherDeathNotice(death.targets, { name: death.chatName, sessionID: deadSessionID }, { rearmsOnResume: false }), synthetic: true }] },
           "async",
         );
+        // Delayed journal writer (post-await): the reload ownership rule
+        // applies - a disposed runtime's rows belong to the reloaded
+        // instance (docs/dev/gotchas.md).
+        if (disposed) return;
         db.runtimeStateDelete("watcher_death", deadSessionID);
         return;
       } catch (err) {
@@ -399,11 +412,19 @@ export async function createRuntime(input: {
         db.runtimeStatePut("hosted", directory, (hostedRow.value as string[]).filter((sid) => sid !== deadSessionID), directory);
       }
       // Durable death record first, then best-effort live delivery - the
-      // row is deleted when a live same-project session has the news.
+      // row is deleted when a live same-project session has the news. The
+      // project is captured HERE (while the chat row still places it): the
+      // wrap-up exit unregisters the row right after recording, so the
+      // project cannot be re-derived at delivery time. A watchless death
+      // writes no row at all: runtimeStatePut upserts, so an empty-targets
+      // write would erase an earlier placed row for the same session (a
+      // reopened session that greenlights /thatch/exit a second time).
       const deadRow = db.findChatSession(deadSessionID);
       const deadProject = deadRow?.project ?? null;
-      db.runtimeStatePut("watcher_death", deadSessionID, { name: death.chatName, targets: death.targets, project: deadProject, at: nowIso() }, directory);
-      void deliverWatcherDeathNotices(deadSessionID, death);
+      if (death.targets.length > 0) {
+        db.runtimeStatePut("watcher_death", deadSessionID, { name: death.chatName, targets: death.targets, project: deadProject, at: nowIso() }, directory);
+      }
+      void deliverWatcherDeathNotices(deadSessionID, death, deadProject);
     },
   });
   // gh presence decides whether watch_create and watch_branch_create work;
@@ -1898,6 +1919,13 @@ export async function createRuntime(input: {
         const wrapUp = sessionID ? pendingWrapUp.get(sessionID) : undefined;
         if (wrapUp) {
           pendingWrapUp.delete(sessionID);
+          // Reload ownership rule (docs/dev/gotchas.md): after a v2 plugin
+          // reload this instance's journal rows belong to the reloaded
+          // instance - resolve nothing further once disposed. Safe today
+          // because the only producer of this branch (the v2 pump) is
+          // settled before dispose, but the guard makes that invariant
+          // local instead of transitive.
+          if (disposed) return;
           db.runtimeStateDelete("wrapup", sessionID);
           let ready = false;
           try {
@@ -1913,13 +1941,24 @@ export async function createRuntime(input: {
             console.error(`[thatch] wrap-up message fetch failed: ${err}`);
           }
           if (ready) {
-            // An exit-greenlit session is leaving the process: leave the
-            // chat directory too, so other sessions stop addressing mail to
-            // a roster entry whose host is about to vanish. The unregister
+            // An exit-greenlit session is closing out: leave the chat
+            // directory too, so other sessions stop addressing mail to a
+            // roster entry whose host is about to vanish. The unregister
             // tombstone also stops any straggler auto-register from
             // resurrecting the row during shutdown. Compact keeps the
             // session alive, so only the exit path does this.
             if (wrapUp.kind === "exit") {
+              // Watcher deaths run BEFORE the unregister: onSessionDeath
+              // places the death row by the session's chat row, and the
+              // unregister deletes that row. The v2 exit action's emit is
+              // TUI-only (the pump never translates it into a second
+              // death pass, which would erase the placed row), so this is
+              // the exit's only death recording.
+              try {
+                watchers.sessionDied(sessionID, { chatName: db.findChatSession(sessionID)?.name ?? null });
+              } catch (err) {
+                console.error(`[thatch] watcher death recording on exit failed: ${err}`);
+              }
               try {
                 db.unregisterChatSession(sessionID);
               } catch (err) {
@@ -1930,7 +1969,7 @@ export async function createRuntime(input: {
               if (wrapUp.kind === "compact") {
                 await caps.compactSession(sessionID);
               } else {
-                await caps.exitHost();
+                await caps.exitHost(sessionID);
               }
             } catch (err) {
               console.error(`[thatch] wrap-up action failed: ${err}`);

@@ -160,6 +160,12 @@ here first. These are the things that have already cost time.
 - **`bun test` does not typecheck**, and `tsconfig.json` excludes `tests`. Test
   type errors are editor-only noise unless you run `tsc` on the test files
   directly. Keep test files type-clean anyway so the editor stays quiet.
+- **`mise run test` (bare `bun test`) also executes the QA barrels**
+  (`tests/qa/*/index.test.ts`), which spawn REAL opencode sessions and spend
+  model tokens, one use case at a time - a full run can hang for many minutes.
+  The unit gate is `mise run check` (`bun test tests/*.test.ts`); QA runs
+  belong to the `mise run qa-auto` / `qa-live` tasks, which select a UC
+  subset by name.
 
 ## Config and notifications
 

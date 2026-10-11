@@ -5,11 +5,11 @@ import type { ToolContext as V2ToolContext } from "@opencode/plugin/promise/tool
 import type { ThatchDB } from "../db";
 import type { HostCapabilities, PromptPart, ToastInput } from "../capabilities";
 import { createRuntime } from "../runtime";
-import { wrapUpCommandContent } from "../commands";
+import { wrapUpCommandContent, wrapUpCommandDescription } from "../commands";
 import { deriveTitle } from "../extraction";
 import { detectRepo, detectWorktreeKind } from "../git";
 import { chatEnabled, loadConfig } from "../config";
-import { SESSION_TAB_RPC, TAB_CLOSED_EVENT, TAB_OPENED_EVENT, buildSubordinatePrompt, tabClosedEventType, tabOpenedEventType } from "../session-tab-shared";
+import { EXIT_TAB_CLOSED_EVENT, SESSION_TAB_RPC, TAB_CLOSED_EVENT, TAB_OPENED_EVENT, TOAST_EVENT, buildSubordinatePrompt, tabClosedEventType, tabOpenedEventType } from "../session-tab-shared";
 import { TOOL_DEFS, trimHostContext, type HostToolContext, type SessionTabCloseInput, type SessionTabHost, type SessionTabSpawnInput, type SessionTabSpawnResult } from "../tool-defs";
 
 // The opencode v2 adapter (opencode 2.x, plugin API @opencode/plugin 2.x).
@@ -46,17 +46,31 @@ import { TOOL_DEFS, trimHostContext, type HostToolContext, type SessionTabCloseI
 // - TUI reach: the ONLY server-to-TUI channel is the rpc event bridge - the
 //   session-tab rpc definition is registered at setup and its events reach
 //   the TUI CLI plugin (the package's ./tui entrypoint), which drives the
-//   tab strip (ui.tabs). Toast/command/exit pushes still have no surface.
-// - toasts, tui commands, session delete/list endpoints:
+//   tab strip (ui.tabs) and shows toasts (ui.toast). Keymap-command pushes
+//   still have no surface.
+// - wrap-up actions: compact rides session.compact on the promise domain
+//   (upstream #52385, newer than the pinned dev types, so runtime-guarded);
+//   exit records the session's watcher deaths synchronously in the runtime
+//   and then emits the bridge's exit-tab-closed event, which the TUI plugin
+//   turns into closing the session's OWN tab (see exitHost in
+//   buildCapabilities).
+// - toasts ride the bridge's toast event (TUI plugin's ui.toast.show);
+//   extraction-child cleanup rides session.remove (upstream #52387, also
+//   runtime-guarded). tui commands, session list endpoints:
 //   no v2 surface reachable from a plugin - degrades as no-op/null.
 //   fetchStatuses returns {} because the wake gate treats an unknown session
 //   as idle; the event-fed status map inside the runtime does the gating.
 //   Session MESSAGES are readable via session.context (mapped into the v1
-//   shape), so the wrap-up greenlight check works; the compaction TRIGGER
-//   does not (no session.compact on the promise domain).
+//   shape), so the wrap-up greenlight check works.
 
 type V2Context = Plugin.Context;
 type V2Cleanup = Plugin.Cleanup;
+
+// The wrap-up exit's tab-close emitter, late-bound in setup (see the
+// tuiBridge holder there). One shape, referenced at the holder, the
+// buildCapabilities seam, and the assignment - a local alias so the payload
+// shape has a single drift point in this file.
+type ExitTabCloseEmitter = (data: { sessionID: string }) => Promise<unknown>;
 
 // Raw setup function: the dual entry (src/index.ts) owns the plugin id and
 // the merged default export; this adapter only implements the v2 setup.
@@ -77,14 +91,26 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   // differs from this instance's directory whenever opencode is launched
   // below the project root. Their events would never pass the directory
   // filter, so they are forwarded by ID: sessionCreate records every child
-  // here, and the pump lets their events through.
+  // here, and the pump lets their events through. Ids are never removed
+  // (children are deleted, but their id never recurs and the set dies with
+  // this activation - only a long-lived instance grows it).
   const childSessions = new Set<string>();
 
   // Tool executions currently running against this instance's runtime (see
   // the counter in the tool execute wrapper below).
   let inflightTools = 0;
 
-  const capabilities = buildCapabilities(context, worktree, childSessions);
+  // TUI-bridge holder: the wrap-up exit emits the exit-tab-closed rpc event
+  // (the TUI plugin closes the session's own tab) and every runtime toast
+  // rides the toast event - both through this late-bound holder, because
+  // capabilities are built before the rpc registration exists. Assigned when
+  // the registration wires (below); undefined forever on an SDK floor
+  // without the rpc surface, which both emitters' guards degrade.
+  const tuiBridge: {
+    emitExitTabClose?: ExitTabCloseEmitter;
+    emitToast?: (toast: ToastInput) => Promise<unknown>;
+  } = {};
+  const capabilities = buildCapabilities(context, worktree, childSessions, tuiBridge);
   const runtime = await createRuntime({ capabilities, directory, worktree, v2Tools: true });
   // Seed the forwarding set from rehydrated child bookkeeping: after a
   // reload, an in-flight extraction child's maps come back from the journal,
@@ -111,13 +137,27 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   if (tabRegistration) {
     const emitTabOpened = (data: { sessionID: string; directory: string }) =>
       tabRegistration.events.emit(TAB_OPENED_EVENT, data);
+    // The session_tab_close tool's confirmed-close emitter: the pump
+    // translates this event into the runtime's death path, so it is the
+    // tool's only route to that bookkeeping.
+    const emitTabClosed = (data: { sessionID: string; chatName: string | null }) =>
+      tabRegistration.events.emit(TAB_CLOSED_EVENT, data);
+    // The wrap-up exit's own emitter: TUI-only (the runtime records the
+    // exit's deaths synchronously before the action fires, so the pump
+    // deliberately never translates this one).
+    tuiBridge.emitExitTabClose = (data) => tabRegistration.events.emit(EXIT_TAB_CLOSED_EVENT, data);
+    // Every runtime toast rides this emitter (alerts, extraction metrics,
+    // chat registration, blocked wrap-ups) - TUI-only by nature. The spread
+    // widens the interface into a plain object type: the rpc emit's
+    // schema-inferred input wants an index signature, which interfaces
+    // never carry.
+    tuiBridge.emitToast = (toast) => tabRegistration.events.emit(TOAST_EVENT, { ...toast });
     runtime.coreContext.sessionTabHost = buildSessionTabHost({
       context,
       directory,
       db: runtime.coreContext.db,
       emitTabOpened,
-      emitTabClosed: (data: { sessionID: string; chatName: string | null }) =>
-        tabRegistration.events.emit(TAB_CLOSED_EVENT, data),
+      emitTabClosed,
       debug: runtime.debug,
     });
   } else {
@@ -278,10 +318,9 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     for (const kind of ["compact", "exit"] as const) {
       editor.add({
         name: `thatch/${kind}`,
-        description:
-          kind === "compact"
-            ? "Flush thatch persistence, check for loose ends, then compact if clear"
-            : "Flush thatch persistence, check for loose ends, then exit opencode if clear",
+        // Shared with the v1 command file's frontmatter so the two hosts'
+        // menu descriptions cannot drift.
+        description: wrapUpCommandDescription(kind),
         // The user's typed arguments ride invocation.prompt (a
         // PromptInput.Prompt with a text field). v1's host expanded
         // $ARGUMENTS from the command file; v2's session.prompt does no
@@ -702,11 +741,22 @@ function buildSessionTabHost(input: {
 // The HostCapabilities implementation over the v2 promise context. Every
 // operation the v2 surface lacks degrades as a no-op or null - the shared
 // runtime's callers treat those results as best-effort and log, never crash.
-function buildCapabilities(context: V2Context, worktree: string, childSessions: Set<string>): HostCapabilities {
+function buildCapabilities(
+  context: V2Context,
+  worktree: string,
+  childSessions: Set<string>,
+  tuiBridge: {
+    emitExitTabClose?: ExitTabCloseEmitter;
+    emitToast?: (toast: ToastInput) => Promise<unknown>;
+  },
+): HostCapabilities {
   // Typed against the SDK's own SessionDomain: the shape errors the
   // original cast (as unknown as {...}) suppressed are exactly what the
-  // review caught (message.list and compact do not exist here; get takes
-  // {sessionID}). Let the typecheck keep holding that line.
+  // review caught (message.list does not exist here; get takes
+  // {sessionID}). compact and remove DO exist on newer SDK builds but not
+  // on the pinned dev types - both calls are runtime-guarded instead of
+  // cast (see compactSession and the sessionDelete comment). Let the
+  // typecheck keep holding that line for the pinned surface.
   const session = context.session;
 
   return {
@@ -731,14 +781,19 @@ function buildCapabilities(context: V2Context, worktree: string, childSessions: 
       childSessions.add(id);
       return { id };
     },
-    // No delete on the v2 SessionDomain: extraction child sessions are not
-    // cleaned up on v2 (documented gap; the bookkeeping maps still keep the
-    // claim/completion lifecycle consistent). Two user-visible consequences: the session
-    // picker accumulates one thatch-extraction entry per extraction, and
-    // "continue last session" (-c) logic that picks the newest top-level
-    // session will land in an extraction child after any session that
-    // triggered extraction, because the child is top-level and newer.
-    sessionDelete: async () => {},
+    // Extraction child cleanup: upstream exposed session.remove on the
+    // promise domain (#52387), the same era as compact - runtime-guarded
+    // the same way (the pinned dev types predate the surface). An older
+    // host keeps the documented gap: the session picker accumulates one
+    // thatch-extraction entry per extraction, and "continue last session"
+    // (-c) logic that picks the newest top-level session lands in an
+    // extraction child after any session that triggered extraction,
+    // because the child is top-level and newer.
+    sessionDelete: async (id: string) => {
+      const remove = (session as { remove?: (input: { sessionID: string }) => Promise<unknown> }).remove;
+      if (typeof remove !== "function") return;
+      await remove({ sessionID: id });
+    },
     promptSession: async (sessionID, body, _mode) => {
       // v2's prompt endpoint takes text, not parts, and has no synthetic /
       // noReply semantics. Nudge injections ride the prompt hook.
@@ -764,36 +819,51 @@ function buildCapabilities(context: V2Context, worktree: string, childSessions: 
     },
     sessionList: async () => null,
     sessionMessages: async (id) => {
-      // The v2 promise domain has no message-list endpoint (no
-      // `message` accessor and no compact/remove in the SessionDomain Pick).
+      // The pinned promise domain has no message-list endpoint (no `message`
+      // accessor; compact/remove exist on newer SDK builds but not here).
       // `session.context` IS exposed and returns the session's message list
       // (Array<SessionMessageInfo>); map into the v1 shape the wrap-up
       // greenlight check reads.
       const result = await session.context({ sessionID: id });
       return mapSessionContextMessages(result);
     },
-    showToast: async (_toast: ToastInput) => {
-      // No toast publish path reachable from the promise context (the
-      // tui.toast.show event has no producer surface here). A `tui`
-      // companion plugin entrypoint (ui.toast.show) is the known lift
-      // candidate - not yet wired. Degrades.
+    showToast: async (toast: ToastInput) => {
+      // The toast rpc event is the only TUI feedback channel on v2 - the
+      // TUI plugin's ui.toast.show. Best-effort by contract (the runtime's
+      // call sites catch-and-ignore): a TUI-less environment (headless run,
+      // still connecting) or an rpc-less SDK floor simply never shows it,
+      // and that is the correct silent degrade, not an error.
+      const emit = tuiBridge.emitToast;
+      if (!emit) return;
+      await emit(toast);
     },
-    compactSession: async () => {
-      // No compaction trigger is reachable from the promise context: the
-      // SessionDomain Pick has no session.compact, and the built-in
-      // /compact is a TUI palette action calling the server endpoint
-      // directly (the server command registry only knows config/plugin-
-      // registered names). The compact wrap-up still runs its checklist
-      // and flush; only the automatic compaction itself degrades.
-      console.error("[thatch] v2: compaction trigger unavailable; wrap-up checklist ran, compact skipped");
+    compactSession: async (sessionID: string) => {
+      // Upstream exposed session.compact on the promise SessionDomain
+      // (#52385) - the same core compaction the built-in /compact runs.
+      // The pinned dev types predate that surface, so the call is
+      // runtime-guarded like the rpc floor: an older host degrades to a
+      // logged no-op (the wrap-up checklist and flush still ran).
+      const compact = (session as { compact?: (input: { sessionID: string }) => Promise<unknown> }).compact;
+      if (typeof compact !== "function") {
+        console.error("[thatch] v2: compaction trigger unavailable; wrap-up checklist ran, compact skipped");
+        return;
+      }
+      await compact({ sessionID });
     },
-    exitHost: async () => {
-      // No TUI surface on v2; the exit wrap-up's checklist and flush run,
-      // the exit itself does not. When upstream restores a publish path
-      // (or the `tui` companion entrypoint's ui.tabs.close is wired),
-      // the right v2 target closes THIS session's tab, not app.exit - on
-      // a shared daemon app.exit would take down every tab. Tracked in
-      // anomalyco/opencode#50984.
+    exitHost: async (sessionID: string) => {
+      // Tab-scoped close (the close anomalyco/opencode#50984 asks for):
+      // the daemon hosts every tab, so app.exit would take down unrelated
+      // sessions. This emit is TUI-only - the runtime records the
+      // session's watcher deaths synchronously BEFORE calling here, and
+      // the pump deliberately never translates this event (a second
+      // death pass would erase the durable death row the first one
+      // wrote).
+      const emit = tuiBridge.emitExitTabClose;
+      if (!emit) {
+        console.error("[thatch] v2: rpc surface unavailable; wrap-up checklist ran, tab close skipped");
+        return;
+      }
+      await emit({ sessionID });
     },
   };
 }

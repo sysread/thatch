@@ -160,10 +160,10 @@ never reads them, and `chat_send` says so at send time. Continuing a
 session with `opencode -s <id>` reclaims its name and row, and any mail
 that queued while it was down is delivered at startup. Explicitly
 closing a session (deleting it in the TUI) unregisters it immediately,
-and a greenlit `/thatch/exit` unregisters the session too: the wrap-up
-checklist calls `chat_unregister`, and the plugin removes the row itself
-when the exit token passes the greenlight check, so other sessions stop
-addressing mail to a process that is about to vanish.
+and a greenlit `/thatch/exit` unregisters the session too: the plugin
+removes the row itself when the exit token passes the greenlight check,
+so other sessions stop
+addressing mail to a session that is closing out.
 
 ## Turning chat off
 

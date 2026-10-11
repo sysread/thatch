@@ -248,9 +248,14 @@ Beyond the tools, thatch hooks into opencode itself:
   flushes pending fact extraction, finishes any promised memory writes, and
   surfaces todos or follow-ups it never addressed. The agent ends its
   response with a greenlight token only when the checklist is clean. Thatch
-  watches for the token and then runs the compaction or exits opencode.
+  watches for the token and then runs the compaction or closes the session
+  (opencode 1 exits the whole app; opencode 2 closes the session's own tab.
+  Either way the session's watches are cancelled, and reopening or resuming
+  the session does not re-arm them - re-create watches you still want with
+  `thatch_watch_create`).
   Without the token nothing fires -- a toast points you at the items the
-  agent listed, and you re-run the command once they're handled. Text typed
+  agent listed in its response, and you re-run the command once they're
+  addressed. Text typed
   after the command reaches the agent first, labeled as a `User Message`
   section ahead of the checklist (say goodbye or hand off context:
   `/thatch/exit Good work - see you tomorrow`). Alongside the wrap-ups,

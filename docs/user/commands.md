@@ -49,7 +49,8 @@ or you invoke it.
 
 Why the gaps: `/thatch/extract` and `/thatch/whois` need the invoking
 session's ID, which only the opencode plugin can supply. The wrap-up
-commands trigger TUI actions through the plugin. Cursor has no file-based
+commands trigger host actions (the compaction and the session close-out)
+through the plugin. Cursor has no file-based
 commands; its prompts come from the MCP server (`prompts/list` and
 `prompts/get`).
 

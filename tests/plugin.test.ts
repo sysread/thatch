@@ -3028,7 +3028,12 @@ describe("installOpencodeCommands", () => {
       expect(body).toContain("treat the user message as n/a");
     }
     const exit = opencodeCommandDefs().find((d) => d.name === "exit")!;
-    expect(exit.content).toContain("chat_unregister");
+    // The exit template deliberately does NOT instruct the model to
+    // unregister from chat: the plugin-side unregister on the greenlit
+    // idle is the deterministic path, and a model-side unregister mid-turn
+    // would delete the chat row before the exit branch can place the
+    // session's watcher deaths by that row (the death lands unplaceable).
+    expect(exit.content).not.toContain("chat_unregister");
   });
 });
 

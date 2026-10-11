@@ -44,10 +44,11 @@ synchronously (fire-and-forget) instead of asynchronously.
 
 The v2 plugin API is missing a few surfaces the v1 API had. On 2.x:
 
-- **No toasts.** Toasts are dropped on v2 (no publish surface). The
-  model-facing nudges they accompanied - watcher and chat wake nudges -
-  still arrive; the extraction-result and other TUI-only toasts have no
-  replacement.
+- **Toasts ride the session-tab bridge.** Every plugin toast (extraction
+  metrics, alerts, chat registration, blocked wrap-ups) travels the
+  session-tab rpc bridge to the TUI plugin's `ui.toast.show`. A TUI-less
+  environment (headless run, still connecting) shows nothing - toasts are
+  best-effort by design.
 - **Plugin state survives reloads.** Editing the plugin (or `opencode
   plugin update`) reloads it, but extraction buffers, watcher
   registrations, and armed wrap-ups are journaled and restored; a process
@@ -56,14 +57,23 @@ The v2 plugin API is missing a few surfaces the v1 API had. On 2.x:
   such a session re-arms its watches on the first message (expired ones
   are dropped and reported), and a live session in the same project gets a
   one-line notice that a dead session's watch will re-arm if resumed.
-- **Extraction children are visible.** The fact-extractor child sessions are
-  top-level sessions the host cannot delete, so they accumulate in the
-  session picker, and "continue last session" (`-c`) can land in one after
-  any session that triggered extraction.
-- **`/thatch/compact` does not auto-compact.** The checklist and memory
-  flush run, but the compaction itself cannot be triggered from the plugin
-  API - run `/compact` yourself after the wrap-up completes. `/thatch/exit`
-  cannot auto-exit for the same reason.
+- **Extraction children are visible on older 2.x builds.** Upstream exposed
+  `session.remove` on the plugin API (v2.0.22), so the fact-extractor
+  child sessions are deleted when they finish - the session picker stays
+  clean. On an older 2.x build (pre-`session.remove`) the deletion
+  degrades silently: children accumulate in the session picker, and
+  "continue last session" (`-c`) can land in one after any session that
+  triggered extraction.
+- **Wrap-up actions need a new host (compact) or an open tab (exit).** The
+  compaction trigger rides `session.compact` on the plugin API (upstream
+  added it in v2.0.22); on an older 2.x build the checklist and memory
+  flush run but the compaction itself is skipped - run `/compact` yourself
+  there. `/thatch/exit` closes the session's own tab over the session-tab
+  bridge; with no tab open (headless run, tabs off) nothing visible happens,
+  but the session still unregisters from chat and its watches are
+  cancelled - on either host, and reopening or resuming the session does
+  not re-arm them. Re-create watches you still want with
+  `thatch_watch_create`.
 - **No `-c` session listing.** The chat resume listing degrades.
 
 Everything else - tools, memory, nudges, chat, watchers - behaves the
@@ -210,8 +220,10 @@ Thatch gives your agent:
   the agent flushes pending fact extraction, finishes promised memory
   writes, and surfaces todos or follow-ups it never addressed. It ends its
   response with a greenlight token only when the checklist is clean; thatch
-  then triggers the compaction or quits opencode. With items outstanding,
-  the agent lists them and nothing fires -- you decide when to retry.
+  then triggers the compaction or closes the session (its tab on opencode
+  2, the whole app on opencode 1 - either way its watches are cancelled).
+  With items outstanding, the agent lists them and nothing fires -- you
+  decide when to retry.
 - **Notifications + user config** -- the agent can ping you out-of-band when a
   long-running outcome lands: a desktop banner, a spoken voice
   announcement, or both (macOS and Linux). On opencode, thatch also watches

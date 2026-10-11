@@ -6,12 +6,16 @@ import {
   SESSION_TAB_RPC,
   TAB_OPENED_EVENT,
   TAB_CLOSED_EVENT,
+  EXIT_TAB_CLOSED_EVENT,
+  TOAST_EVENT,
   buildSubordinatePrompt,
   validateTitle,
   validateLocationArgs,
   isSameMainCheckout,
   isTabOpenedEvent,
   isTabClosedEvent,
+  isExitTabClosedEvent,
+  isToastEvent,
   passesDirectoryGuard,
 } from "../src/session-tab-shared";
 import { TOOL_DEFS } from "../src/tool-defs";
@@ -80,10 +84,10 @@ describe("buildSubordinatePrompt", () => {
 });
 
 describe("SESSION_TAB_RPC definition", () => {
-  test("defines exactly two events with object JSON schemas and no methods", () => {
+  test("defines exactly four events with object JSON schemas and no methods", () => {
     expect(SESSION_TAB_RPC.id).toBe("thatch-tabs");
     expect(Object.keys(SESSION_TAB_RPC.methods)).toEqual([]);
-    expect(Object.keys(SESSION_TAB_RPC.events).sort()).toEqual([TAB_CLOSED_EVENT, TAB_OPENED_EVENT].sort());
+    expect(Object.keys(SESSION_TAB_RPC.events).sort()).toEqual([EXIT_TAB_CLOSED_EVENT, TAB_CLOSED_EVENT, TAB_OPENED_EVENT, TOAST_EVENT].sort());
     for (const event of Object.values(SESSION_TAB_RPC.events)) {
       expect((event.schema as any).type).toBe("object");
       expect((event.schema as any).properties).toBeDefined();
@@ -95,6 +99,21 @@ describe("SESSION_TAB_RPC definition", () => {
     const schema = SESSION_TAB_RPC.events[TAB_CLOSED_EVENT].schema as any;
     expect(schema.properties.chatName.type).toEqual(["string", "null"]);
     expect(schema.required).toEqual(["sessionID", "chatName"]);
+  });
+
+  test("exit-tab-closed is TUI-only: sessionID and nothing else", () => {
+    // No chatName: the wrap-up exit records the session's deaths itself
+    // before emitting, and the pump never translates this event - a
+    // session_tab_close-style payload would invite that translation.
+    const schema = SESSION_TAB_RPC.events[EXIT_TAB_CLOSED_EVENT].schema as any;
+    expect(schema.properties.chatName).toBeUndefined();
+    expect(schema.required).toEqual(["sessionID"]);
+  });
+
+  test("toast carries the ToastInput fields, all required", () => {
+    const schema = SESSION_TAB_RPC.events[TOAST_EVENT].schema as any;
+    expect(schema.properties.variant.enum).toEqual(["info", "success", "warning", "error"]);
+    expect(schema.required).toEqual(["message", "variant", "duration"]);
   });
 });
 
@@ -110,7 +129,20 @@ describe("TUI plugin guard logic", () => {
   test("matches only the fully-qualified tab-closed event type", () => {
     expect(isTabClosedEvent("rpc.thatch-tabs.tab-closed")).toBe(true);
     expect(isTabClosedEvent("rpc.thatch-tabs.tab-opened")).toBe(false);
+    expect(isTabClosedEvent("rpc.thatch-tabs.exit-tab-closed")).toBe(false);
     expect(isTabClosedEvent("session.deleted")).toBe(false);
+  });
+
+  test("matches only the fully-qualified exit-tab-closed event type", () => {
+    expect(isExitTabClosedEvent("rpc.thatch-tabs.exit-tab-closed")).toBe(true);
+    expect(isExitTabClosedEvent("rpc.thatch-tabs.tab-closed")).toBe(false);
+    expect(isExitTabClosedEvent("session.deleted")).toBe(false);
+  });
+
+  test("matches only the fully-qualified toast event type", () => {
+    expect(isToastEvent("rpc.thatch-tabs.toast")).toBe(true);
+    expect(isToastEvent("rpc.thatch-tabs.tab-closed")).toBe(false);
+    expect(isToastEvent("tui.toast.show")).toBe(false);
   });
 
   test("directory guard: equality, and missing locations fail closed", () => {

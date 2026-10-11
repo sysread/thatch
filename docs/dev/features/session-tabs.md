@@ -82,11 +82,14 @@ Key properties:
 ## The cross-entry contract
 
 `src/session-tab-shared.ts` (SDK-free, per the isolation rule in
-`src/index.ts`) holds the rpc definition (`thatch-tabs`: `tab-opened`,
-`tab-closed` - the latter emitted by the close tool (below) and consumed
-by the generalized-session-heartbeat plan), the subordinate prompt builder,
-and the validators. The TUI entrypoint may import only
-`@opencode/plugin/tui` and this module.
+`src/index.ts`) holds the rpc definition (`thatch-tabs`: `tab-opened`;
+`tab-closed` - emitted by the close tool (below) and translated by the v2
+pump into the runtime's confirmed-death path; `exit-tab-closed` - the
+wrap-up exit's TUI-only close, which the runtime records the exit's deaths
+itself before emitting, so the pump deliberately never translates that
+one; and `toast` - every runtime toast's TUI-only feedback channel), the
+subordinate prompt builder, and the validators. The TUI entrypoint may
+import only `@opencode/plugin/tui` and this module.
 
 ## Interactions
 

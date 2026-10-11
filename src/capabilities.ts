@@ -54,7 +54,13 @@ export interface HostCapabilities {
    * only the title carries over.
    */
   sessionCreate(input: { parentID: string; title: string }): Promise<{ id: string }>;
-  /** Delete a session (child-session cleanup). Degrades to a no-op resolve on v2. */
+  /**
+   * Delete a session (extraction-child cleanup, so the picker stays clean
+   * and `-c` resume does not land in a child). v1: client delete. v2:
+   * session.remove on the promise domain (upstream #52387), runtime-guarded
+   * because the pinned dev types predate the surface - an older host
+   * degrades to a no-op (best-effort by the caller's contract).
+   */
   sessionDelete(id: string): Promise<void>;
   /**
    * Prompt a session with text parts. `sync` mode blocks until the child
@@ -90,15 +96,23 @@ export interface HostCapabilities {
   /**
    * Trigger the host's compaction for a session (the wrap-up compact
    * action). v1 dispatches the TUI's session_compact command (the legacy
-   * alias route; the id is ignored). v2 has no compaction trigger reachable
-   * from the promise context and degrades to a logged no-op.
+   * alias route; the id is ignored). v2 calls session.compact on the
+   * promise domain (upstream #52385), runtime-guarded because the pinned
+   * dev types predate that surface; an older host degrades to a logged
+   * no-op.
    */
   compactSession(sessionID: string): Promise<void>;
   /**
-   * Exit the host application (the wrap-up exit action). v1 publishes the
-   * TUI's app.exit command; v2 has no TUI surface and degrades to a no-op.
+   * End the session's presence on the host (the wrap-up exit action). The
+   * runtime records the session's watcher deaths and unregisters it from
+   * chat BEFORE calling here, so implementations only close out the host
+   * side. v1 publishes the TUI's app.exit command - the id is unused
+   * because the whole app is leaving. v2 emits the session-tab bridge's
+   * exit-tab-closed event, a TUI-only close of the session's OWN tab (the
+   * daemon hosts every tab, so an app-wide exit would take down unrelated
+   * sessions too); a host with no bridge degrades to a logged no-op.
    */
-  exitHost(): Promise<void>;
+  exitHost(sessionID: string): Promise<void>;
 }
 
 /**

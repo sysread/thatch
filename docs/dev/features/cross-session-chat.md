@@ -146,10 +146,10 @@ mechanical barrier, a documented trust posture.
 ### Leave tombstones
 
 Every exit path - `chat_unregister`, `session.deleted`, and a greenlit
-`/thatch/exit` (the plugin unregisters the exiting session before
-publishing `app.exit`, so the roster stops advertising a host that is
-about to vanish; the exit template's checklist step asks the model to do
-the same earlier) - writes a
+`/thatch/exit` (the plugin unregisters the exiting session before the
+host close-out - v1 publishes `app.exit`, v2 closes the session's own
+tab - so the roster stops advertising a host that is about to vanish)
+- writes a
 `chat_leave_tombstones` row in the same transaction that deletes the
 directory row. The tombstone is what makes a leave stick: all
 registration paths consult it (the plugin's idle and prompt auto-registerers are

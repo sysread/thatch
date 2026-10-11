@@ -17,10 +17,18 @@
  * The schemas are literal JSON Schema objects because
  * Rpc.PortableEventValueSchema accepts StandardSchemaV1 or a JSON Schema
  * object with type "object"; a literal object keeps this module
- * dependency-free. The tab-closed consumer is live: the v2 pump
- * (src/opencode/v2.ts) translates a confirmed close into the runtime's
- * death path, and the TUI plugin closes the tab - change the shape
- * jointly with both consumers (docs/dev/features/session-tabs.md).
+ * dependency-free. The registration is the server-to-TUI transport for
+ * everything thatch pushes at the TUI (tab lifecycle plus toasts), so its
+ * id says "tabs" only historically. One event has a consumer beyond the
+ * TUI plugin's tab strip: the v2 pump (src/opencode/v2.ts) translates
+ * tab-closed into the runtime's confirmed-death path (the
+ * session_tab_close tool's only route to it), so that shape must change
+ * jointly with all consumers (docs/dev/features/session-tabs.md).
+ * exit-tab-closed is deliberately TUI-only: the wrap-up exit records the
+ * session's watcher deaths synchronously before emitting
+ * (src/runtime.ts), so the pump ignores it - a pump translation would run
+ * the death path a second time and erase the durable death row the first
+ * pass wrote. toast is TUI-only by nature (nobody else consumes it).
  */
 
 import { realpathSync } from "node:fs";
@@ -30,6 +38,8 @@ import { resolveMainCheckout } from "./git";
 export const SESSION_TAB_RPC_ID = "thatch-tabs";
 export const TAB_OPENED_EVENT = "tab-opened";
 export const TAB_CLOSED_EVENT = "tab-closed";
+export const EXIT_TAB_CLOSED_EVENT = "exit-tab-closed";
+export const TOAST_EVENT = "toast";
 
 /** Full wire type of an emitted event, e.g. "rpc.thatch-tabs.tab-opened". */
 export const tabOpenedEventType = `rpc.${SESSION_TAB_RPC_ID}.${TAB_OPENED_EVENT}`;
@@ -37,6 +47,12 @@ export const tabOpenedEventType = `rpc.${SESSION_TAB_RPC_ID}.${TAB_OPENED_EVENT}
 /** Full wire type of the tab-closed event - the generalized-session-
  *  heartbeat plan's confirmed-close consumer matches on this. */
 export const tabClosedEventType = `rpc.${SESSION_TAB_RPC_ID}.${TAB_CLOSED_EVENT}`;
+
+/** Full wire type of the wrap-up exit's TUI-only close event. */
+export const exitTabClosedEventType = `rpc.${SESSION_TAB_RPC_ID}.${EXIT_TAB_CLOSED_EVENT}`;
+
+/** Full wire type of the toast request event. */
+export const toastEventType = `rpc.${SESSION_TAB_RPC_ID}.${TOAST_EVENT}`;
 
 export const SESSION_TAB_RPC = {
   id: SESSION_TAB_RPC_ID,
@@ -64,6 +80,31 @@ export const SESSION_TAB_RPC = {
           chatName: { type: ["string", "null"] },
         },
         required: ["sessionID", "chatName"],
+        additionalProperties: false,
+      },
+    },
+    [EXIT_TAB_CLOSED_EVENT]: {
+      // TUI-only (see the module header): carries just the tab to close.
+      schema: {
+        type: "object",
+        properties: {
+          sessionID: { type: "string" },
+        },
+        required: ["sessionID"],
+        additionalProperties: false,
+      },
+    },
+    [TOAST_EVENT]: {
+      // TUI-only by nature. The payload is thatch's ToastInput verbatim
+      // (all three fields required there, so required here).
+      schema: {
+        type: "object",
+        properties: {
+          message: { type: "string" },
+          variant: { type: "string", enum: ["info", "success", "warning", "error"] },
+          duration: { type: "number" },
+        },
+        required: ["message", "variant", "duration"],
         additionalProperties: false,
       },
     },
@@ -166,6 +207,16 @@ export function isTabOpenedEvent(type: string): boolean {
 /** The close-request filter: same transport, opposite action. */
 export function isTabClosedEvent(type: string): boolean {
   return type === tabClosedEventType;
+}
+
+/** The wrap-up exit's close filter: same TUI action, no pump translation. */
+export function isExitTabClosedEvent(type: string): boolean {
+  return type === exitTabClosedEventType;
+}
+
+/** The toast-request filter: TUI-only by nature. */
+export function isToastEvent(type: string): boolean {
+  return type === toastEventType;
 }
 
 /**

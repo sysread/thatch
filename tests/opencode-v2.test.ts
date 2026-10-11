@@ -2,8 +2,9 @@ import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { setup, eventMatchesInstance, flattenToolContent, mapSessionContextMessages, translateEvent } from "../src/opencode/v2";
-import { tabClosedEventType, tabOpenedEventType } from "../src/session-tab-shared";
+import { EXIT_TAB_CLOSED_EVENT, TAB_CLOSED_EVENT, TOAST_EVENT, exitTabClosedEventType, tabClosedEventType, tabOpenedEventType } from "../src/session-tab-shared";
 import { TOOL_DEFS, type ToolDef } from "../src/tool-defs";
 
 // Mock @huggingface/transformers (same as tests/plugin.test.ts): without it,
@@ -56,6 +57,8 @@ let sessionSyntheticCalls: any[];
 let sessionCreateCalls: any[];
 let sessionGetCalls: any[];
 let sessionContextCalls: any[];
+let sessionCompactCalls: any[];
+let sessionRemoveCalls: any[];
 let sessionMoveCalls: any[];
 let rpcRegistrations: any[];
 let rpcEmitted: { name: string; data: any }[];
@@ -71,6 +74,14 @@ function makeContext(options?: {
   context?: (input: any) => Promise<any>;
   location?: { directory: string; project: { directory: string; canonical: string } };
   move?: (input: any) => Promise<any>;
+  // A session.compact member (upstream #52385). Absent by default so the
+  // default context models the older SDK floor the adapter must guard.
+  compact?: (input: any) => Promise<any>;
+  // A session.remove member (upstream #52387), same floor rule as compact.
+  remove?: (input: any) => Promise<any>;
+  // Omit the rpc domain entirely: the older SDK floor without the
+  // session-tab surface.
+  omitRpc?: boolean;
 }) {
   addedTools = [];
   sessionPromptCalls = [];
@@ -78,6 +89,8 @@ function makeContext(options?: {
   sessionCreateCalls = [];
   sessionGetCalls = [];
   sessionContextCalls = [];
+  sessionCompactCalls = [];
+  sessionRemoveCalls = [];
   sessionMoveCalls = [];
   rpcRegistrations = [];
   rpcEmitted = [];
@@ -86,7 +99,7 @@ function makeContext(options?: {
   contextHook = undefined;
   toolAfterHook = undefined;
   addedCommands = [];
-  return {
+  const context: Record<string, any> = {
     location: options?.location ?? { directory: SESSION_DIR, project: { directory: PROJECT_DIR, canonical: PROJECT_DIR } },
     command: {
       transform: async (callback: (editor: any) => void): Promise<Registration> => {
@@ -146,6 +159,22 @@ function makeContext(options?: {
         sessionSyntheticCalls.push(input);
         return {};
       },
+      ...(options?.compact
+        ? {
+            compact: async (input: any) => {
+              sessionCompactCalls.push(input);
+              return options.compact!(input);
+            },
+          }
+        : {}),
+      ...(options?.remove
+        ? {
+            remove: async (input: any) => {
+              sessionRemoveCalls.push(input);
+              return options.remove!(input);
+            },
+          }
+        : {}),
     },
     event: {
       subscribe: ({ signal }: { signal: AbortSignal }) =>
@@ -159,7 +188,9 @@ function makeContext(options?: {
           }
         })(),
     },
-    rpc: {
+  };
+  if (!options?.omitRpc) {
+    context.rpc = {
       register: async (
         definition: any,
         _handlers: any,
@@ -175,8 +206,9 @@ function makeContext(options?: {
           },
         };
       },
-    },
-  };
+    };
+  }
+  return context;
 }
 
 async function queueEvent(event: any): Promise<void> {
@@ -892,6 +924,253 @@ describe("opencode v2 adapter", () => {
     expect(sessionPromptCalls[0].text).not.toContain("$ARGUMENTS");
   });
 
+  // Wrap-up completion actions: the armed journal row is the resolution
+  // observable (the branch deletes it whether or not the token matched, so
+  // its absence proves the branch ran to completion - not that it never
+  // ran). The greenlight is the FINAL assistant message's trailing token,
+  // read through session.context (mapped into the v1 shape).
+  const wrapupArmed = (sessionID: string): boolean => {
+    const db = new Database(process.env.THATCH_DB_PATH!, { readonly: true });
+    try {
+      return db.query("SELECT 1 FROM runtime_state WHERE kind = 'wrapup' AND session_id = ?").get(sessionID) != null;
+    } finally {
+      db.close();
+    }
+  };
+
+  test("a greenlit /thatch/compact triggers session.compact on the next idle", async () => {
+    const context = makeContext({
+      compact: async () => ({}),
+      context: async () => [
+        { type: "assistant", content: [{ type: "text", text: "flushed; no loose ends THATCH_COMPACT_READY" }] },
+      ],
+    });
+    cleanup = (await setup(context as any)) as () => Promise<void>;
+    const compact = addedCommands.find((c) => c.name === "thatch/compact")!;
+    await compact.execute({ sessionID: "ses_v2_wrap_ok" });
+    expect(wrapupArmed("ses_v2_wrap_ok")).toBe(true);
+    await queueEvent({
+      type: "session.execution.succeeded",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_v2_wrap_ok" },
+    });
+    await waitFor("session.compact called", () => sessionCompactCalls.length === 1);
+    expect(sessionCompactCalls[0]).toEqual({ sessionID: "ses_v2_wrap_ok" });
+    expect(wrapupArmed("ses_v2_wrap_ok")).toBe(false);
+    // The greenlit branch returns early: no extraction child spawn.
+    expect(sessionCreateCalls.length).toBe(0);
+  });
+
+  test("a greenlit /thatch/exit emits the TUI-only close event for the session's own tab", async () => {
+    const context = makeContext({
+      context: async () => [
+        { type: "assistant", content: [{ type: "text", text: "flushed; no loose ends THATCH_EXIT_READY" }] },
+      ],
+    });
+    cleanup = (await setup(context as any)) as () => Promise<void>;
+    const exit = addedCommands.find((c) => c.name === "thatch/exit")!;
+    await exit.execute({ sessionID: "ses_v2_exit_ok" });
+    await queueEvent({
+      type: "session.execution.succeeded",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_v2_exit_ok" },
+    });
+    await waitFor("exit close emitted", () => rpcEmitted.some((e) => e.name === EXIT_TAB_CLOSED_EVENT));
+    const closed = rpcEmitted.find((e) => e.name === EXIT_TAB_CLOSED_EVENT)!;
+    // TUI-only payload (just the tab to close): the runtime records the
+    // session's watcher deaths synchronously before the action, and the
+    // pump never translates this event - a session_tab_close-style payload
+    // would invite that translation.
+    expect(closed.data).toEqual({ sessionID: "ses_v2_exit_ok" });
+    expect(wrapupArmed("ses_v2_exit_ok")).toBe(false);
+    expect(sessionCreateCalls.length).toBe(0);
+  });
+
+  test("a greenlit /thatch/exit places the session's watcher deaths before unregistering it", async () => {
+    // The death row's placement is the load-bearing ordering: onSessionDeath
+    // places the row by the session's chat row, and the exit unregisters that
+    // row - so the deaths must run FIRST or the row lands unplaceable (a
+    // project-null row no peer ever surfaces and nothing deletes).
+    const context = makeContext({
+      context: async () => [
+        { type: "assistant", content: [{ type: "text", text: "flushed; no loose ends THATCH_EXIT_READY" }] },
+      ],
+    });
+    cleanup = (await setup(context as any)) as () => Promise<void>;
+    // The watcher's validation run executes the command in the project
+    // directory, so it must exist on disk.
+    mkdirSync(PROJECT_DIR, { recursive: true });
+    const sessionID = "ses_v2_exit_watch";
+    const chatRegister = addedTools.find((t) => t.name === "thatch_chat_register")!;
+    await chatRegister.execute({}, { sessionID, agent: "general" });
+    const watchCreate = addedTools.find((t) => t.name === "thatch_watch_command_create")!;
+    // A condition that stays unmet: registers (validation exit != 0) and
+    // never fires during the test.
+    const registered = await watchCreate.execute(
+      { command: "test -f /nonexistent-thatch-exit-watch-marker" },
+      { sessionID, agent: "general" },
+    );
+    expect(String((registered as any).content)).not.toContain("refused");
+
+    const exit = addedCommands.find((c) => c.name === "thatch/exit")!;
+    await exit.execute({ sessionID });
+    await queueEvent({
+      type: "session.execution.succeeded",
+      location: { directory: SESSION_DIR },
+      data: { sessionID },
+    });
+    await waitFor("exit close emitted", () => rpcEmitted.some((e) => e.name === EXIT_TAB_CLOSED_EVENT));
+
+    const stateRow = (kind: string): any => {
+      const db = new Database(process.env.THATCH_DB_PATH!, { readonly: true });
+      try {
+        return db.query("SELECT value FROM runtime_state WHERE kind = ? AND session_id = ?").get(kind, sessionID) ?? null;
+      } finally {
+        db.close();
+      }
+    };
+    // The death row is placed (project resolved from the still-registered
+    // chat row) and carries the cancelled watch as a target.
+    const death = stateRow("watcher_death");
+    expect(death).not.toBeNull();
+    const deathValue = JSON.parse(death.value);
+    expect(deathValue.project).toBeTruthy();
+    expect(deathValue.targets).toContain("test -f /nonexistent-thatch-exit-watch-marker");
+    // The watcher definition row is gone (cancelled, not dormant).
+    expect(stateRow("watchers")).toBeNull();
+    // The chat roster row is unregistered.
+    const db = new Database(process.env.THATCH_DB_PATH!, { readonly: true });
+    try {
+      expect(db.query("SELECT 1 FROM chat_sessions WHERE session_id = ?").get(sessionID)).toBeNull();
+    } finally {
+      db.close();
+    }
+
+    // The SSE echo of the emit (the bus feeds a plugin's own events back to
+    // it) must not translate into a second death pass: the second pass would
+    // write an empty-targets row over the placed one and delete it, erasing
+    // the notice the surfacing pass owes the session's peers.
+    await queueEvent({ type: exitTabClosedEventType, data: { sessionID }, location: { directory: SESSION_DIR } });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(stateRow("watcher_death")).not.toBeNull();
+
+    // A second greenlit exit (the user reopened the tab and ran the command
+    // again) must not erase the placed row either: the second sessionDied
+    // finds no watchers, and an empty-targets upsert would overwrite the
+    // placed row before the watchless cleanup deletes it.
+    await exit.execute({ sessionID });
+    await queueEvent({
+      type: "session.execution.succeeded",
+      location: { directory: SESSION_DIR },
+      data: { sessionID },
+    });
+    await waitFor("second exit close emitted", () => rpcEmitted.filter((e) => e.name === EXIT_TAB_CLOSED_EVENT).length === 2);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(stateRow("watcher_death")).not.toBeNull();
+  });
+
+  test("a blocked wrap-up (no greenlight token) triggers no host action", async () => {
+    const context = makeContext({
+      compact: async () => ({}),
+      context: async () => [
+        // Blockers listed, no trailing token: the branch falls through
+        // without firing the action (the model surfaced the blockers in
+        // its response; the blocked-path toast degrades silently on v2).
+        { type: "assistant", content: [{ type: "text", text: "two loose ends remain: the migration, the QA pass" }] },
+      ],
+    });
+    cleanup = (await setup(context as any)) as () => Promise<void>;
+    const compact = addedCommands.find((c) => c.name === "thatch/compact")!;
+    await compact.execute({ sessionID: "ses_v2_wrap_blocked" });
+    await queueEvent({
+      type: "session.execution.succeeded",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_v2_wrap_blocked" },
+    });
+    await waitFor("wrap-up resolved without greenlight", () => !wrapupArmed("ses_v2_wrap_blocked"));
+    // The row delete happens BEFORE the token check, so the branch is
+    // still running at row-gone: settle before asserting the negatives.
+    await new Promise((r) => setTimeout(r, 150));
+    expect(sessionCompactCalls.length).toBe(0);
+    // Neither close event - the blocked path must not fire any host action.
+    expect(rpcEmitted.filter((e) => e.name === TAB_CLOSED_EVENT || e.name === EXIT_TAB_CLOSED_EVENT).length).toBe(0);
+    // The blocked-path warning toast rides the bridge on v2 - find it by
+    // variant + command name, not position: the fall-through auto-register
+    // can emit its own toast after it.
+    expect(
+      rpcEmitted.some(
+        (e) => e.name === TOAST_EVENT && e.data?.variant === "warning" && String(e.data?.message).includes("/thatch/compact"),
+      ),
+    ).toBe(true);
+  });
+
+  test("an older SDK without session.compact degrades to a logged no-op, not a crash", async () => {
+    // The pinned dev types predate upstream #52385, so the adapter guards
+    // the call at runtime; the default context (no compact member) models
+    // that older host.
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
+    };
+    try {
+      const context = makeContext({
+        context: async () => [
+          { type: "assistant", content: [{ type: "text", text: "clear THATCH_COMPACT_READY" }] },
+        ],
+      });
+      cleanup = (await setup(context as any)) as () => Promise<void>;
+      const compact = addedCommands.find((c) => c.name === "thatch/compact")!;
+      await compact.execute({ sessionID: "ses_v2_wrap_floor" });
+      await queueEvent({
+        type: "session.execution.succeeded",
+        location: { directory: SESSION_DIR },
+        data: { sessionID: "ses_v2_wrap_floor" },
+      });
+      await waitFor("wrap-up resolved on the floor host", () => !wrapupArmed("ses_v2_wrap_floor"));
+      await new Promise((r) => setTimeout(r, 150));
+      expect(sessionCompactCalls.length).toBe(0);
+      expect(errors.some((line) => line.includes("compaction trigger unavailable"))).toBe(true);
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("a host without the rpc surface exits greenlit with a logged no-op", async () => {
+    // Same floor rule as session.compact, for the exit action: without the
+    // session-tab bridge there is no closeable tab surface, so the
+    // greenlit exit degrades to a log (the checklist and flush still ran).
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
+    };
+    try {
+      const context = makeContext({
+        omitRpc: true,
+        context: async () => [
+          { type: "assistant", content: [{ type: "text", text: "clear THATCH_EXIT_READY" }] },
+        ],
+      });
+      cleanup = (await setup(context as any)) as () => Promise<void>;
+      const exit = addedCommands.find((c) => c.name === "thatch/exit")!;
+      await exit.execute({ sessionID: "ses_v2_exit_floor" });
+      await queueEvent({
+        type: "session.execution.succeeded",
+        location: { directory: SESSION_DIR },
+        data: { sessionID: "ses_v2_exit_floor" },
+      });
+      await waitFor("wrap-up resolved without rpc", () => !wrapupArmed("ses_v2_exit_floor"));
+      await new Promise((r) => setTimeout(r, 150));
+      expect(rpcEmitted.length).toBe(0);
+      // "tab close skipped" pins the ACTION's degrade log, distinct from
+      // the setup-time "rpc surface unavailable" line.
+      expect(errors.some((line) => line.includes("tab close skipped"))).toBe(true);
+    } finally {
+      console.error = originalError;
+    }
+  });
+
   test("flattenToolContent passes strings through and joins text parts", async () => {
     expect(flattenToolContent("plain output")).toBe("plain output");
     expect(
@@ -1069,6 +1348,67 @@ describe("opencode v2 adapter", () => {
     });
     const drained = await fetchTool.execute({ session_id: "ses_v2_task_parent" }, { sessionID: "ses_v2_other2", agent: "general" });
     expect(String((drained as any).content)).not.toContain("payload-xyz");
+  });
+
+  test("the extraction child's idle deletes it via session.remove on a current host", async () => {
+    // The child deletion keeps the session picker clean on v2 (and `-c`
+    // resume out of extraction children). finishExtractionChild drives it
+    // from the child's idle event; the child routes through the
+    // childSessions forwarding set (its events carry no location here).
+    const context = makeContext({ remove: async () => ({}) });
+    cleanup = (await setup(context as any)) as () => Promise<void>;
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_v2_child_del",
+      input: { command: "git log" },
+      status: "completed",
+      result: { content: "abc123 real work" },
+    });
+    await queueEvent({
+      type: "session.execution.succeeded",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_v2_child_del" },
+    });
+    await waitFor("extraction child created", () => sessionCreateCalls.length === 1);
+    await queueEvent({ type: "session.execution.succeeded", data: { sessionID: "v2-test-child" } });
+    await waitFor("child deleted", () => sessionRemoveCalls.length === 1);
+    expect(sessionRemoveCalls[0]).toEqual({ sessionID: "v2-test-child" });
+  });
+
+  test("an older SDK without session.remove leaves the child in place, silently", async () => {
+    // The floor keeps the documented gap (the picker accumulates one
+    // thatch-extraction entry per extraction): best-effort by contract, so
+    // the degrade is silent and the rest of the child cleanup still runs.
+    // The child journal row is the completion observable: journalChild
+    // deletes it after the map cleanup and BEFORE sessionDelete, so
+    // row-gone proves the cleanup ran - the settle idiom cannot (a throw
+    // in finishExtractionChild would also leave remove at zero).
+    const childJournaled = (): boolean => {
+      const db = new Database(process.env.THATCH_DB_PATH!, { readonly: true });
+      try {
+        return db.query("SELECT 1 FROM runtime_state WHERE kind = 'child' AND session_id = ?").get("v2-test-child") != null;
+      } finally {
+        db.close();
+      }
+    };
+    const context = makeContext();
+    cleanup = (await setup(context as any)) as () => Promise<void>;
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_v2_child_floor",
+      input: { command: "git log" },
+      status: "completed",
+      result: { content: "abc123 real work" },
+    });
+    await queueEvent({
+      type: "session.execution.succeeded",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_v2_child_floor" },
+    });
+    await waitFor("extraction child created and journaled", () => sessionCreateCalls.length === 1 && childJournaled());
+    await queueEvent({ type: "session.execution.succeeded", data: { sessionID: "v2-test-child" } });
+    await waitFor("child cleanup completed", () => !childJournaled());
+    expect(sessionRemoveCalls.length).toBe(0);
   });
 
   test("child-session events pass the directory filter on below-root launches", async () => {
