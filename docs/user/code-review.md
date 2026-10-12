@@ -62,6 +62,10 @@ verifies whether prior findings were adequately addressed before
 deciding whether to re-run the full review. The author must either
 fix the code, prove the finding is not a concern with a checkable
 argument, or file a follow-up ticket with a risk explanation.
+Between rounds the author may merge the default branch — or, on a
+stacked PR, merge or rebase onto the base branch — into the branch;
+the followup excludes those commits so only the author's own changes
+are verified.
 
 ## Author-side response
 

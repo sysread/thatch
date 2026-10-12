@@ -28,6 +28,7 @@ const useCase: UseCase = {
     "- Resolved findings get a reply drafted on the thread.",
     "- Unresolved findings are surfaced for re-attention.",
     "- The optional handoff to the coordinator is offered only when the new changes are substantial enough.",
+    "- When the author merged the default branch or a stacked base branch into the branch between rounds (or rebased onto it), the followup excludes those commits and verifies only the author's own changes.",
     "- The followup does not re-run findings that were already dismissed as false positives in the prior round.",
   ].join("\n"),
   manualOnly: true,

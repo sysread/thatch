@@ -30,7 +30,7 @@ Run `git fetch origin` (NOT `git pull`). Inspect `git remote -v` to recognize th
 - `dev.azure.com` → Azure DevOps
 
 Probe for an open PR/MR on the current branch:
-- **GitHub**: `gh pr view <branch> --json number,title,headRefOid,baseRefOid`
+- **GitHub**: `gh pr view <branch> --json number,title,headRefOid,baseRefOid,baseRefName`
 - **GitLab**: `glab mr list --source-branch <branch>`
 
 If no PR/MR is found or no VCS CLI is available, you cannot re-check. Report this and stop.
@@ -79,7 +79,7 @@ Compare `LAST_ROUND_SHA` to `CURRENT_SHA`:
 
 **Force-push check**: run `git merge-base --is-ancestor <LAST_ROUND_SHA> <CURRENT_SHA>`. If it fails, the author rewrote history (force-pushed). Line numbers may have drifted. You will need to locate each finding's equivalent location in the new HEAD by matching surrounding context, not by line number.
 
-**Merge-from-main check**: if the author merged main into the branch between rounds, plain `git log <LAST_ROUND_SHA>..<CURRENT_SHA>` and `git diff <LAST_ROUND_SHA> <CURRENT_SHA>` both pull in every main commit, burying the author's actual response commits. To see only the author's commits, run `git log <LAST_ROUND_SHA>..<CURRENT_SHA> --not origin/main` after `git fetch origin`. Then read each remaining commit's diff with `git show <sha>`. Do not assume a large diff stat means the author rewrote the PR. Check for a merge commit first.
+**Merge-from-base check**: if the author merged the default branch into the branch between rounds — or, on a stacked PR, merged or rebased onto the PR's base branch — plain `git log <LAST_ROUND_SHA>..<CURRENT_SHA>` and `git diff <LAST_ROUND_SHA> <CURRENT_SHA>` both pull in every base commit, burying the author's actual response commits. To see only the author's commits, run `git log <LAST_ROUND_SHA>..<CURRENT_SHA> --not origin/<default-branch>` after `git fetch origin` (usually main or master). On a stacked PR (Step 1's probe returned a base branch that is not the default branch — `baseRefName` on GitHub, the MR's target branch on GitLab), also fetch the base branch and exclude it too: `git fetch origin <base-branch>`, then `git log <LAST_ROUND_SHA>..<CURRENT_SHA> --not origin/<default-branch> origin/<base-branch>`. Then read each remaining commit's diff with `git show <sha>`. Do not assume a large diff stat means the author rewrote the PR. Check for a merge commit first.
 
 ### Read author responses
 
@@ -152,7 +152,7 @@ Produce a structured report for the user:
 - PR/MR number, title
 - Last-reviewed SHA, current SHA
 - Whether the author pushed changes, responded to comments, or both
-- Force-push or merge-from-main detected (if applicable)
+- Force-push or merge-from-base detected (if applicable)
 
 ### Finding verification
 
