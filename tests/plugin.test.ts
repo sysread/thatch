@@ -37,7 +37,7 @@ mock.module("@huggingface/transformers", () => ({
 }));
 
 import {
-  server,
+  server as opencodeServer,
   osProcessArgs,
   startupSessionId,
   startupSessionIdFromArgv,
@@ -73,6 +73,15 @@ let wrapUpMessages: any[] = [];
 // it), so afterAll can restore it UNCONDITIONALLY after the auto-register
 // log filter below comes off - no conditional restore to get wrong.
 const realConsoleError = console.error.bind(console);
+
+// The delivery guard skips wake attempts when the runtime's bound
+// directory is gone, so every fixture runtime this file binds must get a
+// directory that actually exists. One wrapper creates the worktree on
+// demand instead of a hand-maintained list of /tmp paths.
+async function server(input: any) {
+  mkdirSync(input.worktree, { recursive: true });
+  return opencodeServer(input);
+}
 
 beforeAll(async () => {
   dbDir = mkdtempSync(join(tmpdir(), "thatch-plugin-test-"));
@@ -1728,6 +1737,54 @@ describe("plugin entry", () => {
     expect(promptArgs.body.parts[0].text).toContain("thatch");
 
     testHooks.dispose?.();
+  });
+
+  test("delivery guard wiring: a wake into a deleted directory is skipped with a debug line", async () => {
+    // Wiring-level, not a direct guardDelivery call: this drives the
+    // integrated path (server -> createRuntime -> guarded promptSession)
+    // so a guard that is defined but never wired cannot pass here. The
+    // function-level behavior lives in tests/delivery-guard.test.ts.
+    const wakeDir = mkdtempSync(join(tmpdir(), "thatch-guard-gone-"));
+    const guardDb = mkdtempSync(join(tmpdir(), "thatch-guard-db-"));
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    const prevDebug = process.env.THATCH_DEBUG;
+    process.env.THATCH_DB_PATH = join(guardDb, "test.db");
+    // Only the delivery guard's tag passes the filter, so any matched line
+    // in the log is the guard's and nothing else's.
+    process.env.THATCH_DEBUG = "runtime:delivery";
+    try {
+      let promptCalled = false;
+      const guardClient = {
+        session: {
+          prompt: async () => {
+            promptCalled = true;
+          },
+        },
+      };
+      const testHooks = await server({ client: guardClient, worktree: wakeDir } as any);
+      try {
+        rmSync(wakeDir, { recursive: true });
+        await testHooks.event!({
+          event: {
+            type: "session.created",
+            properties: { info: { id: "ses-guard-gone" } },
+          },
+        } as any);
+
+        // The wake must not run against the deleted directory: no prompt,
+        // no throw, and the debug line names the session and the path.
+        expect(promptCalled).toBe(false);
+        const log = readFileSync(join(guardDb, "debug.log"), "utf8");
+        expect(log).toContain("runtime:delivery");
+        expect(log).toContain("ses-guard-gone");
+        expect(log).toContain(wakeDir);
+      } finally {
+        await testHooks.dispose?.();
+      }
+    } finally {
+      process.env.THATCH_DB_PATH = prevDbPath;
+      process.env.THATCH_DEBUG = prevDebug;
+    }
   });
 
   test("event handler ignores non-session.created events", async () => {

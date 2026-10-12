@@ -367,3 +367,18 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   chat canary). Local plugin specs handed to a loader explicitly
   (`"plugin": ["./path"]`) can point at a directory on v1 - it is only the
   AUTO-discovery scan that is files-only.
+
+## A promptSession wrapper must stay synchronous or fire-and-forget delivery assertions misfire
+
+- **Symptom**: tests that assert on wake delivery immediately after a hook
+  invocation see zero calls; deliveries land one microtask late.
+- **Cause**: the delivery guard (`guardDelivery`, src/runtime.ts) sits on
+  every wake path, and its directory-existence check was first written as
+  `await stat(...)`. Fire-and-forget callers (`void caps.promptSession(...)`)
+  and the repo's mock contract (calls recorded "synchronously inside the
+  mock", asserted with no intervening await) observe the wrapped call
+  before an extra microtask resolves.
+- **Fix**: the existence check is synchronous (`existsSync`), so the guard
+  adds no microtask between the gate and the wrapped call. If you ever
+  replace it with an async check, the callers' fire-and-forget timing -
+  and the tests that pin it - break again. (2026-10-12, wake-delivery-guard)

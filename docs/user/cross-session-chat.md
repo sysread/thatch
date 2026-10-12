@@ -59,7 +59,10 @@ explicitly with `thatch_chat_register` (no arguments) - useful after
 
 When mail arrives for an idle session, thatch wakes it with a notification -
 the agent gets a model turn even with nobody at the keyboard, reads its
-inbox, and decides what to do. The notification names the senders and the
+inbox, and decides what to do. If the session's directory has been deleted
+(a merged branch's worktree, for example), the wake is skipped quietly:
+no error appears, the mail stays queued, and it delivers normally once the
+directory exists again. The notification names the senders and the
 count only; the agent reads the actual messages itself. A split message
 arrives as one grouped notification ("N unread messages from X"), and the
 parts carry their own markers so the reader assembles the whole before

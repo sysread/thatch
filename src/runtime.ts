@@ -1,5 +1,6 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { createDebugLog } from "./debug";
+import { createDebugLog, type DebugLog } from "./debug";
 import { ThatchDB, repoPathCache } from "./db";
 import { chatOpenTabs as chatOpenTabsProvider } from "./tab-state";
 import { SharedModelPool } from "./embeddings";
@@ -135,6 +136,47 @@ export interface ThatchRuntime {
   dispose(): Promise<void>;
 }
 
+/**
+ * Whether a wake delivery's target directory can host the attempt right
+ * now. existsSync cannot say WHY a path is absent - deleted worktree,
+ * broken symlink, permission on a parent - and none of those states can
+ * host a wake attempt, so one false answer covers the class (deliberate:
+ * the alternative, surfacing non-ENOENT errors through the attempt, buys
+ * a toast back for no recovery the mail does not already get from its
+ * pending-and-retry cycle). Synchronous on purpose: fire-and-forget
+ * callers and test harnesses observe promptSession timing with no added
+ * microtask between the gate and the wrapped call.
+ */
+export function directoryAvailable(path: string): boolean {
+  return existsSync(path);
+}
+
+/**
+ * The delivery guard: wraps the host's promptSession so a wake attempt
+ * never runs against a session whose directory has been deleted. The
+ * attempt itself would error, and opencode surfaces that failure to the
+ * user as a toast. Skipping instead leaves the pending mail queued - the
+ * check runs fresh on every attempt, so a worktree recreated at the same
+ * path (or a session revived in a live directory) resumes delivery with
+ * nothing lost. This covers every wake site at once because chat nudges,
+ * watcher notifications, watcher death notices, rehydrate pings, chat
+ * echoes, and extraction-child dispatch all funnel through promptSession,
+ * and a host instance is bound to its sessions' own directory.
+ */
+export function guardDelivery(
+  promptSession: HostCapabilities["promptSession"],
+  directory: string,
+  debug: DebugLog,
+): HostCapabilities["promptSession"] {
+  return (sessionID, body, mode) => {
+    if (!directoryAvailable(directory)) {
+      debug("runtime:delivery", `skipped wake to ${sessionID}: directory ${directory} no longer exists`);
+      return Promise.resolve();
+    }
+    return promptSession(sessionID, body, mode);
+  };
+}
+
 export async function createRuntime(input: {
   capabilities: HostCapabilities;
   directory: string;
@@ -147,7 +189,7 @@ export async function createRuntime(input: {
    */
   v2Tools?: boolean;
 }): Promise<ThatchRuntime> {
-  const { capabilities: caps, directory, worktree, v2Tools } = input;
+  const { capabilities, directory, worktree, v2Tools } = input;
   // The opencode server's cwd is wherever the server happened to start;
   // `worktree` is the project this plugin instance actually serves.
   // `directory` is the session's own directory - on resume after the
@@ -184,6 +226,16 @@ export async function createRuntime(input: {
   const chatOn = chatEnabled(loadConfig(dbPath).config);
 
   const debug = createDebugLog(dbPath);
+
+  // The delivery guard wraps the host's promptSession once, so no wake
+  // attempt in this instance runs against a deleted directory (see
+  // guardDelivery). The v2 wrap-up command in opencode/v2.ts calls
+  // capabilities.promptSession directly and deliberately bypasses this
+  // wrapper: it is user-invoked in a live tab, not a wake.
+  const caps: HostCapabilities = {
+    ...capabilities,
+    promptSession: guardDelivery(capabilities.promptSession, directory ?? worktree, debug),
+  };
 
   // Shared embedding model: refcounted per db path (see SharedModelPool).
   const model = sharedModels.acquire(dbPath, modelName);

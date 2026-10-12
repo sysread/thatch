@@ -123,6 +123,11 @@ let cleanup: (() => Promise<void>) | undefined;
 beforeEach(() => {
   dbDir = mkdtempSync(join(tmpdir(), "thatch-v2-test-"));
   process.env.THATCH_DB_PATH = join(dbDir, "test.db");
+  // The delivery guard skips wake attempts when the runtime's bound
+  // directory is gone, so the fixture host must bind to directories that
+  // actually exist.
+  mkdirSync(SESSION_DIR, { recursive: true });
+  mkdirSync(PROJECT_DIR, { recursive: true });
   // Redirect skill installation away from the real ~/.config.
   process.env.XDG_CONFIG_HOME = join(dbDir, "config");
 });

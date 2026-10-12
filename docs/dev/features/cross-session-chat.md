@@ -349,6 +349,22 @@ and a count, pointer-only like watcher notifications, with the model calling
 `chat_read` for content. On success the poller stamps `delivered_at`
 (re-stamping on re-nudges resets the re-nudge timer).
 
+Before any wake attempt runs, the delivery guard (`guardDelivery` in
+`src/runtime.ts`) checks that the runtime instance's own directory - the
+bound directory of every session it hosts - still exists. A deleted
+worktree (merged branch) would otherwise error every attempt, and opencode
+surfaces that error to the user as a toast. The guard skips the attempt
+with a `runtime:delivery` debug line instead, leaving the mail queued; the
+check is per attempt, so a worktree recreated at the same path resumes
+delivery. The existence check cannot say why a path is absent (deleted
+tree, broken symlink, parent permission), so any miss classifies as gone -
+deliberate, because surfacing non-ENOENT errors through the attempt would
+buy the toast back for no recovery the pending-and-retry cycle does not
+already provide. The guard wraps `promptSession` in
+`createRuntime`, which covers chat nudges, watcher notifications and death
+notices, rehydrate pings, chat echoes, and extraction dispatch at once;
+MCP hosts never build a runtime, so they are unaffected.
+
 The hard brake: at most a fixed number of wake prompts per recipient per
 hour (default 6, in-memory on purpose - it is a loop guard, not accounting).
 Without it, two agents politely acknowledging each other would ping-pong

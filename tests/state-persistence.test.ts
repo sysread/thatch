@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ThatchDB } from "../src/db";
@@ -19,7 +19,13 @@ import { hostedSessionIds, unexpiredGraceRehosts } from "../src/chat";
 let dbDir: string;
 let dbPath: string;
 // The directory the test runtime runs in (the instance-scoping key).
+// Created eagerly: the delivery guard skips wake attempts when the
+// runtime's bound directory is gone, so every fixed fixture directory
+// this file binds a runtime to must actually exist.
 const WORK_DIR = "/tmp/thatch-state-workdir";
+for (const dir of [WORK_DIR, "/tmp/thatch-state-a", "/tmp/thatch-state-b", "/tmp/thatch-test-worktree"]) {
+  mkdirSync(dir, { recursive: true });
+}
 
 beforeEach(() => {
   dbDir = mkdtempSync(join(tmpdir(), "thatch-state-"));
