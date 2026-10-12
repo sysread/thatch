@@ -1,6 +1,6 @@
 ---
 name: thatch-refine
-description: Classify the current project (audience, lifecycle, surface) and refine a plan under that type's requirements. Entry point for the thatch-refine-* family. Use when the user asks to refine a plan, runs /thatch/refine, or when a plan is about to be implemented and the project type should shape the refinement bar. For a bare "refine this plan" request, load this skill rather than thatch-plan-refinement directly - the router picks the type and applies its delta on top of the core loop.
+description: Classify the current project (audience, lifecycle, surface) and refine a plan under that type's requirements. Entry point for the thatch-refine-* family. Use when the user asks to refine a plan, runs /thatch/refine, or when a plan is about to be implemented and the project type should shape the refinement bar. For a bare "refine this plan" request, load this skill rather than thatch-plan-refinement directly - the router picks the type and applies its delta on top of the core loop. Deep-mode triggers in the core skill are binding; a type delta relaxes round counts, never mode selection.
 ---
 
 You are the entry point for project-type-aware plan refinement. The core
@@ -68,6 +68,12 @@ pass.
 4. Load `thatch-plan-refinement` (the core loop) and the type's skill.
 5. Run the core loop with the type skill's deltas applied. Where a delta
    and the core skill disagree, the delta wins; that is its whole job.
+   One exception: mode selection. A delta relaxes round counts, skip
+   thresholds, and plan sections. It never turns off deep mode. When a
+   deep-mode trigger in `thatch-plan-refinement` is met (shared
+   persistent state, many files or hosts, a new abstraction, table, or
+   contract, or the user asks for depth), the lens fan-out runs
+   regardless of type.
 
 If no type fits (the repo serves a niche the table misses), run plain
 `thatch-plan-refinement` and say that the requirements are the generic

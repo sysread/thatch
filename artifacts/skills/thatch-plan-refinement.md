@@ -1,6 +1,6 @@
 ---
 name: thatch-plan-refinement
-description: Refine a plan for a code change by dispatching a fresh-context reviewer subagent to hunt for gaps, unverified premises, and unexpected side effects, then revising and re-reviewing until consensus. Use when a plan is about to be implemented, when the user asks to refine, stress-test, or double-check a plan, or after a plan revision that incorporated prior findings. This is the generic core loop; when the project type should shape the refinement bar, load thatch-refine instead and it will apply a type delta on top of this loop. Quick mode is one fresh reviewer per round; deep mode adds a specialist lens fan-out (reuse, alternatives, hidden problems, safe-to-modify, archaeology).
+description: Refine a plan for a code change by dispatching a fresh-context reviewer subagent to hunt for gaps, unverified premises, and unexpected side effects, then revising and re-reviewing until consensus. Use when a plan is about to be implemented, when the user asks to refine, stress-test, or double-check a plan, or after a plan revision that incorporated prior findings. This is the generic core loop; when the project type should shape the refinement bar, load thatch-refine instead and it will apply a type delta on top of this loop. Quick mode is one fresh reviewer per round; deep mode adds a specialist lens fan-out (reuse, alternatives, hidden problems, safe-to-modify, archaeology). Deep-mode triggers are binding; when one is met the fan-out runs, and project-type deltas relax round counts, never mode selection.
 ---
 
 You are refining a plan before code exists. A plan written by the same context that researched the problem inherits that context's blind spots. A reviewer with no stake in the plan and no memory of writing it finds what the author cannot. Refinement is the loop: draft, review, revise, repeat until consensus. Each pass tightens the plan; a round with no findings means the plan is done, not that the loop failed.
@@ -17,6 +17,16 @@ Pick the mode before starting, and say which you picked.
 
 **Deep mode** — adds a one-time specialist lens fan-out (see below) before the consensus rounds. Use when the plan: touches shared or persistent state (database tables, files, config) that other consumers read; spans many files or multiple hosts/processes; introduces a new abstraction, table, or contract; or when the user asks for depth. Deep mode runs the lenses ONCE, in the first round; the remaining rounds are quick-mode consensus on the revised plan.
 
+**These triggers are binding.** If any trigger is met, deep mode's lens fan-out runs for that plan; quick mode is not an option for it. Project-type deltas (`thatch-refine-personal` and its siblings) relax round counts and skip thresholds. They never relax mode selection. The triggers were met verbatim in a 26-round field refinement (October 2026) and quick mode ran anyway, which is why this paragraph is a rule and not advice.
+
+## Plan format requirements
+
+Two plan shapes earn their own plan section. Add them at draft time; retrofitting them mid-loop costs rounds, because every round after the retrofit re-reviews prose the section would have settled.
+
+**State and transition matrix.** Any plan that adds or changes UI or session state (modes, statuses, retention, flags, caches) must carry a state-and-transition matrix as a plan section: every state, every transition between states, and the precedence rule that decides which transition wins when two compete. The first reviewer round verifies every user journey in the plan against the matrix, not against the prose. UX rules written as prose accrete; a matrix makes the unspecified combination impossible to miss. In a 26-round field refinement (October 2026), the state rules of a chat-and-UI plan lived as prose for 16 rounds, and reviewers kept finding combinations no one had written down; a matrix forced at round one would have collapsed most of those findings into the first two rounds.
+
+**Deltas-from-template ledger.** When the plan ports or clones a template or twin feature, it must carry a table of deltas from that template. Each row names one divergence and what the twin actually does at that point, verified against the template's source, not remembered. Reviewers check template-behavior claims against the ledger instead of re-deriving the twin's behavior from scratch. In the same field refinement, a template fact flipped across three rounds because each fresh reviewer re-derived it and got a different answer; the ledger is the fix for that class.
+
 ## The loop
 
 1. **Draft the plan.** Every factual premise carries a `file:line` citation you personally verified. A premise you did not check is a guess wearing a citation; verify it or mark it unverified.
@@ -26,9 +36,26 @@ Pick the mode before starting, and say which you picked.
    - Hunt for gaps by severity (blocker / should-fix / nice-to-have), unexpected side effects, blast radius, and the question "how does this fail in production?" — concurrency, stale state, multi-host interactions, test flakiness, and behavior changes for existing callers.
    - Say explicitly when it cannot verify something, rather than guessing.
 3. **Revise the plan** from the findings. Fix what is wrong, adjust what needs adjusting, and record what you rejected and why.
-4. **Dispatch a NEW reviewer with fresh context** on the revised plan. Never continue the prior reviewer's session, and never tell it what previous reviewers said — prior findings anchor the next reviewer, and it will inherit the earlier reviewer's blind spots instead of finding its own. Present the revised plan as if it were the original.
-5. **Consensus** is a round where the reviewer reports no blockers, no unaddressed should-fixes, and the plan's premises all verify. Two consecutive quiet rounds is strong consensus; one is enough to build.
-6. **Cap at three review rounds.** If the plan has not converged by then, stop looping and put the remaining disagreements in front of the user — continued revision usually means the design problem, not the plan, is unresolved.
+4. **Run the revision self-check.** Before dispatching the next reviewer, re-read the revision diff against the plan it edits, in the same context, and check three things: does the fix contradict anything else in the plan, does it open a new unspecified corner, and is it consistent with findings already folded in. This is a contradiction check on the diff, not a fresh review, and it is cheap because it reuses context you already have. Skipping it hands the next fresh reviewer your own unfinished edges one round late. In the 26-round field refinement cited above, revision churn dominated rounds 8 through 19 because each fix opened corners no one checked until the next round caught them.
+5. **Dispatch a NEW reviewer with fresh context** on the revised plan. Never continue the prior reviewer's session, and never tell it what previous reviewers said — prior findings anchor the next reviewer, and it will inherit the earlier reviewer's blind spots instead of finding its own. Present the revised plan as if it were the original.
+6. **Consensus** is a round where the reviewer reports no blockers, no unaddressed should-fixes, and the plan's premises all verify. Two consecutive quiet rounds is strong consensus; one is enough to build. For a run extended past the cap, the stopping rule changes; see Extended runs below.
+7. **Cap at three review rounds.** If the plan has not converged by then, stop looping and put the remaining disagreements in front of the user — continued revision usually means the design problem, not the plan, is unresolved. If the user explicitly extends the run past the cap, follow Extended runs below instead of stopping.
+
+## Extended runs (past the cap)
+
+The cap is a default, not a law. When the user explicitly extends the run ("keep going while it is useful"), do not stop, and do not repeat the general reviewer prompt either. In the 26-round field refinement cited above, the user overrode the cap, the extended rounds kept earning their keep, and the repeated prompt re-trod ground earlier rounds had already covered. Two mechanics govern the extension.
+
+**Rotate the reviewer lens.** Each extended round's reviewer prompt carries one lens from a fixed schedule, instead of the general prompt:
+
+1. Schema and data model: the tables, columns, constraints, and migrations the plan touches.
+2. Cross-module contracts: the callers, imports, and API surfaces the plan changes.
+3. Lifecycle and edge cases: creation, teardown, concurrency, and failure paths.
+4. Prompt and UI surfaces: user-visible text, states, and flows.
+5. General: the standard reviewer prompt, then restart the schedule.
+
+This rotation applies only past the cap. The standard loop keeps the general prompt for all three of its rounds.
+
+**Stop on a build-clean round.** For an extended run, consensus is a round with no build-changing findings, where build-changing means the finding would change what gets built, not how a sentence reads. Wording and editorial findings batch into one final editorial pass after the last round; they do not start new rounds. The quiet-round definition in the loop stays in force for standard runs.
 
 ## Deep mode: the lenses
 
@@ -68,6 +95,8 @@ Do not argue, and do not silently drop the findings. Reduce the risk of building
 - Demand `file:line` evidence for every claim, and explicit "unverified" where it cannot check.
 - Ask it to state whether the plan's own list of affected surfaces is complete or over-broad. Plan authors over-scope and under-scope in equal measure.
 - Tell it the repo is read-only for this task.
+- If the plan carries a state-and-transition matrix, tell the reviewer to verify each user journey against the matrix. This is the first round's job in particular.
+- If the plan carries a deltas-from-template ledger, tell the reviewer to check template-behavior claims against the ledger and not re-derive the twin's behavior from its source. Each ledger row already records what the twin does, verified; independent re-derivation is how contradictory facts about the template flip-flop across rounds.
 
 ## Cost control
 

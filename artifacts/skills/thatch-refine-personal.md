@@ -32,6 +32,11 @@ below; where they disagree, these win.
 - **Degraded review is fine.** If the host cannot dispatch sub-agents, a
   same-context self-review pass is usually enough. Saying so out loud, as
   the core skill requires, is still worthwhile but the stakes are lower.
+- **Round counts drop, not mode selection.** These deltas relax how many
+  rounds a run needs. If a deep-mode trigger in `thatch-plan-refinement`
+  is met (shared persistent state, many files or hosts, a new
+  abstraction, table, or contract, or the user asks for depth), the lens
+  fan-out still runs.
 
 ## Lens weights
 

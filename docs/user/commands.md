@@ -28,9 +28,10 @@ invoke it. The remaining commands (`refine`, `self-review`, `peer-review`,
   project type's requirements: the agent classifies the project (team,
   personal, shared library, spike, infrastructure, or open source
   contribution), confirms the pick, and runs the refinement loop with
-  that type's expectations applied. Text after the command can name the
-  type directly (for example, `/thatch/refine shared-lib`) to skip
-  classification.
+  that type's expectations applied. Project type relaxes round counts
+  and documentation bars, never the deep-mode triggers. Text after the
+  command can name the type directly (for example, `/thatch/refine
+  shared-lib`) to skip classification.
 - `/thatch/peer-review` — review another author's change: the full review
   pipeline with findings weighted for org velocity. Text after the command
   names the review target (for example, `/thatch/peer-review 1234` for a
