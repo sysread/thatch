@@ -8,8 +8,8 @@ import { server } from "../../../src/index";
 import { setup as setupV2 } from "../../../src/opencode/v2";
 import { installOpencodeCommands } from "../../../src/commands";
 import { EXIT_TAB_CLOSED_EVENT, TOAST_EVENT } from "../../../src/session-tab-shared";
-import { Database } from "bun:sqlite";
 import { makeV2Harness } from "../../mocks/v2-harness";
+import { runtimeStateRow } from "../../mocks/runtime-state";
 import { captureConsoleError } from "../../mocks/console-error";
 
 /**
@@ -224,14 +224,7 @@ const useCase: UseCase = {
         }
         return true;
       };
-      const wrapupArmed = (sessionID: string) => {
-        const db = new Database(ctx.env.THATCH_DB_PATH, { readonly: true });
-        try {
-          return db.query("SELECT 1 FROM runtime_state WHERE kind = 'wrapup' AND session_id = ?").get(sessionID) != null;
-        } finally {
-          db.close();
-        }
-      };
+      const wrapupArmed = (sessionID: string) => runtimeStateRow(ctx.env.THATCH_DB_PATH, "wrapup", sessionID) !== null;
 
       // Steps 9-10: compact and exit greenlights on the v2 adapter.
       const v2 = makeV2Harness(ctx.dir, { compact: true });

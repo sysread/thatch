@@ -1,52 +1,27 @@
-import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { setup, eventMatchesInstance, flattenToolContent, mapSessionContextMessages, optionalDomainMethod, translateEvent } from "../src/opencode/v2";
 import { captureConsoleError } from "./mocks/console-error";
+import { makeV2Harness, type V2Harness } from "./mocks/v2-harness";
+import { runtimeStateRow } from "./mocks/runtime-state";
 import { EXIT_TAB_CLOSED_EVENT, TAB_CLOSED_EVENT, TOAST_EVENT, exitTabClosedEventType, tabClosedEventType, tabOpenedEventType } from "../src/session-tab-shared";
 import { TOOL_DEFS, type ToolDef } from "../src/tool-defs";
 
-// Mock @huggingface/transformers (same as tests/plugin.test.ts): without it,
-// every setup() builds a real BgeEmbeddingModel and the runtime's embedding
-// calls would download a model. The pipeline strips BgeEmbeddingModel's
-// QUERY_PREFIX so queryEmbed and passageEmbed of the same text land on the
-// same vector - without the strip, a tool-seeded matcher (passageEmbed) can
-// never be re-found by the nudge path (queryEmbed), which the staleness
-// binding test below depends on.
-mock.module("@huggingface/transformers", () => ({
-  env: {},
-  pipeline: async () => async (text: string, _opts: any) => {
-    const QUERY_PREFIX = "Represent this sentence for searching relevant passages: ";
-    if (text.startsWith(QUERY_PREFIX)) text = text.slice(QUERY_PREFIX.length);
-    let h = 0;
-    for (let i = 0; i < text.length; i++) {
-      h = ((h << 5) - h) + text.charCodeAt(i);
-      h |= 0;
-    }
-    h ^= 0x9e3779b9;
-    const vec = new Float32Array(384);
-    for (let i = 0; i < 384; i++) {
-      h ^= h << 13;
-      h ^= h >>> 17;
-      h ^= h << 5;
-      h |= 0;
-      vec[i] = h / 0x80000000;
-    }
-    return { data: vec };
-  },
-}));
-
 // The v2 adapter's contract test: a mocked v2 promise context (plain
 // objects, call-recording arrays - the house pattern from
-// tests/plugin.test.ts) driving the real runtime through the adapter.
+// tests/plugin.test.ts) driving the real runtime through the adapter. The
+// context itself comes from the shared harness (tests/mocks/v2-harness.ts,
+// which also serves the QA use cases and registers the transformers mock);
+// the wrapper below just rebinds this file's module-level recorders onto
+// the harness's live arrays so ~40 tests keep their ergonomic names.
 
 const SESSION_DIR = "/tmp/thatch-v2-test-session";
 const PROJECT_DIR = "/tmp/thatch-v2-test-project";
 
 type HookFn = (input: any) => any;
-type Registration = { dispose: () => void };
 
 let dbDir: string;
 let promptHook: HookFn | undefined;
@@ -63,7 +38,6 @@ let sessionPromptCalls: any[];
 let sessionSyntheticCalls: any[];
 let sessionCreateCalls: any[];
 let sessionGetCalls: any[];
-let sessionContextCalls: any[];
 let sessionCompactCalls: any[];
 let sessionRemoveCalls: any[];
 let sessionMoveCalls: any[];
@@ -73,8 +47,11 @@ let rpcEmitted: { name: string; data: any }[];
 // execute flow's ordering (create -> move -> emit -> prompt) is load-bearing
 // (docs/dev/features/session-tabs.md, "How it works"), and the flow spans four
 // different mocks - only a shared log can assert relative order.
-const flowLog: string[] = [];
-const eventQueue: any[] = [];
+let flowLog: string[];
+// The harness backing the current makeContext() call: queueEvent delegates
+// to it (the event queue is per-harness now, so events cannot leak across
+// tests the way the old file-level queue could).
+let currentHarness: V2Harness;
 
 // Joins the last user message's text parts of a mocked request - the same
 // surface the context hook injects into.
@@ -91,145 +68,45 @@ function makeContext(options?: {
   move?: (input: any) => Promise<any>;
   // A session.compact member (upstream #52385). Absent by default so the
   // default context models the older SDK floor the adapter must guard.
-  compact?: (input: any) => Promise<any>;
+  compact?: boolean;
   // A session.remove member (upstream #52387), same floor rule as compact.
-  remove?: (input: any) => Promise<any>;
+  remove?: boolean;
   // Omit the rpc domain entirely: the older SDK floor without the
   // session-tab surface.
   omitRpc?: boolean;
 }) {
-  addedTools = [];
-  sessionPromptCalls = [];
-  sessionSyntheticCalls = [];
-  sessionCreateCalls = [];
-  sessionGetCalls = [];
-  sessionContextCalls = [];
-  sessionCompactCalls = [];
-  sessionRemoveCalls = [];
-  sessionMoveCalls = [];
-  rpcRegistrations = [];
-  rpcEmitted = [];
-  flowLog.length = 0;
-  promptHook = undefined;
-  contextHook = undefined;
-  toolAfterHook = undefined;
-  addedCommands = [];
-  const context: Record<string, any> = {
-    location: options?.location ?? { directory: SESSION_DIR, project: { directory: PROJECT_DIR, canonical: PROJECT_DIR } },
-    command: {
-      transform: async (callback: (editor: any) => void): Promise<Registration> => {
-        callback({
-          add: (definition: any) => addedCommands.push(definition),
-        });
-        return { dispose: () => {} };
-      },
-    },
-    tool: {
-      transform: async (callback: (editor: any) => void): Promise<Registration> => {
-        callback({
-          add: (tool: any) => addedTools.push({ name: tool.name, description: tool.description, input: tool.input, execute: tool.execute }),
-        });
-        return { dispose: () => {} };
-      },
-      hook: async (name: string, callback: HookFn): Promise<Registration> => {
-        if (name === "execute.after") toolAfterHook = callback;
-        return { dispose: () => {} };
-      },
-    },
-    session: {
-      hook: async (name: string, callback: HookFn): Promise<Registration> => {
-        if (name === "prompt") promptHook = callback;
-        if (name === "context") contextHook = callback;
-        return { dispose: () => {} };
-      },
-      create: async (input: any) => {
-        sessionCreateCalls.push(input);
-        flowLog.push("create");
-        // The real promise client returns the created SessionInfo directly
-        // (the envelope types are `{data: X}["data"]` indexed - unwrapped).
-        return { id: "v2-test-child" };
-      },
-      move: async (input: any) => {
-        sessionMoveCalls.push(input);
-        flowLog.push("move");
-        if (options?.move) return options.move(input);
-        return {};
-      },
-      get: async (input: any) => {
-        sessionGetCalls.push(input);
-        if (options?.get) return options.get(input);
-        return { title: "some title" };
-      },
-      context: async (input: any) => {
-        sessionContextCalls.push(input);
-        if (options?.context) return options.context(input);
-        return [];
-      },
-      prompt: async (input: any) => {
-        sessionPromptCalls.push(input);
-        flowLog.push("prompt");
-        return {};
-      },
-      synthetic: async (input: any) => {
-        sessionSyntheticCalls.push(input);
-        return {};
-      },
-      ...(options?.compact
-        ? {
-            compact: async (input: any) => {
-              sessionCompactCalls.push(input);
-              return options.compact!(input);
-            },
-          }
-        : {}),
-      ...(options?.remove
-        ? {
-            remove: async (input: any) => {
-              sessionRemoveCalls.push(input);
-              return options.remove!(input);
-            },
-          }
-        : {}),
-    },
-    event: {
-      subscribe: ({ signal }: { signal: AbortSignal }) =>
-        (async function* () {
-          // Poll instead of promise-waiting: a wake signal sent while the
-          // pump is still processing the previous event would be lost, and
-          // the last queued event would never yield.
-          while (!signal.aborted) {
-            if (eventQueue.length > 0) yield eventQueue.shift();
-            else await new Promise((r) => setTimeout(r, 5));
-          }
-        })(),
-    },
-  };
-  if (!options?.omitRpc) {
-    context.rpc = {
-      register: async (
-        definition: any,
-        _handlers: any,
-      ): Promise<{ dispose: () => void; events: { emit: (name: string, data: any) => Promise<void> } }> => {
-        rpcRegistrations.push(definition);
-        return {
-          dispose: () => {},
-          events: {
-            emit: async (name: string, data: any) => {
-              rpcEmitted.push({ name, data });
-              flowLog.push("emit");
-            },
-          },
-        };
-      },
-    };
-  }
-  return context;
+  currentHarness = makeV2Harness(SESSION_DIR, {
+    projectDir: PROJECT_DIR,
+    // The extraction child id the unit tests' e2e flows assert against.
+    childID: "v2-test-child",
+    ...options,
+  });
+  // The adapter registers its session/tool hooks DURING setup() - after
+  // makeContext returns - so these are stable delegators that read the
+  // current harness's hook table at call time, not snapshots (a snapshot
+  // would be undefined here and the hook-asserting tests would fail).
+  promptHook = (input: any) => currentHarness.hooks["prompt"]!(input);
+  contextHook = (input: any) => currentHarness.hooks["context"]!(input);
+  toolAfterHook = (input: any) => currentHarness.hooks["execute.after"]!(input);
+  addedCommands = currentHarness.commands;
+  addedTools = currentHarness.addedTools;
+  sessionPromptCalls = currentHarness.calls.prompt;
+  sessionSyntheticCalls = currentHarness.calls.synthetic;
+  sessionCreateCalls = currentHarness.calls.create;
+  sessionGetCalls = currentHarness.calls.get;
+  sessionCompactCalls = currentHarness.calls.compact;
+  sessionRemoveCalls = currentHarness.calls.remove;
+  sessionMoveCalls = currentHarness.calls.move;
+  rpcRegistrations = currentHarness.calls.registrations;
+  rpcEmitted = currentHarness.calls.emitted;
+  flowLog = currentHarness.flowLog;
+  return currentHarness.context;
 }
 
 async function queueEvent(event: any): Promise<void> {
-  eventQueue.push(event);
-  // The mock generator polls every 5ms; give it a beat to start consuming.
-  await new Promise((r) => setTimeout(r, 15));
+  // Delegate to the current harness's queue (per-harness event queue - the
+  // old file-level queue could leak unconsumed events into the next test).
+  return currentHarness.queue(event);
 }
 
 /** Polls until `fn` is truthy (the pump's handlers are async); 5s deadline. */
@@ -568,7 +445,10 @@ describe("opencode v2 adapter", () => {
 
   test("system prompt hook injects the thatch system prompt", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
-    expect(contextHook).toBeDefined();
+    // Assert the hook TABLE, not the delegator binding: the delegator is
+    // always defined (it reads the table at call time), so the binding
+    // assert would be tautological - this one proves setup registered it.
+    expect(currentHarness.hooks["context"]).toBeDefined();
     // v2 system parts are {type: "text", text} objects; the adapter must
     // convert the runtime's plain strings before pushing.
     const system: unknown[] = [];
@@ -582,7 +462,7 @@ describe("opencode v2 adapter", () => {
 
   test("prompt hook preserves the user's text when nothing fires", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
-    expect(promptHook).toBeDefined();
+    expect(currentHarness.hooks["prompt"]).toBeDefined();
     const prompt = { text: "remember the thing we discussed about deployment" };
     await promptHook!({ sessionID: "ses_v2_a", messageID: "msg_1", prompt });
     // The runtime buffered no tool interactions, so no extraction nudge
@@ -592,8 +472,8 @@ describe("opencode v2 adapter", () => {
 
   test("nudges stay out of the stored prompt and ride the context hook", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
-    expect(toolAfterHook).toBeDefined();
-    expect(contextHook).toBeDefined();
+    expect(currentHarness.hooks["execute.after"]).toBeDefined();
+    expect(currentHarness.hooks["context"]).toBeDefined();
     // Buffer a tool interaction through the v2 execute.after hook, then
     // send a prompt: nothing may touch prompt.text (v2 stores prompt text
     // as the user message - injecting there would echo any injection into
@@ -1191,18 +1071,11 @@ describe("opencode v2 adapter", () => {
   // its absence proves the branch ran to completion - not that it never
   // ran). The greenlight is the FINAL assistant message's trailing token,
   // read through session.context (mapped into the v1 shape).
-  const wrapupArmed = (sessionID: string): boolean => {
-    const db = new Database(process.env.THATCH_DB_PATH!, { readonly: true });
-    try {
-      return db.query("SELECT 1 FROM runtime_state WHERE kind = 'wrapup' AND session_id = ?").get(sessionID) != null;
-    } finally {
-      db.close();
-    }
-  };
+  const wrapupArmed = (sessionID: string): boolean => runtimeStateRow(process.env.THATCH_DB_PATH!, "wrapup", sessionID) !== null;
 
   test("a greenlit /thatch/compact triggers session.compact on the next idle", async () => {
     const context = makeContext({
-      compact: async () => ({}),
+      compact: true,
       context: async () => [
         { type: "assistant", content: [{ type: "text", text: "flushed; no loose ends THATCH_COMPACT_READY" }] },
       ],
@@ -1283,21 +1156,13 @@ describe("opencode v2 adapter", () => {
     });
     await waitFor("exit close emitted", () => rpcEmitted.some((e) => e.name === EXIT_TAB_CLOSED_EVENT));
 
-    const stateRow = (kind: string): any => {
-      const db = new Database(process.env.THATCH_DB_PATH!, { readonly: true });
-      try {
-        return db.query("SELECT value FROM runtime_state WHERE kind = ? AND session_id = ?").get(kind, sessionID) ?? null;
-      } finally {
-        db.close();
-      }
-    };
+    const stateRow = (kind: string): any => runtimeStateRow(process.env.THATCH_DB_PATH!, kind, sessionID);
     // The death row is placed (project resolved from the still-registered
     // chat row) and carries the cancelled watch as a target.
-    const death = stateRow("watcher_death");
+    const death = stateRow("watcher_death") as { project?: string; targets?: string[] };
     expect(death).not.toBeNull();
-    const deathValue = JSON.parse(death.value);
-    expect(deathValue.project).toBeTruthy();
-    expect(deathValue.targets).toContain("test -f /nonexistent-thatch-exit-watch-marker");
+    expect(death!.project).toBeTruthy();
+    expect(death!.targets).toContain("test -f /nonexistent-thatch-exit-watch-marker");
     // The watcher definition row is gone (cancelled, not dormant).
     expect(stateRow("watchers")).toBeNull();
     // The chat roster row is unregistered.
@@ -1333,7 +1198,7 @@ describe("opencode v2 adapter", () => {
 
   test("a blocked wrap-up (no greenlight token) triggers no host action", async () => {
     const context = makeContext({
-      compact: async () => ({}),
+      compact: true,
       context: async () => [
         // Blockers listed, no trailing token: the branch falls through
         // without firing the action (the model surfaced the blockers in
@@ -1605,7 +1470,7 @@ describe("opencode v2 adapter", () => {
     // resume out of extraction children). finishExtractionChild drives it
     // from the child's idle event; the child routes through the
     // childSessions forwarding set (its events carry no location here).
-    const context = makeContext({ remove: async () => ({}) });
+    const context = makeContext({ remove: true });
     cleanup = (await setup(context as any)) as () => Promise<void>;
     await toolAfterHook!({
       tool: "bash",
@@ -1633,14 +1498,7 @@ describe("opencode v2 adapter", () => {
     // deletes it after the map cleanup and BEFORE sessionDelete, so
     // row-gone proves the cleanup ran - the settle idiom cannot (a throw
     // in finishExtractionChild would also leave remove at zero).
-    const childJournaled = (): boolean => {
-      const db = new Database(process.env.THATCH_DB_PATH!, { readonly: true });
-      try {
-        return db.query("SELECT 1 FROM runtime_state WHERE kind = 'child' AND session_id = ?").get("v2-test-child") != null;
-      } finally {
-        db.close();
-      }
-    };
+    const childJournaled = (): boolean => runtimeStateRow(process.env.THATCH_DB_PATH!, "child", "v2-test-child") !== null;
     const context = makeContext();
     cleanup = (await setup(context as any)) as () => Promise<void>;
     await toolAfterHook!({

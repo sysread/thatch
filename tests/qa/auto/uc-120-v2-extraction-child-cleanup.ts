@@ -1,7 +1,7 @@
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 import { setup as setupV2 } from "../../../src/opencode/v2";
 import { makeV2Harness } from "../../mocks/v2-harness";
-import { Database } from "bun:sqlite";
+import { runtimeStateRow } from "../../mocks/runtime-state";
 
 /**
  * UC-120: opencode v2 extraction-child cleanup (session.remove).
@@ -82,14 +82,7 @@ const useCase: UseCase = {
           // completion (the child journal row is the observable -
           // journalChild deletes it after the map cleanup and BEFORE the
           // deletion under test), the deletion just never happens.
-          const childJournaled = () => {
-            const db = new Database(ctx.env.THATCH_DB_PATH, { readonly: true });
-            try {
-              return db.query("SELECT 1 FROM runtime_state WHERE kind = 'child' AND session_id = ?").get("qa-120-child") != null;
-            } finally {
-              db.close();
-            }
-          };
+          const childJournaled = () => runtimeStateRow(ctx.env.THATCH_DB_PATH, "child", "qa-120-child") !== null;
           if (!(await v2wait("child cleanup completed", () => !childJournaled()))) return false;
           if (harness.calls.remove.length !== 0) {
             console.log(`  FAIL: the floor context has no remove member, got ${JSON.stringify(harness.calls.remove)}`);
