@@ -1,5 +1,5 @@
 ---
-description: Plan a new feature or change
+description: Design, plan, and implement a new feature or change
 agent: build
 ---
 
