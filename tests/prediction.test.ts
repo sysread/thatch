@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 
 let dbPath: string;
@@ -404,5 +405,60 @@ describe("scorePredictionNudge", () => {
 
     const items = db.scorePredictionNudge([store, "global"], makeEmbed(1), 0.0, 5);
     expect(items.length).toBe(2);
+  });
+});
+
+describe("matcher updated_at semantics", () => {
+  // Row-level reads and timestamp manipulation the public ThatchDB API
+  // deliberately does not expose (house pattern from tests/chat.test.ts:
+  // raw handle on the same file).
+  const rawUpdatedAt = (matcherId: string): string => {
+    const raw = new Database(dbPath, { readonly: true });
+    try {
+      return (raw.query("SELECT updated_at FROM prediction_matchers WHERE id = ?").get(matcherId) as any).updated_at;
+    } finally {
+      raw.close();
+    }
+  };
+  const rewindUpdatedAt = (matcherId: string) => {
+    const raw = new Database(dbPath);
+    try {
+      raw.run("UPDATE prediction_matchers SET updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?", [matcherId]);
+    } finally {
+      raw.close();
+    }
+  };
+
+  test("a new edge bumps the matcher's updated_at; a no-op re-link does not", () => {
+    const matcherId = db.createMatcher(store, "PR review", makeEmbed(1), "m");
+    const p1 = db.createPrediction(store, "skip tech debt", "reason", makeEmbed(3), "m");
+    db.createEdge(matcherId, p1, 1.0);
+    rewindUpdatedAt(matcherId);
+
+    // A NEW edge is graph activity: the matcher's updated_at must move.
+    const p2 = db.createPrediction(store, "write tests first", "reason", makeEmbed(4), "m");
+    db.createEdge(matcherId, p2, 1.0);
+    const bumped = rawUpdatedAt(matcherId);
+    expect(bumped).not.toBe("2000-01-01T00:00:00.000Z");
+
+    // Re-linking to an EXISTING edge (ON CONFLICT DO NOTHING) changes
+    // nothing - the timestamp must stay put.
+    rewindUpdatedAt(matcherId);
+    db.createEdge(matcherId, p1, 1.0);
+    expect(rawUpdatedAt(matcherId)).toBe("2000-01-01T00:00:00.000Z");
+  });
+
+  test("deleting a prediction bumps the matchers whose edges cascade away", () => {
+    const m1 = db.createMatcher(store, "PR review", makeEmbed(1), "m");
+    const m2 = db.createMatcher("global", "PR review", makeEmbed(1), "m");
+    const p1 = db.createPrediction(store, "skip tech debt", "reason", makeEmbed(3), "m");
+    db.createEdge(m1, p1, 1.0);
+    db.createEdge(m2, p1, 1.0);
+    rewindUpdatedAt(m1);
+    rewindUpdatedAt(m2);
+
+    expect(db.deletePrediction(p1)).toBe(true);
+    expect(rawUpdatedAt(m1)).not.toBe("2000-01-01T00:00:00.000Z");
+    expect(rawUpdatedAt(m2)).not.toBe("2000-01-01T00:00:00.000Z");
   });
 });

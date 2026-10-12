@@ -288,13 +288,29 @@ export class ScoringEngine {
 
   createEdge(matcherId: string, itemId: string, weight: number): void {
     const now = new Date().toISOString();
-    const { edgesTable, itemForeignKey } = this.#cfg;
-    this.#db.run(
-      `INSERT INTO ${edgesTable} (matcher_id, ${itemForeignKey}, weight, created_at)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(matcher_id, ${itemForeignKey}) DO NOTHING`,
-      [matcherId, itemId, weight, now] as any,
-    );
+    const { edgesTable, itemForeignKey, matchersTable } = this.#cfg;
+    // Insert and bump run atomically: an edge that landed without its
+    // updated_at bump would read as older than it is. bun:sqlite nests
+    // transaction functions via savepoints, so this composes with a
+    // caller's outer transaction (prediction_update's, for one).
+    // Bump only when the insert landed - a re-link to an existing edge
+    // changes nothing.
+    // A matcher's updated_at means "last change to the matcher row or its
+    // edge set" (not "matcher text written"): re-linking a matcher to a
+    // corrected item is graph activity the planned staleness audit must
+    // see. No reader consumes matcher updated_at yet; the bump keeps the
+    // timestamp truthful for when that audit lands.
+    this.#db.transaction(() => {
+      const result = this.#db.run(
+        `INSERT INTO ${edgesTable} (matcher_id, ${itemForeignKey}, weight, created_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(matcher_id, ${itemForeignKey}) DO NOTHING`,
+        [matcherId, itemId, weight, now] as any,
+      );
+      if (result.changes > 0) {
+        this.#db.run(`UPDATE ${matchersTable} SET updated_at = ? WHERE id = ?`, [now, matcherId] as any);
+      }
+    })();
   }
 
   adjustConfidence(itemId: string, signal: "confirm" | "disconfirm" | "soft"): void {
@@ -349,8 +365,23 @@ export class ScoringEngine {
   }
 
   deleteItem(itemId: string): boolean {
-    const result = this.#db.run(`DELETE FROM ${this.#cfg.itemsTable} WHERE id = ?`, [itemId]);
-    return result.changes > 0;
+    const { itemsTable, edgesTable, itemForeignKey, matchersTable } = this.#cfg;
+    // Bump the matchers whose edges are about to cascade away with the
+    // item (edge rows have ON DELETE CASCADE, so the DELETE below removes
+    // them implicitly). Same updated_at meaning as createEdge: last change
+    // to the matcher row or its edge set. Bump and delete run atomically
+    // (bun:sqlite nests via savepoints): a bump whose delete then failed
+    // would record graph activity that never happened.
+    return this.#db.transaction(() => {
+      const now = new Date().toISOString();
+      this.#db.run(
+        `UPDATE ${matchersTable} SET updated_at = ?
+         WHERE id IN (SELECT matcher_id FROM ${edgesTable} WHERE ${itemForeignKey} = ?)`,
+        [now, itemId] as any,
+      );
+      const result = this.#db.run(`DELETE FROM ${itemsTable} WHERE id = ?`, [itemId]);
+      return result.changes > 0;
+    })();
   }
 
   listItems(store: string): {

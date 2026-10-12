@@ -1050,7 +1050,7 @@ switch (command) {
       const sessionID = data.session_id ?? data.conversation_id;
 
       const { peekQueue, getMissedCount, incrementMissedCount } = await import("../src/extract-queue");
-      const { extractionNudge, claudeWriteNudge, claudeRecallNudge, predictionNudge, behaviorNudge } = await import("../src/prompts");
+      const { extractionNudge, claudeWriteNudge, claudeRecallNudge, predictionNudge, behaviorNudge, mcpToolName } = await import("../src/prompts");
       const { detectSkew, readNpmCacheForUpdate } = await import("../src/version-check");
 
       let repo = "unknown";
@@ -1144,10 +1144,10 @@ switch (command) {
           parts.push(claudeRecallNudge(matches));
         }
         if (predictions && predictions.length > 0) {
-          parts.push(predictionNudge(predictions));
+          parts.push(predictionNudge(predictions, mcpToolName));
         }
         if (behaviors && behaviors.length > 0) {
-          parts.push(behaviorNudge(behaviors));
+          parts.push(behaviorNudge(behaviors, mcpToolName));
         }
 
         if (parts.length > 0) {
@@ -1296,13 +1296,13 @@ switch (command) {
       if (repo === "unknown") repo = "global";
 
       const { sidebandPredictions, sidebandSocketPath } = await import("../src/sideband");
-      const { predictionNudge } = await import("../src/prompts");
+      const { predictionNudge, mcpToolName } = await import("../src/prompts");
       const sockPath = sidebandSocketPath(dbPath);
       const threshold = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.60");
       const predictions = await sidebandPredictions(sockPath, promptText, [repo, "global"], threshold, 5);
 
       if (predictions && predictions.length > 0) {
-        const output = predictionNudge(predictions);
+        const output = predictionNudge(predictions, mcpToolName);
         if (isJson) console.log(JSON.stringify({ additional_context: output }));
         else console.log(output);
       } else {

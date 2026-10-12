@@ -131,6 +131,20 @@ Tiers 2, 3, and 4 all fire independently. Any subset may inject. All share
 one embedding computation, reused across three cosine scans against
 different tables.
 
+#### Snapshot semantics
+
+A nudge block is computed once, when the message is submitted, and stays
+attached to that message for the whole turn - including every model round
+trip after mid-turn tool calls. Predictions, behaviors, or memories the
+conversation mutates mid-turn do NOT refresh an already-injected block
+(v1: the synthetic part lives on the stored message; v2:
+`pendingInjections` re-injects the prompt-time text into every outbound
+request of the turn, bound to the message it was computed for - see
+[opencode-plugin.md](opencode-plugin.md)). The prediction and behavior
+blocks therefore end with a snapshot footer naming the store state they
+reflect and the live tool to re-check. The recall nudge carries no footer:
+it lists memory labels without confidence claims.
+
 ### MCP path (`bin/thatch`, `flush-tools` subcommand)
 
 The `flush-tools` subcommand fires on `UserPromptSubmit` (Claude Code) or

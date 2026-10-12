@@ -102,3 +102,4 @@ import "./uc-117-chat-identity-directory-binding";
 import "./uc-118-watcher-death-detection";
 import "./uc-119-chat-split-long-messages";
 import "./uc-120-v2-extraction-child-cleanup";
+import "./uc-121-nudge-snapshot-footer";

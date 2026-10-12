@@ -24,13 +24,19 @@ the agent's context. The block looks like:
 - [0.58 conf, 1 tests] When about to commit changes to the repo:
   do Run mise run check (tsc + bun test + markdownlint) before
   committing. Never commit code that fails the quality gate.
+Snapshot: these labels reflect the behavior store as of this message's
+submission. Behaviors updated after submission (including during this
+turn) do not refresh it; re-check with thatch_behavior_list before
+relying on them.
 ```
 
 The agent evaluates each surfaced rule against the current situation.
 If relevant (ham), it follows the rule and calls `behavior_feedback`
 with `relevant: true`. If not relevant (spam), it calls
 `behavior_feedback` with `relevant: false`. This trains the classifier
-so future nudges are more accurate.
+so future nudges are more accurate. On Claude Code and Cursor the
+footer's tool name appears with its MCP spelling
+(`mcp__thatch__behavior_list`).
 
 ## Default behaviors
 

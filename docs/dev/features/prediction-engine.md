@@ -141,6 +141,8 @@ later — land below that floor and accumulate. The dedup pass finds them:
   `[thatch] User decision model` header.
 - 0-evidence predictions use "you may prefer"; predictions with evidence use
   "you tend to".
+- The block ends with a snapshot footer (see the block example below): the
+  labels are a submission-time snapshot, not a live view.
 - Independent try/catch — a prediction failure does not block recall or
   behavior.
 - Toast: `[thatch] N predictions surfaced`.
@@ -159,10 +161,26 @@ later — land below that floor and accumulate. The dedup pass finds them:
 The auto-fire block looks like:
 
 ```text
-## User decision model
+[thatch] User decision model
 - [0.72 conf, 4 tests] When {matcher}: you tend to {prediction}
 - [0.61 conf, 2 tests] When {matcher2}: you may prefer {prediction2}
+Snapshot: these labels reflect the prediction store as of this message's
+submission. Predictions updated after submission (including during this
+turn) do not refresh it; re-check with thatch_prediction_query before
+relying on them.
 ```
+
+The footer's tool name follows the host: opencode sees
+`thatch_prediction_query`; MCP hosts (Claude Code, Cursor) see
+`mcp__thatch__prediction_query`. The renderer resolves the spelling
+through the caller's `ToolNamer`.
+
+The snapshot footer exists because the block is computed once when the
+message is submitted and stays attached to it for the whole turn (v1:
+synthetic part on the stored message; v2: `pendingInjections` re-injected
+into every outbound request of the turn). Predictions the conversation
+mutates mid-turn do not refresh the block; the footer tells the consumer
+the labels are a submission-time snapshot and points at the live tool.
 
 Prompt instructions: follow strong predictions silently, surface weak or
 competing predictions to the user, update the model when the user responds.
@@ -279,6 +297,14 @@ prediction_dedup_pairs(
     PRIMARY KEY (store, id_a, id_b)
 )
 ```
+
+Timestamp semantics: a matcher's `updated_at` is the last change to the
+matcher row OR its edge set — `createEdge` bumps it when a new edge lands,
+and deleting an item bumps the matchers whose edges cascade away. The
+matcher's own text may legitimately be older than its links (a corrected
+prediction re-links the existing matcher without touching its text).
+An item's `updated_at` is written at creation and then moved by the last
+confidence change.
 
 ## Key invariants
 

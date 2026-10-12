@@ -58,7 +58,7 @@ the shared runtime needs. It is the lifecycle-level sibling of `CoreContext`
 | Capability | v1 source | v2 source | v2 strategy |
 |---|---|---|---|
 | bus events | `event` hook | `event.subscribe` (raw SSE) | client-side location filter; location-less events resolve via `session.get` (`{sessionID}` input) and drop unresolvable (mirrors v1's server-side filter); events for plugin-created extraction children pass by ID (they live in the project directory, which differs from the instance directory on below-root launches) |
-| incoming message | `chat.message` hook | `session.hook("prompt")` | the hook awaits the runtime; nudge injections append to the OUTBOUND request's last user message in the generate hook (v2 wire `Message` carries parts in `content`, not `parts`) |
+| incoming message | `chat.message` hook | `session.hook("prompt")` | the hook awaits the runtime; nudge injections append to the OUTBOUND request's user message whose text matches the entry's stored prompt, in the context hook (v2 wire `Message` carries parts in `content`, not `parts`). Entries form a per-session set (cap 3, oldest evicted) so a prompt queued mid-turn keeps its own entry instead of evicting the running turn's; a prompt whose nudge computation comes up empty clears the session's whole set, so the running turn's remaining rounds lose their block in that one case (smaller than the staleness it prevents: an entry left behind would match its own prompt text in later requests' session history and replay a stale block there) |
 | system prompt | `experimental.chat.system.transform` | `session.hook("context")` | mutates the request's system array; the runtime's plain strings convert to `{type: "text", text}` SystemPart objects at the boundary |
 | compaction | `experimental.session.compacting` + `.autocontinue` + `session.compacted` | `session.hook("compaction")` | flag lands; context-injection surface unverified |
 | wrap-up commands | `command.execute.before` + command files | `command.transform` + `CommandEditor.add` | registered in code: `execute` arms the greenlight check (`onCommandExecuteBefore`) and delivers the same prompt body the v1 file carries, substituting the invocation's prompt text for `$ARGUMENTS` (v2's `session.prompt` does no template expansion); the runtime installs only ACTION command files on v2 and REMOVES stale wrap-up files from earlier v1 runs (a file and a registered command with the same name would collide) |
@@ -90,11 +90,35 @@ suite runs green against a v2 serve.
 Still unverified against the live binary (static analysis only):
 
 - Whether `session.hook("prompt")` fires for `session.synthetic` inbox
-  items. If it does not, `pendingInjections` from the prior real turn gets
-  appended to the synthetic turn's outbound request.
+  items. If it does not, `pendingInjections` from the prior real turn would
+  be appended to the synthetic turn's outbound request. Structurally
+  bounded 2026-10-12: each `pendingInjections` entry is bound to the prompt
+  text it was computed from, and the context hook injects it only into a
+  request user message whose joined text equals that prompt - a replay onto
+  any other message (synthetic turn, missed prompt hook, failed
+  `onChatMessage`) is skipped. Text equality is the tightest binding
+  available, not an airtight one: an identical prompt re-submitted after a
+  missed prompt hook still matches and replays; the next prompt-hook run
+  that fires is the recovery. The prompt-time block still re-fires on every
+  round of its OWN turn (v1's persistent-synthetic-part semantics), and the
+  block carries a snapshot footer stating the labels are a submission-time
+  snapshot and pointing at the live re-check tool.
 - Whether `SessionGenerate.messages` are fresh objects per model call within
-  a turn. If not, the generate hook pushes duplicate nudges on every tool
-  round trip.
+  a turn. The context hook appends injections to the matched message's
+  content, which changes the text the binding check compares. With fresh
+  objects per call (what the tests assume), the prompt-time block re-fires
+  on every round of its own turn. With reused objects, round 1's
+  injections would change the matched message's text, so the binding check
+  would skip rounds 2 and on - within-turn replay would break after round
+  1 instead of duplicating.
+- Entries outliving their session: `pendingInjections` is keyed by session
+  id and never swept on session end. Bounded - a per-session set capped at
+  3 entries, and the map itself dies with the adapter activation - but a
+  session's entries do persist after the session is gone, pre-existing.
+- Cross-directory hook dispatch scope: the event pump filters events by
+  directory, but the session hooks (`prompt`, `context`, `compaction`)
+  have no such filter - whether a hook can fire for another directory's
+  session is unverified, pre-existing.
 - An npm-installed copy (not the dev checkout, which has devDependencies
   present) loading under v2 - the isolation rule's real-world proof.
 

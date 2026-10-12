@@ -29,9 +29,9 @@ import { TOOL_DEFS, trimHostContext, type HostToolContext, type SessionTabCloseI
 //   array; the runtime's plain strings convert to {type: "text", text}
 //   parts at the boundary.
 // - per-message nudges: the prompt hook computes the turn's injections;
-//   the generate hook appends them to the outbound request's last user
-//   message `content` array (v2 wire Messages have no `parts` field).
-//   Injections stay out of the stored prompt text.
+//   the context hook appends them to the outbound request's user message
+//   that matches the entry's prompt text (v2 wire Messages have no
+//   `parts` field). Injections stay out of the stored prompt text.
 // - noReply deliveries (chat echoes, session-start reminder): v2's prompt
 //   endpoint cannot suppress the model turn, so the runtime gates them off
 //   via capabilities.noReplyDelivery.
@@ -65,6 +65,26 @@ import { TOOL_DEFS, trimHostContext, type HostToolContext, type SessionTabCloseI
 
 type V2Context = Plugin.Context;
 type V2Cleanup = Plugin.Cleanup;
+
+// Both ends of the prompt-text binding must reconstruct text the same way:
+// the prompt-session adapter joins outbound prompt parts with this helper,
+// and the context hook joins a wire message's text parts with it before
+// comparing against the stored prompt text. A separator mismatch would
+// silently fail the equality and drop the turn's nudges.
+function joinTextParts(parts: Array<{ text: string }>): string {
+  return parts.map((p) => p.text).join("\n\n");
+}
+
+// Reconstructs a wire message's text for the prompt-text binding. A string
+// content is the common case; multi-part messages join with joinTextParts
+// so the read side agrees with the write side's separator.
+function messageText(message: { content: unknown }): string {
+  if (typeof message.content === "string") return message.content;
+  const parts = (Array.isArray(message.content) ? message.content : []).filter(
+    (p: any) => p?.type === "text",
+  );
+  return joinTextParts(parts);
+}
 
 // The wrap-up exit's tab-close emitter, late-bound in setup (see the
 // tuiBridge holder there). One shape, referenced at the holder, the
@@ -239,12 +259,34 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   //   (the v1 contract); v2's system parts are { type: "text", text }
   //   objects, so convert at the boundary.
   // - per-turn nudges: append the prompt hook's stored injections to the
-  //   OUTBOUND request's last user message. The stored user message stays
-  //   clean (v1 delivered nudges as TUI-hidden synthetic parts; v2's prompt
-  //   text IS the stored message), and the request is rebuilt per round
-  //   trip, so injecting here reproduces v1's persistent-synthetic-part
-  //   semantics: the model sees the nudges on every call of the turn.
-  const pendingInjections = new Map<string, string[]>();
+  //   OUTBOUND request's user message whose text matches the entry's
+  //   stored prompt (see the binding check below). The stored user message
+  //   stays clean (v1 delivered nudges as TUI-hidden synthetic parts; v2's
+  //   prompt text IS the stored message), and the request is rebuilt per
+  //   round trip, so injecting here reproduces v1's
+  //   persistent-synthetic-part semantics: the model sees the nudges on
+  //   every call of the turn.
+  // Per-turn nudge injections, keyed by session, then by the prompt text
+  // they were computed from. Each entry is bound to that text: the context
+  // hook injects an entry only when the request contains a user message
+  // whose text equals it. A bare sessionID-keyed entry that outlives its
+  // turn (the prompt hook missed or failed on a later message) replays a
+  // stale nudge block onto a message it was never computed for - deleted
+  // predictions surfaced as current with their old confidence labels (the
+  // October 2026 staleness report).
+  //
+  // The per-session set holds a small bounded number of entries (oldest
+  // evicted) so a prompt queued mid-turn keeps its own fresh entry instead
+  // of evicting the running turn's: the running turn's remaining rounds
+  // still match their own prompt, and the queued prompt's turn matches
+  // its own. A prompt whose nudge computation comes up empty clears the
+  // session's whole set - an entry left behind would match its own prompt
+  // text in the session HISTORY of later requests and replay a stale block
+  // there - so a queued prompt with no nudges drops the running turn's
+  // remaining-round block. That cost is smaller than the staleness it
+  // prevents; opencode-plugin.md discloses it.
+  const PENDING_INJECTION_CAP = 3;
+  const pendingInjections = new Map<string, Map<string, { promptText: string; injections: string[] }>>();
   const registerSystem = await context.session.hook(
     "context",
     async (request: { sessionID: string; system: unknown[]; messages?: any[] }) => {
@@ -253,16 +295,51 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
       for (const part of pushed) {
         request.system.push(typeof part === "string" ? { type: "text", text: part } : part);
       }
-      const injections = pendingInjections.get(request.sessionID);
-      if (!injections?.length) return;
-      const lastUser = [...(request.messages ?? [])].reverse().find((m) => m?.role === "user");
-      if (!lastUser) return;
+      const pending = pendingInjections.get(request.sessionID);
+      if (!pending?.size) return;
+      // Binding check: a stored v2 user message IS its prompt text (the
+      // prompt hook's injections are computed from it), so text equality
+      // identifies the message an entry belongs to. Wire message ids are
+      // optional on the v2 Message schema and cannot be relied on here.
+      //
+      // The match searches the request's user messages for the LAST one
+      // whose joined text equals the entry's prompt - it is not simply the
+      // request's last user message. Sibling context hooks (opencode's plan
+      // plugin) splice their own user-role reminder into the request
+      // mid-turn: BEFORE the prompt when the request's last message is
+      // user-role, but AT THE TAIL when it is not (mid-turn rounds), which
+      // would make the reminder the last user message, fail the equality,
+      // and silently drop every nudge for the turn. Injecting into the
+      // prompt's own message is v1's persistent-synthetic-part semantics.
+      //
+      // Entries are tried newest first: when several are pending for the
+      // session, the latest prompt-hook run wins a text match.
+      //
+      // Text equality is the tightest binding available here, not an
+      // airtight one: an identical prompt re-submitted after a missed
+      // prompt hook still matches and replays. The next prompt-hook run
+      // that fires is the recovery.
+      let target: any;
+      let matched: { promptText: string; injections: string[] } | undefined;
+      for (const entry of [...pending.values()].reverse()) {
+        target = [...(request.messages ?? [])]
+          .reverse()
+          .find((m) => m?.role === "user" && messageText(m) === entry.promptText);
+        if (target) {
+          matched = entry;
+          break;
+        }
+      }
+      if (!matched) {
+        runtime.debug("v2:hook:context", `session=${request.sessionID} no user message matches a stored prompt; skipping injections`);
+        return;
+      }
       // v2's wire Message carries parts in `content: Array<ContentPart>` -
       // it has no `parts` field, so injecting there would write a stray
       // property the provider formatter never reads (silent nudge loss).
-      const content = Array.isArray(lastUser.content) ? lastUser.content : (lastUser.content = []);
-      for (const text of injections) content.push({ type: "text", text });
-      runtime.debug("v2:hook:context", `session=${request.sessionID} injected=${injections.length} messages=${request.messages?.length}`);
+      const content = Array.isArray(target.content) ? target.content : (target.content = []);
+      for (const text of matched.injections) content.push({ type: "text", text });
+      runtime.debug("v2:hook:context", `session=${request.sessionID} injected=${matched.injections.length} messages=${request.messages?.length}`);
     },
   );
 
@@ -281,12 +358,29 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
         );
       } catch (err) {
         console.error(`[thatch] v2 prompt hook failed: ${err}`);
+        // The hook owns no fresh entry for this prompt; a retained one
+        // belongs to a superseded prompt and would replay on an identical
+        // re-submission. Drop the session's whole set.
+        pendingInjections.delete(request.sessionID);
         return;
       }
       const injections = parts.slice(1).map((part) => part.text);
       if (injections.length > 0) runtime.debug("v2:hook:prompt", `session=${request.sessionID} injections=${injections.length}`);
-      if (injections.length > 0) pendingInjections.set(request.sessionID, injections);
-      else pendingInjections.delete(request.sessionID);
+      if (injections.length > 0) {
+        const entries = pendingInjections.get(request.sessionID) ?? new Map();
+        if (!entries.has(request.prompt.text) && entries.size >= PENDING_INJECTION_CAP) {
+          // Bounded set: evict the oldest entry (insertion order).
+          entries.delete(entries.keys().next().value!);
+        }
+        entries.set(request.prompt.text, { promptText: request.prompt.text, injections });
+        pendingInjections.set(request.sessionID, entries);
+      } else {
+        // A prompt that produced no nudges clears the session's whole set:
+        // an entry left behind would match its own prompt text in the
+        // session history of later requests and replay a stale block there.
+        // See the pendingInjections comment above for the disclosed cost.
+        pendingInjections.delete(request.sessionID);
+      }
     },
   );
 
@@ -821,7 +915,7 @@ function buildCapabilities(
       // prompt); v2's prompt enqueues the message and returns while the
       // model turn runs asynchronously, so the extraction background flag
       // degrades: both modes enqueue the same way.
-      const text = body.parts.map((part) => part.text).join("\n\n");
+      const text = joinTextParts(body.parts);
       if (!body.noReply && body.parts.length > 0 && body.parts.every((part) => part.synthetic)) {
         await session.synthetic({ sessionID, text });
         return;

@@ -46,10 +46,21 @@ like:
   flag tech debt before reviewing the diff
 - [0.61 conf, 2 tests] When choosing test scope: you may prefer
   integration tests over unit tests
+Snapshot: these labels reflect the prediction store as of this message's
+submission. Predictions updated after submission (including during this
+turn) do not refresh it; re-check with thatch_prediction_query before
+relying on them.
 ```
 
 The agent reads this and decides whether to follow the prediction,
-surface it to you, or ignore it. You never see the nudge directly.
+surface it to you, or ignore it. You never see the nudge directly. The
+snapshot line matters when the agent corrects the model mid-conversation
+(you say "no, that's wrong" and it calls `thatch_prediction_delete`):
+the block it saw at the start of the turn is a submission-time snapshot
+and does not update. The agent should re-query with
+`thatch_prediction_query` instead of trusting the block's labels. On
+Claude Code and Cursor the tool name appears with its MCP spelling
+(`mcp__thatch__prediction_query`).
 
 ## Tools
 

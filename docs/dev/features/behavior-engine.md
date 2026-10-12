@@ -113,6 +113,8 @@ Parameters: `behavior` (statement, semantic match at cosine >= 0.85),
 - Injects `behaviorNudge(items)` as a separate synthetic text part with a
   `[thatch] Situational behaviors` header.
 - 0-evidence behaviors use "consider"; behaviors with evidence use "do".
+- The block ends with a snapshot footer (same as the prediction nudge): the
+  labels are a submission-time snapshot, not a live view.
 - Independent try/catch — a behavior failure does not block recall or
   prediction.
 - Toast: `[thatch] N behaviors surfaced`.
@@ -249,6 +251,14 @@ behavior_provenance(
     FOREIGN KEY (behavior_id) REFERENCES behaviors(id) ON DELETE CASCADE
 )
 ```
+
+Timestamp semantics: a matcher's `updated_at` is the last change to the
+matcher row OR its edge set — `createEdge` bumps it when a new edge lands
+(atomically with the insert), and deleting an item bumps the matchers whose
+edges cascade away (atomically with the delete). The matcher's own text may
+legitimately be older than its links (a corrected behavior re-links the
+existing matcher without touching its text). A behavior's `updated_at` is
+written at creation and then moved by the last confidence change.
 
 ## Key invariants
 

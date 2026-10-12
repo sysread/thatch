@@ -992,12 +992,32 @@ function formatRecallNudge(matches: NudgeMatch[], toolName: string): string {
 // update on user response).
 // ---------------------------------------------------------------------------
 
-export function predictionNudge(items: PredictionNudgeItem[]): string {
+// Shared tail of the prediction and behavior nudges. The re-check tool name
+// is resolved by the caller's ToolNamer: the same renderers serve the
+// opencode plugin path (thatch_*) and the MCP flush-tools path
+// (mcp__thatch__*), where hosts spell tools differently.
+function snapshotFooter(store: string, recheckTool: string): string {
+  const cap = store[0].toUpperCase() + store.slice(1);
+  return (
+    `Snapshot: these labels reflect the ${store} store as of this message's submission. ` +
+    `${cap} updated after submission (including during this turn) do not refresh it; ` +
+    `re-check with ${recheckTool} before relying on them.`
+  );
+}
+
+export function predictionNudge(items: PredictionNudgeItem[], tool: ToolNamer = opencodeToolName): string {
   const lines = items.map((p) => {
     const verb = predictionVerb(p.evidence_count);
     return `- ${formatWhenLine(p.confidence, p.evidence_count, p.matcher_description, p.statement, verb)}`;
   });
-  return `[thatch] User decision model\n${lines.join("\n")}`;
+  // Snapshot basis (the Oct 2026 staleness report): the block is computed
+  // once when the message is submitted and stays attached to it for the
+  // whole turn. Predictions mutated after submission (by this turn's own
+  // tool calls, or a concurrent session) do not refresh it - the labels
+  // below can lag the store. Point the consumer at the live tool instead
+  // of implying a per-round refresh.
+  const footer = snapshotFooter("prediction", tool("prediction_query"));
+  return `[thatch] User decision model\n${lines.join("\n")}\n${footer}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1006,12 +1026,15 @@ export function predictionNudge(items: PredictionNudgeItem[]): string {
 // how to act (follow relevant rules, ham/spam each match via behavior_feedback).
 // ---------------------------------------------------------------------------
 
-export function behaviorNudge(items: BehaviorNudgeItem[]): string {
+export function behaviorNudge(items: BehaviorNudgeItem[], tool: ToolNamer = opencodeToolName): string {
   const lines = items.map((b) => {
     const verb = b.evidence_count === 0 ? "consider" : "do";
     return `- ${formatWhenLine(b.confidence, b.evidence_count, b.matcher_description, b.statement, verb)}`;
   });
-  return `[thatch] Situational behaviors\n${lines.join("\n")}`;
+  // Same snapshot basis as the prediction nudge: computed at submission,
+  // not refreshed by mid-turn behavior feedback.
+  const footer = snapshotFooter("behavior", tool("behavior_list"));
+  return `[thatch] Situational behaviors\n${lines.join("\n")}\n${footer}`;
 }
 
 /**

@@ -96,7 +96,7 @@ prediction_matchers(
   embedding BLOB,
   model TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL -- last change to the matcher row or its edge set
 )
 ```
 
@@ -116,7 +116,7 @@ predictions(
   confirm_count REAL NOT NULL DEFAULT 0,
   disconfirm_count REAL NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL -- written at creation, then last confidence change
 )
 ```
 
@@ -167,7 +167,7 @@ behavior_matchers(
   embedding BLOB,
   model TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL -- last change to the matcher row or its edge set
 )
 ```
 
@@ -185,7 +185,7 @@ behaviors(
   confirm_count REAL NOT NULL DEFAULT 0,
   disconfirm_count REAL NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL -- written at creation, then last confidence change
 )
 ```
 
