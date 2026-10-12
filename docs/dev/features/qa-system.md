@@ -70,9 +70,11 @@ execution directly via bun assertions. These are fast and run in parallel.
 Spawn real opencode sessions. Test the full pipeline with a real model. These
 cost model tokens and have a 20-minute per-use-case timeout. Live use cases
 check for `opencode` on PATH at runtime: if it is present they run; if not,
-they skip with `[MANUAL]`. Three (UC-006, UC-010, UC-013) are
+they skip with `[MANUAL]`. Six (UC-006, UC-010, UC-013, UC-083, UC-084,
+and UC-085) are
 `manualOnly: true` for infrastructure reasons (Cursor hook lifecycle, nested
-opencode session timeout, compaction trigger). Run them locally with
+opencode session timeout, compaction trigger, sub-agent support, skill
+loading, and a PR with prior review comments). Run them locally with
 `mise run qa-live`.
 
 | UC | Name | What it tests |
@@ -86,6 +88,20 @@ opencode session timeout, compaction trigger). Run them locally with
 | UC-013 | compaction-context | compaction hook injects context |
 | UC-019 | archived-memory-lifecycle | archive -> search excludes -> unarchive -> search includes |
 | UC-020 | extraction-escalation | polite -> insistent -> ALL-CAPS over missed nudges |
+| UC-038 | no-save-run | an extraction child that finds nothing worth saving (no toast) |
+| UC-043 | compaction-suppression | extraction nudges suppressed while an extraction child runs |
+| UC-077 | child-session-drain | direct extraction: the child drains the parent's queue |
+| UC-078 | child-session-error | direct extraction: the child errors, held entries requeue |
+| UC-079 | child-session-deletion | direct extraction: the child is deleted, entries requeue |
+| UC-080 | parent-session-deletion | parent deleted mid-extraction, cleanup completes |
+| UC-083 | review-coordinator | the multi-agent review coordinator pipeline |
+| UC-084 | review-walkthrough | the change-walkthrough skill on a real diff |
+| UC-085 | review-followup | follow-up round verification against prior review comments |
+| UC-086 | review-response | author-side response to incoming review comments |
+| UC-087 | review-no-subagents | the solo review path on hosts without sub-agents |
+| UC-098 | chat-cross-session | two real opencode sessions exchange chat messages |
+| UC-119 | session-tab-spawn | the session_tab spawn flow end to end |
+| UC-122 | review-mode-commands | /thatch/self-review and /thatch/peer-review overlay efficacy (seeded fixture) |
 
 ### mise tasks
 
@@ -235,7 +251,7 @@ No separate QA docs directory exists. QA use cases live in `tests/qa/` as execut
 1. **Automatable use cases never spawn an LLM.** They test CLI, hooks, DB, and
    tool execution directly.
 2. **Live use cases spawn real opencode sessions and cost model tokens.** They
-   skip with `[MANUAL]` when `opencode` is not on PATH; three are
+   skip with `[MANUAL]` when `opencode` is not on PATH; six are
    `manualOnly: true` for infrastructure reasons.
 3. **`QA_DRY_RUN=1` lists use cases without executing.** Use this for CI and
    coverage review.

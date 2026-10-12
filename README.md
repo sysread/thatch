@@ -212,10 +212,16 @@ Thatch gives your agent:
 - **Slash commands** -- `/thatch/defrag` (consolidate duplicate memories),
   `/thatch/extract` (drain the extraction queue now), `/thatch/hygiene`
   (tend stale and orphaned memories), `/thatch/reflect` (persist what
-  the session learned), and `/thatch/refine` (refine a plan under the
-  project type's requirements, classifying the project first) run on
-  demand. The first four mirror the same behaviors the nudges run on
-  their own schedule. Plus the opencode-only wrap-ups: `/thatch/compact` and
+  the session learned), `/thatch/refine` (refine a plan under the
+  project type's requirements, classifying the project first),
+  `/thatch/self-review` (review your own completed work before
+  submitting it, weighted for reputation and simplicity),
+  `/thatch/peer-review` (review another author's change, weighted for
+  org velocity and sharing the project's persistent memory), and
+  `/thatch/whois` (report the session's chat identity) run on demand.
+  The nudge-backed actions (`defrag`, `extract`, `hygiene`, `reflect`)
+  mirror the same behaviors the nudges run on their own schedule; the
+  rest stand alone. Plus the opencode-only wrap-ups: `/thatch/compact` and
   `/thatch/exit` run a pre-flight checklist before a compaction or an exit:
   the agent flushes pending fact extraction, finishes promised memory
   writes, and surfaces todos or follow-ups it never addressed. It ends its
@@ -247,19 +253,24 @@ host.
 
 The memory tools, prediction and behavior engines, conversation search via
 the `thatch session` CLI, cross-session chat (with stop-hook wake), skills,
-and the on-demand actions `/thatch/defrag`, `/thatch/hygiene`, and
-`/thatch/reflect` (synced by `thatch setup --claude`). Not available: the
-wrap-up commands and `/thatch/extract` (they need the opencode plugin's
-session identity and TUI control routes), live recall/prediction nudges
+and the on-demand actions `/thatch/defrag`, `/thatch/hygiene`,
+`/thatch/reflect`, `/thatch/refine`, `/thatch/self-review`, and
+`/thatch/peer-review` (synced by `thatch setup --claude`; the review-mode
+commands run the specialist sequence inline, since the coordinator skill is
+opencode-only). Not available: the
+wrap-up commands (they need the plugin's host action routes),
+`/thatch/extract` and `/thatch/whois` (they need the opencode plugin's
+session identity), live recall/prediction nudges
 beyond the hook-based flow, and toast notifications.
 
 ## What works in Cursor
 
 The same core set as Claude Code (memory, predictions, behaviors, chat with
-stop-hook wake, skills, and the `defrag`/`hygiene`/`reflect` actions). Cursor
+stop-hook wake, skills, and the `defrag`/`hygiene`/`reflect`/`refine`/
+`self-review`/`peer-review` actions). Cursor
 has no file-based slash commands, so the actions surface through MCP prompts
-instead. Not available: the wrap-up commands, `/thatch/extract`, and toast
-notifications.
+instead. Not available: the wrap-up commands, `/thatch/extract`,
+`/thatch/whois`, and toast notifications.
 
 ## Privacy
 

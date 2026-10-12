@@ -1,9 +1,11 @@
 # Slash commands
 
 Thatch ships `/thatch/*` commands you run yourself, on top of the nudges the
-plugin fires on its own schedule. Nudges and commands share the same
-instruction text, so a behavior works the same whether it fires automatically
-or you invoke it.
+plugin fires on its own schedule. The nudge-backed commands (`defrag`,
+`extract`, `hygiene`, `reflect`) share their instruction text with the
+nudges, so a behavior works the same whether it fires automatically or you
+invoke it. The remaining commands (`refine`, `self-review`, `peer-review`,
+`whois`) stand alone.
 
 ## Commands
 
@@ -29,6 +31,20 @@ or you invoke it.
   that type's expectations applied. Text after the command can name the
   type directly (for example, `/thatch/refine shared-lib`) to skip
   classification.
+- `/thatch/peer-review` — review another author's change: the full review
+  pipeline with findings weighted for org velocity. Text after the command
+  names the review target (for example, `/thatch/peer-review 1234` for a
+  PR). The review walks the project's persistent memory for
+  incidents, constraints, and footguns the author could not have known,
+  and checks them against the change. Settled designs are not
+  re-litigated, and "if someone changes this later it breaks" findings
+  are never reported. See [code-review.md](code-review.md).
+- `/thatch/self-review` — review your own completed work before
+  submitting it: the full review pipeline weighted for reputation and
+  simplicity. Takes the same target argument as peer-review. Rounds
+  iterate (fix or decline each finding, then re-review the updated
+  state) until a round produces no meaningful findings, at most three.
+  See [code-review.md](code-review.md).
 - `/thatch/compact` and `/thatch/exit` — the wrap-up commands. They run a
   pre-flight checklist (flush extraction, finish promised memory writes,
   surface loose ends) before a compaction or an exit, gated by a greenlight
@@ -45,6 +61,8 @@ or you invoke it.
 | `/thatch/reflect` | yes | yes | yes (as an MCP prompt) |
 | `/thatch/whois` | yes | no | no |
 | `/thatch/refine` | yes | yes | yes (as an MCP prompt) |
+| `/thatch/peer-review` | yes | yes | yes (as an MCP prompt) |
+| `/thatch/self-review` | yes | yes | yes (as an MCP prompt) |
 | `/thatch/compact`, `/thatch/exit` | yes | no | no |
 
 Why the gaps: `/thatch/extract` and `/thatch/whois` need the invoking

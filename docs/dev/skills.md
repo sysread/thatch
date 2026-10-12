@@ -75,11 +75,11 @@ description: Extract durable project facts ... Use when ...
 
 | Skill | Role |
 |-------|------|
-| `thatch-code-review` | Resolve review target (incl. VCS detection and connected PR/MR lookup for follow-up round detection), gather project context, research affected workflows, estimate complexity, partition, dispatch the review specialists in parallel, synthesize with a workflow-change preface, prior-comment cross-reference, and sibling-register cross-reference. |
+| `thatch-code-review` | Resolve review target (incl. VCS detection and connected PR/MR lookup for follow-up round detection), gather project context, research affected workflows, estimate complexity, partition, dispatch the review specialists in parallel, synthesize with a workflow-change preface, prior-comment cross-reference, and sibling-register cross-reference. Also the machinery behind the `/thatch/self-review` and `/thatch/peer-review` mode commands, which run it with a weighting overlay (inline, without sub-agents, on hosts that lack the coordinator). |
 
 ## REVIEW_COMMON
 
-The seven problem-finding review specialists share a framework interpolated via `${REVIEW_COMMON}` (the eighth specialist, highlights, finds positive things and uses its own structure):
+The seven problem-finding review specialists share a framework interpolated via `${REVIEW_COMMON}` (the technique and highlights specialists do not use it: technique reports informational notes and highlights finds positive things, each with its own structure):
 
 - **Static analysis only** — no running tests/linters/compilers.
 - **Scope gathering** — resolve the git range, `git diff --stat`, read changed
@@ -146,7 +146,7 @@ and `--cursor` pass only the shared set.
 
 ## Adding a skill
 
-1. Write `artifacts/skills/thatch-<name>.md` with YAML frontmatter. If it's a problem-finding review specialist, include `${REVIEW_COMMON}` (interpolated from `artifacts/skills/common.md`). The highlights specialist does not use REVIEW_COMMON — it finds positive things, not problems, so the problem-finding framework does not apply.
+1. Write `artifacts/skills/thatch-<name>.md` with YAML frontmatter. If it's a problem-finding review specialist, include `${REVIEW_COMMON}` (interpolated from `artifacts/skills/common.md`). The technique and highlights specialists do not use REVIEW_COMMON — technique reports informational notes and highlights finds positive things, so the problem-finding framework does not apply to either.
 2. Add the skill name to the `names` array in `loadSharedSkills()` (or `loadOpencodeOnlySkills()` if sub-agents are needed). The loader in `src/skills.ts` reads `.md` files at init.
 3. If the skill name appears in a tool's workflow (e.g. `thatch-fact-extractor`), update `src/prompts.ts`.
 4. Run `mise run check` — tests verify counts; `installSkills` picks up new files on next init.

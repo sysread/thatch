@@ -1,6 +1,31 @@
 import type { PredictionNudgeItem, BehaviorNudgeItem } from "./db";
 
 /**
+ * The review specialist roster, in the coordinator's dispatch order. This is
+ * the single source of truth for the roster and its count in code: both host
+ * instruction skill lists (the opencode system prompt and the Claude
+ * Code/Cursor instructions), the review-mode command couching in
+ * src/commands.ts, and the shared-skills install list in src/skills.ts all
+ * derive from it, so a roster change lands in code everywhere at once.
+ * Prose copies cannot interpolate and remain hand-maintained: the
+ * coordinator and followup skills' count phrases are pinned by a
+ * setup.test.ts alarm, and the rest (the coordinator's Step 6 name list,
+ * the synthesizer's specialist list, the user-doc tables) need a grep of
+ * the artifacts and docs when the roster changes.
+ */
+export const REVIEW_SPECIALISTS: readonly string[] = [
+  "thatch-review-pedantic",
+  "thatch-review-acceptance",
+  "thatch-review-state-flow",
+  "thatch-review-economy",
+  "thatch-review-no-slop",
+  "thatch-review-breadcrumbs",
+  "thatch-review-mark-and-sweep",
+  "thatch-review-highlights",
+  "thatch-review-technique",
+];
+
+/**
  * Shared verb selection for prediction formatting. 0-evidence predictions
  * use the hedged "you may prefer"; predictions with any evidence use the
  * confident "you tend to". Used by both the auto-fire nudge and the
@@ -188,7 +213,7 @@ exposes tools through code.
 Thatch ships skills for code review, project investigation, and memory
 workflows. The host auto-discovers them, but reach for them proactively:
 
-- \`thatch-code-review\` - full multi-agent code review (dispatches 8 specialists + synthesizer). Requires sub-agent support.
+- \`thatch-code-review\` - full multi-agent code review (dispatches ${REVIEW_SPECIALISTS.length} specialist sub-agents, then synthesizes). Requires sub-agent support.
 - \`thatch-coordination\` - coordinate subordinate LLM sessions: dispatch with thatch_session_tab (opencode v2), track each in your task list, supervise over cross-session chat, verify before declaring done.
 - \`thatch-review-followup\` - alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed prior findings, offers to reply on resolved items, then optionally re-runs the full structured review.
 - \`thatch-code-archaeology\` - investigate an existing feature, debug an unfamiliar area, or begin a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features) before proposing changes. The research skill; pair with \`thatch-coding-workflow\`.
@@ -551,7 +576,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-code-walkthrough\` - produces a teaching walkthrough for a feature/workflow as it stands today with a specific format (SYNOPSIS + per-workflow orient/mechanism/numbered-stages + Key files) and calibrated prose rules. Also use proactively to draft high-level docs for new or undocumented features (suitable for pkg/README.md or docs/features/<name>.md). Load the skill for the format and prose rules, not just for the research method.
 - \`thatch-review-context\` - gather project context (PRs, tickets, TODOs, deferred work) before a review.
 - \`thatch-review-followup\` - alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed prior findings, offers to reply on resolved items, then optionally re-runs the full structured review.
-- \`thatch-review-pedantic\` / \`-acceptance\` / \`-state-flow\` / \`-economy\` / \`-no-slop\` / \`-breadcrumbs\` / \`-mark-and-sweep\` / \`-highlights\` / \`-technique\` - nine specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
+- ${REVIEW_SPECIALISTS.map((name) => "`" + name + "`").join(" / ")} - ${REVIEW_SPECIALISTS.length} specialist review lenses. Run individually, then \`thatch-review-synthesizer\` to verify and aggregate.
 - \`thatch-project-primer\` - investigate a new project and write foundational memories.
 - \`thatch-session-reflection\` - record what you learned at end of session.
 - \`thatch-fact-extractor\` - extract durable facts from recent tool interactions (auto-triggered by the extraction pipeline).

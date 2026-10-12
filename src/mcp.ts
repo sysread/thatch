@@ -482,7 +482,7 @@ async function dispatch(
             arguments: [
               {
                 name: "focus",
-                description: "Optional scope for the action, e.g. which store to work on",
+                description: "Optional text for the action: a scope (for example, which store to work on), a review target (branch, PR, MR, or git range), or other context",
                 required: false,
               },
             ],

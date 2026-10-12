@@ -2984,7 +2984,7 @@ describe("installOpencodeCommands", () => {
     try {
       const first = installOpencodeCommands(home);
       const names = first.map((p) => p.split("/").pop()!.replace(/\.md$/, "")).sort();
-      expect(names).toEqual(["compact", "defrag", "exit", "extract", "hygiene", "refine", "reflect", "whois"]);
+      expect(names).toEqual(["compact", "defrag", "exit", "extract", "hygiene", "peer-review", "refine", "reflect", "self-review", "whois"]);
       const compact = readFileSync(join(first[0]!), "utf8");
       expect(compact).toContain("description:");
       expect(compact).toContain("THATCH_COMPACT_READY");
@@ -3072,15 +3072,16 @@ describe("action commands", () => {
     }
   });
 
-  test("Claude Code command set drops wrap-ups and the opencode-only extract action", async () => {
+  test("Claude Code command set drops wrap-ups and the opencode-only actions (extract, whois)", async () => {
     const { claudeCommandDefs } = await import("../src/commands");
     const names = claudeCommandDefs().map((d) => d.name).sort();
-    expect(names).toEqual(["defrag", "hygiene", "refine", "reflect"]);
+    expect(names).toEqual(["defrag", "hygiene", "peer-review", "refine", "reflect", "self-review"]);
     for (const def of claudeCommandDefs()) {
-      // Tool spelling follows the host. Hygiene drives the thatch CLI and
-      // refine triggers a skill; neither names a memory tool, so both are
-      // exempt from the MCP spelling check.
-      if (def.name !== "hygiene" && def.name !== "refine") {
+      // Tool spelling follows the host. Hygiene drives the thatch CLI,
+      // refine triggers a skill, and self-review names no tools; all three
+      // are exempt from the MCP spelling check. peer-review names
+      // memory_recall through the namer, so it must pass the check.
+      if (def.name !== "hygiene" && def.name !== "refine" && def.name !== "self-review") {
         expect(def.content).toMatch(/mcp__thatch__/);
         expect(def.content).not.toContain("thatch_find_duplicates");
       }
@@ -3092,7 +3093,7 @@ describe("action commands", () => {
     const claudeDir = mkdtempSync(join(tmpdir(), "thatch-claude-cmds-"));
     try {
       const first = installClaudeCommands(claudeDir);
-      expect(first).toHaveLength(4);
+      expect(first).toHaveLength(6);
       expect(first[0]).toContain(join("commands", "thatch"));
       expect(installClaudeCommands(claudeDir)).toEqual([]);
     } finally {

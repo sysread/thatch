@@ -68,3 +68,41 @@ describe("whois command", () => {
     expect(claudeNames).not.toContain("whois");
   });
 });
+
+describe("review-mode commands (peer-review, self-review)", () => {
+  test("shared across hosts: both sets carry them, couching the review pipeline with mode rules", () => {
+    const opencode = opencodeActionCommandDefs();
+    const peer = opencode.find((d) => d.name === "peer-review");
+    const self = opencode.find((d) => d.name === "self-review");
+    expect(peer).toBeDefined();
+    expect(self).toBeDefined();
+
+    // Both couch the same machinery: the coordinator skill when present,
+    // the inline specialist procedure when not, and the target coming
+    // from the user message or the MCP Focus: line.
+    for (const def of [peer!, self!]) {
+      expect(def.content).toContain("thatch-code-review");
+      expect(def.content).toContain("thatch-review-synthesizer");
+      expect(def.content).toContain("Focus: line");
+      expect(def.content).toContain("mode rules");
+    }
+
+    // The two modes carry different policy: peer-review is org-velocity and
+    // forbids future-change findings; self-review is reputation-weighted
+    // and iterates rounds.
+    expect(peer!.content).toContain("org velocity");
+    expect(peer!.content).toContain("Never report findings of the form");
+    expect(self!.content).toContain("reputation");
+    expect(self!.content).toContain("three rounds");
+    expect(self!.content).not.toContain("org velocity");
+
+    // Claude Code's set carries both (they need no session identity), with
+    // the memory-walk tool in MCP spelling and no opencode spelling.
+    const claudePeer = claudeCommandDefs().find((d) => d.name === "peer-review")!;
+    const claudeSelf = claudeCommandDefs().find((d) => d.name === "self-review")!;
+    expect(claudePeer).toBeDefined();
+    expect(claudeSelf).toBeDefined();
+    expect(claudePeer.content).toContain("mcp__thatch__memory_recall");
+    expect(claudePeer.content).not.toContain("thatch_memory_recall");
+  });
+});

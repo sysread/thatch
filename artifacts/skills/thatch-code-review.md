@@ -58,7 +58,7 @@ Dispatch a sub-agent using the Task tool to research the code workflows affected
 
 The sub-agent produces a code guide with one section per affected workflow or feature. Wait for it to complete and collect the guide.
 
-This guide gives specialists the code-level context (purpose, data flow, evolutions, constraints) they need to avoid false positives about intentional behavior and long-standing design decisions, and reduces duplicate code-tracing across the eight specialist lenses.
+This guide gives specialists the code-level context (purpose, data flow, evolutions, constraints) they need to avoid false positives about intentional behavior and long-standing design decisions, and reduces duplicate code-tracing across the nine specialist lenses.
 
 If the context brief includes a sibling register (from Step 2's related-PR discovery), fold it into the guide per the `Cross-PR context` section of the thatch-code-archaeology skill — whether you dispatch a sub-agent or do this research inline. The traps the guide exists to catch are comments referencing sibling work, contracts consumed from a sibling, and ordering assumptions across the stack or train.
 

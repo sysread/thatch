@@ -52,7 +52,7 @@ Skills are split into shared (all hosts) and opencode-only:
 | `thatch-code-archaeology` | Investigates an existing feature, debugs an unfamiliar area, or begins a new ticket. The research skill; pair with `thatch-coding-workflow`. |
 | `thatch-review-followup` | Verifies whether the author's responses and code changes since your last review adequately addressed your prior findings. |
 | `thatch-review-response` | Author-side review response: triage findings on your own PR, fix bugs one by one, reply on each thread, post a top-level summary comment. |
-| `thatch-code-review` | Multi-agent review coordinator (opencode-only). Dispatches parallel sub-agents for specialist fan-out and synthesis. |
+| `thatch-code-review` | Multi-agent review coordinator (opencode-only). Dispatches parallel sub-agents for specialist fan-out and synthesis. Also the machinery behind the `/thatch/self-review` and `/thatch/peer-review` mode commands, which couch it with a weighting overlay and run the specialists inline on hosts where the coordinator is not installed. |
 
 ### Walkthrough skills
 
@@ -104,7 +104,9 @@ window.
   re-installs from its canonical source). Edit the canonical source
   in the thatch repo instead.
 - The opencode-only coordinator (`thatch-code-review`) requires
-  sub-agent support. It is not available on Claude Code or Cursor.
+  sub-agent support. It is not available on Claude Code or Cursor; the
+  `/thatch/self-review` and `/thatch/peer-review` commands run the
+  same specialists inline there instead.
 - Skill content is markdown read at runtime, not compiled into the
   binary. If the skill file is missing or corrupted, the skill will
   not load (silent failure).

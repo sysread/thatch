@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  REVIEW_SPECIALISTS,
   defragCore,
   extractionCore,
   hygieneCore,
@@ -24,10 +25,14 @@ import {
  *
  * Two command families live here:
  *
- * - Actions (/thatch/defrag, extract, hygiene, reflect): user-invoked
- *   wrappers around a behavior that the nudges otherwise only run on their
- *   own schedule. Each action body is a prompt core from src/prompts.ts, so
- *   nudge and command wording cannot drift.
+ * - Actions (/thatch/defrag, extract, hygiene, peer-review, refine,
+ *   reflect, self-review, whois): user-invoked commands. The nudge-backed
+ *   ones (defrag, extract, hygiene, reflect) render prompt cores from
+ *   src/prompts.ts, so nudge and command wording cannot drift. The rest
+ *   (peer-review, refine, self-review, whois) are self-contained here:
+ *   they have no nudge counterpart. peer-review and self-review couch the
+ *   code review pipeline with a mode overlay: the same machinery, with
+ *   findings weighted for whose work is under review.
  * - Wrap-ups (/thatch/compact, exit): greenlight-token commands that need
  *   the opencode plugin's host action routes (the compact trigger and the
  *   session close-out), so they are opencode-only.
@@ -59,9 +64,41 @@ $ARGUMENTS
 (That section carries the text typed after the command. When it is empty, treat the user message as n/a - the command was run bare.)`;
 
 /**
+ * How the review-mode commands (peer-review, self-review) run the code
+ * review machinery on the host at hand. opencode has the
+ * thatch-code-review coordinator skill and sub-agent dispatch; Claude Code
+ * and Cursor have neither, so the same procedure runs inline through the
+ * shared specialist skills. The mode overlay that differentiates the two
+ * commands lives in each command's own body and applies in both paths:
+ * sub-agent briefings on opencode, specialist passes inline elsewhere.
+ *
+ * Both couchings below are shared consts interpolated into the two bodies
+ * so the commands' procedure and target resolution cannot drift; each body
+ * keeps only its mode rules. The specialist roster and count come from
+ * REVIEW_SPECIALISTS in src/prompts.ts, the same source as the install
+ * list in src/skills.ts.
+ */
+const reviewPipelineCouching = `If the thatch-code-review skill is available, load it and follow its steps, with one addition: apply the mode rules below throughout - to context gathering, every specialist briefing, and the synthesis.
+
+If that skill is not available on this host, run the same procedure yourself, in order:
+- Resolve the review range. Compute the merge-base against the base branch's remote tracking ref (for example origin/main), not the working branch's own upstream, and cite every file:line against the range's head SHA with git show, never the working tree. A PR or MR number resolves through the host's CLI (gh pr view, glab mr view) plus fetching the head ref (git fetch origin refs/pull/N/head on GitHub, refs/merge-requests/N/head on GitLab, or the source branch). A repository with no remote reviews the working tree's recent commits instead.
+- Build the context brief with the thatch-review-context skill.
+- Partition large diffs into review units.
+- Run the ${REVIEW_SPECIALISTS.length} specialist skills (${REVIEW_SPECIALISTS.join(", ")}) on each unit.
+- Synthesize with thatch-review-synthesizer.
+The mode rules below apply in every specialist pass and in the synthesis, on every host. If the specialist skills are not installed on this host, tell the user to run thatch setup for it.`;
+
+/**
+ * How the review-mode commands resolve what to review. Shared so the two
+ * commands accept the same target syntax and default identically.
+ */
+const reviewTargetCouching = `The user message may name the review target: a branch, a PR or MR number, or a git range. On MCP hosts the Focus: line carries that text instead. If no target is given, review the current branch against its base.`;
+
+/**
  * One on-demand action: the command name (minus the thatch/ prefix), the
  * description shown in the command menu, and the instruction body (a prompt
- * core). opencodeOnly marks actions that need a session identity or other
+ * core for the nudge-backed actions, self-contained text for the rest).
+ * opencodeOnly marks actions that need a session identity or other
  * plugin-only capability; those are excluded from Claude Code command files
  * and MCP prompts.
  */
@@ -74,8 +111,11 @@ export interface ActionDef {
 
 /**
  * The on-demand action set, shared by every host that renders actions. The
- * bodies come from prompt cores so a wording change lands in the nudge and
- * the command at once. `tool` renders tool names in the host's spelling.
+ * nudge-backed bodies (defrag, extract, hygiene, reflect) come from prompt
+ * cores in src/prompts.ts so a wording change lands in the nudge and the
+ * command at once; the rest (peer-review, refine, self-review, whois) are
+ * self-contained here because they have no nudge counterpart. `tool`
+ * renders tool names in the host's spelling.
  */
 export function actionDefs(tool: ToolNamer): ActionDef[] {
   return [
@@ -104,6 +144,25 @@ After dispatching, call thatch_extraction_done to acknowledge.`,
       body: hygieneCore(),
     },
     {
+      name: "peer-review",
+      description: "Review another author's change (PR, MR, branch, or git range) through the full review pipeline",
+      // Skill-couching action (refine precedent): no nudge counterpart, so
+      // the body lives here. The memory-walk tool name is spelled through
+      // the namer so MCP renderings carry the mcp__thatch__ form.
+      body: `Review a change authored by someone else: a PR, MR, or branch on origin. The review runs the full thatch review pipeline with findings weighted for org velocity.
+
+${reviewTargetCouching}
+
+${reviewPipelineCouching}
+
+## Peer review mode rules
+
+- Weight for org velocity. Findings that speed up or unblock the whole team outrank findings about individual lines. The highest-value findings: a simpler method that achieves the same outcome; an existing function or helper that already does what this change reimplements; documentation that is accurate and extremely clearly written; unintended consequences for callers, sibling features, or contracts the author could not see.
+- Walk the project's memory. The author does not have this project's persistent memory; you do. During context gathering, call ${tool("memory_recall")} with several phrasings about the touched area: past incidents, design constraints, rejected approaches, known footguns. Check each recalled item against the change and report the ones that apply. Frame these findings as sharing knowledge the author could not have had, not as catching mistakes.
+- Do not re-litigate settled designs. When the context brief or memory shows a design decision was agreed (in a ticket discussion, a prior review acceptance, recorded docs, or a memory of the agreement), treat the decision as settled. Findings may address how the change implements that decision. Findings that argue the decision itself was wrong are out of scope for this review.
+- Never report findings of the form "if someone changes this in the future, it will silently break." This review does not solve for engineers who change code without reading it. It solves for engineers and LLMs who WILL read the code. For them, verify the change leaves a breadcrumb trail to wherever this organization records how a feature works (a context module, a feature doc, a README). Flag a missing trail. Do not flag hypothetical future misuse.`,
+    },
+    {
       name: "refine",
       description: "Refine a plan under the project type's requirements (classifies the project first)",
       // A skill trigger, not a nudge behavior: the body points at the
@@ -117,6 +176,26 @@ The user message may name a project type (team-app, personal, shared-lib, spike,
       name: "reflect",
       description: "Persist what this session learned as memories",
       body: reflectCore(tool),
+    },
+    {
+      name: "self-review",
+      description: "Review the user's own completed work before submitting it",
+      // Skill-couching action (see peer-review). Names no tools, so the
+      // MCP spelling test exempt list covers it.
+      body: `Review the user's own completed work before submitting it: as a PR or MR on a shared project, or as a direct commit on a personal project. The review runs the full thatch review pipeline with findings weighted to protect the user's reputation as a conscientious developer.
+
+The work under review was authored by the user, or by their agent acting in the user's name. Two goals: the work is sound, and it does not read as sloppy. Reviewers and teammates read the comments, docs, and commit messages as the user's own.
+
+${reviewTargetCouching}
+
+${reviewPipelineCouching}
+
+## Self review mode rules
+
+- The reputation lenses weigh heaviest. NoSlop, Technique, and Breadcrumbs findings outrank same-severity findings from the other lenses. AI-writing tells, vague comments, and a missing narrative are exactly what this review exists to catch before anyone else sees them.
+- Overweight simplicity on shared projects. Prefer findings that make the design easier to understand, easier to test, and more reliable: fewer assumptions, less surface area for bugs and side effects.
+- Technique and highlights findings are decisions, not footnotes. Each one that would produce a simpler, clearer, or more reliable design is surfaced for an adopt-or-dismiss decision before submission. Work through them with the user one at a time; do not leave them as informational asides.
+- Iterate rounds. After each round, work the findings with the user: fix each, or explicitly decline it with a reason. Then run another full round on the updated state. A round is meaningful when it produces a MEDIUM or higher finding, or a technique or slop finding worth adopting. A round producing only LOW mechanical findings gets them fixed but does not trigger another round. Stop at the first round with no meaningful findings, and never run more than three rounds.`,
     },
     {
       name: "whois",

@@ -1,5 +1,6 @@
 import { mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { REVIEW_SPECIALISTS } from "./prompts";
 
 export interface SkillDef {
   name: string;
@@ -53,15 +54,10 @@ function loadSharedSkills(): SkillDef[] {
     "thatch-fact-extractor",
     "thatch-dedup-classifier",
     "thatch-project-primer",
-    "thatch-review-pedantic",
-    "thatch-review-acceptance",
-    "thatch-review-state-flow",
-    "thatch-review-economy",
-    "thatch-review-no-slop",
-    "thatch-review-breadcrumbs",
-    "thatch-review-mark-and-sweep",
-    "thatch-review-highlights",
-    "thatch-review-technique",
+    // The specialist roster (order and count) comes from prompts.ts so the
+    // install set and the review-mode commands' inline procedure cannot
+    // diverge.
+    ...REVIEW_SPECIALISTS,
     "thatch-review-synthesizer",
     "thatch-review-context",
     "thatch-code-archaeology",

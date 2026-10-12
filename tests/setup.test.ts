@@ -5,6 +5,7 @@ import { join, dirname } from "node:path";
 import yaml from "yaml";
 import { setupClaudeCode, setupCursor, setupSkillsOnly, checkSetup, registerClaudeMcpServer } from "../src/setup";
 import {
+  REVIEW_SPECIALISTS,
   claudeInstructions,
   cursorInstructions,
   memoryPointersSection,
@@ -1228,6 +1229,27 @@ describe("skill artifact registry parity", () => {
     }
   });
 
+  test("the coordinator and followup skills' specialist counts match REVIEW_SPECIALISTS", () => {
+    // REVIEW_SPECIALISTS (src/prompts.ts) is the single source for the
+    // roster; every code surface derives from it. The prose copies in the
+    // skill artifacts cannot interpolate, so this test is the alarm that
+    // fires when a specialist is added or removed: both skills' count
+    // phrases must carry the roster's current size. The precise Step 6
+    // heading check pins the coordinator's dispatch list; the loose
+    // per-file checks trip on any count-phrase drift. Prose copies this
+    // cannot reach (the synthesizer's specialist name list, the user-doc
+    // tables and count phrases) still need a grep when the roster changes.
+    // (The skills spell counts as words, hence the word map up to twelve;
+    // a roster beyond twelve specialists is not a real scenario.)
+    const COUNT_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+    const countPhrase = `${COUNT_WORDS[REVIEW_SPECIALISTS.length]} specialist`;
+    const coordinator = OPENCODE_ONLY_SKILLS.find((s) => s.name === "thatch-code-review")!;
+    expect(coordinator.content).toContain(`The ${countPhrase}s are:`);
+    expect(coordinator.content).toContain(countPhrase);
+    const followup = SHARED_SKILLS.find((s) => s.name === "thatch-review-followup")!;
+    expect(followup.content).toContain(`all ${countPhrase}s on`);
+  });
+
   test("REVIEW_COMMON is interpolated only into review specialist skills", () => {
     // The loader interpolates `${REVIEW_COMMON}` when it appears on its own
     // line (the directive form used by the seven problem-finding review specialists). Inline
@@ -1237,7 +1259,10 @@ describe("skill artifact registry parity", () => {
     // The synthesizer and code-review coordinator include some of the same
     // section headers (e.g. "## Static analysis only") as hardcoded content,
     // so the marker must be a phrase unique to common.md.
-    const REVIEW_SPECIALISTS = new Set([
+    // (Named REVIEW_COMMON_SPECIALISTS, not REVIEW_SPECIALISTS, to avoid
+    // confusion with the roster const in src/prompts.ts: this set is the
+    // ${REVIEW_COMMON} interpolators only, a seven-name subset.)
+    const REVIEW_COMMON_SPECIALISTS = new Set([
       "thatch-review-pedantic",
       "thatch-review-acceptance",
       "thatch-review-state-flow",
@@ -1249,7 +1274,7 @@ describe("skill artifact registry parity", () => {
     const REVIEW_COMMON_BODY =
       "For every potential finding, you MUST describe a concrete scenario";
     for (const skill of [...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]) {
-      const isReviewSpecialist = REVIEW_SPECIALISTS.has(skill.name);
+      const isReviewSpecialist = REVIEW_COMMON_SPECIALISTS.has(skill.name);
       const hasInterpolatedBody = skill.content.includes(REVIEW_COMMON_BODY);
       expect(hasInterpolatedBody).toBe(isReviewSpecialist);
     }

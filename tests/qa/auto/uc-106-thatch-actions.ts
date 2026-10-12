@@ -3,14 +3,17 @@ import { join } from "node:path";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 
 /**
- * UC-106: Thatch actions (/thatch/defrag, extract, hygiene, reflect).
+ * UC-106: Thatch actions (/thatch/defrag, extract, hygiene, peer-review,
+ * refine, reflect, self-review, whois).
  *
  * Automatable: yes - verifies the user-visible artifacts and session-id
  * plumbing with no model tokens: the command files the plugin syncs, the
- * Claude Code command set, the MCP prompt parity, and the omitted-session-id
- * fallback on get_extraction_payload through the plugin's own tools. The
- * agent-facing quality of the instruction bodies (does a model actually run
- * a clean defrag?) needs a live session - not covered here.
+ * Claude Code command set, the MCP prompt parity, the review-mode command
+ * bodies (pipeline couching + mode rules + host tool spelling), and the
+ * omitted-session-id fallback on get_extraction_payload through the
+ * plugin's own tools. The agent-facing quality of the instruction bodies
+ * (does a model actually run a clean defrag?) needs a live session - not
+ * covered here.
  */
 const useCase: UseCase = {
   name: "UC-106-thatch-actions",
@@ -19,17 +22,19 @@ const useCase: UseCase = {
     "- An isolated fixture with THATCH_DB_PATH and XDG_CONFIG_HOME set",
   ].join("\n"),
   steps: [
-    "1. Load the plugin server. Verify the action command files (defrag, extract, hygiene, refine, reflect) were synced next to the wrap-up files, each carrying a description frontmatter and its prompt-core body.",
+    "1. Load the plugin server. Verify the action command files (defrag, extract, hygiene, peer-review, refine, reflect, self-review, whois) were synced next to the wrap-up files, each carrying a description frontmatter and its instruction body.",
     "2. Verify the extract action instructs the model to learn the session ID from get_session_info and pass it explicitly to the sub-agent.",
-    "3. Verify installClaudeCommands writes only defrag/hygiene/refine/reflect, spelled with mcp__thatch__ tool names.",
-    "4. Verify host parity: opencode = claude set + compact/exit/extract; MCP prompts = claude set.",
-    "5. Buffer a tool interaction for a session via tool.execute.after, then call thatch_get_extraction_payload with the session_id omitted and a host context carrying that session ID. Verify the queued payload comes back.",
-    "6. Call the same tool with no session_id and no host context (the MCP-host shape). Verify the error names the parent-session rule.",
+    "3. Verify installClaudeCommands writes only the shared actions (defrag, hygiene, peer-review, refine, reflect, self-review), with any tool names in MCP spelling (defrag and peer-review name tools through the namer; hygiene, refine, and self-review name none).",
+    "4. Verify host parity: opencode = claude set + compact/exit/extract/whois; MCP prompts = claude set.",
+    "5. Verify the review-mode command files (peer-review, self-review) synced into both host installs with the mode overlay present, and the Claude rendering of peer-review spelling memory recall for MCP (the full body markers are pinned by tests/commands.test.ts).",
+    "6. Buffer a tool interaction for a session via tool.execute.after, then call thatch_get_extraction_payload with the session_id omitted and a host context carrying that session ID. Verify the queued payload comes back.",
+    "7. Call the same tool with no session_id and no host context (the MCP-host shape). Verify the error names the parent-session rule.",
   ].join("\n"),
   expected: [
-    "- The plugin syncs seven command files: wrap-ups (compact, exit) plus the five actions.",
-    "- Action bodies are rendered from the prompt cores; the extract action carries the session-id rule.",
-    "- Claude Code gets the four shared actions; MCP prompts match Claude Code's set one-to-one.",
+    "- The plugin syncs the wrap-up command files (compact, exit) plus every action command file (defrag, extract, hygiene, peer-review, refine, reflect, self-review, whois).",
+    "- The nudge-backed action bodies are rendered from the prompt cores; the extract action carries the session-id rule.",
+    "- Claude Code gets the shared actions (defrag, hygiene, peer-review, refine, reflect, self-review); MCP prompts match Claude Code's set one-to-one.",
+    "- The review-mode command files sync with the mode overlay present; the Claude rendering spells memory recall for MCP (mcp__thatch__memory_recall), never the opencode spelling.",
     "- An omitted session_id resolves to the invoking session on the opencode path and errors with the pass-the-parent-id rule when no session context exists.",
   ].join("\n"),
 
@@ -61,7 +66,7 @@ const useCase: UseCase = {
     try {
       // Step 1: action command files synced at plugin load.
       const dir = join(ctx.env.XDG_CONFIG_HOME, "opencode", "command", "thatch");
-      for (const name of ["compact", "exit", "defrag", "extract", "hygiene", "refine", "reflect"]) {
+      for (const name of ["compact", "exit", "defrag", "extract", "hygiene", "peer-review", "refine", "reflect", "self-review", "whois"]) {
         if (!existsSync(join(dir, `${name}.md`))) {
           console.log(`  FAIL: ${name}.md not installed into the fixture config home`);
           return "FAIL";
@@ -85,8 +90,8 @@ const useCase: UseCase = {
       const claudeDir = join(ctx.dir, ".claude-fixture");
       const written = installClaudeCommands(claudeDir);
       const names = claudeCommandDefs().map((d) => d.name).sort();
-      if (names.join(",") !== "defrag,hygiene,refine,reflect" || written.length !== 4) {
-        console.log(`  FAIL: claude command set should be defrag/hygiene/refine/reflect, got ${names.join(",")}`);
+      if (names.join(",") !== "defrag,hygiene,peer-review,refine,reflect,self-review" || written.length !== 6) {
+        console.log(`  FAIL: claude command set should be defrag/hygiene/peer-review/refine/reflect/self-review, got ${names.join(",")}`);
         return "FAIL";
       }
       const claudeDefrag = readFileSync(join(claudeDir, "commands", "thatch", "defrag.md"), "utf8");
@@ -106,7 +111,26 @@ const useCase: UseCase = {
         return "FAIL";
       }
 
-      // Step 5: omitted session_id resolves through the plugin's own tools.
+      // Step 5: the review-mode command files sync with the mode overlay.
+      // The full body markers (pipeline couching, per-mode rules, target
+      // sources) are pinned by tests/commands.test.ts; this step verifies
+      // the end-to-end surface the unit test cannot: the files land in both
+      // host installs with the overlay present and host-correct tool
+      // spelling.
+      for (const name of ["peer-review", "self-review"]) {
+        const body = readFileSync(join(dir, `${name}.md`), "utf8");
+        if (!body.includes("mode rules")) {
+          console.log(`  FAIL: ${name}.md synced without the mode overlay`);
+          return "FAIL";
+        }
+      }
+      const claudePeerBody = readFileSync(join(claudeDir, "commands", "thatch", "peer-review.md"), "utf8");
+      if (!claudePeerBody.includes("mcp__thatch__memory_recall") || claudePeerBody.includes("thatch_memory_recall")) {
+        console.log("  FAIL: claude peer-review.md does not use the MCP tool spelling for memory recall");
+        return "FAIL";
+      }
+
+      // Step 6: omitted session_id resolves through the plugin's own tools.
       const ses = "ses-qa-106";
       await hooks["tool.execute.after"]!({
         tool: "read",
@@ -123,7 +147,7 @@ const useCase: UseCase = {
         return "FAIL";
       }
 
-      // Step 6: no session_id and no host context -> the parent-id rule.
+      // Step 7: no session_id and no host context -> the parent-id rule.
       const noHost = await hooks.tool!.thatch_get_extraction_payload.execute({}, {} as any);
       if (typeof noHost !== "string" || !noHost.includes("session_id is required") || !noHost.includes("parent")) {
         console.log(`  FAIL: MCP-shape call should error with the parent-id rule, got: ${String(noHost).slice(0, 120)}`);

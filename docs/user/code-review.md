@@ -55,6 +55,34 @@ the review:
 Each specialist is a self-contained static-analysis pass. They can run
 individually or as part of the coordinated review.
 
+## Review modes: /thatch/self-review and /thatch/peer-review
+
+Two slash commands run the same pipeline with the findings weighted for
+whose work is under review.
+
+- `/thatch/self-review` reviews your own completed work before you
+  submit it. The slop, technique, and breadcrumbs lenses weigh
+  heaviest, simplicity is overweighted on shared projects, and
+  technique or highlights findings that would simplify the design are
+  surfaced for an adopt-or-dismiss decision rather than left as
+  footnotes. The review iterates: after each round you fix or decline
+  each finding, and the next round re-reviews the updated state until
+  a round produces no meaningful findings (at most three rounds).
+- `/thatch/peer-review` reviews another author's change. Findings are
+  weighted for org velocity: simpler ways to the same outcome, existing
+  helpers that already do the work, extremely clear documentation, and
+  unintended consequences for callers and siblings. The review walks
+  the project's persistent memory for incidents, constraints, and
+  footguns the author could not have known, and checks them against
+  the change. Settled designs are not re-litigated, and "if someone
+  changes this later it breaks" findings are never reported; instead
+  the review verifies the change leaves a breadcrumb trail to wherever
+  the project records how the feature works.
+
+Both commands work on every host. On opencode they drive the
+coordinator with sub-agents. On Claude Code and Cursor the same
+procedure runs the specialists inline, in sequence.
+
 ## Follow-up rounds
 
 After the author responds or pushes changes, `thatch-review-followup`
@@ -78,7 +106,9 @@ one, reply on each thread, and post a top-level summary comment.
 
 - The coordinator (`thatch-code-review`) is opencode-only. It
   requires sub-agent support to dispatch parallel specialists. On
-  Claude Code or Cursor, run specialists individually instead.
+  Claude Code or Cursor, run specialists individually instead; the
+  `/thatch/self-review` and `/thatch/peer-review` commands package
+  exactly that inline sequence, with a mode overlay on top.
 - The review quality depends on the model. Weak models may
   hallucinate findings or miss subtle issues.
 - The synthesizer verifies cited text exists, but it does not

@@ -259,10 +259,12 @@ Beyond the tools, thatch hooks into opencode itself:
   after the command reaches the agent first, labeled as a `User Message`
   section ahead of the checklist (say goodbye or hand off context:
   `/thatch/exit Good work - see you tomorrow`). Alongside the wrap-ups,
-  on-demand actions (`/thatch/defrag`, `/thatch/extract`, `/thatch/hygiene`,
-  `/thatch/reflect`, `/thatch/whois`) run the memory-maintenance behaviors
-  whenever you want,
-  not just when a nudge fires -- see [commands.md](commands.md).
+  on-demand actions cover the memory-maintenance behaviors (`/thatch/defrag`,
+  `/thatch/extract`, `/thatch/hygiene`, `/thatch/reflect`) whenever you
+  want, not just when a nudge fires, plus the standalone commands: plan
+  refinement (`/thatch/refine`), the review modes (`/thatch/self-review`,
+  `/thatch/peer-review`), and the chat identity report (`/thatch/whois`)
+  -- see [commands.md](commands.md).
   A greenlit `/thatch/exit` also unregisters the session from the chat
   directory, so other sessions stop sending it mail. The commands
   self-install into `~/.config/opencode/command/thatch/` at plugin startup;
@@ -363,7 +365,7 @@ response, walkthrough, and workflow skills that support the review pipeline:
 
 | Skill | Purpose |
 |-------|---------|
-| `thatch-code-review` | Multi-agent review coordinator. Dispatches parallel sub-agents for triage, decomposition, specialist fan-out, and synthesis with a workflow-change preface. Not available in Claude Code (requires sub-agent support). |
+| `thatch-code-review` | Multi-agent review coordinator. Dispatches parallel sub-agents for triage, decomposition, specialist fan-out, and synthesis with a workflow-change preface. Not available in Claude Code (requires sub-agent support), though the `/thatch/self-review` and `/thatch/peer-review` commands run the same specialists inline there. |
 
 ### Host availability
 
