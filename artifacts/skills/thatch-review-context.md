@@ -1,6 +1,6 @@
 ---
 name: thatch-review-context
-description: Gather project and feature context before a code review. Investigates PR descriptions, git history, ticket references, linked docs/tickets, docs, and memory to build a context brief that prevents false positives about intentionally deferred work. Use before dispatching review specialists or running a solo review.
+description: Gather project and feature context before a code review. Investigates PR descriptions, git history, ticket references, linked docs/tickets, docs, memory, and related PRs (stack members, release trains) to build a context brief that prevents false positives about intentionally deferred work and about pieces delivered by sibling PRs. Use before dispatching review specialists or running a solo review.
 ---
 
 You are a review context builder. Your job is to gather project context that gives reviewers the background they need to avoid false positives about intentionally deferred work, incomplete features, and multi-ticket dependencies.
@@ -85,7 +85,7 @@ If the matching CLI tool (`gh`, `glab`, etc.) is not on PATH and you cannot call
 #### Detect the connected PR/MR
 
 Use the current branch name (without remote or merge-base prefix) to look up an open PR/MR:
-- **GitHub**: `gh pr view --head <branch> --json number,title,state,headRefName,baseRefName,headRefOid,baseRefOid`. Fallback: `gh api repos/{owner}/{repo}/pulls --jq ".[] | select(.head.ref==\"<branch>\")"`.
+- **GitHub**: `gh pr view <branch> --json number,title,state,headRefName,baseRefName,headRefOid,baseRefOid`. Fallback: `gh api repos/{owner}/{repo}/pulls --jq ".[] | select(.head.ref==\"<branch>\")"`.
 - **GitLab**: `glab mr list --source-branch <branch>`.
 - **Bitbucket Cloud**: REST `https://api.bitbucket.org/2.0/repositories/<owner>/<slug>/pullrequests?q=source.branch.name="<branch>"` (no widely-adopted CLI; call via available HTTP tool).
 - **Azure DevOps**: `az repos pr list --source-branch <branch> --org <org-url> -r <project>`.
@@ -132,6 +132,46 @@ Directory structure conventions are often undocumented. They live in the repo's 
 
 This gives the pedantic specialist the structural context without having to discover the pattern independently.
 
+### 11. Related PRs: stacks and release trains
+
+A change is often one piece of a coordinated set of PRs. The other pieces are outside this diff, so specialists cannot see them. Two false-positive patterns result: a comment references work that a sibling PR delivers, or the change consumes a contract that a sibling PR defines. Discover the set and record what each piece does.
+
+Two shapes to look for:
+- **Stack**: PRs that merge into each other. This PR's base branch is another PR's head branch.
+- **Release train**: PRs that all target the main branch but must merge or deploy in a specific order. The order lives in tracker relations or ticket DEPENDENCIES sections (the ticket section that names the change's blocking links; the links carry the ordering, the bullets carry only the rationale), not in the branch structure.
+
+#### Discovery
+
+- **Stack chaining**: if the connected PR's base branch is not the main branch, another PR probably owns that branch as its head. Find it (`gh pr view <base-branch>` on GitHub, `glab mr list --source-branch <base-branch>` on GitLab), then repeat from that PR until the chain reaches the main branch. Walk at most 5 links in each direction; record deeper stack members as `unexplored` register entries. Also look downward: `gh pr list --base <this-branch>` (GitHub) or `glab mr list --target-branch <this-branch>` (GitLab) finds PRs stacked on top of this one.
+- **Tracker relations**: tickets surfaced by the earlier sources carry blockedBy/blocks relations, parent epics, and DEPENDENCIES sections that name the ordered set. Stack chaining cannot find a release train, because every PR in a train targets main; this route is the primary way trains surface. Map each ticket in the set to its PR/MR (`gh pr list --search "TICKET-ID"` on GitHub, or the tracker's attached-PR link); a ticket with no open PR stays a dependency recorded in the brief's Dependencies section, not a register entry.
+- **Linked PRs** from sources 1 and 8. Deduplicate against the two methods above.
+
+A sibling that already merged to main is also covered by the staleness check (source 3). Record it in the register anyway, for context.
+
+#### Build the sibling register
+
+For each sibling PR/MR:
+- PR/MR number, title, state (open/merged/closed/draft)
+- Its base branch, and for stacks its position in the chain
+- One line: what it implements, from its description and diff stat
+
+This field list is canonical: the brief section below and the synthesizer's Cross-PR notes appendix render the register as built here. An `unexplored` entry (a stack member beyond the walk cap) carries the number, title, state, base branch, and chain position, but no what-it-implements line and no consistency verdicts; the sibling's description and diff were not read.
+
+#### Targeted consistency verification
+
+Read every sibling's description in full. Open a sibling's diff only to verify the specific contracts, symbols, and references this change consumes or mentions. Never run a full second review of a sibling. Checks:
+
+1. **Contract check**: an API, type, schema, config key, or flag this change consumes from a sibling matches the sibling's actual implementation at its head SHA.
+2. **Reference check**: a comment or doc in this change references a thing X. X exists in this change or in a sibling. If neither delivers X, the reference is dangling.
+3. **Ordering check**: the change or its ticket claims a merge or release order for the set. Verify the claim is stated and consistent with the stack chain or the tracker relations.
+4. **Overlap check**: two PRs in the set implement the same thing differently.
+
+Tag each check that applied: `consistent`, `inconsistent` (with the evidence), or `unclear`.
+
+#### Early-out
+
+If the discovery routes above surfaced no related PR/MR and no coordinated ticket set, state `Standalone change — no sibling register` and skip this source. A coordinated ticket set with no open PRs is not standalone: record it under Dependencies. Most personal projects land here; the source costs one look.
+
 ## Context brief format
 
 Produce a structured brief:
@@ -154,6 +194,7 @@ List each deferred piece:
 - What other tickets or PRs this depends on (must merge first)
 - What tickets or PRs depend on this (are blocked by it)
 - Whether base branches have landed (for stacked PRs)
+- **Release order**: when a ticket or the PR description claims a merge or deploy order for a set of changes, record the claimed order and where it is claimed (which ticket's DEPENDENCIES section, which tracker relation, or which PR description)
 - **Staleness**: whether main has moved past the merge-base since the branch point. When the staleness check (source 3) found commits touching this change's paths, list them here — the synthesizer re-verifies behavioral findings against current main before classifying them
 
 ### Relevant constraints
@@ -174,6 +215,18 @@ List the prior-comments register (one entry per prior comment):
 If context gathering found a connected PR/MR but no prior reviews by other users, state `First round on PR #N — no prior comments to register`.
 
 If context gathering found no connected PR/MR (local-branch review), state `Local-branch review — no prior-comment fetch`. This is not a gap; the existing review procedure applies.
+
+### Sibling PR context (only when related PRs were detected)
+
+List the sibling register as built above (one entry per sibling):
+- PR/MR number, title, state, base branch, and for stacks the chain position
+- What it implements (one line)
+- Consistency verdicts from the targeted checks (`consistent` / `inconsistent` with evidence / `unclear`), only for the checks that applied
+- An `unexplored` entry renders its fields only; the missing what-it-implements line and verdicts record the walk cap, not a gap
+
+Whether base branches have landed is recorded under Dependencies above, not here.
+
+If discovery found no related PRs and no coordinated ticket set, state `Standalone change — no sibling register`. This is not a gap; the change is not part of a coordinated set. A coordinated ticket set with no open PRs is not standalone: its claimed order is recorded under Dependencies.
 
 ## If context is sparse
 

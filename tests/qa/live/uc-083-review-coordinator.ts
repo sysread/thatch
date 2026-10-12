@@ -17,7 +17,7 @@ const useCase: UseCase = {
   steps: [
     "1. Load the thatch-code-review skill.",
     "2. The coordinator resolves the review target — branch name, PR number, or explicit range.",
-    "3. The coordinator gathers project context (PR description, git archaeology, TODO markers, links to docs/designs/tickets followed from the change, staleness check against post-merge-base main, thatch memories, docs).",
+    "3. The coordinator gathers project context (PR description, git archaeology, TODO markers, links to docs/designs/tickets followed from the change, related PRs discovered as stack members or release-train siblings, staleness check against post-merge-base main, thatch memories, docs).",
     "4. The coordinator researches affected workflows via thatch-code-archaeology.",
     "5. The coordinator estimates complexity and partitions the diff into review units.",
     "6. The coordinator dispatches specialist sub-agents in parallel — one per review unit.",
@@ -27,6 +27,7 @@ const useCase: UseCase = {
   expected: [
     "- The review target is resolved correctly (branch, PR, or range).",
     "- Project context is gathered and injected into specialist prompts.",
+    "- When the change belongs to a stack or release train, the sibling register is built with targeted consistency verdicts, injected into specialist prompts, and cross-referenced at synthesis (a missing piece delivered by a sibling PR is not reported as a defect).",
     "- Affected workflows are researched before partitioning.",
     "- The diff is partitioned into review units sized for a single sub-agent.",
     "- Specialists run in parallel and produce structured findings.",

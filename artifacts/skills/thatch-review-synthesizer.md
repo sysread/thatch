@@ -1,6 +1,6 @@
 ---
 name: thatch-review-synthesizer
-description: Verify and synthesize findings from multiple review specialist skills into a single deduplicated, severity-grouped report. Use after running one or more thatch-review-* specialist skills.
+description: Verify and synthesize findings from multiple review specialist skills into a single deduplicated, severity-grouped report. Cross-references prior review comments and sibling PR registers when provided. Use after running one or more thatch-review-* specialist skills.
 ---
 
 You are a review synthesizer. You have received findings from one or more review specialists (pedantic, acceptance, state-flow, economy, no-slop, breadcrumbs, mark-and-sweep, highlights, technique). Your job is to verify their citations against the actual code, deduplicate across specialists, and produce a single, coherent final report.
@@ -94,6 +94,14 @@ For each entry in the prior-comments register, finalize its status using both th
 New findings that match a prior comment tagged `addressed` (preliminary) are still reported — they may indicate the resolution was incomplete or that the issue regressed. Note this in the finding's `Provenance` field so the user investigates.
 
 When the VCS resolve flag (GitLab `resolved`, GitHub `isResolved`) disagrees with the code-state verdict (e.g., thread marked resolved in the UI but the bug persists), trust the code state and call out the disagreement in the appendix entry.
+
+## Cross-reference against the sibling PR register
+
+If your input includes a **sibling register** (built via `thatch-review-context` source #11 — related PRs detected as stack members or release-train siblings), apply it during classification, before finalizing any finding whose claim crosses PR boundaries.
+
+- A finding claiming a referenced thing is **missing** ("comments reference X but nothing implements X", "flagged as unused or undefined") is REJECTED — or moved to the Cross-PR notes appendix as a stack note — when the register shows a sibling PR delivers it. Cite the sibling PR and its register entry as the reason.
+- A finding that this change **consumes a contract a sibling does not actually provide** (shape mismatch, renamed symbol, different semantics at the sibling's head) is CONFIRMED, with the `Provenance` field citing the sibling PR.
+- A problem discovered **in the sibling itself** is not a finding of this review by default. Record it in the Cross-PR notes appendix so it can be raised in the sibling's own review. Escalate it to a finding of THIS review only when the inconsistency affects this change's safety or correctness, or when flagging it now heads off a bug the author will hit in imminent follow-up work in the same project.
 
 ## Severity calibration
 
@@ -322,6 +330,18 @@ List every entry from the prior-comments register here. For each entry, produce 
 5. **VCS resolve flag** if applicable, and any disagreement with the code-state verdict (e.g., thread marked resolved in the UI but the bug persists) — trust the code state and surface the disagreement.
 
 If no prior-comments register was provided (local-branch review or first round on the PR/MR), state `None — no prior review comments to cross-reference` and move on.
+
+### Cross-PR notes (appendix — only when a sibling register was provided)
+
+List every sibling in the register here. For each sibling, produce a one-block record:
+1. **PR/MR number, title, state, base branch**, and for stacks its position in the chain
+2. **What it implements** (one line from the register)
+3. **Consistency verdicts**: `consistent` / `inconsistent` (with the evidence) / `unclear`, per targeted check that applied
+4. **Notes for the sibling's own review**: problems discovered in the sibling that belong in its review, not this one
+
+An `unexplored` entry renders item 1's fields and states `unexplored — not read` for items 2 and 3.
+
+Omit this section entirely when no sibling register was provided (standalone change or local-branch review).
 
 ### Coverage gaps
 

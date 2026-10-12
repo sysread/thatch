@@ -47,8 +47,8 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
 | `thatch-review-highlights` | Positive finding detection: notably clever solutions, cleanup done along the way, documentation that helps. Medium-high bar against generic praise. |
 | `thatch-review-technique` | Technique lens: teaching-grade notes on unseen helpers/internal packages, companion techniques, house patterns, test-craft, API-shape principles, next-reader discoverability. Informational only, verified citations, never blocking. |
-| `thatch-review-synthesizer` | Verify specialist findings against code, dedupe, classify, calibrate severity. Starts the final report with a workflow-change preface, then cross-references findings against prior review comments when a follow-up round register is provided. |
-| `thatch-review-context` | Gather project/feature context (PR descriptions, git archaeology, ticket references, linked docs/tickets followed from the change, memory) before fan-out. Prevents false positives about intentionally deferred work, and checks whether main moved past the merge-base touching the same paths (staleness signal for the synthesizer). Also fetches prior review comments on a connected PR/MR for follow-up-round detection and builds a register with preliminary addressed-check status per comment. |
+| `thatch-review-synthesizer` | Verify specialist findings against code, dedupe, classify, calibrate severity. Starts the final report with a workflow-change preface, then cross-references findings against prior review comments when a follow-up round register is provided, and against sibling PR registers when related PRs were detected (cross-PR notes appendix). |
+| `thatch-review-context` | Gather project/feature context (PR descriptions, git archaeology, ticket references, linked docs/tickets followed from the change, memory) before fan-out. Prevents false positives about intentionally deferred work, and checks whether main moved past the merge-base touching the same paths (staleness signal for the synthesizer). Also fetches prior review comments on a connected PR/MR for follow-up-round detection and builds a register with preliminary addressed-check status per comment. Also discovers related PRs (stacks chained through base branches, release trains ordered by tracker relations) and builds a sibling register with targeted consistency verdicts. |
 | `thatch-code-archaeology` | Investigate an existing feature, debug an unfamiliar area, or begin a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features, skeletons) before proposing changes. The research skill; pair with `thatch-coding-workflow`. |
 | `thatch-review-followup` | Alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review round adequately addressed your prior findings, offers to reply on resolved items, then optionally re-runs the full structured review. |
 | `thatch-change-walkthrough` | Explain a change to the user as a teaching walkthrough: resolve the delta, research each affected workflow at the merge-base, teach current behavior, then overlay the modifications with file:line citations and analogies. |
@@ -75,7 +75,7 @@ description: Extract durable project facts ... Use when ...
 
 | Skill | Role |
 |-------|------|
-| `thatch-code-review` | Resolve review target (incl. VCS detection and connected PR/MR lookup for follow-up round detection), gather project context, research affected workflows, estimate complexity, partition, dispatch the review specialists in parallel, synthesize with a workflow-change preface and prior-comment cross-reference. |
+| `thatch-code-review` | Resolve review target (incl. VCS detection and connected PR/MR lookup for follow-up round detection), gather project context, research affected workflows, estimate complexity, partition, dispatch the review specialists in parallel, synthesize with a workflow-change preface, prior-comment cross-reference, and sibling-register cross-reference. |
 
 ## REVIEW_COMMON
 
@@ -93,6 +93,9 @@ The seven problem-finding review specialists share a framework interpolated via 
 - **Project context awareness** — if a context brief is provided (from the
   coordinator or from loading `thatch-review-context`), use it to avoid false
   positives about intentionally deferred work.
+- **Sibling PR context** — when the brief's sibling register is present
+  (related PRs detected), check it before flagging anything as referenced but
+  missing; a stack member or release-train sibling may deliver the piece.
 - **Workflow context awareness** — if a workflow guide is provided (from the
   coordinator or from loading `thatch-code-archaeology`), use it to understand
   the purpose and evolution of the code, distinguishing intentional behavior

@@ -18,11 +18,11 @@ Identify what to review:
 - If a git range was specified (A..B form), use it directly.
 - If no target was specified, review the current branch against its base, resolving the base from `origin/main` (or the appropriate remote tracking ref) after fetching.
 
-Also detect whether the current branch has a **connected PR/MR** even when none was specified — this is what enables follow-up-round detection in Step 2. Inspect `git remote -v` to recognize the VCS host (github.com → GitHub/`gh`; gitlab.* → GitLab/`glab`; bitbucket.org → Bitbucket Cloud; dev.azure.com → Azure DevOps). Then probe for an open PR/MR on the current branch using the matching CLI or REST API:
-- GitHub: `gh pr view --head <branch> --json number,headRefOid,baseRefOid`
+Also detect whether the current branch has a **connected PR/MR** even when none was specified — this is what enables follow-up-round detection and related-PR discovery in Step 2. Inspect `git remote -v` to recognize the VCS host (github.com → GitHub/`gh`; gitlab.* → GitLab/`glab`; bitbucket.org → Bitbucket Cloud; dev.azure.com → Azure DevOps). Then probe for an open PR/MR on the current branch using the matching CLI or REST API:
+- GitHub: `gh pr view <branch> --json number,headRefOid,baseRefOid`
 - GitLab: `glab mr list --source-branch <branch>`
 - Other providers: equivalent detection via their CLI or REST API.
-- If you cannot detect or cannot interact with the VCS (no CLI, no REST access), treat the change as a **local-branch review** and proceed with the existing procedure. A local-branch review is not a defect — it just means there is no prior-comments register to build.
+- If you cannot detect or cannot interact with the VCS (no CLI, no REST access), treat the change as a **local-branch review** and proceed with the existing procedure. A local-branch review is not a defect — it means there is no prior-comments register to build and no connected PR to chain stack discovery from (release trains remain discoverable through tracker relations and linked PRs).
 
 Also fetch any refs not locally reachable so branches and PRs that were never checked out can be reviewed (e.g. `git fetch origin <branch>` for a PR head).
 
@@ -43,8 +43,9 @@ Load the thatch-review-context skill and follow its methodology to build a conte
 - **Links in the change** — docs, designs, tickets, and related PRs linked from the PR description, commit messages, or the changed files themselves; follow them for scope and design context (see source #8 in the review-context skill)
 - **Staleness check** — whether main has moved past the merge-base touching the same paths (see source #3 in the review-context skill); when it has, record the commits in the brief
 - **Prior review comments** — if Step 1 detected a connected PR/MR, fetch ALL prior review comments on it (see source #9 in the review-context skill) and build the prior-comments register with a preliminary addressed-check status per comment. This is what distinguishes a **follow-up round** (register non-empty) from the **first round** (register empty or PR has no prior reviews). If Step 1 found no connected PR/MR, the brief explicitly states `Local-branch review — no prior-comment fetch`.
+- **Related PRs (stacks and release trains)** — discover the coordinated set this change belongs to (see source #11 in the review-context skill): stack members chained through base branches, and release-train siblings ordered by tracker relations or ticket DEPENDENCIES sections (the ticket section that names the change's blocking links). Build the sibling register with targeted consistency verdicts; source #11's early-out governs when to skip (a connected PR/MR is required to chain a stack, but a release train is discoverable from ticket references and linked PRs alone). When reading the siblings' descriptions and targeted diffs would crowd the orchestrator's context (a deep stack or a large train), dispatch one sub-agent instructed to follow source #11's methodology in the review-context skill, then fold its output into the brief.
 
-Produce the context brief in the format the skill prescribes (project context, this change's scope, deferred work, dependencies, relevant constraints, and the prior review comments section when present).
+Produce the context brief in the format the skill prescribes (project context, this change's scope, deferred work, dependencies, relevant constraints, the prior review comments section when present, and the sibling PR context section when related PRs were detected).
 
 If context is sparse (no PR description, no ticket references, no relevant memories), note that the change appears standalone. Even a sparse brief is valuable: it tells specialists you looked and found nothing, so they do not need to repeat the search.
 
@@ -58,6 +59,8 @@ Dispatch a sub-agent using the Task tool to research the code workflows affected
 The sub-agent produces a code guide with one section per affected workflow or feature. Wait for it to complete and collect the guide.
 
 This guide gives specialists the code-level context (purpose, data flow, evolutions, constraints) they need to avoid false positives about intentional behavior and long-standing design decisions, and reduces duplicate code-tracing across the eight specialist lenses.
+
+If the context brief includes a sibling register (from Step 2's related-PR discovery), fold it into the guide per the `Cross-PR context` section of the thatch-code-archaeology skill — whether you dispatch a sub-agent or do this research inline. The traps the guide exists to catch are comments referencing sibling work, contracts consumed from a sibling, and ordering assumptions across the stack or train.
 
 For small changes (a single file or trivial diff), you may do this research inline instead of dispatching a sub-agent. Use your judgment: if the workflow research would require reading more than 3-4 files, dispatch a sub-agent to preserve your context for orchestration.
 
@@ -129,6 +132,7 @@ Pass the synthesizer:
 - The workflow guide from Step 3.
 - The specialist findings.
 - The prior-comments register when present.
+- The sibling register from Step 2 when present.
 - The staleness signal from the brief (commits on main after the merge-base touching this change's paths), when present.
 
 The final user-facing report MUST begin with a concise explanation of the workflow(s) this PR changes before listing findings. Use one `### Workflow changes` section, with one subheading per affected workflow when there are multiple. Use the before/now walkthrough shape from the thatch-pr-description skill: numbered step = existing behavior; `NOW` sub-bullet = what the PR changes; `N/A` for new stages. This gives the user a map of the change before the findings. Keep it short: 3-6 steps per workflow.
@@ -141,15 +145,18 @@ Technique notes (from the technique specialist) appear in a `### Technique notes
 
 **Follow-up round cross-reference** — if Step 2 built a prior-comments register, the synthesizer must cross-reference every confirmed and rejected finding against it (see the synthesizer skill's "Cross-reference against prior review comments" section). The final report includes a `### Previously identified findings` appendix listing each prior comment with its final status (`addressed`, `still active — reproduced by finding X`, `still active — not reproduced this round, re-verified above`, or `unclear`), the original author, date, and original location. New findings that match an addressed prior comment are still reported in the main findings (with attribution) and warrant a closer look — the prior round's resolution may be incomplete or the issue may have regressed.
 
+**Cross-PR consistency** — if Step 2 built a sibling register, the synthesizer must cross-reference findings against it (see the synthesizer skill's "Cross-reference against the sibling PR register" section). A finding claiming something is missing is rejected or downgraded to a stack note when a sibling delivers it. An inconsistency between this change and a sibling becomes a finding of THIS review only when it affects this change's safety or correctness, or when flagging it now heads off a bug the author will hit in imminent follow-up work in the same project; otherwise it lands in the `### Cross-PR notes` appendix, for the sibling's own review (the synthesizer skill's section carries the rule).
+
 Alternatively, perform the synthesis yourself:
 1. Read each finding's cited location to verify evidence accuracy.
 2. Deduplicate findings flagged by multiple specialists.
 3. Group findings by root cause where multiple findings stem from the same issue.
 4. Classify each as CONFIRMED, REJECTED, or UNVERIFIABLE. For behavioral findings, apply citation verification, reachability, and intent verification. For mechanical findings, verify the cited text exists, is branch-introduced or newly made relevant, and violates the stated guideline or specialist taxonomy. For highlights, verify the cited text exists, the claim is accurate, and the highlighted thing genuinely rises above baseline competence. For technique notes, verify the cited alternative exists at the cited location and achieves the same behavior; if the code as written is actually a defect, hand the finding to the defect track instead. When the brief reports staleness (main moved past the merge-base touching this change's paths), re-verify each behavioral finding against current main first — a finding true only at the merge-base is a rebase note for the author, not a defect in this PR.
 5. Cross-reference against the prior-comments register if one was built in Step 2: tag matching findings `Provenance: previously identified by @author, PR #N, DATE` and produce the `### Previously identified findings` appendix per the synthesizer skill.
-6. Calibrate severity (BLOCKING > HIGH > MEDIUM > LOW) based on your verification.
-7. Produce a final report with a workflow-change preface, highlights (if any), technique notes (if any), findings grouped by severity, coverage gaps, and human-verifiable unknowns noted. Include every confirmed LOW finding.
-8. Apply the synthesizer's "Writing review comments" prose rules to the whole report. Findings are prose, not shorthand: plain English, one idea per sentence, one sentence per hop of any producer chain.
+6. Cross-reference against the sibling register if one was built in Step 2: reject or downgrade to a stack note any finding whose "missing piece" a sibling delivers; confirm findings where this change consumes a contract a sibling does not provide; route sibling-side problems to the Cross-PR notes appendix unless they affect this change's safety or correctness or head off a bug the author will hit in imminent follow-up work in the same project; produce the `### Cross-PR notes` appendix per the synthesizer skill.
+7. Calibrate severity (BLOCKING > HIGH > MEDIUM > LOW) based on your verification.
+8. Produce a final report with a workflow-change preface, highlights (if any), technique notes (if any), findings grouped by severity, coverage gaps, and human-verifiable unknowns noted. Include every confirmed LOW finding.
+9. Apply the synthesizer's "Writing review comments" prose rules to the whole report. Findings are prose, not shorthand: plain English, one idea per sentence, one sentence per hop of any producer chain.
 
 ## Specialist briefing template
 
@@ -162,6 +169,7 @@ When dispatching each sub-agent, include in the prompt:
 - **The project context brief** from Step 2, filtered to what is relevant to this unit's scope. Explicitly list any deferred work that falls within this unit's files, and call out TODO ($ticket) markers the specialists should recognize as intentional.
 - **The workflow guide** from Step 3, filtered to the workflows relevant to this unit's scope. Use it to understand the purpose and evolution of the code before flagging issues. It provides the code-level context (flows, contracts, history, constraints) that prevents false positives about intentional behavior and long-standing design decisions.
 - **The prior review comments register** from Step 2 when present — the list of issues other reviewers already raised, with each comment's current-HEAD location and preliminary status. This is a **hint list, not a finding list**: it saves specialists the work of treating an already-identified issue as newly discovered. Specialists still produce their own findings normally. For any finding that matches a prior comment, set `Provenance` to `previously identified by @author, PR #N, DATE` in addition to the branch-introduced / pre-existing classification — the synthesizer does the final cross-reference and dedup.
+- **The sibling register** from Step 2 when present — the related PRs (stack members and release-train siblings), what each implements, and the targeted consistency verdicts. Before flagging anything as "referenced but missing" or "not implemented anywhere in this change", check the register: a sibling may deliver the missing piece.
 - Any design context or specific concerns
 - Explicit scope boundaries ("your scope is X; do NOT review Y")
 - Instruction to produce markdown findings with: severity, category, file:line, finding, evidence, trigger scenario, reachability, source of truth, producer chain, provenance

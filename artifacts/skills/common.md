@@ -34,6 +34,7 @@ If your briefing includes a project context brief (from the coordinator or from 
 - **Deferred work** listed in the brief is intentionally excluded from this PR. Do not flag the absence of deferred pieces as bugs, inconsistencies, or missing functionality.
 - **Dependencies** in the brief tell you whether base-branch behavior is expected to be present or not. Do not assert that base-branch behavior exists without verifying it landed.
 - **Relevant constraints** may explain why code is structured a certain way. Consider them before flagging design choices.
+- **Sibling PR context** in the brief (when related PRs were detected) tells you where the pieces outside this diff live. Before flagging something as "referenced but not implemented anywhere in this change", check the sibling register: a stack member or release-train sibling may deliver it.
 
 ## Workflow context awareness
 If your briefing includes a workflow guide (from the coordinator or from loading thatch-code-archaeology), use it to understand the purpose and evolution of the code you are reviewing:

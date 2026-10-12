@@ -30,7 +30,7 @@ Run `git fetch origin` (NOT `git pull`). Inspect `git remote -v` to recognize th
 - `dev.azure.com` → Azure DevOps
 
 Probe for an open PR/MR on the current branch:
-- **GitHub**: `gh pr view --head <branch> --json number,title,headRefOid,baseRefOid`
+- **GitHub**: `gh pr view <branch> --json number,title,headRefOid,baseRefOid`
 - **GitLab**: `glab mr list --source-branch <branch>`
 
 If no PR/MR is found or no VCS CLI is available, you cannot re-check. Report this and stop.

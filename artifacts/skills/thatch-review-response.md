@@ -80,7 +80,7 @@ Identify the PR and VCS host:
   recognize the VCS host: `github.com` -> GitHub (`gh`), `gitlab.*` ->
   GitLab (`glab`), `bitbucket.org` -> Bitbucket Cloud, `dev.azure.com` ->
   Azure DevOps.
-- Probe for an open PR on the current branch: `gh pr view --head <branch>
+- Probe for an open PR on the current branch: `gh pr view <branch>
   --json number,title,headRefOid` (GitHub) or equivalent.
 
 Fetch ALL review comments:

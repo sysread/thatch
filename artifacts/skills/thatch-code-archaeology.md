@@ -198,6 +198,15 @@ For each feature or workflow you investigated, teach the user what it is and how
 
 Include sub-agent findings as their own per-feature sections, integrated into the same report.
 
+### Cross-PR context (when a sibling register is supplied)
+
+When the review coordinator dispatches you, your input may include the project context brief with a sibling register: related PRs detected as stack members or release-train siblings. Fold the register into the guide where it changes what a reviewer would flag:
+
+- A comment or doc referencing work delivered by a sibling PR is intentional cross-referencing, not a dangling reference. Note it as a design decision, with the sibling PR number.
+- A contract consumed from a sibling (an API, type, schema, or flag) is part of the workflow's data flow. Map it, and note the dependency direction.
+- An ordering assumption across the stack or train (this change assumes a sibling lands first) is a workflow constraint. Note it with the claimed order from the register.
+- Do not investigate a sibling's code beyond what the register and its consistency verdicts already established. The register is context, not a mandate to review the sibling.
+
 ### Recommendations
 Tailor this section to the user's original ask:
 - **Research or investigation**: summarize what you found and what remains unknown

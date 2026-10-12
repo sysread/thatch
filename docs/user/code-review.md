@@ -16,7 +16,10 @@ the review:
 2. **Gather project context**: PR descriptions, git archaeology,
    ticket references, links to docs/designs/tickets found in the
    change (followed one hop for scope and design context), TODO
-   markers, prior reviews, project memory. Also checks whether main
+   markers, prior reviews, project memory. Also discovers related
+   PRs (stacks chained through base branches, release trains
+   ordered by ticket relations) and checks consistency between
+   them and the change. Also checks whether main
    has moved past the merge-base touching the same paths — a stale
    branch can make findings true only at the merge-base.
 3. **Research affected workflows**: load `thatch-code-archaeology`,
@@ -30,6 +33,10 @@ the review:
    the final report. When the branch is stale relative to main, it
    re-verifies behavioral findings against current main and reports
    merge-base-only findings as rebase notes rather than defects.
+   When related PRs were detected, it cross-references findings
+   against the sibling register: a missing piece delivered by a
+   sibling is not a defect, and inconsistencies between connected
+   PRs surface as cross-PR notes.
 
 ## The nine specialists
 
