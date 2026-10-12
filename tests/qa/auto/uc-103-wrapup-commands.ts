@@ -10,6 +10,7 @@ import { installOpencodeCommands } from "../../../src/commands";
 import { EXIT_TAB_CLOSED_EVENT, TOAST_EVENT } from "../../../src/session-tab-shared";
 import { Database } from "bun:sqlite";
 import { makeV2Harness } from "../../mocks/v2-harness";
+import { captureConsoleError } from "../../mocks/console-error";
 
 /**
  * UC-103: Wrap-up commands (/thatch/compact, /thatch/exit).
@@ -276,32 +277,31 @@ const useCase: UseCase = {
       // still ran.
       const v2floor = makeV2Harness(ctx.dir, { compact: false });
       let disposeFloor: (() => Promise<void>) | undefined;
-      const errors: string[] = [];
-      const originalError = console.error;
-      console.error = (...args: unknown[]) => {
-        errors.push(args.map(String).join(" "));
-      };
-      process.env.XDG_CONFIG_HOME = ctx.env.XDG_CONFIG_HOME;
-      process.env.THATCH_DB_PATH = ctx.env.THATCH_DB_PATH;
-      try {
-        disposeFloor = (await setupV2(v2floor.context as any)) as () => Promise<void>;
-        const floorCmd = v2floor.commands.find((c) => c.name === "thatch/compact")!;
-        v2floor.setAssistant("All clear.\nTHATCH_COMPACT_READY");
-        await floorCmd.execute({ sessionID: "ses-qa-103-v2c" });
-        await v2floor.queue({ type: "session.execution.succeeded", location: { directory: ctx.dir }, data: { sessionID: "ses-qa-103-v2c" } });
-        if (!(await v2wait("floor wrap-up resolved", () => !wrapupArmed("ses-qa-103-v2c")))) return "FAIL";
-        // The row delete happens BEFORE the token check, so the branch may
-        // still be mid-flight at row-gone: settle before asserting the log.
-        await new Promise((r) => setTimeout(r, 150));
-        if (!errors.some((line) => line.includes("compaction trigger unavailable"))) {
-          console.log(`  FAIL: v2 floor compact should degrade with a log, got ${JSON.stringify(errors)}`);
-          return "FAIL";
+      const { result: floorResult, lines: floorLog } = await captureConsoleError(async () => {
+        process.env.XDG_CONFIG_HOME = ctx.env.XDG_CONFIG_HOME;
+        process.env.THATCH_DB_PATH = ctx.env.THATCH_DB_PATH;
+        try {
+          disposeFloor = (await setupV2(v2floor.context as any)) as () => Promise<void>;
+          const floorCmd = v2floor.commands.find((c) => c.name === "thatch/compact")!;
+          v2floor.setAssistant("All clear.\nTHATCH_COMPACT_READY");
+          await floorCmd.execute({ sessionID: "ses-qa-103-v2c" });
+          await v2floor.queue({ type: "session.execution.succeeded", location: { directory: ctx.dir }, data: { sessionID: "ses-qa-103-v2c" } });
+          if (!(await v2wait("floor wrap-up resolved", () => !wrapupArmed("ses-qa-103-v2c")))) return "FAIL";
+          // The row delete happens BEFORE the token check, so the degrade
+          // log is still in flight at row-gone: settle INSIDE the capture
+          // scope or the log can slip out past it.
+          await new Promise((r) => setTimeout(r, 150));
+          return "PASS";
+        } finally {
+          process.env.XDG_CONFIG_HOME = prevXdg;
+          process.env.THATCH_DB_PATH = prevDb;
+          await disposeFloor?.();
         }
-      } finally {
-        console.error = originalError;
-        process.env.XDG_CONFIG_HOME = prevXdg;
-        process.env.THATCH_DB_PATH = prevDb;
-        await disposeFloor?.();
+      });
+      if (floorResult !== "PASS") return "FAIL";
+      if (!floorLog.some((line) => line.includes("compaction trigger unavailable"))) {
+        console.log(`  FAIL: v2 floor compact should degrade with a log, got ${JSON.stringify(floorLog)}`);
+        return "FAIL";
       }
 
       // Step 12: a blocked wrap-up (no token) shows its toast over the

@@ -24,6 +24,7 @@ import {
   type WatcherEventType,
   type WatcherRegistryOptions,
 } from "../src/watchers";
+import { silenceConsoleError } from "./mocks/console-error";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -462,10 +463,8 @@ describe("WatcherRegistry", () => {
 
   test("failed delivery stays pending and retries", async () => {
     let fail = true;
-    // The production retry path logs each failed delivery; silence it so the
-    // expected failure does not leak into the test output.
-    const errorLog = console.error;
-    console.error = () => {};
+    // The production retry path logs each failed delivery; the scope
+    // swallows it so the expected failure does not leak into the output.
     const reg = new WatcherRegistry({
       deliver: async (sessionID, events) => {
         if (fail) throw new Error("busy");
@@ -475,7 +474,7 @@ describe("WatcherRegistry", () => {
       ghRunner: quietGh(),
       pollIntervalMs: 60_000,
     });
-    try {
+    await silenceConsoleError(async () => {
       await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
       const prWatcher = reg.listForSession("s1")[0];
       if (prWatcher.source !== "pr") throw new Error("expected a pr watcher");
@@ -487,9 +486,7 @@ describe("WatcherRegistry", () => {
       await reg.deliverPending();
       expect(delivered).toHaveLength(1);
       expect(reg.pendingCount("s1")).toBe(0);
-    } finally {
-      console.error = errorLog;
-    }
+    });
   });
 
   test("expired watchers report their expiry to the session and are dropped", async () => {
@@ -1284,20 +1281,14 @@ describe("runWatchedCommand", () => {
   });
 
   test("kills a hanging command at the timeout and reports timedOut", async () => {
-    // The production runner logs each timeout kill; silence it so the
-    // expected kill does not leak into the test output.
-    const errorLog = console.error;
-    console.error = () => {};
-    try {
-      const result = await runWatchedCommand("sleep 20", "/tmp", 500);
-      expect(result.timedOut).toBe(true);
-      // 137 = SIGKILL from the watchdog. Consumers only read the timedOut
-      // flag; the raw code is informational.
-      expect(result.exitCode).toBe(137);
-      expect(result.durationMs).toBeLessThan(10_000);
-    } finally {
-      console.error = errorLog;
-    }
+    // The production runner logs each timeout kill; the scope swallows it
+    // so the expected kill does not leak into the output.
+    const result = await silenceConsoleError(async () => runWatchedCommand("sleep 20", "/tmp", 500));
+    expect(result.timedOut).toBe(true);
+    // 137 = SIGKILL from the watchdog. Consumers only read the timedOut
+    // flag; the raw code is informational.
+    expect(result.exitCode).toBe(137);
+    expect(result.durationMs).toBeLessThan(10_000);
   });
 
   test("survives a grandchild holding the pipe open past the kill", async () => {
@@ -1336,9 +1327,8 @@ describe("runWatchedCommand", () => {
 describe("poll resilience", () => {
   test("a throwing canDeliver gate fails closed and leaves the mail pending", async () => {
     const delivered: Array<{ sessionID: string; events: WatcherEvent[] }> = [];
-    // The fail-closed path logs the gate error; silence it for clean output.
-    const errorLog = console.error;
-    console.error = () => {};
+    // The fail-closed path logs the gate error; the scope swallows it for
+    // clean output.
     const reg = new WatcherRegistry({
       deliver: async (sessionID, events) => {
         delivered.push({ sessionID, events });
@@ -1349,7 +1339,7 @@ describe("poll resilience", () => {
       ghRunner: quietGh(),
       pollIntervalMs: 60_000,
     });
-    try {
+    await silenceConsoleError(async () => {
       await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
       const w = reg.listForSession("s1")[0];
       if (w.source !== "pr") throw new Error("expected a pr watcher");
@@ -1359,9 +1349,7 @@ describe("poll resilience", () => {
       await reg.poll();
       expect(reg.pendingCount("s1")).toBe(1);
       expect(delivered).toHaveLength(0);
-    } finally {
-      console.error = errorLog;
-    }
+    });
     reg.dispose();
   });
 

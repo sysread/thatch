@@ -3,7 +3,8 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { setup, eventMatchesInstance, flattenToolContent, mapSessionContextMessages, translateEvent } from "../src/opencode/v2";
+import { setup, eventMatchesInstance, flattenToolContent, mapSessionContextMessages, optionalDomainMethod, translateEvent } from "../src/opencode/v2";
+import { captureConsoleError } from "./mocks/console-error";
 import { EXIT_TAB_CLOSED_EVENT, TAB_CLOSED_EVENT, TOAST_EVENT, exitTabClosedEventType, tabClosedEventType, tabOpenedEventType } from "../src/session-tab-shared";
 import { TOOL_DEFS, type ToolDef } from "../src/tool-defs";
 
@@ -263,6 +264,28 @@ describe("translateEvent session.created parentID", () => {
       data: { sessionID: "ses_child", parentID: "ses_parent" },
     });
     expect(event.properties.info.parentID).toBe("ses_parent");
+  });
+});
+
+describe("optionalDomainMethod", () => {
+  // The SDK-floor guard for promise-domain members newer than the pinned
+  // dev types (compact, remove): present -> callable, absent -> undefined,
+  // and never mistakes a non-function member for one.
+  test("returns a present member as a callable", async () => {
+    const calls: any[] = [];
+    const fn = optionalDomainMethod({ compact: async (input: any) => { calls.push(input); return "ok"; } }, "compact");
+    expect(fn).toBeTypeOf("function");
+    await fn!({ sessionID: "ses_floor" });
+    expect(calls).toEqual([{ sessionID: "ses_floor" }]);
+  });
+
+  test("returns undefined for an absent member (the older-SDK floor)", () => {
+    expect(optionalDomainMethod({}, "compact")).toBeUndefined();
+    expect(optionalDomainMethod({ remove: undefined }, "remove")).toBeUndefined();
+  });
+
+  test("returns undefined for a non-function member", () => {
+    expect(optionalDomainMethod({ compact: "not a function" }, "compact")).toBeUndefined();
   });
 });
 
@@ -1108,12 +1131,7 @@ describe("opencode v2 adapter", () => {
     // The pinned dev types predate upstream #52385, so the adapter guards
     // the call at runtime; the default context (no compact member) models
     // that older host.
-    const errors: string[] = [];
-    const originalError = console.error;
-    console.error = (...args: unknown[]) => {
-      errors.push(args.map(String).join(" "));
-    };
-    try {
+    const { lines } = await captureConsoleError(async () => {
       const context = makeContext({
         context: async () => [
           { type: "assistant", content: [{ type: "text", text: "clear THATCH_COMPACT_READY" }] },
@@ -1130,22 +1148,16 @@ describe("opencode v2 adapter", () => {
       await waitFor("wrap-up resolved on the floor host", () => !wrapupArmed("ses_v2_wrap_floor"));
       await new Promise((r) => setTimeout(r, 150));
       expect(sessionCompactCalls.length).toBe(0);
-      expect(errors.some((line) => line.includes("compaction trigger unavailable"))).toBe(true);
-    } finally {
-      console.error = originalError;
-    }
+      return;
+    });
+    expect(lines.some((line) => line.includes("compaction trigger unavailable"))).toBe(true);
   });
 
   test("a host without the rpc surface exits greenlit with a logged no-op", async () => {
     // Same floor rule as session.compact, for the exit action: without the
     // session-tab bridge there is no closeable tab surface, so the
     // greenlit exit degrades to a log (the checklist and flush still ran).
-    const errors: string[] = [];
-    const originalError = console.error;
-    console.error = (...args: unknown[]) => {
-      errors.push(args.map(String).join(" "));
-    };
-    try {
+    const { lines } = await captureConsoleError(async () => {
       const context = makeContext({
         omitRpc: true,
         context: async () => [
@@ -1163,12 +1175,11 @@ describe("opencode v2 adapter", () => {
       await waitFor("wrap-up resolved without rpc", () => !wrapupArmed("ses_v2_exit_floor"));
       await new Promise((r) => setTimeout(r, 150));
       expect(rpcEmitted.length).toBe(0);
-      // "tab close skipped" pins the ACTION's degrade log, distinct from
-      // the setup-time "rpc surface unavailable" line.
-      expect(errors.some((line) => line.includes("tab close skipped"))).toBe(true);
-    } finally {
-      console.error = originalError;
-    }
+      return;
+    });
+    // "tab close skipped" pins the ACTION's degrade log, distinct from
+    // the setup-time "rpc surface unavailable" line.
+    expect(lines.some((line) => line.includes("tab close skipped"))).toBe(true);
   });
 
   test("flattenToolContent passes strings through and joins text parts", async () => {

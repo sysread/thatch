@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
+import { silenceConsoleError } from "./mocks/console-error";
 import { ChatStore, ChatPoller, isStale, nowIso, CHAT_STALE_MS, CHAT_POLL_INTERVAL_MS, CHAT_AUTO_TTL_DAYS, MAX_BODY_LEN, CHAT_SPLIT_PART_LEN, CHAT_MAX_BODY_CHARS, CHAT_READ_PAGE_LEN, isoMinutesAgo as cutoffAgo, NAME_CHARSET, chatTailDiff, formatChatTailJsonl, renderChatParticipant, parseChatTimeBound, filterChatTailRows, chatTailBacklog, slugifyTitle, isDefaultSessionTitle, humanAge, chatLiveness, splitChatRoster, sortChatRoster, splitChatBody, chatReadClip, chatReadPage, createWakeGate, continuedInTarget, scanPredecessorTranscript, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailRow, type ChatTailFilter } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { chatEchoText } from "../src/prompts";
@@ -1339,10 +1340,8 @@ describe("ChatPoller", () => {
   });
 
   test("delivery failure leaves messages pending", async () => {
-    // The production delivery path logs each failed delivery; silence it so
-    // the expected failure does not leak into the test output.
-    const errorLog = console.error;
-    console.error = () => {};
+    // The production delivery path logs each failed delivery; the scope
+    // swallows it so the expected failure does not leak into the output.
     const failing = new ChatPoller({
       store: db,
       hostedSessions: () => hosted,
@@ -1352,13 +1351,11 @@ describe("ChatPoller", () => {
       canDeliver: () => true,
       pollIntervalMs: 60_000,
     });
-    try {
+    await silenceConsoleError(async () => {
       db.sendChatMessage("ses_a", "bob-00001", "hello");
       await failing.deliverPending();
       expect(db.pendingChatNotifications(["ses_b"], cutoffAgo(15)).length).toBe(1);
-    } finally {
-      console.error = errorLog;
-    }
+    });
     failing.dispose();
   });
 
@@ -1413,11 +1410,9 @@ describe("ChatPoller", () => {
       pollIntervalMs: 60_000,
       maxNudgesPerHour: 1,
     });
-    // The production delivery path logs the failed stamp; silence it so the
-    // expected failure does not leak into the test output.
-    const errorLog = console.error;
-    console.error = () => {};
-    try {
+    // The production delivery path logs the failed stamp; the scope
+    // swallows it so the expected failure does not leak into the output.
+    await silenceConsoleError(async () => {
       db.sendChatMessage("ses_a", "bob-00001", "counted even if the stamp fails");
       await stampThrows.deliverPending();
       expect(deliveries.length).toBe(1);
@@ -1425,9 +1420,7 @@ describe("ChatPoller", () => {
       // a later cycle must not re-deliver, stamp failure or not.
       await stampThrows.deliverPending();
       expect(deliveries.length).toBe(1);
-    } finally {
-      console.error = errorLog;
-    }
+    });
     stampThrows.dispose();
   });
 

@@ -738,6 +738,22 @@ function buildSessionTabHost(input: {
   };
 }
 
+// Runtime guard for promise-domain members newer than the pinned dev types
+// (compact - upstream #52385; remove - #52387): a typed call fails tsc
+// against the pin, and an unguarded cast crashes on an older host. Returns
+// the member as a callable, or undefined on the floor - the CALLER owns the
+// degrade (a log for user-requested actions like compact; silence for
+// best-effort ones like the child cleanup). The rpc registration guard in
+// setup is the same idiom at domain granularity and stays inline: it gates
+// a whole registration, not one call.
+export function optionalDomainMethod(
+  domain: object,
+  method: string,
+): ((input: unknown) => Promise<unknown>) | undefined {
+  const fn = (domain as Record<string, unknown>)[method];
+  return typeof fn === "function" ? (fn as (input: unknown) => Promise<unknown>) : undefined;
+}
+
 // The HostCapabilities implementation over the v2 promise context. Every
 // operation the v2 surface lacks degrades as a no-op or null - the shared
 // runtime's callers treat those results as best-effort and log, never crash.
@@ -754,9 +770,9 @@ function buildCapabilities(
   // original cast (as unknown as {...}) suppressed are exactly what the
   // review caught (message.list does not exist here; get takes
   // {sessionID}). compact and remove DO exist on newer SDK builds but not
-  // on the pinned dev types - both calls are runtime-guarded instead of
-  // cast (see compactSession and the sessionDelete comment). Let the
-  // typecheck keep holding that line for the pinned surface.
+  // on the pinned dev types - both calls go through optionalDomainMethod
+  // (above). Let the typecheck keep holding that line for the pinned
+  // surface.
   const session = context.session;
 
   return {
@@ -782,16 +798,17 @@ function buildCapabilities(
       return { id };
     },
     // Extraction child cleanup: upstream exposed session.remove on the
-    // promise domain (#52387), the same era as compact - runtime-guarded
-    // the same way (the pinned dev types predate the surface). An older
-    // host keeps the documented gap: the session picker accumulates one
-    // thatch-extraction entry per extraction, and "continue last session"
+    // promise domain (#52387), the same era as compact - guarded the same
+    // way (optionalDomainMethod; the pinned dev types predate the surface).
+    // An older host keeps the documented gap: the session picker accumulates
+    // one thatch-extraction entry per extraction, and "continue last session"
     // (-c) logic that picks the newest top-level session lands in an
     // extraction child after any session that triggered extraction,
     // because the child is top-level and newer.
     sessionDelete: async (id: string) => {
-      const remove = (session as { remove?: (input: { sessionID: string }) => Promise<unknown> }).remove;
-      if (typeof remove !== "function") return;
+      const remove = optionalDomainMethod(session, "remove");
+      // Best-effort by the caller's contract: the floor degrades silently.
+      if (!remove) return;
       await remove({ sessionID: id });
     },
     promptSession: async (sessionID, body, _mode) => {
@@ -840,11 +857,11 @@ function buildCapabilities(
     compactSession: async (sessionID: string) => {
       // Upstream exposed session.compact on the promise SessionDomain
       // (#52385) - the same core compaction the built-in /compact runs.
-      // The pinned dev types predate that surface, so the call is
-      // runtime-guarded like the rpc floor: an older host degrades to a
-      // logged no-op (the wrap-up checklist and flush still ran).
-      const compact = (session as { compact?: (input: { sessionID: string }) => Promise<unknown> }).compact;
-      if (typeof compact !== "function") {
+      // The pinned dev types predate that surface, so the call goes through
+      // optionalDomainMethod: an older host degrades to a logged no-op (the
+      // wrap-up checklist and flush still ran).
+      const compact = optionalDomainMethod(session, "compact");
+      if (!compact) {
         console.error("[thatch] v2: compaction trigger unavailable; wrap-up checklist ran, compact skipped");
         return;
       }

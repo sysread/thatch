@@ -69,9 +69,10 @@ const tuiToastCalls: any[] = [];
 // The message list the mock session.messages returns; wrap-up tests point
 // this at canned assistant responses to simulate the greenlight check.
 let wrapUpMessages: any[] = [];
-// The real console.error, stashed by beforeAll so afterAll can restore it
-// after the auto-register log filter is removed.
-let fileConsoleError: ((...args: unknown[]) => void) | null = null;
+// The real console.error, bound at module load (before any hook can swap
+// it), so afterAll can restore it UNCONDITIONALLY after the auto-register
+// log filter below comes off - no conditional restore to get wrong.
+const realConsoleError = console.error.bind(console);
 
 beforeAll(async () => {
   dbDir = mkdtempSync(join(tmpdir(), "thatch-plugin-test-"));
@@ -83,13 +84,11 @@ beforeAll(async () => {
   // failure fire-and-forget. Such a log can land after the triggering test
   // has ended, so a per-test silence cannot trap it reliably. Filter the
   // known phrase for the whole file instead; every other error still logs.
-  const realConsoleError = console.error.bind(console);
   console.error = (...args: unknown[]) => {
     const first = args[0];
     if (typeof first === "string" && first.includes("chat auto-register failed")) return;
     realConsoleError(...args);
   };
-  fileConsoleError = realConsoleError;
   // RECALL_THRESHOLD is a module-level constant (0.55 default), read when
   // runtime.ts is first imported. Setting the env var here can't change it,
   // but 0.55 works: the hash-based mock scores ~1.0 for identical texts and
@@ -134,7 +133,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   hooks.dispose?.();
-  if (fileConsoleError) console.error = fileConsoleError;
+  console.error = realConsoleError;
   rmSync(dbDir, { recursive: true, force: true });
   delete process.env.THATCH_DB_PATH;
   delete process.env.XDG_CONFIG_HOME;
