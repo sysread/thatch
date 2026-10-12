@@ -60,9 +60,15 @@ export class ThatchDB {
   #predictionsStore!: PredictionEngine;
   #behaviorsStore!: BehaviorEngine;
   #chatStore!: ChatStore;
+  // The open-tab provider for broadcast targeting (roster OPEN-vs-RECENT).
+  // Optional: unwired (tests, callers with no tab reader) means no tab
+  // signal, so every fresh opencode row degrades to RECENT - honest, never
+  // a false OPEN. Production callers wire chatOpenTabs(src/tab-state.ts).
+  #chatOpenTabs?: () => ReadonlySet<string>;
 
-  constructor(path: string) {
+  constructor(path: string, opts: { chatOpenTabs?: () => ReadonlySet<string> } = {}) {
     this.#path = path;
+    this.#chatOpenTabs = opts.chatOpenTabs;
     this.#open();
   }
 
@@ -1086,7 +1092,22 @@ export class ThatchDB {
   }
 
   broadcastChatMessage(fromSession: string, body: string) {
-    return this.#chat.broadcast(fromSession, body);
+    return this.#chat.broadcast(fromSession, body, this.#chatOpenTabs?.());
+  }
+
+  /**
+   * Confirmed tab closes recorded by the roster (the session_tab tool's
+   * bridge event). Readers subtract the fresh ones from the open-tab set
+   * (effectiveOpenTabs) so a residue tabs.json row cannot read OPEN right
+   * after a confirmed close.
+   */
+  chatTabClosures(): { sessionID: string; at: string }[] {
+    return this.runtimeStateAll()
+      .filter((r) => r.kind === "chat_tab_closed")
+      .flatMap((r) => {
+        const at = (r.value as { at?: string } | null)?.at;
+        return typeof at === "string" ? [{ sessionID: r.sessionID, at }] : [];
+      });
   }
 
   chatMessageStatus(sessionID: string) {

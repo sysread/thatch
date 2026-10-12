@@ -25,11 +25,18 @@ let db: ThatchDB;
 // A second, raw connection for fixture surgery: aging timestamps and other
 // row-level manipulation the public API deliberately does not expose.
 let raw: Database;
+// Open-tab fixture for the broadcast/liveness surfaces. null = "every
+// registered session has a tab" (preserves the pre-tab-signal pins); a
+// test replaces it with an explicit set to exercise the open/recent split.
+let openTabsFixture: ReadonlySet<string> | null;
 
 beforeEach(() => {
   dbDir = mkdtempSync(join(tmpdir(), "thatch-chat-test-"));
   dbPath = join(dbDir, "test.db");
-  db = new ThatchDB(dbPath);
+  openTabsFixture = null;
+  db = new ThatchDB(dbPath, {
+    chatOpenTabs: () => openTabsFixture ?? new Set(db.listChatSessions().map((r) => r.session_id)),
+  });
   raw = new Database(dbPath);
 });
 
@@ -307,6 +314,47 @@ describe("ChatStore via ThatchDB", () => {
     const empty = db.broadcastChatMessage("ses_a", "anyone there?");
     expect(empty.ok).toBe(true);
     if (empty.ok) expect(empty.recipients).toEqual([]);
+  });
+
+  test("broadcast targets only OPEN rows: fresh-without-tab is skipped and named", () => {
+    reg("ses_a", "alice");
+    reg("ses_b", "bob");
+    reg("ses_c", "carol");
+    reg("ses_m", "mickey");
+    raw.run("UPDATE chat_sessions SET host_kind = 'mcp' WHERE session_id = 'ses_m'");
+    // bob has a tab (OPEN); carol does not (RECENT). RECENT is skipped:
+    // the tab-less wake can be swallowed, so the fan-out would spend a
+    // model turn on a delivery that likely never runs. MCP always
+    // receives (it reads mail at its next prompt).
+    openTabsFixture = new Set(["ses_b", "ses_m"]);
+    const result = db.broadcastChatMessage("ses_a", "rebase if you are based on main");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.recipients.sort()).toEqual(["bob-00001", "mickey-00001"]);
+    expect(result.skipped).toEqual(["carol-00001"]);
+    expect(db.unreadChatCount("ses_b")).toBe(1);
+    expect(db.unreadChatCount("ses_m")).toBe(1);
+    expect(db.unreadChatCount("ses_c")).toBe(0);
+  });
+
+  test("broadcast with no tab signal degrades honestly: every opencode row is RECENT", () => {
+    reg("ses_a", "alice");
+    reg("ses_b", "bob");
+    reg("ses_m", "mickey");
+    raw.run("UPDATE chat_sessions SET host_kind = 'mcp' WHERE session_id = 'ses_m'");
+    // An unwired provider (no local opencode state, tabs disabled): no
+    // session reads as open, so only the MCP row receives - never a false
+    // OPEN-driven fan-out.
+    const noSignal = new ThatchDB(dbPath);
+    try {
+      const result = noSignal.broadcastChatMessage("ses_a", "anyone mounted?");
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.recipients).toEqual(["mickey-00001"]);
+      expect(result.skipped.sort()).toEqual(["bob-00001"]);
+    } finally {
+      noSignal.close();
+    }
   });
 
   test("read drains the inbox oldest-first and stamps messages read", () => {
@@ -708,9 +756,22 @@ describe("chatLiveness and roster split", () => {
 
   test("stale is two missed beats: one late beat is still fresh", () => {
     expect(CHAT_STALE_MS).toBe(2 * CHAT_POLL_INTERVAL_MS);
-    expect(chatLiveness(row({ last_seen: ago(CHAT_POLL_INTERVAL_MS + 5_000) }), NOW)).toBe("fresh");
-    expect(chatLiveness(row({ last_seen: ago(CHAT_STALE_MS) }), NOW)).toBe("fresh");
+    expect(chatLiveness(row({ last_seen: ago(CHAT_POLL_INTERVAL_MS + 5_000) }), NOW)).toBe("recent");
+    expect(chatLiveness(row({ last_seen: ago(CHAT_STALE_MS) }), NOW)).toBe("recent");
     expect(chatLiveness(row({ last_seen: ago(CHAT_STALE_MS + 1) }), NOW)).toBe("stale");
+  });
+
+  test("fresh heartbeat splits open vs recent on the open-tab set", () => {
+    const tabs = new Set(["ses_x"]);
+    // Tab present: OPEN (session presence). Same heartbeat without a tab:
+    // RECENT (host alive, presence unknown). No tab set at all degrades
+    // everything to RECENT - never a false OPEN.
+    expect(chatLiveness(row({ session_id: "ses_x" }), NOW, tabs)).toBe("open");
+    expect(chatLiveness(row({ session_id: "ses_y" }), NOW, tabs)).toBe("recent");
+    expect(chatLiveness(row({ session_id: "ses_x" }), NOW, new Set())).toBe("recent");
+    expect(chatLiveness(row({ session_id: "ses_x" }), NOW)).toBe("recent");
+    // Staleness wins over tab membership: a stale row with a tab is STALE.
+    expect(chatLiveness(row({ session_id: "ses_x", last_seen: ago(CHAT_STALE_MS + 1) }), NOW, tabs)).toBe("stale");
   });
 
   test("mcp rows are turn-driven: idle is the normal between-prompts state", () => {

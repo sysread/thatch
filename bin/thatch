@@ -13,11 +13,12 @@ import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscript
 import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
 import { chatNotificationNudge } from "../src/prompts";
+import { chatOpenTabs as chatOpenTabsProvider } from "../src/tab-state";
 import { createDebugLog } from "../src/debug";
 
 const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 const dbPath = process.env.THATCH_DB_PATH ?? join(configHome, "thatch", "thatch.db");
-const db = new ThatchDB(dbPath);
+const db: ThatchDB = new ThatchDB(dbPath, { chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()) });
 
 const [command, ...args] = process.argv.slice(2);
 
@@ -427,7 +428,9 @@ const CHAT_ROSTER_HEADER = ["NAME", "SESSION ID", "AGE", "STATUS", "PROJECT", "T
  * Renders the `chat list` roster as two sections - Active and Stale - each
  * an aligned-column table under a header row. Section headers are bold,
  * the stale explainer is muted italic; rows use green names, dim age,
- * green/red status, and a muted italic topic.
+ * green/red status, and a muted italic topic. The STATUS column carries
+ * the liveness verdict: open (tab open now), recent (host alive, no open
+ * tab), active/idle (MCP rows), stale (host presumed gone).
  * staleCapMs bounds how old a stale row is displayed (null = no bound);
  * rows past the cap collapse into a muted hidden-count note so the reader
  * knows rows exist that the window left out.
@@ -435,7 +438,7 @@ const CHAT_ROSTER_HEADER = ["NAME", "SESSION ID", "AGE", "STATUS", "PROJECT", "T
  * NO_COLOR is unset), so piped output - grep, redirect, QA runners - stays
  * clean plain text.
  */
-function formatChatRoster(sessions: ChatSessionRow[], staleCapMs: number | null = null): string {
+function formatChatRoster(sessions: ChatSessionRow[], staleCapMs: number | null = null, openTabs?: ReadonlySet<string>): string {
   const colored = process.stdout.isTTY === true && !process.env.NO_COLOR;
   const paint = (code: string, s: string) => (colored ? `\x1b[${code}m${s}\x1b[0m` : s);
   const { active, stale, staleHidden } = splitChatRoster(sortChatRoster(sessions), Date.now(), staleCapMs);
@@ -444,7 +447,7 @@ function formatChatRoster(sessions: ChatSessionRow[], staleCapMs: number | null 
       r.name,
       r.session_id,
       humanAge(r.last_seen),
-      chatLiveness(r),
+      chatLiveness(r, Date.now(), openTabs),
       r.project ?? "unknown",
       r.topic ?? "",
     ];
@@ -455,11 +458,14 @@ function formatChatRoster(sessions: ChatSessionRow[], staleCapMs: number | null 
     const header = align(CHAT_ROSTER_HEADER).map((h) => paint("1", h)).join("  ");
     const body = rows.map((r) => {
       const [name, sessionID, age, status, project, topic] = align(cells(r));
+      // Green = present or reachable (open/active), yellow = alive host
+      // without a tab (recent, wake not guaranteed), red = stale.
+      const statusColor = status === "stale" ? "31" : status === "recent" ? "33" : "32";
       return [
         paint("32", name),
         paint("2", sessionID),
         paint("2", age),
-        paint(status === "stale" ? "31" : "32", status),
+        paint(statusColor, status),
         project,
         topic ? paint("3;90", topic) : "",
       ].join("  ").trimEnd();
@@ -514,8 +520,11 @@ async function chatCommand(rest: string[]): Promise<void> {
           process.exit(1);
         } else staleCapMs = Number(staleNext) * 24 * 60 * 60 * 1000;
       }
+      // The open-tab set is read once per invocation at render time: rows
+      // with a tab render "open", fresh rows without one "recent".
+      const openTabs = chatOpenTabsProvider(() => db.chatTabClosures())();
       let sessions = db.listChatSessions();
-      if (!showStale) sessions = sessions.filter((r) => chatLiveness(r) === "fresh");
+      if (!showStale) sessions = sessions.filter((r) => chatLiveness(r, Date.now(), openTabs) !== "stale");
       if (sessions.length === 0) {
         console.log(
           showStale
@@ -524,7 +533,7 @@ async function chatCommand(rest: string[]): Promise<void> {
         );
         break;
       }
-      console.log(formatChatRoster(sessions, showStale ? staleCapMs : null));
+      console.log(formatChatRoster(sessions, showStale ? staleCapMs : null, openTabs));
       break;
     }
 

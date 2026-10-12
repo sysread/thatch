@@ -17,13 +17,18 @@ let db: ThatchDB;
 let model: MockEmbeddingModel;
 let ctx: CoreContext;
 const defaultStore = "test-owner/test-repo";
+// Open-tab fixture for the roster/chat_send surfaces. null = "every
+// registered session has a tab" (preserves the open-class pins); a test
+// replaces it with an explicit set to exercise the open/recent split.
+let openTabsFixture: ReadonlySet<string> | null;
 
 beforeEach(() => {
   dbDir = mkdtempSync(join(tmpdir(), "thatch-mcp-test-"));
   dbPath = join(dbDir, "test.db");
   db = new ThatchDB(dbPath);
   model = new MockEmbeddingModel();
-  ctx = { db, model, defaultStore };
+  openTabsFixture = null;
+  ctx = { db, model, defaultStore, openTabs: () => openTabsFixture ?? new Set(db.listChatSessions().map((r) => r.session_id)) };
 });
 
 afterEach(() => {
@@ -1151,18 +1156,50 @@ describe("chat delivery model in tool output", () => {
     expect(staleSection).not.toContain("ses_split_oc");
   });
 
+  test("chat_list renders the open/recent split inside the Active section", async () => {
+    await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_roster_open", agent: "build" });
+    await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_roster_recent", agent: "build" });
+    // One of the two carries a tab; the other is a fresh heartbeat with
+    // no tab. Both stay in Active; the per-row verdict distinguishes them.
+    openTabsFixture = new Set(["ses_roster_open"]);
+    const list = await findChatTool("chat_list").execute({}, ctx, { sessionID: "ses_roster_open", agent: "build" });
+    expect(list).toContain("# Active Sessions");
+    // The row bodies carry the verdict right after the last-seen age
+    // (matched with context - the bare token would also match the legend).
+    expect(list).toMatch(/ago open/);
+    expect(list).toMatch(/ago recent/);
+    expect(list).toContain("Liveness: open = the session has an opencode tab right now");
+    // No tab signal at all: everything degrades to recent, never open.
+    openTabsFixture = new Set();
+    const degraded = await findChatTool("chat_list").execute({}, ctx, { sessionID: "ses_roster_open", agent: "build" });
+    expect(degraded).not.toMatch(/ago open/);
+  });
+
   test("chat_send states the recipient's liveness at send time", async () => {
     await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_snd_to", agent: "build" });
     await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_snd_from", agent: "build" });
     // send resolves recipients by name OR session id - id keeps this test
     // free of name lookups.
+    // OPEN recipient (tab in the fixture): the wake promise stands.
     const fresh = await findChatTool("chat_send").execute(
       { to: "ses_snd_to", body: "ping" },
       ctx,
       { sessionID: "ses_snd_from", agent: "build" },
     );
-    expect(fresh).toContain("fresh");
+    expect(fresh).toContain("open (last seen");
     expect(fresh).toContain("will be woken");
+    // RECENT recipient (fresh heartbeat, no tab): honest wording - the
+    // tab-less wake is NOT guaranteed, replacing the old false promise.
+    openTabsFixture = new Set();
+    const recent = await findChatTool("chat_send").execute(
+      { to: "ses_snd_to", body: "ping" },
+      ctx,
+      { sessionID: "ses_snd_from", agent: "build" },
+    );
+    expect(recent).toContain("RECENT");
+    expect(recent).toContain("NO OPEN TAB");
+    expect(recent).toContain("not guaranteed");
+    expect(recent).not.toContain("will be woken");
     new Database(dbPath).run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_snd_to'");
     const stale = await findChatTool("chat_send").execute(
       { to: "ses_snd_to", body: "ping again" },

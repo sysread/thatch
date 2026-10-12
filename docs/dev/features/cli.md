@@ -51,7 +51,8 @@ Read-only window on the cross-session chat directory ([cross-session-chat.md](cr
   (`formatChatRoster()` in `bin/thatch`; pipes and QA runners get plain
   text). Rows are split into Active and Stale sections by
   `splitChatRoster()`; the status column is `chatLiveness()`'s verdict
-  (`fresh`/`stale` for opencode rows, `active`/`idle` for MCP rows).
+  (`open`/`recent`/`stale` for opencode rows - the open-tab reader feeds
+  the open/recent split - `active`/`idle` for MCP rows).
 - `chat tail` follows the message stream as JSONL: one `ChatTailEvent`
   per line via `formatChatTailJsonl()` (a bare `JSON.stringify`; no ANSI,
   no markdown rendering, no local-time conversion - the tail is a log for

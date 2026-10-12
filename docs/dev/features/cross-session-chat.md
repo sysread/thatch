@@ -235,12 +235,17 @@ the top of the result teaches the paging call, and ids make it exact.
 
 `chat_broadcast` posts one message to every other registered session at
 once, one inbox row per recipient per part - the existing wake machinery
-(grouping, gating, rate cap) treats each as ordinary mail. Stale sessions
-are skipped and reported rather than messaged: a host that has stopped
-heartbeat-ing will never read the mail, and dead mail to a dead process is
-just clutter. The sender is excluded. It is a separate tool rather than a
+(grouping, gating, rate cap) treats each as ordinary mail. Opencode rows
+are skipped and reported unless they are OPEN (fresh heartbeat AND a tab
+open now, per the open-tab reader below): a host that has stopped
+heartbeat-ing will never read the mail, and a fresh-but-tab-less session's
+wake can be swallowed without running a turn, so messaging it would spend
+a model turn on a delivery that likely never fires. MCP sessions always
+receive (they read mail at their next prompt). Every skip is listed by
+name in the result's `skipped` field. The sender is excluded. It is a
+separate tool rather than a
 magic `chat_send` recipient because "send to all" changes the behavior
-(fan-out, stale skipping, no address resolution), and a function that
+(fan-out, skip classes, no address resolution), and a function that
 changes behavior drastically on a parameter value is two functions.
 
 Retries are idempotent by READ STATE within a short window: a send (or
@@ -269,7 +274,8 @@ fires no `session.deleted`, so its rows would linger - staleness catches
 them: a row that has missed two consecutive beats (`CHAT_STALE_MS`, 60s
 at the default interval) is stale, meaning its harness stopped. Two beats
 rather than one so a single late poll cycle does not flap the roster.
-Heartbeat age is the ONLY liveness signal, by design. A host process id
+Heartbeat age is the only WRITTEN liveness signal, by design (the tab
+reader below is read-only). A host process id
 cannot serve: the same session is re-hosted by a new process on every
 `-s` resume, so a pid stamped on the row lies as soon as a different
 harness beats it (it says dead while the heartbeat proves alive). RESTART
@@ -280,12 +286,43 @@ into, so without the grace they would read stale while alive-idle and
 mail to them would not wake the tab. Sessions that emit activity
 graduate to permanent hosting; still-silent ones (closed tabs) age out
 at the grace and go stale. `isStale`
-(src/chat.ts) is the single rule; `chatLiveness`, the `chat_send` note,
-and the broadcast skip all call it, so they cannot disagree. `chat_list`
+(src/chat.ts) is the single staleness rule; `chatLiveness`, the `chat_send`
+note, and the broadcast skip all call it, so they cannot disagree.
+
+### The open-tab reader: OPEN vs RECENT
+
+Heartbeat age alone conflates presence with recency: a finished
+conversation stays fresh until its directory's instance stops beating it
+(days), and a closed tab leaves a fresh row. The refinement is a READ-ONLY
+second signal, `src/tab-state.ts`: at roster render and broadcast time,
+glob `<XDG_STATE_HOME>/opencode/*/tui/tabs.json` (one file per release
+channel - "latest" today, hence the glob), parse BOTH scope modes
+(`global.tabs` and per-path `cwd.*.tabs`; the scope depends on opencode's
+`tabs.scope` config), and build the set of sessionIDs carrying a tab.
+Missing files, bad JSON, and absent state trees degrade to an empty set -
+an unknown tab state never reads as OPEN. `chatLiveness` takes the set and
+returns `open` (fresh + tab), `recent` (fresh + no tab), `stale`;
+MCP rows keep `active`/`idle`. Callers compose the raw set with confirmed
+tab closes via `effectiveOpenTabs` (`chatOpenTabs` is the wired provider):
+the `session.tab_closed` bridge event (the session_tab tool's confirmed
+close) writes a `chat_tab_closed` runtime_state marker, and a FRESH marker
+(inside `CHAT_TAB_CLOSED_OVERRIDE_MS`, 2 staleness windows) subtracts the
+session from the set - so a residue tabs.json row cannot read OPEN right
+after a confirmed close. The marker self-expires (the death path stops the
+heartbeat, so the row goes stale on heartbeat age regardless) and is
+superseded by any later beat.
+
+Known limits, accepted: a killed window leaves tab rows behind (the file
+is restart persistence by design), so dead-window residue reads OPEN until
+its heartbeat ages out; tabs disabled degrades everything to RECENT.
+
+`chat_list`
 groups the result into Active and Stale sections - the stale section's
-explainer says what stale means - and `chat_send` states the recipient's
+explainer says what stale means, and each row renders its verdict -
+and `chat_send` states the recipient's
 liveness at send time, so a sender mailing a ghost learns it immediately
-instead of waiting on a wake that will never fire. Both roster surfaces
+instead of waiting on a wake that will never fire, and a sender mailing a
+tab-less session is told the wake is not guaranteed. Both roster surfaces
 order rows with `sortChatRoster` (also src/chat.ts): project first,
 alphabetical, with no-project rows last; most recently seen first within
 a project. The CLI roster bounds
@@ -475,7 +512,9 @@ caller's identity and mailbox, and is absent entirely when chat is
 disabled - absence is silent by construction.
 Staleness semantics differ by kind: an opencode row's stale age means its
 harness stopped beating (broadcast skips it), while an mcp row's age only means
-"between turns" (broadcast always delivers).
+"between turns" (broadcast always delivers). Broadcast also skips fresh
+opencode rows with no open tab (see the open-tab reader) - the skip
+classes are reported by name either way.
 
 The `/thatch/whois` command (opencode-only action, src/commands.ts) is the
 user-facing identity report: it relays `chat_status` for the invoking
@@ -489,18 +528,27 @@ mutates anything.
 
 Timing constants live in `src/chat.ts`: poll interval 30s, staleness
 threshold two missed beats (60s), re-nudge window 15 minutes, nudge cap 6 per recipient
-per hour, auto-row TTL 7 days. Environment overrides: `THATCH_CHAT_SPLIT_PART_LEN`
-(auto-split part budget, default 2000, clamped 500..9000) and
-`THATCH_CHAT_MAX_BODY_CHARS` (whole-body acceptance ceiling, default 20000);
-both are resolved once at module load and sanitized to positive integers
+per hour, auto-row TTL 7 days, confirmed-close override window two
+staleness windows (`CHAT_TAB_CLOSED_OVERRIDE_MS` in `src/tab-state.ts`).
+Environment overrides: `THATCH_CHAT_SPLIT_PART_LEN`
+(auto-split part budget, default 2000, clamped 500..9000),
+`THATCH_CHAT_MAX_BODY_CHARS` (whole-body acceptance ceiling, default 20000), and
+`THATCH_OPENCODE_STATE_ROOT` (the open-tab reader's state root, tests and
+QA sandboxes only);
+the split constants are resolved once at module load and sanitized to positive integers
 within their clamps - invalid values silently fall back to the default.
 
 ## Source files
 
 - `src/chat.ts` - ChatStore (directory + inbox SQL, assigned-name draw:
-  pool pick, slugify, counter bump, insert, prune, topic refresh), ChatPoller
+  pool pick, slugify, counter bump, insert, prune, topic refresh, broadcast
+  targeting), ChatPoller
   (heartbeat, gated delivery, re-nudge, rate cap, hourly prune sweep),
-  staleness helper
+  staleness helper, chatLiveness (the open/recent/active/idle/stale
+  verdicts)
+- `src/tab-state.ts` - the read-only open-tab reader: per-channel
+  tabs.json glob (global + cwd scopes), confirmed-close override window,
+  the composed open-tabs provider
 - `src/chat-names.ts` - the static display-name pool (nomenclater style),
   the base for every assigned name
 - `src/db.ts` - the chat tables in schema init (including

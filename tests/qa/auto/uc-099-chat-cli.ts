@@ -1,16 +1,21 @@
 import { $ } from "bun";
 import { Database } from "bun:sqlite";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 import { ThatchDB } from "../../../src/db";
+import { readOpenTabSessions } from "../../../src/tab-state";
 
 /**
  * UC-099: Chat CLI.
  *
  * Automatable: `thatch chat list` and `thatch chat tail --once` are pure
  * CLI reads over a controlled DB. Seeds registered sessions with topics
- * (fresh and stale), a direct message, a broadcast, and a departed sender,
- * then verifies the roster and the tail's JSONL events, including the
- * broadcast flag and the departed-sender fallback. The roster's project
+ * (fresh and stale), a tabs.json fixture in the sandbox XDG state tree
+ * (some sessions with tabs, some without), a direct message, a broadcast,
+ * and a departed sender, then verifies the roster (including the
+ * open/recent liveness verdicts) and the tail's JSONL events, including
+ * the broadcast flag and the departed-sender fallback. The roster's project
  * grouping order is probed with two sibling-project seeds, the active-only
  * default is verified against the long-stale ghost, bare --stale adds the
  * stale section under the one-day display cap (hidden-count note), and
@@ -29,7 +34,7 @@ const useCase: UseCase = {
   ].join("\n"),
   steps: [
     "1. Seed a DB: three registered sessions (alpha with a topic, beta, ghost aged long stale), two ordering probes in sibling projects, a direct message, a broadcast, and a message from a sender that then unregisters.",
-    "2. Run `thatch chat list` and verify the default active-only roster: one Active section (aligned header row plus name, human age, status, project, and topic columns) with no Stale section.",
+    "2. Run `thatch chat list` and verify the default active-only roster: one Active section (aligned header row plus name, human age, status, project, and topic columns) with no Stale section, and per-row status verdicts: open for seeds with a tab, recent for seeds without one.",
     "3. Verify bare `--stale` adds the Stale section but still hides the long-stale ghost behind the default one-day display cap (hidden-count note), and `--stale all` shows it unbounded.",
     "4. Run `thatch chat tail --once` and verify every stdout line is one JSON object with event/at/id/from/to/body fields, broadcast copies carry broadcast: true with their real recipient, and already-read messages have a read event linked by id.",
     "5. Verify a departed sender renders as unknown in the tail.",
@@ -47,9 +52,31 @@ const useCase: UseCase = {
     const bin = `${ctx.repoRoot}/bin/thatch`;
     const run = (args: string[]) => $`bun ${bin} ${args}`.env(ctx.env).cwd(ctx.dir).quiet().nothrow();
 
+    // The sandbox XDG state tree doubles as the open-tab fixture root: the
+    // CLI's reader derives <XDG_STATE_HOME>/opencode/<channel>/tui/tabs.json
+    // through the real path derivation. alpha and beta carry tabs (OPEN);
+    // the other seeds do not (RECENT).
+    const stateRoot = join(ctx.env.XDG_STATE_HOME, "opencode");
+    mkdirSync(join(stateRoot, "latest", "tui"), { recursive: true });
+    writeFileSync(
+      join(stateRoot, "latest", "tui", "tabs.json"),
+      JSON.stringify({
+        global: { tabs: [], unread: {} },
+        cwd: {
+          "/sandbox/project": {
+            tabs: [{ sessionID: "ses_alpha", title: "watching CI" }, { sessionID: "ses_beta", title: "beta" }],
+            unread: {},
+          },
+        },
+      }),
+    );
+
     // Seed on the fixture's THATCH_DB_PATH (the CLI opens the same file
-    // through its own env).
-    const seeded = new ThatchDB(ctx.env.THATCH_DB_PATH);
+    // through its own env). The seeded db gets the same open-tab reader so
+    // its broadcast sees the same tab state the CLI will render.
+    const seeded = new ThatchDB(ctx.env.THATCH_DB_PATH, {
+      chatOpenTabs: () => readOpenTabSessions(stateRoot),
+    });
     try {
       const a = seeded.registerChatSession("ses_alpha", "acme/widgets", "watching CI", "opencode", "alpha");
       const b = seeded.registerChatSession("ses_beta", "acme/widgets", null, "opencode", "beta");
@@ -147,6 +174,12 @@ const useCase: UseCase = {
     const at = (needle: string) => listText.indexOf(needle);
     if (at("early-00001") === -1 || at("early-00001") > at("alpha-00001") || at("alpha-00001") > at("late-00001")) {
       console.log(`  FAIL: roster rows not ordered by project:\n${listText}`);
+      return "FAIL";
+    }
+    // Liveness verdicts: tab-carrying seeds render open, tab-less ones
+    // recent (both stay in the Active section; only staleness splits it).
+    if (!/ago\s+open\b/.test(listText) || !/ago\s+recent\b/.test(listText)) {
+      console.log(`  FAIL: roster rows missing open/recent verdicts:\n${listText}`);
       return "FAIL";
     }
 

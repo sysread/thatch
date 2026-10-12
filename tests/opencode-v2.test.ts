@@ -868,6 +868,11 @@ describe("opencode v2 adapter", () => {
     // ...and the death row carries the watch targets for peer surfacing.
     const death = check.runtimeStateAll().find((r) => r.kind === "watcher_death" && r.sessionID === "ses_sub_close");
     expect((death?.value as any)?.targets).toContain("acme/widgets#7");
+    // The roster's demotion record rides the same event: a chat_tab_closed
+    // marker lets every reader (roster render, broadcast targeting) distrust
+    // a residue tab row for this session instantly.
+    const closure = check.runtimeStateAll().find((r) => r.kind === "chat_tab_closed" && r.sessionID === "ses_sub_close");
+    expect(typeof (closure?.value as any)?.at).toBe("string");
     check.close();
   });
 

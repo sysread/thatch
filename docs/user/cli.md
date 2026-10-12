@@ -57,7 +57,8 @@ thatch chat tail --since 2026-09-12 --until "2026-09-13 09:00"   # a window
 
 `chat list` shows every registered session in two sections, Active and
 Stale, each as aligned columns under a header row: how long since its
-last heartbeat, its status (`fresh` or `stale` for opencode sessions;
+last heartbeat, its status (`open` - a tab is open now - or `recent` -
+host alive, no open tab - for opencode sessions;
 `active` or `idle` for Claude Code and Cursor sessions, which only beat
 when a prompt runs), its project, and its topic (the session's title) -
 the fastest way to answer "which session should I talk to about X?"

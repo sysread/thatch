@@ -133,6 +133,13 @@ export interface CoreContext {
    *  authoritative over the caller-claimed `as` argument. Returns null when
    *  no fresh mapping exists (Cursor, unknown server process). */
   chatDerivedIdentity?: () => string | null;
+  /** Reads the sessions that have an opencode tab open RIGHT NOW (the
+   *  per-channel tabs.json reader plus confirmed-close overrides, computed
+   *  fresh at each call). Roster rows carrying a tab render "open"; fresh
+   *  rows without one render "recent", and broadcast targets only open
+   *  rows. Unwired (tests, hosts with no local opencode state) means no
+   *  tab signal: everything degrades to "recent", never a false "open". */
+  openTabs?: () => ReadonlySet<string>;
   /** Host-executed session-tab operations, wired ONLY by the opencode v2
    *  adapter (post-construction into the shared CoreContext, because the
    *  implementation closes over both the runtime's db and the v2 plugin
@@ -2131,12 +2138,14 @@ const chatRegisterDef: ToolDef = {
 };
 
 /** Lists registered sessions with liveness. Stale means the session's host
- *  process has not heartbeat-ed it recently - it is gone or hung. */
+ *  process has not heartbeat-ed it recently - it is gone or hung. Fresh
+ *  rows split into open (a tab is open now) and recent (no known tab). */
 const chatListDef: ToolDef = {
   name: "chat_list",
   description:
     "List sessions registered in the cross-session chat directory, with a " +
-    "liveness marker (fresh = active, stale = likely gone), each session's " +
+    "liveness marker (open = a tab is open now, recent = host alive but no " +
+    "open tab, stale = host likely gone), each session's " +
     "project and topic, and your own unread count.",
   args: {
     as: mcpIdentityArg(),
@@ -2149,10 +2158,11 @@ const chatListDef: ToolDef = {
       return "No sessions registered. Sessions join the directory automatically on their first idle (opencode), or via chat_register - you would be the first.";
     }
     const unread = ctx.db.unreadChatCount(identity.sessionID);
+    const openTabs = ctx.openTabs?.() ?? new Set<string>();
     const { active, stale } = splitChatRoster(sortChatRoster(sessions));
     const line = (s: (typeof sessions)[number]) => {
       const self = s.session_id === identity.sessionID;
-      const liveness = chatLiveness(s);
+      const liveness = chatLiveness(s, Date.now(), openTabs);
       const project = s.project ? ` project:${s.project}` : "";
       // The age turns the liveness bucket into a concrete last-check-in;
       // the checkout kind tells sessions on a shared tree who sits in a
@@ -2178,13 +2188,17 @@ const chatListDef: ToolDef = {
     // The name-stability note closes the roster because it answers the
     // question a reader asking "is this the same X as before?" needs:
     // assigned names are unique forever; only hook-anchored MCP identities
-    // can be revisited by an old name.
+    // can be revisited by an old name. The liveness legend decodes the
+    // per-row verdicts: presence (open) is distinct from a live host
+    // (recent) and from a stopped one (stale).
     return (
       `[chat] ${sessions.length} session${sessions.length === 1 ? "" : "s"} registered\n\n` +
       `${sections.join("\n\n")}\n\n` +
+      `Liveness: open = the session has an opencode tab right now; recent = ` +
+      `its harness is alive but no tab is open (wake delivery not guaranteed); ` +
+      `stale = its harness has missed its heartbeat and may be gone. ` +
       `Names are assigned by thatch and never reused or reassigned, so the ` +
-      `same name is always the same session. A name whose row shows stale or ` +
-      `idle has not been seen recently.`
+      `same name is always the same session.`
     );
   },
 };
@@ -2226,17 +2240,21 @@ const chatSendDef: ToolDef = {
       ? `\n\nDUPLICATE SUPPRESSED: an identical message sent moments ago is still UNREAD in the recipient's inbox, so no second copy was created - the original delivery stands. The same body delivers again once they have read it (or a few seconds past the dedupe window).`
       : "";
     // State the recipient's ACTUAL liveness: the boilerplate "waits until
-    // idle" is only true for a live host. A stale recipient's harness is
-    // probably gone - say so, so the sender can reroute instead of waiting
-    // on a wake that will never fire.
+    // idle" is only true for a session with an open tab. A recent row's
+    // harness is alive but the tab-less wake can be swallowed without
+    // running a turn - say so instead of promising a wake that may never
+    // fire. A stale recipient's harness is probably gone entirely.
     const row = ctx.db.findChatSession(session_id);
-    const liveness = row ? chatLiveness(row) : "stale";
+    const liveness = row ? chatLiveness(row, Date.now(), ctx.openTabs?.()) : "stale";
+    const lastSeen = row ? humanAge(row.last_seen) : "just now";
     const delivery =
-      liveness === "fresh"
-        ? `The recipient is fresh (last seen ${row ? humanAge(row.last_seen) : "just now"}) and will be woken when its session goes idle.`
-        : liveness === "active"
-          ? `The recipient is an MCP-host session; it sees this message at its next prompt.`
-          : `NOTE: the recipient is STALE (last seen ${row ? humanAge(row.last_seen) : "unknown"}). Its harness may no longer be running - the message waits unread until that session resumes, and no wake will fire meanwhile. If you meant a different session, check chat_list and resend.`;
+      liveness === "open"
+        ? `The recipient is open (last seen ${lastSeen}) and will be woken when its session goes idle.`
+        : liveness === "recent"
+          ? `NOTE: the recipient is RECENT (last seen ${lastSeen}): its harness is alive, but the session has NO OPEN TAB. The message waits in its inbox, but wake delivery is not guaranteed - a tab-less session may not run a turn on the wake. Daemon-resident sessions (subordinates) usually still pick the message up on their next activity; a closed tab may sit unread. If you expected a live window, check chat_list.`
+          : liveness === "active"
+            ? `The recipient is an MCP-host session; it sees this message at its next prompt.`
+            : `NOTE: the recipient is STALE (last seen ${row ? humanAge(row.last_seen) : "unknown"}). Its harness may no longer be running - the message waits unread until that session resumes, and no wake will fire meanwhile. If you meant a different session, check chat_list and resend.`;
     return (
       `[sent] to ${name} (${session_id.slice(0, 12)})\n\n` +
       `${delivery}${splitNote}${dedupeNote}`
@@ -2344,11 +2362,12 @@ const chatBroadcastDef: ToolDef = {
     "Broadcast one message to every other registered session on this " +
     "machine at once - for announcements and open questions (\"which of " +
     "you is working on X?\", \"main just moved, rebase if you are based on " +
-    "it\"). Stale opencode sessions (harness stopped heartbeating) are skipped and " +
-    "reported, since they will never read the mail; MCP sessions receive " +
-    "it at their next prompt. Each recipient is woken like any chat " +
-    "message, so broadcast sparingly: every live session spends a model " +
-    "turn on it.",
+    "it\"). Opencode sessions without an open tab (stale, or fresh but " +
+    "tab-less) are skipped and reported: they are not reliably wakeable, so " +
+    "messaging them would spend a turn on a delivery that likely never " +
+    "runs. MCP sessions receive it at their next prompt. Each recipient is " +
+    "woken like any chat message, so broadcast sparingly: every open " +
+    "session spends a model turn on it.",
   args: {
     body: z.string().describe(
       `Message body, delivered to every other registered session. Bodies over ${CHAT_SPLIT_PART_LEN} characters ` +
@@ -2368,7 +2387,7 @@ const chatBroadcastDef: ToolDef = {
       `recipients: ${result.recipients.length > 0 ? result.recipients.join(", ") : "(none)"}`,
     ];
     if (result.parts > 1) lines.push(`sent as ${result.parts} parts per recipient (the body exceeded ${CHAT_SPLIT_PART_LEN} characters and was auto-split)`);
-    if (result.skipped.length > 0) lines.push(`skipped stale: ${result.skipped.join(", ")}`);
+    if (result.skipped.length > 0) lines.push(`skipped (stale or no open tab): ${result.skipped.join(", ")}`);
     if (result.deduped > 0) lines.push(`duplicate suppressed: an identical broadcast sent moments ago is still UNREAD at ${result.deduped} recipient${result.deduped === 1 ? "" : "s"} - the original delivery stands; the same body delivers again to a recipient once they have read it`);
     return (
       lines.join("\n") +
@@ -2625,6 +2644,7 @@ export interface CoreContextExtensions {
   drainExtractionQueue?: CoreContext["drainExtractionQueue"];
   watcherRegistry?: WatcherRegistry;
   projectDir?: string;
+  openTabs?: CoreContext["openTabs"];
 }
 
 /**
@@ -2652,6 +2672,7 @@ export function buildCoreContext(
     drainExtractionQueue: extensions?.drainExtractionQueue,
     watchers: extensions?.watcherRegistry,
     projectDir: extensions?.projectDir,
+    openTabs: extensions?.openTabs,
   };
 }
 

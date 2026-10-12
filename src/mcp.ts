@@ -6,6 +6,7 @@ import { BgeEmbeddingModel } from "./embeddings";
 import { detectRepo } from "./git";
 import { checkSetup, setupClaudeCode, setupCursor } from "./setup";
 import { TOOL_DEFS, type CoreContext, type ToolDef } from "./tool-defs";
+import { chatOpenTabs as chatOpenTabsProvider } from "./tab-state";
 import { actionDefs, type ActionDef } from "./commands";
 import { mcpToolName } from "./prompts";
 import { SidebandServer, sidebandSocketPath } from "./sideband";
@@ -136,7 +137,7 @@ export async function runMcpServer(): Promise<void> {
 
   // The DB must exist before identity detection: detectRepo consults the
   // repo_paths cache when the project directory is gone (deleted worktree).
-  const db = new ThatchDB(dbPath);
+  const db: ThatchDB = new ThatchDB(dbPath, { chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()) });
   const detected = await detectRepo(projectDir, repoPathCache(db));
   // unknown-to-global, matching the hook's mapping (bin/thatch): chat
   // registration must follow the same store the tools would read, and
@@ -173,6 +174,9 @@ export async function runMcpServer(): Promise<void> {
     defaultStore: repo,
     extractionPayloadProvider,
     drainExtractionQueue,
+    // Same-machine tab reader: the MCP server can read the local opencode
+    // state tree, so its roster renders the same open/recent split.
+    openTabs: chatOpenTabsProvider(() => db.chatTabClosures()),
     // Claude Code identity anchor, two model-proof layers:
     //  1. The hooks record (parent pid -> session) from payloads the model
     //     cannot influence, and this server is a child of the same Claude

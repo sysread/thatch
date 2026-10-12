@@ -206,7 +206,7 @@ requirements.
 | `thatch_chat_send` | Send a message to another registered session, by name or session id. The recipient is nudged when its session is idle. |
 | `thatch_chat_read` | Drain your inbox: all unread messages oldest-first, marked read. Senders identified by display name. |
 | `thatch_chat_unregister` | Leave the chat directory. |
-| `thatch_chat_broadcast` | Send one message to every other live registered session at once. Stale sessions (dead host processes) are skipped and reported. Use sparingly: every live session pays a model turn for a broadcast. |
+| `thatch_chat_broadcast` | Send one message to every other live registered session at once. Opencode sessions without an open tab (stale, or fresh but tab-less) are skipped and reported by name. Use sparingly: every open session pays a model turn for a broadcast. |
 
 See [cross-session-chat.md](cross-session-chat.md) for the full behavior,
 liveness model, and limitations.

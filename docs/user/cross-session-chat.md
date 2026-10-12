@@ -25,13 +25,20 @@ explicitly with `thatch_chat_register` (no arguments) - useful after
 `chat_unregister`, or just to check your assigned name. Once registered:
 
 - `thatch_chat_list` shows every registered session on the machine, grouped
-  into Active and Stale sections: active sessions can be woken; stale ones
-  have missed two heartbeats, about a minute (the opencode process hosting
-  them has probably stopped). Each row carries how long ago the session last
+  into Active and Stale sections: active sessions' harness is alive; stale
+  ones have missed two heartbeats, about a minute (the opencode process
+  hosting them has probably stopped). Each active row also carries a
+  liveness verdict: `open` means the session has an opencode tab open
+  right now, `recent` means the harness is alive but no tab is open. Each
+  row carries how long ago the session last
   checked in, its project, whether it runs in the project root or a linked
   git worktree, its topic, and your unread count
 - `thatch_chat_send` delivers a message to another registered session, by
   name or session id, and states the recipient's liveness at send time.
+  For a recipient with no open tab it says so plainly: the message waits
+  in the inbox, but the wake is not guaranteed to start a turn
+  (daemon-resident sessions like subordinates usually still pick the
+  message up on their next activity).
   An identical resend within a few seconds is treated as a client retry:
   while the first copy is still unread it succeeds but delivers nothing
   new (the tool output says so); once the recipient has read it, the same
@@ -46,8 +53,8 @@ explicitly with `thatch_chat_register` (no arguments) - useful after
   the rest with the `message` and `offset` arguments (each drain line
   carries the message id). Paging never marks anything read
 - `thatch_chat_broadcast` delivers one message to every other live
-  registered session at once (a long body is split per recipient, exactly
-  like a split `chat_send`)
+  registered session that has a tab open, plus every MCP session (a long
+  body is split per recipient, exactly like a split `chat_send`)
 - `thatch_chat_unregister` leaves the directory
 
 When mail arrives for an idle session, thatch wakes it with a notification -
@@ -61,10 +68,14 @@ the last is suffixed "(continued in next message)".
 
 Broadcasts are for announcements and open questions ("which of you is
 working on the payments code?", "main just moved, rebase if you are based
-on it"). Every live session gets the message and spends a model turn on it,
+on it"). Every OPEN session gets the message and spends a model turn on it,
 so broadcast sparingly - for anything with a known audience, `chat_send` is
-the polite tool. Stale sessions are skipped and reported: a dead session
-never reads a broadcast.
+the polite tool. Sessions without an open tab are skipped and reported by
+name: a stale session will never read the mail, and a fresh-but-tab-less
+session (a closed tab, or a headless subordinate) is not reliably wakeable,
+so messaging it would spend a turn on a delivery that likely never runs.
+With opencode tabs disabled, broadcasts reach only MCP sessions - that is
+the honest reading of "no tab signal", never a false fan-out.
 
 ## Watching the conversation
 
@@ -149,14 +160,27 @@ host the sessions run in.
 
 ## Liveness
 
-A session shows as fresh while the opencode process hosting it is
-running: hosted sessions keep beating (idle ones included), so the
-freshness is real. When that process dies, its sessions stop beating and
-show as stale about a minute later (two missed heartbeats), grouped into
-a separate Stale section. A laptop that slept reads the same way until
-its processes catch up.
+Liveness has three levels, and the roster shows which one a row is in.
+
+The base signal is the heartbeat: a session shows as fresh while the
+opencode process hosting it is running - hosted sessions keep beating
+(idle ones included), so the freshness is real. When that process dies,
+its sessions stop beating and show as stale about a minute later (two
+missed heartbeats), grouped into a separate Stale section. A laptop that
+slept reads the same way until its processes catch up.
+
+The second signal, read at roster time, is opencode's own tab state: a
+fresh row whose session has a tab open right now shows as `open`, one
+without shows as `recent`. `recent` covers finished-but-recently-active
+conversations, closed tabs, and daemon-resident sessions that never had a
+window (subordinates) - the harness is alive, but presence is unknown.
+With tabs disabled (or no opencode state on the machine) every fresh row
+shows as `recent`: an unknown tab state never reads as open.
+
 Messages to a stale session wait in its inbox unread - a dead session
-never reads them, and `chat_send` says so at send time. Continuing a
+never reads them, and `chat_send` says so at send time. Messages to a
+`recent` session are delivered, but `chat_send` warns that the wake is
+not guaranteed without an open tab. Continuing a
 session with `opencode -s <id>` reclaims its name and row, and any mail
 that queued while it was down is delivered at startup. Explicitly
 closing a session (deleting it in the TUI) unregisters it immediately,

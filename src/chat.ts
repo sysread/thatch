@@ -351,18 +351,28 @@ export function humanAge(iso: string, now = Date.now()): string {
   return `${Math.floor(minutes / (24 * 60))}d ago`;
 }
 
-/** The liveness verdict for one roster row, from heartbeat age alone:
- *  - "fresh"/"stale" for opencode rows (poller-driven heartbeat; stale means *    the hosting harness has missed two beats and is presumed gone)
- *  - "active"/"idle" for MCP rows (turn-driven; idle between prompts is the
- *    NORMAL state, so an idle MCP row is reachable, not dead)
- *  Heartbeat age is the only signal on purpose. A process id cannot serve:
- *  the same session is re-hosted by a new process on every `-s` resume, so
- *  a pid stamped on the row lies as soon as a different harness beats it.
- *  One clock, one rule. */
-export function chatLiveness(row: ChatSessionRow, now = Date.now()): "fresh" | "stale" | "active" | "idle" {
+/** The liveness verdict for one roster row, from heartbeat age plus (for
+ *  opencode rows) the open-tab set:
+ *  - "open" - fresh heartbeat AND a tab is open now (session presence)
+ *  - "recent" - fresh heartbeat, no known tab: an instance that saw this
+ *    session is alive and beating it, but the session itself may or may
+ *    not be wakeable (a closed tab's wake can be swallowed; a daemon-
+ *    resident subordinate runs headless and may still pick up mail)
+ *  - "stale" - the hosting harness has missed two beats and is presumed
+ *    gone
+ *  - "active"/"idle" for MCP rows (turn-driven; idle between prompts is
+ *    the NORMAL state, so an idle MCP row is reachable, not dead)
+ *  Heartbeat age alone decides staleness - a process id cannot serve: the
+ *  same session is re-hosted by a new process on every `-s` resume, so a
+ *  pid stamped on the row lies as soon as a different harness beats it.
+ *  The tab set is a READ-ONLY refinement (src/tab-state.ts) consumed at
+ *  render/broadcast time; omitting it degrades every fresh opencode row
+ *  to "recent" - honest, never a false "open". */
+export function chatLiveness(row: ChatSessionRow, now = Date.now(), openTabs?: ReadonlySet<string>): "open" | "recent" | "stale" | "active" | "idle" {
   const stale = isStale(row, now);
   if (row.host_kind === "mcp") return stale ? "idle" : "active";
-  return stale ? "stale" : "fresh";
+  if (stale) return "stale";
+  return openTabs?.has(row.session_id) ? "open" : "recent";
 }
 
 /** Orders roster rows for display: project first (so a shared-tree reader
@@ -858,10 +868,16 @@ export class ChatStore {
   }
 
   /**
-   * Posts a message to every other registered session at once. Stale
-   * sessions are skipped, not messaged - a host process that has stopped
-   * heartbeat-ing will never read the mail, and a broadcast is for reaching
-   * live agents. Each recipient gets its own inbox row per part, so the
+   * Posts a message to every other registered session at once. Opencode
+   * rows are skipped unless they are OPEN - a fresh heartbeat AND a tab
+   * open right now. Both skip classes are honest: a STALE row's host
+   * process has stopped heartbeat-ing and will never read the mail, and a
+   * RECENT row (fresh heartbeat, no open tab) is not reliably wakeable -
+   * the wake can be swallowed without a tab to receive it, so the fan-out
+   * would spend a model turn on a delivery that likely never runs. MCP
+   * rows always receive (they read mail at their next prompt). Every skip
+   * is listed by name in `skipped` so the caller can see who was left
+   * out and why. Each recipient gets its own inbox row per part, so the
    * existing wake machinery (grouping, gating, rate cap) treats the
    * broadcast as ordinary per-recipient mail. An oversized body is
    * auto-split (splitChatBody) and every recipient gets every part inside
@@ -871,6 +887,7 @@ export class ChatStore {
   broadcast(
     fromSession: string,
     body: string,
+    openTabs?: ReadonlySet<string>,
   ): { ok: true; recipients: string[]; skipped: string[]; deduped: number; parts: number } | { ok: false; error: string } {
     const trimmed = body.trim();
     if (!trimmed) return { ok: false, error: `Message body cannot be empty (attempted ${body.length} characters).` };
@@ -885,6 +902,9 @@ export class ChatStore {
       };
     }
     const parts = splitChatBody(trimmed);
+    // No provider = no tab signal: every fresh opencode row degrades to
+    // RECENT (honest - an unknown tab state never reads as open).
+    const open = openTabs ?? new Set<string>();
     const recipients: string[] = [];
     const skipped: string[] = [];
     let deduped = 0;
@@ -894,10 +914,12 @@ export class ChatStore {
     this.#db.transaction(() => {
       for (const row of this.list()) {
         if (row.session_id === fromSession) continue;
-        // Staleness means "host process gone" only for opencode rows; an
-        // mcp row between turns reads its mail at the next prompt, so it
+        // Two honest skip classes for opencode rows: STALE (host process
+        // gone - never reads the mail) and RECENT (fresh heartbeat, no
+        // open tab - the wake is not guaranteed to run a turn). An mcp
+        // row between turns reads its mail at the next prompt, so it
         // always receives.
-        if (row.host_kind === "opencode" && isStale(row)) {
+        if (row.host_kind === "opencode" && (isStale(row) || !open.has(row.session_id))) {
           skipped.push(row.name);
           continue;
         }

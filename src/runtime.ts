@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { createDebugLog } from "./debug";
 import { ThatchDB, repoPathCache } from "./db";
+import { chatOpenTabs as chatOpenTabsProvider } from "./tab-state";
 import { SharedModelPool } from "./embeddings";
 import { detectRepo, detectWorktreeKind, resolveSpawnCwd } from "./git";
 import { buildCoreContext } from "./tool-defs";
@@ -169,7 +170,10 @@ export async function createRuntime(input: {
 
   // The DB must exist before identity detection: detectRepo consults the
   // repo_paths cache when the session directory is gone.
-  const db = new ThatchDB(dbPath);
+  // chatOpenTabs composes the tab-state reader (tabs.json across channels,
+  // minus confirmed closes) lazily per call - never cached - so roster
+  // rendering and broadcast targeting see the current tab state.
+  const db: ThatchDB = new ThatchDB(dbPath, { chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()) });
   const repoCache = repoPathCache(db);
   const repo = await detectRepo(directory ?? worktree, repoCache);
 
@@ -1303,6 +1307,7 @@ export async function createRuntime(input: {
 
   return {
     coreContext: buildCoreContext(db, model, repo, {
+      openTabs: chatOpenTabsProvider(() => db.chatTabClosures()),
       extractionPayloadProvider: (targetID: string, fetcherID?: string): string | null => {
         // A fetcher identity turns the fetch into the delivery record: the
         // claimed entries stay accepted, and THAT fetcher's completion
@@ -1875,7 +1880,16 @@ export async function createRuntime(input: {
         // initiated only). CONFIRMED death: skip the delivery-persistence
         // heuristic entirely and run the death path now.
         const props = event.properties as { sessionID?: string; chatName?: string | null };
-        if (props.sessionID) watchers.sessionDied(props.sessionID, { chatName: props.chatName ?? null });
+        if (props.sessionID) {
+          // Roster demotion record: a confirmed close lets every reader
+          // (roster render, broadcast targeting) distrust a residue tab
+          // row for this session instantly, instead of waiting for
+          // tabs.json to agree or the heartbeat to age out. Self-expiring
+          // (CHAT_TAB_CLOSED_OVERRIDE_MS) and superseded by any later
+          // heartbeat, so a session that regains a tab reads OPEN again.
+          db.runtimeStatePut("chat_tab_closed", props.sessionID, { at: nowIso() }, directory);
+          watchers.sessionDied(props.sessionID, { chatName: props.chatName ?? null });
+        }
         return;
       }
       if (event.type === "session.status") {
