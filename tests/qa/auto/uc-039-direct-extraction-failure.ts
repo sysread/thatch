@@ -79,7 +79,7 @@ const useCase: UseCase = {
     // model-driven handshake it drove raced its own state machine (the
     // September 2026 dispatch-loop report) and was removed. The runtime's
     // chat.message block no longer imports or calls extractionNudge - the
-    // behavioral pin lives in tests/plugin.test.ts (no-nudge assertions);
+    // behavioral pin lives in tests/plugin-extraction-direct.test.ts (no-nudge assertions);
     // here we assert the pipeline contract the retry relies on.
     if (typeof pipeline.peek(sessionID) !== "object") {
       console.log("  FAIL: peek should expose the pending buffer for the retry");

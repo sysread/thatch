@@ -13,6 +13,7 @@ opencode emits bus events for session lifecycle changes. Thatch subscribes to th
 - Sub-agent lifecycle: task-dispatched sub-agents complete accepted entries but are not deleted
 - Session error recovery: child errors requeue parent's accepted entries
 - Session deletion recovery: child deletion requeues; parent deletion completes accepted entries
+- Stranded-session self-heal: sessions whose recorded directory is gone (a merged + deleted worktree) are deleted when machinery (`thatch-extraction` corpses) and moved to the project's canonical checkout when real
 - Wrap-up commands: `/thatch/compact` and `/thatch/exit` arm a greenlight check resolved on the next idle
 
 ## How it works
@@ -117,6 +118,40 @@ first-ever install is invisible until the next server start.
 
 - Clear the `compacting` flag so chat.message nudges resume
 - See [compaction-recovery.md](compaction-recovery.md)
+
+### Stranded-session self-heal sweep
+
+Why it exists: opencode v2 records a directory on every session row, and
+opening a session whose directory is gone (a merged + deleted worktree) boots
+a dead path and shows the "session location unavailable" recovery dialog.
+Sessions get stranded there in two ways: extraction children leaked by hosts
+older than v2.0.22 (whose session domain had no `remove`, so cleanup was a
+silent no-op) and children whose idle event died with a daemon restart. The
+sweep runs at setup and on an interval (`THATCH_STRAND_SWEEP_MS`), and the
+rehydrate pass finalizes journaled extraction children through the host
+before pruning their rows, so both the corpse population and the leak paths
+are covered.
+
+What it does, decided by `planStrandActions` (pure, unit-tested):
+
+- Sessions in a live directory are never touched, whatever the row looks like
+- Machinery (`thatch-extraction` title) in a dead directory: delete via the
+  host's session delete
+- Real top-level sessions in a dead directory: MOVE to the project's
+  canonical checkout (`project.worktree` in opencode.db) -- the same outcome
+  as the manual recovery dialog, minus the picking; history is preserved and
+  user sessions are never deleted
+- Host-created task children (parentId set): always skipped -- they are
+  opencode's own records of subagent work and deleting them would break the
+  parent transcript's subagent rendering
+- Unresolvable canonical or no move endpoint: skipped and logged
+
+The host supplies the enumeration (v1: `client.session.list`; v2: readonly
+read of opencode.db, since the promise domain has no session list and the
+sweep needs machine-wide rows) plus the move/delete endpoints; every leg
+degrades silently. A summary toast fires only when something was healed. Set
+`THATCH_STRAND_SWEEP=off` to disarm the sweep entirely (tests do, so it can
+never act on a developer's real database through mocks).
 
 ### Internal state maps
 

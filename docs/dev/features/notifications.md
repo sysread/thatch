@@ -203,7 +203,7 @@ rejected for that reason (plus v1 has no TUI plugin surface at all).
   records argv), AppleScript escaping, partial vs total failure, unsupported
   platform, plus tool-level tests (merge-no-wipe, echo, `mode: none` no-op,
   configured voice honored) with `THATCH_DB_PATH` pointed at a tempdir.
-- `tests/tool-defs.test.ts` -- registry count and name list (hardcoded literals that fail loudly when the surface changes).
+- `tests/tool-defs-catalog-session.test.ts` -- registry count and name list (hardcoded literals that fail loudly when the surface changes).
 - `tests/alerts.test.ts` -- the alert state machine: `deriveRoundShape`
   (idle-marker delimiter, v1 fallback, synthetic trigger detection), the
   real-work flag, pause dedup and re-arm, abort/shutdown silence,

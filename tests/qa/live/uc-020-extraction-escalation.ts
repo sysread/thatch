@@ -9,7 +9,7 @@ import { registerUseCase, type UseCase } from "../runner";
  * nudge at all (plugin-driven at idle - see UC-003); the opencode part of
  * this case verifies the ABSENCE of escalation.
  *
- * Automatable: the escalation tiers are pinned in tests/plugin.test.ts
+ * Automatable: the escalation tiers are pinned in tests/plugin-prompts.test.ts
  * (extractionNudge escalation) and the no-drain-on-ack queue contract in
  * tests/extract-queue.test.ts.
  */

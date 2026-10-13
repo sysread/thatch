@@ -148,7 +148,7 @@ When a doc edit tempts you to write "N tools" or "M skills", write "the tool
 table below" or link to the source of truth instead.
 
 Test files are the exception and the enforcement layer: tests like
-`tests/setup.test.ts` and `tests/tool-defs.test.ts` assert counts as
+`tests/setup-skills.test.ts` and `tests/tool-defs-catalog-session.test.ts` assert counts as
 literals so `mise run check` fails loudly when the surface changes. Keep
 those. Keep them out of prose.
 
@@ -156,7 +156,7 @@ those. Keep them out of prose.
 
 Skill counts appear in these TEST files only (they fail loudly when stale):
 
-1. `tests/setup.test.ts` -- asserts the shared skill count against code
+1. `tests/setup-skills.test.ts` -- asserts the shared skill count against code
 2. `tests/qa/auto/uc-005-setup-install.ts` -- shared skill count in expected string
 3. `tests/qa/auto/uc-014-skill-install-drift.ts` -- shared vs opencode counts in expected string
 

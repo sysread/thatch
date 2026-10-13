@@ -4,7 +4,7 @@ import { registerUseCase, type UseCase } from "../runner";
  * UC-003: Fact extraction from tool activity.
  *
  * Automatable: the buffer/claim/completion contract is covered by
- * tests/plugin.test.ts against the mock client. This live case verifies the
+ * tests/plugin-extraction-direct.test.ts against the mock client. This live case verifies the
  * end-to-end shape in a real session: tool work -> idle -> plugin-created
  * child -> memories -> toast, with NO nudge text in the user's conversation.
  */

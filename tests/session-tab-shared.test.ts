@@ -26,7 +26,7 @@ import { buildCoreContext } from "../src/tool-defs";
 // The session-tab feature's shared contract: validators, the prompt
 // composition, the rpc definition shape, and the TUI guard logic. Everything
 // here runs without a host - the v2 adapter's flow test lives in
-// opencode-v2.test.ts (it needs the makeContext double).
+// the opencode-v2 harness (tests/mocks/opencode-v2-harness.ts, the makeContext double)..
 
 describe("session_tab title validation", () => {
   test("accepts a normal task title, trimmed", () => {

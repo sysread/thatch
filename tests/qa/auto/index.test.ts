@@ -104,3 +104,4 @@ import "./uc-119-chat-split-long-messages";
 import "./uc-120-v2-extraction-child-cleanup";
 import "./uc-121-nudge-snapshot-footer";
 import "./uc-122-roster-open-recent";
+import "./uc-123-strand-self-heal";

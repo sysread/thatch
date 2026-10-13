@@ -60,8 +60,11 @@ export function resolveOpencodeDbPath(): string | null {
  * database - the same pick the TUI makes from client.session.list(), which
  * the v2 plugin context cannot call (its session domain has no list) and
  * which would arrive too late for the runtime's synchronous rehydration
- * partition regardless. Null when the db is unavailable or no top-level
- * session exists in the directory.
+ * partition regardless. Prefers the v2 `session_v2` table when the database
+ * has one: v2-era sessions live there and the legacy `session` table only
+ * holds pre-migration rows, so a v1-table read under a v2 daemon would
+ * resolve -c from years-old sessions. Null when the db is unavailable or no
+ * top-level session exists in the directory.
  */
 export function mostRecentTopLevelSessionId(directory: string): string | null {
   const dbPath = resolveOpencodeDbPath();
@@ -73,12 +76,101 @@ export function mostRecentTopLevelSessionId(directory: string): string | null {
     return null;
   }
   try {
-    const row = db
-      .query(
-        "SELECT id FROM session WHERE directory = ? AND (parent_id IS NULL OR parent_id = '') ORDER BY time_updated DESC LIMIT 1",
-      )
-      .get(directory) as { id: string } | null;
+    const v2 = hasV2SessionTables(db);
+    const row = v2
+      ? (db
+          .query(
+            "SELECT id FROM session_v2 WHERE directory = ? AND (parent_id IS NULL OR parent_id = '') ORDER BY time_updated DESC LIMIT 1",
+          )
+          .get(directory) as { id: string } | null)
+      : (db
+          .query(
+            "SELECT id FROM session WHERE directory = ? AND (parent_id IS NULL OR parent_id = '') ORDER BY time_updated DESC LIMIT 1",
+          )
+          .get(directory) as { id: string } | null);
     return row?.id ?? null;
+  } catch {
+    return null;
+  } finally {
+    db.close();
+  }
+}
+
+/** True when the database carries opencode v2's session tables. */
+function hasV2SessionTables(db: Database): boolean {
+  const row = db
+    .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_v2'")
+    .get() as { name: string } | undefined;
+  return row?.name === "session_v2";
+}
+
+/** One session row as the stranded-session sweep sees it (host-agnostic shape). */
+export interface SweepSessionRow {
+  id: string;
+  title: string;
+  directory: string;
+  /** Host link for subagent children; null for top-level sessions. */
+  parentId: string | null;
+  /** v2 project id (joins to the project table's canonical worktree). Null on v1 rows. */
+  projectId: string | null;
+}
+
+/** Everything the strand sweep needs from one readonly pass over opencode.db. */
+export interface SweepEnumeration {
+  sessions: SweepSessionRow[];
+  /** Project id -> canonical checkout directory. Empty on v1 (no project rows read). */
+  canonicalByProject: Record<string, string>;
+}
+
+/**
+ * Enumerates every session row opencode has, plus each project's canonical
+ * checkout directory, in one readonly pass. Prefers the v2 tables
+ * (session_v2 + project) and falls back to the v1 `session` table when the
+ * database predates them. Returns null when the db is missing, unreadable,
+ * or its schema has drifted past these column names - the strand sweep
+ * treats null as "nothing known, do nothing". The sweep's deletions and
+ * moves go through the host's own session endpoints; this read only ever
+ * NAMES candidates, so a stale or partial read can never corrupt anything.
+ */
+export function enumerateSweepSessions(): SweepEnumeration | null {
+  const dbPath = resolveOpencodeDbPath();
+  if (!dbPath) return null;
+  let db: Database;
+  try {
+    db = new Database(dbPath, { readonly: true });
+  } catch {
+    return null;
+  }
+  try {
+    const v2 = hasV2SessionTables(db);
+    const sessions: SweepSessionRow[] = v2
+      ? (db
+          .query("SELECT id, title, directory, parent_id, project_id FROM session_v2")
+          .all() as { id: string; title: string | null; directory: string; parent_id: string | null; project_id: string | null }[]
+        ).map((r) => ({
+          id: r.id,
+          title: r.title ?? "",
+          directory: r.directory,
+          parentId: r.parent_id ?? null,
+          projectId: r.project_id ?? null,
+        }))
+      : (db
+          .query("SELECT id, title, directory, parent_id FROM session")
+          .all() as { id: string; title: string | null; directory: string; parent_id: string | null }[]).map((r) => ({
+          id: r.id,
+          title: r.title ?? "",
+          directory: r.directory,
+          parentId: r.parent_id ?? null,
+          projectId: null,
+        }));
+    const canonicalByProject: Record<string, string> = {};
+    if (v2) {
+      const projectRows = db
+        .query("SELECT id, worktree FROM project")
+        .all() as { id: string; worktree: string }[];
+      for (const r of projectRows) canonicalByProject[r.id] = r.worktree;
+    }
+    return { sessions, canonicalByProject };
   } catch {
     return null;
   } finally {

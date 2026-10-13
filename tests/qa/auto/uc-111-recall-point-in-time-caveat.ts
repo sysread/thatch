@@ -11,7 +11,7 @@ import { TOOL_DEFS, type CoreContext } from "../../../src/tool-defs";
  * loop. This is the read-side counterpart of the prompt layer's
  * "Memories Are Pointers, Not Truth" section: memories must be treated
  * as a guide to where to look, not a source of truth. The unit tests in
- * tests/tool-defs.test.ts pin the same contract; this use case runs it
+ * tests/tool-defs-memory-prediction-behavior.test.ts pins the same contract; this use case runs it
  * through the qa-auto runner so the contract is exercised outside
  * `mise run check`, which does not execute tests/qa/.
  */

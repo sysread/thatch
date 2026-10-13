@@ -177,6 +177,55 @@ export function guardDelivery(
   };
 }
 
+/** What the strand sweep should do, decided purely from enumerated session rows. */
+export interface StrandPlan {
+  /** Machinery sessions (this plugin's extraction children) to delete via the host. */
+  remove: string[];
+  /** Real sessions to relocate out of a dead directory, to their project's canonical checkout. */
+  move: { id: string; to: string }[];
+  /** Rows the sweep saw but deliberately left alone. */
+  skipped: number;
+}
+
+/**
+ * Decides, per session row, whether a stranded session gets deleted
+ * (machinery), moved (a real session whose directory is gone - the same
+ * outcome as opencode's manual "session location unavailable" recovery, minus
+ * the directory picking), or left alone. Everything hinges on the directory
+ * being dead on disk: a session in a live directory is someone's working
+ * state, however it looks. Host-created task children (parentId set) are
+ * always skipped - they are opencode's own records of subagent work,
+ * invisible in top-level session lists, and deleting them would break the
+ * parent transcript's subagent rendering.
+ */
+export function planStrandActions(input: {
+  sessions: { id: string; title: string; directory: string; parentId: string | null; projectId: string | null }[];
+  canonicalByProject: Record<string, string>;
+  pathExists: (path: string) => boolean;
+  /** When false (host has no move endpoint), real sessions count as skipped. */
+  canMove: boolean;
+}): StrandPlan {
+  const plan: StrandPlan = { remove: [], move: [], skipped: 0 };
+  for (const s of input.sessions) {
+    if (input.pathExists(s.directory)) continue;
+    if (isMachinerySessionTitle(s.title)) {
+      plan.remove.push(s.id);
+      continue;
+    }
+    if (s.parentId) {
+      plan.skipped++;
+      continue;
+    }
+    const canonical = s.projectId ? input.canonicalByProject[s.projectId] : undefined;
+    if (input.canMove && canonical && canonical !== s.directory && input.pathExists(canonical)) {
+      plan.move.push({ id: s.id, to: canonical });
+    } else {
+      plan.skipped++;
+    }
+  }
+  return plan;
+}
+
 export async function createRuntime(input: {
   capabilities: HostCapabilities;
   directory: string;
@@ -760,7 +809,25 @@ export async function createRuntime(input: {
     const ownDirectory = row.directory === directory;
     const isStartup = inheritSession !== undefined && row.sessionID === inheritSession;
     if (samePid && !ownDirectory) continue; // live sibling - untouched
-    if (!samePid && !ownDirectory) continue; // another location's instance owns these rows - its own restart cleans them
+    if (!samePid && !ownDirectory) {
+      // Another location's instance owns these rows - its own restart
+      // cleans them. Exception: a directory that no longer exists (a merged
+      // and deleted worktree) will never boot an instance again, so its
+      // journaled extraction children are stranded forever - the opencode
+      // session row is global and outlives this journal. Finalize the child
+      // through the host and drop the journal row; the strand sweep (below)
+      // is the backstop for corpses this journal never knew about.
+      if (row.kind === "child" && !existsSync(row.directory)) {
+        const rec = row.value as { kind?: "extraction" | "task" };
+        if (rec?.kind === "extraction") {
+          void caps.sessionDelete(row.sessionID).catch((err) =>
+            debug("strand-sweep", `dead-directory finalize failed for ${row.sessionID}: ${err}`),
+          );
+          db.runtimeStateDelete(row.kind, row.sessionID);
+        }
+      }
+      continue;
+    }
     if (!samePid && !isStartup) {
       // Watcher definitions survive a restart as DORMANT rows instead of
       // being pruned: the defining session's harness died with the old
@@ -793,6 +860,20 @@ export async function createRuntime(input: {
         // surfaces at a live session's next prompt. Both are deleted on
         // consumption.
         continue;
+      }
+      // Restart-window leak fix (same as the child-row branch below): the
+      // child's opencode session row is global and outlives this journal,
+      // so an extraction child whose idle event died with the old process
+      // must be finalized through the host before the row goes. Task
+      // children and kindless pre-marker rows are left to the strand
+      // sweep's title-based pass.
+      if (row.kind === "child") {
+        const rec = row.value as { kind?: "extraction" | "task" };
+        if (rec?.kind === "extraction") {
+          void caps.sessionDelete(row.sessionID).catch((err) =>
+            debug("strand-sweep", `restart finalize failed for ${row.sessionID}: ${err}`),
+          );
+        }
       }
       db.runtimeStateDelete(row.kind, row.sessionID);
       continue;
@@ -848,6 +929,18 @@ export async function createRuntime(input: {
         // could never hold and the snapshot recovery was unreachable.
         if (inheritSession !== undefined && rec?.parentID === inheritSession && Array.isArray(rec.snapshot)) {
           for (const interaction of rec.snapshot) extraction.push(interaction);
+        }
+        // Restart-window leak fix: the child's opencode session row is
+        // global and outlives this journal, so an extraction child whose
+        // idle event died with the old process would sit in the session
+        // picker forever (and `-c` can land in it). Finalize through the
+        // host, best-effort. Kindless pre-marker rows are left to the
+        // strand sweep's title-based pass, which never touches
+        // host-created task children.
+        if (rec?.kind === "extraction") {
+          void caps.sessionDelete(row.sessionID).catch((err) =>
+            debug("strand-sweep", `restart finalize failed for ${row.sessionID}: ${err}`),
+          );
         }
         db.runtimeStateDelete(row.kind, row.sessionID);
         continue;
@@ -1145,6 +1238,102 @@ export async function createRuntime(input: {
     }
   };
   void reconcileRestoredChildren();
+
+  // Self-heal for sessions stranded in directories that no longer exist
+  // (merged + deleted worktrees): opencode v2 records the directory on
+  // every session, and opening a stranded one boots a dead path and shows
+  // the "session location unavailable" recovery dialog. Machinery corpses
+  // (this plugin's extraction children, leaked by pre-2.0.22 hosts or a
+  // daemon restart mid-extraction) are deleted; REAL sessions are moved to
+  // their project's canonical checkout - never deleted. Runs at setup and
+  // on an interval, because worktrees die while the daemon lives on. The
+  // host supplies the enumeration (v1: client list; v2: readonly
+  // opencode.db read) and the move/delete endpoints; every leg degrades
+  // silently. Concurrent instances each run their own sweep - the actions
+  // are idempotent (a second delete of the same corpse throws NotFound
+  // into the catch, a second move lands on an already-moved session).
+  let sweepInFlight = false;
+  const sweepStrandedSessions = async (trigger: string): Promise<void> => {
+    // Kill switch read at call time: tests set THATCH_STRAND_SWEEP=off so
+    // the boot sweep never acts on the developer's real opencode.db through
+    // test mocks, and an operator can disarm the sweep without a rebuild.
+    const gate = process.env.THATCH_STRAND_SWEEP;
+    if (gate === "0" || gate === "false" || gate === "off") return;
+    if (disposed || sweepInFlight) return;
+    sweepInFlight = true;
+    try {
+      let enumerated: Awaited<ReturnType<typeof caps.enumerateSessions>> = null;
+      try {
+        enumerated = await caps.enumerateSessions();
+      } catch (err) {
+        debug("strand-sweep", `enumerate failed (${trigger}): ${err}`);
+        return;
+      }
+      if (!enumerated || disposed) return;
+      debug(
+        "strand-sweep",
+        `enumerated ${enumerated.sessions.length} session row(s), ${Object.keys(enumerated.canonicalByProject).length} project(s) [${trigger}]`,
+      );
+      const plan = planStrandActions({
+        sessions: enumerated.sessions,
+        canonicalByProject: enumerated.canonicalByProject,
+        pathExists: (p) => existsSync(p),
+        canMove: typeof caps.sessionMove === "function",
+      });
+      let removed = 0;
+      let moved = 0;
+      for (const id of plan.remove) {
+        if (disposed) return;
+        try {
+          await caps.sessionDelete(id);
+          // The journal row may exist for restart-window children; a
+          // historical corpse has none, and a no-op delete is fine.
+          db.runtimeStateDelete("child", id);
+          removed++;
+        } catch (err) {
+          debug("strand-sweep", `remove failed for ${id} (${trigger}): ${err}`);
+        }
+      }
+      for (const m of plan.move) {
+        if (disposed) return;
+        try {
+          await caps.sessionMove?.(m.id, m.to);
+          moved++;
+        } catch (err) {
+          debug("strand-sweep", `move failed for ${m.id} (${trigger}): ${err}`);
+        }
+      }
+      if (removed + moved > 0) {
+        debug(
+          "strand-sweep",
+          `healed ${removed + moved} stranded session(s): ${moved} moved, ${removed} removed, ${plan.skipped} skipped [${trigger}]`,
+        );
+        try {
+          await caps.showToast({
+            message: `[thatch] healed ${removed + moved} stranded session${removed + moved === 1 ? "" : "s"} from dead worktrees (${moved} moved, ${removed} removed)`,
+            variant: "info",
+            duration: 6000,
+          });
+        } catch {
+          // TUI may not be connected (headless mode).
+        }
+      }
+    } finally {
+      sweepInFlight = false;
+    }
+  };
+  const STRAND_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+  let strandSweepTimer: ReturnType<typeof setInterval> | undefined;
+  const armStrandSweep = () => {
+    // Env override read at call time per house convention (test/ops knob).
+    const ms = Number(process.env.THATCH_STRAND_SWEEP_MS) || STRAND_SWEEP_INTERVAL_MS;
+    strandSweepTimer = setInterval(() => {
+      void sweepStrandedSessions("interval");
+    }, ms);
+    strandSweepTimer.unref?.();
+  };
+  void sweepStrandedSessions("boot");
+  armStrandSweep();
 
   // Skills always install to the global opencode config - installing into the
   // worktree would mutate the user's repo (untracked files in git status).
@@ -2283,6 +2472,7 @@ export async function createRuntime(input: {
     dispose: async () => {
       disposed = true;
       stopVersionChecker();
+      if (strandSweepTimer) clearInterval(strandSweepTimer);
       watchers.dispose();
       chatPoller.dispose();
       try {

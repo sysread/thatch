@@ -291,9 +291,11 @@ src/watchers.ts, test-enforced).
   session.status tracking, session.deleted cleanup, dispose
 - `src/prompts.ts` - `watcherNotificationNudge()`, system prompt
   Watchers section
-- `tests/watchers.test.ts` - registry, poll, and diff unit tests
+- `tests/watchers-registry.test.ts` - registry, poll, and death-detection unit tests
+- `tests/watchers-git-state.test.ts` - PR/branch diff and check-run description unit tests
+- `tests/watchers-commands.test.ts` - command watcher and poll-resilience unit tests
   (mocked gh and command runners, no network)
-- `tests/tool-defs.test.ts` - watch tool execute-function tests
+- `tests/tool-defs-watch-chat.test.ts` - watch tool execute-function tests
 - `tests/qa/auto/uc-095-watchers.ts` - end-to-end lifecycle against a
   mocked gh runner
 - `tests/qa/auto/uc-101-command-watchers.ts` - command-watch lifecycle

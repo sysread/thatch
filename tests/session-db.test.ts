@@ -7,6 +7,7 @@ import {
   SessionDB,
   resolveOpencodeDbPath,
   mostRecentTopLevelSessionId,
+  enumerateSweepSessions,
   partToTimelineEntry,
   partToTranscriptEntries,
 } from "../src/session-db";
@@ -110,6 +111,84 @@ describe("mostRecentTopLevelSessionId", () => {
   test("returns null when no session db exists", () => {
     process.env.OPENCODE_DB = "/nonexistent/opencode.db";
     expect(mostRecentTopLevelSessionId("/tmp/work")).toBeNull();
+  });
+
+  test("prefers the v2 session_v2 table when the database has one", () => {
+    // Under a v2 daemon the legacy `session` table only holds pre-migration
+    // rows; reading it would resolve -c from years-old sessions. The v2
+    // table must win even when the legacy table holds newer-looking rows.
+    const contPath = join(dbDir, "continue-v2.db");
+    const cont = new Database(contPath);
+    cont.exec(`CREATE TABLE session (id text PRIMARY KEY, directory text, parent_id text, time_updated integer)`);
+    cont.exec(`CREATE TABLE session_v2 (id text PRIMARY KEY, directory text, parent_id text, time_updated integer)`);
+    cont.query("INSERT INTO session VALUES ('ses_legacy_new', '/tmp/work', NULL, 9000)").run();
+    cont.query("INSERT INTO session_v2 VALUES ('ses_v2_new', '/tmp/work', NULL, 2000)").run();
+    cont.query("INSERT INTO session_v2 VALUES ('ses_v2_child', '/tmp/work', 'ses_v2_new', 8000)").run();
+    cont.query("INSERT INTO session_v2 VALUES ('ses_v2_elsewhere', '/somewhere/else', NULL, 9500)").run();
+    cont.close();
+
+    const saved = process.env.OPENCODE_DB;
+    process.env.OPENCODE_DB = contPath;
+    try {
+      expect(mostRecentTopLevelSessionId("/tmp/work")).toBe("ses_v2_new");
+    } finally {
+      if (saved === undefined) delete process.env.OPENCODE_DB;
+      else process.env.OPENCODE_DB = saved;
+    }
+  });
+
+});
+
+describe("enumerateSweepSessions", () => {
+  test("reads v2 tables with canonicals when present", () => {
+    const sweepPath = join(dbDir, "sweep-v2.db");
+    const s = new Database(sweepPath);
+    s.exec(`CREATE TABLE session_v2 (id text PRIMARY KEY, title text, directory text, parent_id text, project_id text)`);
+    s.exec(`CREATE TABLE project (id text PRIMARY KEY, worktree text)`);
+    s.query("INSERT INTO session_v2 VALUES ('ses_corpse', 'thatch-extraction', '/tmp/wt-dead', NULL, 'p1')").run();
+    s.query("INSERT INTO session_v2 VALUES ('ses_child', 'sub', '/tmp/wt-dead', 'ses_parent', 'p1')").run();
+    s.query("INSERT INTO project VALUES ('p1', '/tmp/canonical')").run();
+    s.close();
+
+    const saved = process.env.OPENCODE_DB;
+    process.env.OPENCODE_DB = sweepPath;
+    try {
+      const result = enumerateSweepSessions();
+      expect(result).not.toBeNull();
+      expect(result!.sessions).toHaveLength(2);
+      expect(result!.sessions[0]).toMatchObject({ id: "ses_corpse", title: "thatch-extraction", parentId: null, projectId: "p1" });
+      expect(result!.sessions[1]).toMatchObject({ id: "ses_child", parentId: "ses_parent" });
+      expect(result!.canonicalByProject).toEqual({ p1: "/tmp/canonical" });
+    } finally {
+      if (saved === undefined) delete process.env.OPENCODE_DB;
+      else process.env.OPENCODE_DB = saved;
+    }
+  });
+
+  test("falls back to the v1 session table with no canonicals", () => {
+    const sweepPath = join(dbDir, "sweep-v1.db");
+    const s = new Database(sweepPath);
+    s.exec(`CREATE TABLE session (id text PRIMARY KEY, title text, directory text, parent_id text, time_created integer, time_updated integer)`);
+    s.query("INSERT INTO session VALUES ('ses_v1', 'work', '/tmp/proj', NULL, 1, 2)").run();
+    s.close();
+
+    const saved = process.env.OPENCODE_DB;
+    process.env.OPENCODE_DB = sweepPath;
+    try {
+      const result = enumerateSweepSessions();
+      expect(result).not.toBeNull();
+      expect(result!.sessions).toHaveLength(1);
+      expect(result!.sessions[0]).toMatchObject({ id: "ses_v1", directory: "/tmp/proj", parentId: null, projectId: null });
+      expect(result!.canonicalByProject).toEqual({});
+    } finally {
+      if (saved === undefined) delete process.env.OPENCODE_DB;
+      else process.env.OPENCODE_DB = saved;
+    }
+  });
+
+  test("returns null when no session db exists", () => {
+    process.env.OPENCODE_DB = "/nonexistent/opencode.db";
+    expect(enumerateSweepSessions()).toBeNull();
   });
 });
 

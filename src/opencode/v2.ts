@@ -5,6 +5,7 @@ import type { ToolContext as V2ToolContext } from "@opencode/plugin/promise/tool
 import type { ThatchDB } from "../db";
 import type { HostCapabilities, PromptPart, ToastInput } from "../capabilities";
 import { createRuntime } from "../runtime";
+import { enumerateSweepSessions } from "../session-db";
 import { wrapUpCommandContent, wrapUpCommandDescription } from "../commands";
 import { deriveTitle } from "../extraction";
 import { detectRepo, detectWorktreeKind } from "../git";
@@ -929,6 +930,20 @@ function buildCapabilities(
       return (await session.get({ sessionID: id })) ?? null;
     },
     sessionList: async () => null,
+    enumerateSessions: async () => {
+      // The promise domain has no session list, and the strand sweep needs
+      // machine-wide rows (dead-worktree sessions belong to no live
+      // instance), so this reads opencode.db directly - the same readonly
+      // pattern the -c inheritance resolution already uses. Null on any
+      // schema drift; the sweep treats that as "nothing known".
+      return enumerateSweepSessions();
+    },
+    sessionMove: async (id, directory) => {
+      // The pinned dev types carry move on the SessionDomain pick (the
+      // session_tab spawn flow uses it), so this is a typed call, unlike
+      // remove/compact above.
+      await session.move({ sessionID: id, directory });
+    },
     sessionMessages: async (id) => {
       // The pinned promise domain has no message-list endpoint (no `message`
       // accessor; compact/remove exist on newer SDK builds but not here).

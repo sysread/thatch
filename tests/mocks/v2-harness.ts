@@ -1,6 +1,7 @@
 /**
  * The shared mock v2 promise-context harness: ONE builder serving the unit
- * tests (tests/opencode-v2.test.ts, through its thin rebinding wrapper)
+ * tests (the tests/opencode-v2-*.test.ts parts, through their rebinding
+ * wrapper tests/mocks/opencode-v2-harness.ts)
  * and the QA use cases (uc-103, uc-120) that drive the real v2 adapter
  * (src/opencode/v2.ts setup) end-to-end. The two used to be separate
  * copies with drifting shapes; this module is the single source.
@@ -28,7 +29,7 @@
  * The transformers mock below is registered at import time so every
  * consumer gets it (the adapter's runtime builds BgeEmbeddingModel; the
  * mock gives hash-based vectors with no download - same pattern as
- * tests/plugin.test.ts). The pipeline strips BgeEmbeddingModel's
+ * tests/mocks/plugin-harness.ts). The pipeline strips BgeEmbeddingModel's
  * QUERY_PREFIX so queryEmbed and passageEmbed of the same text land on the
  * same vector - without the strip, a tool-seeded matcher (passageEmbed)
  * can never be re-found by the nudge path (queryEmbed), which the v2
@@ -59,7 +60,7 @@ mock.module("@huggingface/transformers", () => ({
   },
   // BgeEmbeddingModel's default factory sets env.cacheDir before building
   // the pipeline, so the mock must expose a writable env object (same
-  // contract as tests/plugin.test.ts).
+  // contract as tests/mocks/plugin-harness.ts).
   env: {},
 }));
 

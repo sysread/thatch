@@ -429,7 +429,7 @@ last `CHAT_TAIL_DEFAULT_LIMIT` (20) messages via `chatTailBacklog()`;
 `filterChatTailRows()` narrows every feed snapshot (backlog and follow
 polls alike) by body regexes, participant-name substrings, and a
 half-open time window. The diff itself is `chatTailDiff()` (unit-tested
-in `tests/chat.test.ts`): sent events on first view, then new sends and
+in `tests/chat-tail.test.ts`): sent events on first view, then new sends and
 newly-read messages per poll, with the diff state seeded from the full
 feed so neither the limit nor a mid-follow rename/unregister can
 resurface old rows as sent events. `chat_messages.via_broadcast` marks
@@ -589,8 +589,11 @@ within their clamps - invalid values silently fall back to the default.
 - `src/prompts.ts` - `chatNotificationNudge()`, `chatEchoText()` /
   `isChatEchoParts()`, system prompt Cross-Session Chat section, MCP
   absent-tools note
-- `tests/chat.test.ts` - store, pool, migration, echo-text, liveness, tail
-  diff/backlog, and poller unit tests (temp-dir SQLite, injected delivery)
+- `tests/chat-store.test.ts`, `tests/chat-poller.test.ts`,
+  `tests/chat-tail.test.ts`, `tests/chat-echo.test.ts` - store, pool,
+  migration, echo-text, liveness, tail diff/backlog, and poller unit tests
+  (temp-dir SQLite, injected delivery; shared fixtures in
+  `tests/mocks/chat-harness.ts`)
 - `tests/qa/auto/uc-097-chat.ts` - full lifecycle against a mocked poller
 - `tests/qa/auto/uc-099-chat-cli.ts` - `chat list` roster and `chat tail`
   JSONL contract over a seeded DB

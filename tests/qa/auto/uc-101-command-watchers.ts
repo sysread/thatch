@@ -29,7 +29,7 @@ const useCase: UseCase = {
     "- watch_command_create is opencodeOnly; command_success is one of the 12 event types.",
     "- createCommand captures the baseline exit code; a baseline exit 0 is refused (condition already met) and exit 127 is refused.",
     "- Unmet conditions poll silently; the first exit 0 fires exactly one event and the watcher self-cancels at detection.",
-    "- A timed-out run leaves the last-seen exit untouched and keeps the watch alive (the unit suite in tests/watchers.test.ts also covers the shared per-session limit).",
+    "- A timed-out run leaves the last-seen exit untouched and keeps the watch alive (the unit suite in tests/watchers-commands.test.ts also covers the shared per-session limit).",
   ].join("\n"),
 
   async run(_ctx: QaContext) {

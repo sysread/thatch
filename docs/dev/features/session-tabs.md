@@ -147,8 +147,9 @@ dependency for the TUI entry's runtime resolution.
 ## Testing
 
 - Unit: `tests/session-tab-shared.test.ts` (validators, definition shape,
-  guard logic), `tests/opencode-v2.test.ts` (the execute flows' ordering via
-  the `makeContext` double with `session.move` + the `rpc` domain).
+  guard logic), `tests/opencode-v2-adapter-tabs.test.ts` (the execute flows'
+  ordering via the `makeContext` double with `session.move` + the `rpc`
+  domain).
 - QA: uc-059 (tool list + MCP leak check), uc-014/uc-060 (skill counts),
   uc-119 (the live spawn flow through the docker sandbox).
 - Live smoke (recorded 2026-10-08, ALL SCENARIOS PASSED): headless legs -

@@ -78,6 +78,28 @@ export interface HostCapabilities {
   /** List sessions in this directory. Null when unavailable (v2 degrade). */
   sessionList(): Promise<{ id: string; parentID?: string; time?: { updated?: number } }[] | null>;
   /**
+   * Enumerate every session the host knows (id, title, directory, parent
+   * link, project link) plus each project's canonical checkout directory,
+   * for the runtime's stranded-session sweep. v1 maps client.session.list();
+   * v2 reads opencode.db readonly (its promise domain has no session list
+   * and the sweep needs machine-wide rows, not per-directory ones). Null
+   * when the host has no enumeration surface or the read fails - the sweep
+   * treats null as "nothing known, do nothing".
+   */
+  enumerateSessions(): Promise<{
+    sessions: { id: string; title: string; directory: string; parentId: string | null; projectId: string | null }[];
+    canonicalByProject: Record<string, string>;
+  } | null>;
+  /**
+   * Move a session to another directory. The strand sweep's self-heal for
+   * real sessions stranded in a deleted worktree (deletion is reserved for
+   * machinery sessions); moving is exactly what opencode's own
+   * "session location unavailable" recovery dialog does, minus the
+   * directory picking. Optional: the v1 SDK has no move endpoint, so the
+   * v1 adapter omits it and the sweep degrades to machinery-only deletion.
+   */
+  sessionMove?(id: string, directory: string): Promise<void>;
+  /**
    * Fetch a session's message list (wrap-up greenlight check, alert round
    * classification). Null when unavailable. v2 reads them via
    * session.context, mapped into this shape. Parts carry the fields the
@@ -147,6 +169,20 @@ export function capabilitiesFromClient(client: PluginInput["client"]): HostCapab
     sessionList: async () => {
       const { data } = await client.session.list();
       return data ?? null;
+    },
+    enumerateSessions: async () => {
+      const { data } = await client.session.list();
+      if (!data) return null;
+      return {
+        sessions: data.map((s) => ({
+          id: s.id,
+          title: s.title ?? "",
+          directory: (s as { directory?: string }).directory ?? "",
+          parentId: (s as { parentID?: string }).parentID ?? null,
+          projectId: null,
+        })),
+        canonicalByProject: {},
+      };
     },
     sessionMessages: async (id) => {
       const { data } = await client.session.messages({ path: { id } });

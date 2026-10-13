@@ -46,9 +46,19 @@ const useCase: UseCase = {
       const harness = makeV2Harness(ctx.dir, { ...options, childID: "qa-120-child" });
       let dispose: (() => Promise<void>) | undefined;
       const prevXdg = process.env.XDG_CONFIG_HOME;
+      const prevData = process.env.XDG_DATA_HOME;
       const prevDb = process.env.THATCH_DB_PATH;
       process.env.XDG_CONFIG_HOME = ctx.env.XDG_CONFIG_HOME;
+      process.env.XDG_DATA_HOME = ctx.env.XDG_DATA_HOME;
       process.env.THATCH_DB_PATH = ctx.env.THATCH_DB_PATH;
+      // XDG_DATA_HOME isolation is load-bearing here: the boot strand sweep
+      // enumerates the opencode.db resolved from XDG_DATA_HOME, and with
+      // the host's real db visible its corpse deletions would land in this
+      // uc's session.remove recorder ahead of the child cleanup under
+      // test. The fixture tree has no opencode.db, so the sweep no-ops.
+      // (test.concurrent runs use cases in one process - env mutations leak
+      // across concurrent legs, so the strand kill switch is NOT used
+      // here; UC-123 is its only tester.)
       try {
         dispose = (await setupV2(harness.context as any)) as () => Promise<void>;
         // Buffer a real-work interaction so the parent's idle triggers the
@@ -92,6 +102,7 @@ const useCase: UseCase = {
         return true;
       } finally {
         process.env.XDG_CONFIG_HOME = prevXdg;
+        process.env.XDG_DATA_HOME = prevData;
         process.env.THATCH_DB_PATH = prevDb;
         await dispose?.();
       }

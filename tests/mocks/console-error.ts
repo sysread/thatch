@@ -14,9 +14,9 @@
  * Larger granularities have a sound alternative: pairing the swap with
  * beforeEach/afterEach (or a try/finally around a whole use-case run) is
  * symmetric and restores unconditionally - see the watcher-death describe
- * in tests/watchers.test.ts and uc-118. What this module exists to prevent
- * is the per-test hand-rolled dance, where the restore is one forgotten
- * finally away from a leak.
+ * in tests/watchers-registry.test.ts and uc-118. What this module exists to
+ * prevent is the per-test hand-rolled dance, where the restore is one
+ * forgotten finally away from a leak.
  */
 
 export async function silenceConsoleError<T>(fn: () => Promise<T>): Promise<T> {

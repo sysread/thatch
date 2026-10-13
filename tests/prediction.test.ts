@@ -410,7 +410,7 @@ describe("scorePredictionNudge", () => {
 
 describe("matcher updated_at semantics", () => {
   // Row-level reads and timestamp manipulation the public ThatchDB API
-  // deliberately does not expose (house pattern from tests/chat.test.ts:
+  // deliberately does not expose (house pattern from the chat test files:
   // raw handle on the same file).
   const rawUpdatedAt = (matcherId: string): string => {
     const raw = new Database(dbPath, { readonly: true });

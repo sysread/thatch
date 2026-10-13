@@ -30,10 +30,15 @@ for (const dir of [WORK_DIR, "/tmp/thatch-state-a", "/tmp/thatch-state-b", "/tmp
 beforeEach(() => {
   dbDir = mkdtempSync(join(tmpdir(), "thatch-state-"));
   dbPath = join(dbDir, "test.db");
+  // The rehydrate tests here drive the restart-branch finalize directly;
+  // the boot-time strand sweep stays off so it can never act on the
+  // developer's real opencode.db through the mock clients.
+  process.env.THATCH_STRAND_SWEEP = "off";
 });
 
 afterEach(() => {
   rmSync(dbDir, { recursive: true, force: true });
+  delete process.env.THATCH_STRAND_SWEEP;
 });
 
 const ix = (sessionID: string, tool = "bash"): ToolInteraction => ({
@@ -146,6 +151,82 @@ describe("SharedModelPool refcount", () => {
 });
 
 describe("runtime rehydration through server()", () => {
+  test("a foreign-pid extraction-child row is finalized through the host on restart, not just pruned", async () => {
+    // The restart-window leak: the child's opencode session row is global
+    // and outlives the journaled bookkeeping, so pruning alone left the
+    // corpse in the session picker (and -c could land in it). The restart
+    // branch must DELETE the child session through the host when the
+    // journal row carries the extraction kind.
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut(
+      "child",
+      "ses_corpse_child",
+      { kind: "extraction", parentID: "ses_dead_parent", snapshot: [], metrics: { new: 0, updated: 0, deleted: 0 } },
+      WORK_DIR,
+      process.pid + 999,
+    );
+    db.runtimeStatePut(
+      "child",
+      "ses_task_child",
+      { kind: "task", parentID: "ses_dead_parent", snapshot: [], metrics: { new: 0, updated: 0, deleted: 0 } },
+      WORK_DIR,
+      process.pid + 999,
+    );
+    db.close();
+
+    const deleteCalls: string[] = [];
+    const mockClient = {
+      session: {
+        prompt: async () => {},
+        promptAsync: async () => {},
+        create: async () => ({ data: { id: "test-child" } }),
+        delete: async (opts: any) => {
+          deleteCalls.push(opts?.path?.id);
+        },
+        get: async () => ({ data: { title: "Test session" } }),
+        messages: async () => ({ data: [] }),
+        status: async () => ({ data: {} }),
+        list: async () => ({ data: [] }),
+      },
+      tui: {
+        showToast: async () => {},
+        executeCommand: async () => ({ data: true }),
+        publish: async () => ({ data: true }),
+      },
+    };
+
+    let hooks: { dispose?: () => Promise<void> } | undefined;
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    try {
+      process.env.THATCH_DB_PATH = dbPath;
+      process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+      hooks = (await server({ client: mockClient, worktree: WORK_DIR, directory: WORK_DIR } as any)) as any;
+
+      // The finalize is fire-and-forget; poll for the delete call.
+      const end = Date.now() + 5000;
+      while (!deleteCalls.includes("ses_corpse_child")) {
+        if (Date.now() > end) throw new Error("restart finalize never deleted the extraction child");
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      // A task-dispatched sub-agent is opencode's own record of subagent
+      // work - the finalize must never touch it.
+      expect(deleteCalls).toEqual(["ses_corpse_child"]);
+      // Both journal rows are pruned either way (the pre-existing behavior).
+      const check = new ThatchDB(dbPath);
+      const ids = check.runtimeStateAll().map((r) => r.sessionID);
+      expect(ids).not.toContain("ses_corpse_child");
+      expect(ids).not.toContain("ses_task_child");
+      check.close();
+    } finally {
+      await hooks?.dispose?.();
+      if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevConfig;
+      if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+      else process.env.THATCH_DB_PATH = prevDbPath;
+    }
+  });
+
   test("same-pid rows survive (reload); foreign-pid rows are pruned", async () => {
     const db = new ThatchDB(dbPath);
     // Reload case: written by THIS process (a v2 plugin reload re-runs
