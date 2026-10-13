@@ -1156,14 +1156,24 @@ describe("chat delivery model in tool output", () => {
     expect(staleSection).not.toContain("ses_split_oc");
   });
 
-  test("chat_list renders the open/recent split inside the Active section", async () => {
+  test("chat_list renders the open/recent split as separate sections", async () => {
     await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_roster_open", agent: "build" });
     await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_roster_recent", agent: "build" });
     // One of the two carries a tab; the other is a fresh heartbeat with
-    // no tab. Both stay in Active; the per-row verdict distinguishes them.
+    // no tab. They land in separate sections: the tabbed row in Active,
+    // the tab-less row in Recent (wake not guaranteed, no open tab).
     openTabsFixture = new Set(["ses_roster_open"]);
     const list = await findChatTool("chat_list").execute({}, ctx, { sessionID: "ses_roster_open", agent: "build" });
     expect(list).toContain("# Active Sessions");
+    expect(list).toContain("# Recent Sessions");
+    // Each section holds exactly its own row (rows render the session id
+    // sliced to 12 chars, so the assertions use the same prefix).
+    const activeSection = list.slice(0, list.indexOf("# Recent Sessions"));
+    const recentSection = list.slice(list.indexOf("# Recent Sessions"));
+    expect(activeSection).toContain("ses_roster_o");
+    expect(activeSection).not.toContain("ses_roster_r");
+    expect(recentSection).toContain("ses_roster_r");
+    expect(recentSection).not.toContain("ses_roster_o");
     // The row bodies carry the verdict right after the last-seen age
     // (matched with context - the bare token would also match the legend).
     expect(list).toMatch(/ago open/);

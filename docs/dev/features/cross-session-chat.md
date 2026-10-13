@@ -317,18 +317,26 @@ is restart persistence by design), so dead-window residue reads OPEN until
 its heartbeat ages out; tabs disabled degrades everything to RECENT.
 
 `chat_list`
-groups the result into Active and Stale sections - the stale section's
-explainer says what stale means, and each row renders its verdict -
+groups the result into Active, Recent, and Stale sections - the Recent
+and Stale sections' explainers say what those states mean, and each row
+renders its verdict -
 and `chat_send` states the recipient's
 liveness at send time, so a sender mailing a ghost learns it immediately
 instead of waiting on a wake that will never fire, and a sender mailing a
 tab-less session is told the wake is not guaranteed. Both roster surfaces
-order rows with `sortChatRoster` (also src/chat.ts): project first,
+order rows with `sortChatRoster` (also src/chat.ts) and split fresh
+opencode rows along the same open/recent boundary (`splitChatRoster`
+takes the open-tab set): project first,
 alphabetical, with no-project rows last; most recently seen first within
-a project. The CLI roster bounds
-the stale display to one day by default (`--stale N` in days, `--stale all`
-unbounded), collapsing older rows into a hidden-count note; the tool
-surface stays unbounded so an agent always sees the full directory.
+a project. The CLI roster guards the Recent and Stale sections behind
+flags, and the two guards hide differently: without `--recent` the
+tab-less rows collapse into a muted hidden-count note (revealed by the
+flag), while without `--stale` stale rows are dropped entirely; with
+`--stale [N|all]` they show under a one-day display cap that collapses
+older rows into a
+hidden-count note. The tool
+surface shows all three sections unbounded so an agent always sees the
+full directory.
 `session.deleted` is the graceful-exit fast path that unregisters immediately.
 
 ### Delivery, re-nudge, and the rate cap

@@ -2139,7 +2139,10 @@ const chatRegisterDef: ToolDef = {
 
 /** Lists registered sessions with liveness. Stale means the session's host
  *  process has not heartbeat-ed it recently - it is gone or hung. Fresh
- *  rows split into open (a tab is open now) and recent (no known tab). */
+ *  rows split into open (a tab is open now) and recent (no known tab).
+ *  The three sections render unguarded by design, unlike the CLI's
+ *  --recent/--stale guards: an agent choosing a recipient always needs
+ *  the full directory, including the tab-less rows it may still reach. */
 const chatListDef: ToolDef = {
   name: "chat_list",
   description:
@@ -2159,7 +2162,7 @@ const chatListDef: ToolDef = {
     }
     const unread = ctx.db.unreadChatCount(identity.sessionID);
     const openTabs = ctx.openTabs?.() ?? new Set<string>();
-    const { active, stale } = splitChatRoster(sortChatRoster(sessions));
+    const { active, recent, stale } = splitChatRoster(sortChatRoster(sessions), Date.now(), null, openTabs);
     const line = (s: (typeof sessions)[number]) => {
       const self = s.session_id === identity.sessionID;
       const liveness = chatLiveness(s, Date.now(), openTabs);
@@ -2176,6 +2179,15 @@ const chatListDef: ToolDef = {
     const sections: string[] = [];
     if (active.length > 0) {
       sections.push(`# Active Sessions\n\n${active.map(line).join("\n")}`);
+    }
+    if (recent.length > 0) {
+      sections.push(
+        `# Recent Sessions\n\n` +
+          `_These sessions are alive but have no open tab: a wake may not reach them ` +
+          `until their tab reopens, though headless subordinates may still read mail ` +
+          `on their own turns._\n\n` +
+          `${recent.map(line).join("\n")}`,
+      );
     }
     if (stale.length > 0) {
       sections.push(

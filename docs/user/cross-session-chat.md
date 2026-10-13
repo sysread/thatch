@@ -25,11 +25,12 @@ explicitly with `thatch_chat_register` (no arguments) - useful after
 `chat_unregister`, or just to check your assigned name. Once registered:
 
 - `thatch_chat_list` shows every registered session on the machine, grouped
-  into Active and Stale sections: active sessions' harness is alive; stale
+  into Active, Recent, and Stale sections: active sessions either have an
+  opencode tab open right now or are Claude Code and Cursor rows, which
+  read mail at their next prompt; recent ones are alive but have no open
+  tab, so a wake may not reach them until the tab reopens; stale
   ones have missed two heartbeats, about a minute (the opencode process
-  hosting them has probably stopped). Each active row also carries a
-  liveness verdict: `open` means the session has an opencode tab open
-  right now, `recent` means the harness is alive but no tab is open. Each
+  hosting them has probably stopped). Each
   row carries how long ago the session last
   checked in, its project, whether it runs in the project root or a linked
   git worktree, its topic, and your unread count

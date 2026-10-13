@@ -15,9 +15,12 @@ import { readOpenTabSessions } from "../../../src/tab-state";
  * (some sessions with tabs, some without), a direct message, a broadcast,
  * and a departed sender, then verifies the roster (including the
  * open/recent liveness verdicts) and the tail's JSONL events, including
- * the broadcast flag and the departed-sender fallback. The roster's project
- * grouping order is probed with two sibling-project seeds, the active-only
- * default is verified against the long-stale ghost, bare --stale adds the
+ * the broadcast flag and the departed-sender fallback. The roster's
+ * project grouping order is probed with two sibling-project seeds
+ * (tab-less, so probed under --recent where they are visible), the
+ * open-only default is verified against the long-stale ghost and the
+ * tab-less recent rows (hidden behind a note, revealed by --recent),
+ * bare --stale adds the
  * stale section under the one-day display cap (hidden-count note), and
  * --stale all is the unbounded escape hatch. A second seed
  * batch (numbered fillers) exercises the tail's --limit elision note,
@@ -34,15 +37,17 @@ const useCase: UseCase = {
   ].join("\n"),
   steps: [
     "1. Seed a DB: three registered sessions (alpha with a topic, beta, ghost aged long stale), two ordering probes in sibling projects, a direct message, a broadcast, and a message from a sender that then unregisters.",
-    "2. Run `thatch chat list` and verify the default active-only roster: one Active section (aligned header row plus name, human age, status, project, and topic columns) with no Stale section, and per-row status verdicts: open for seeds with a tab, recent for seeds without one.",
-    "3. Verify bare `--stale` adds the Stale section but still hides the long-stale ghost behind the default one-day display cap (hidden-count note), and `--stale all` shows it unbounded.",
-    "4. Run `thatch chat tail --once` and verify every stdout line is one JSON object with event/at/id/from/to/body fields, broadcast copies carry broadcast: true with their real recipient, and already-read messages have a read event linked by id.",
-    "5. Verify a departed sender renders as unknown in the tail.",
-    "6. Seed 25 numbered filler messages, then run filtered tails: verify --limit line counts and the stderr elision note, ANDed --match, --from name matching, and the --since/--until window.",
+    "2. Run `thatch chat list` and verify the default open-only roster: one Active section (aligned header row plus name, human age, status, project, and topic columns) with no Stale or Recent section, and tab-less rows collapsed into a hidden-count note pointing at `--recent`.",
+    "3. Run `thatch chat list --recent` and verify the Recent section renders the tab-less seeds with the recent verdict (the open verdicts render in the Active section), then verify bare `--stale` adds the Stale section but still hides the long-stale ghost behind the default one-day display cap (hidden-count note), and `--stale all` shows it unbounded.",
+    "4. Verify the flags compose in either order: `--stale --recent` keeps the one-day cap and shows Recent (the flag token is not eaten as --stale's value), and `--recent --stale all` renders the full three-section page in order (Active, Recent, Stale).",
+    "5. Run `thatch chat tail --once` and verify every stdout line is one JSON object with event/at/id/from/to/body fields, broadcast copies carry broadcast: true with their real recipient, and already-read messages have a read event linked by id.",
+    "6. Verify a departed sender renders as unknown in the tail.",
+    "7. Seed 25 numbered filler messages, then run filtered tails: verify --limit line counts and the stderr elision note, ANDed --match, --from name matching, and the --since/--until window.",
   ].join("\n"),
   expected: [
-    "- The default roster is active-only: fresh sessions with a human-readable age, project, and topic; no Stale section.",
-    "- Bare `--stale` adds a Stale section; rows older than the one-day default cap are hidden and counted in a note; `--stale all` displays every stale row.",
+    "- The default roster is open-only: fresh tabbed sessions with a human-readable age, project, and topic; no Stale or Recent section, and tab-less rows collapse into a hidden-count note.",
+    "- `--recent` reveals the Recent section with the tab-less seeds rendering the recent verdict; bare `--stale` adds a Stale section; rows older than the one-day default cap are hidden and counted in a note; `--stale all` displays every stale row.",
+    "- The flags compose in either order: `--stale --recent` keeps the cap (no ghost) and renders Recent; `--recent --stale all` renders Active, Recent, and Stale in that page order with the ghost visible.",
     "- The tail is JSONL: one sent event per line with the body verbatim and each participant's topic; via_broadcast rows are one sent event per recipient with broadcast: true.",
     "- A sender whose directory row is gone renders as 'unknown (id, departed)'.",
     "- --limit caps the backlog with an elision note on stderr; --match ANDs; --from/--to match names; --since/--until bound the window.",
@@ -117,7 +122,7 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const listText = list.stdout.toString();
-    // The default roster is active-only: the Active section renders with
+    // The default roster is open-only: the Active section renders with
     // its aligned header row plus session rows (name, age, status, project,
     // topic) - and no Stale section at all. Piped output carries no ANSI.
     for (const needle of [
@@ -132,7 +137,13 @@ const useCase: UseCase = {
     }
     // The default hides stale rows entirely - section, note, and all.
     if (listText.includes("# Stale Sessions") || listText.includes("ghost-00001") || listText.includes("older stale session")) {
-      console.log(`  FAIL: default roster should be active-only:\n${listText}`);
+      console.log(`  FAIL: default roster should be open-only:\n${listText}`);
+      return "FAIL";
+    }
+    // The default also hides recent (alive, tab-less) rows: the ordering
+    // probes carry no tabs, so they collapse into the hidden-count note.
+    if (listText.includes("early-00001") || !listText.includes("2 recent sessions hidden") || !listText.includes("--recent to show")) {
+      console.log(`  FAIL: default roster should hide tab-less rows behind the note:\n${listText}`);
       return "FAIL";
     }
     // Bare --stale opts into the stale section under the one-day display
@@ -167,19 +178,61 @@ const useCase: UseCase = {
       console.log(`  FAIL: --stale all should show the missed-heartbeat explainer:\n${unbounded.stdout.toString()}`);
       return "FAIL";
     }
-    // Roster ordering: project groups sort alphabetically (acme/alpha,
-    // then acme/widgets, then acme/zulu), so the probe rows bracket the
-    // original trio. Within-project recency ordering is unit-tested;
-    // seeds registered microseconds apart cannot pin it here.
-    const at = (needle: string) => listText.indexOf(needle);
-    if (at("early-00001") === -1 || at("early-00001") > at("alpha-00001") || at("alpha-00001") > at("late-00001")) {
-      console.log(`  FAIL: roster rows not ordered by project:\n${listText}`);
+    // The flags compose, and order never matters: in "--stale --recent"
+    // the flag token must not be eaten as --stale's value (a bare --stale
+    // keeps the one-day cap, hiding the long-stale ghost). The combined
+    // "--recent --stale all" renders the full three-section page, in
+    // section order: Active, then Recent, then Stale.
+    const both = await run(["chat", "list", "--stale", "--recent"]);
+    if (both.exitCode !== 0) {
+      console.log(`  FAIL: chat list --stale --recent exited ${both.exitCode}`);
       return "FAIL";
     }
-    // Liveness verdicts: tab-carrying seeds render open, tab-less ones
-    // recent (both stay in the Active section; only staleness splits it).
-    if (!/ago\s+open\b/.test(listText) || !/ago\s+recent\b/.test(listText)) {
-      console.log(`  FAIL: roster rows missing open/recent verdicts:\n${listText}`);
+    const bothText = both.stdout.toString();
+    if (!bothText.includes("# Recent Sessions") || bothText.includes("ghost-00001")) {
+      console.log(`  FAIL: --stale --recent should render Recent with the cap still hiding the ghost:\n${bothText}`);
+      return "FAIL";
+    }
+    const allThree = await run(["chat", "list", "--recent", "--stale", "all"]);
+    if (allThree.exitCode !== 0) {
+      console.log(`  FAIL: chat list --recent --stale all exited ${allThree.exitCode}`);
+      return "FAIL";
+    }
+    const allThreeText = allThree.stdout.toString();
+    const headers = ["# Active Sessions", "# Recent Sessions", "# Stale Sessions"].map((h) => allThreeText.indexOf(h));
+    if (headers.some((i) => i === -1) || headers[0] > headers[1] || headers[1] > headers[2] || !allThreeText.includes("ghost-00001")) {
+      console.log(`  FAIL: combined flags should render Active, Recent, Stale in order with the ghost:\n${allThreeText}`);
+      return "FAIL";
+    }
+    // --recent reveals the Recent section: the tab-less ordering probes
+    // render with the recent verdict, alongside the Active section's
+    // tab-carrying seeds.
+    const withRecent = await run(["chat", "list", "--recent"]);
+    if (withRecent.exitCode !== 0) {
+      console.log(`  FAIL: chat list --recent exited ${withRecent.exitCode}`);
+      return "FAIL";
+    }
+    const recentText = withRecent.stdout.toString();
+    if (!recentText.includes("# Recent Sessions") || !recentText.includes("early-00001") || !recentText.includes("late-00001")) {
+      console.log(`  FAIL: --recent roster missing the Recent section or its rows:\n${recentText}`);
+      return "FAIL";
+    }
+    // Roster ordering: project groups sort alphabetically within a
+    // section (acme/alpha, then acme/zulu). The probes are tab-less, so
+    // they only render under --recent, and the section split dominates
+    // the page (Active renders before Recent), so the bracket is probed
+    // within the Recent section rather than across it. Within-project
+    // recency ordering is unit-tested; seeds registered microseconds
+    // apart cannot pin it here.
+    const at = (needle: string) => recentText.indexOf(needle);
+    if (at("early-00001") === -1 || at("early-00001") > at("late-00001")) {
+      console.log(`  FAIL: Recent section rows not ordered by project:\n${recentText}`);
+      return "FAIL";
+    }
+    // Liveness verdicts: the tab-carrying seeds render open, the
+    // tab-less probes render recent (each in its own section).
+    if (!/ago\s+open\b/.test(recentText) || !/ago\s+recent\b/.test(recentText)) {
+      console.log(`  FAIL: roster rows missing open/recent verdicts:\n${recentText}`);
       return "FAIL";
     }
 

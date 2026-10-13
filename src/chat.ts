@@ -389,31 +389,41 @@ export function sortChatRoster(rows: ChatSessionRow[]): ChatSessionRow[] {
   });
 }
 
-/** Splits the roster for the two-section display: Active (wake-able or
- *  reachable - fresh opencode rows and every MCP row, which read mail at
- *  their next prompt) and Stale (opencode rows whose harness has stopped
- *  reporting; mail to them waits until they resume).
+/** Splits the roster for the three-section display: Active (wakeable or
+ *  reachable - opencode rows with an open tab, plus every MCP row, which
+ *  read mail at their next prompt), Recent (fresh opencode rows with no
+ *  open tab: the harness is alive and beating, but a wake may not reach
+ *  the session until its tab reopens - headless subordinates may still
+ *  read mail on their own turns), and Stale (opencode rows whose harness
+ *  has stopped reporting; mail to them waits until they resume).
+ *  openTabs refines fresh opencode rows into open versus recent; when
+ *  omitted every fresh opencode row degrades to recent, never a false
+ *  open (chatLiveness's rule).
  *  staleCapMs bounds how old a stale row the roster displays, so
  *  long-dead sessions cannot bury the fresh signal; hidden rows come
  *  back only as the staleHidden count, so the CLI can say what it left
  *  out. null (the default) shows every stale row - the tool surface has
  *  no cap, only the CLI applies one. */
-export function splitChatRoster(rows: ChatSessionRow[], now = Date.now(), staleCapMs: number | null = null): { active: ChatSessionRow[]; stale: ChatSessionRow[]; staleHidden: number } {
+export function splitChatRoster(rows: ChatSessionRow[], now = Date.now(), staleCapMs: number | null = null, openTabs?: ReadonlySet<string>): { active: ChatSessionRow[]; recent: ChatSessionRow[]; stale: ChatSessionRow[]; staleHidden: number } {
   const active: ChatSessionRow[] = [];
+  const recent: ChatSessionRow[] = [];
   const stale: ChatSessionRow[] = [];
   let staleHidden = 0;
   for (const row of rows) {
-    if (chatLiveness(row, now) === "stale") {
+    const verdict = chatLiveness(row, now, openTabs);
+    if (verdict === "stale") {
       if (staleCapMs !== null && now - Date.parse(row.last_seen) > staleCapMs) {
         staleHidden++;
       } else {
         stale.push(row);
       }
+    } else if (verdict === "recent") {
+      recent.push(row);
     } else {
       active.push(row);
     }
   }
-  return { active, stale, staleHidden };
+  return { active, recent, stale, staleHidden };
 }
 
 /**

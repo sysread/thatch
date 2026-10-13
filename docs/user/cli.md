@@ -49,7 +49,8 @@ Read-only access to the chat directory your opencode sessions share
 (see [cross-session-chat.md](cross-session-chat.md)):
 
 ```bash
-thatch chat list               # who is registered: name, age, project, topic
+thatch chat list               # who is open now: name, age, project, topic
+thatch chat list --recent      # also show alive sessions with no open tab
 thatch chat list --stale all   # also show stale sessions older than a day
 thatch chat tail               # follow sent and read events, live (JSONL)
 thatch chat tail --once        # print the last 20 messages and exit
@@ -59,21 +60,28 @@ thatch chat tail --from al --to bob        # substring match on names
 thatch chat tail --since 2026-09-12 --until "2026-09-13 09:00"   # a window
 ```
 
-`chat list` shows every registered session in two sections, Active and
-Stale, each as aligned columns under a header row: how long since its
-last heartbeat, its status (`open` - a tab is open now - or `recent` -
-host alive, no open tab - for opencode sessions;
-`active` or `idle` for Claude Code and Cursor sessions, which only beat
-when a prompt runs), its project, and its topic (the session's title) -
-the fastest way to answer "which session should I talk to about X?"
-Rows are grouped by project (alphabetical; sessions with no project
-last), most recently seen first within each project. A
-stale session has missed two heartbeats, about a minute: the opencode
-process hosting it has probably stopped. The stale section shows rows
-up to one day old by default; older ones collapse into a hidden-count
-note so long-dead sessions cannot bury the fresh signal. Pass
-`--stale N` (days) to widen the window or `--stale all` to see every
-stale row. Color is added only when the
+`chat list` renders the chat roster in three sections - Active, Recent,
+and Stale - each as aligned columns under a header row: how long since its last heartbeat, its status (`open` - a tab is open now - or
+`recent` - host alive, no open tab - for opencode sessions; `active` or
+`idle` for Claude Code and Cursor sessions, which only beat when a
+prompt runs), its project, and its topic (the session's title) - the
+fastest way to answer "which session should I talk to about X?" Rows
+are grouped by project (alphabetical; sessions with no project last),
+most recently seen first within each project.
+
+The default view shows the sessions you can wake or reach now: open
+sessions plus Claude Code and Cursor rows, which read mail at their
+next prompt. A recent session - its harness is alive but its tab is
+closed, so a wake may not reach it until the tab reopens - collapses
+into a muted hidden-count note pointing at `--recent`, which reveals
+the Recent section. A stale session has missed two heartbeats, about a
+minute: the opencode process hosting it has probably stopped. Its
+section is hidden too, behind `--stale`, but without a count note - the
+default view simply drops stale rows. The stale section
+shows rows up to one day old by default; older ones collapse into a
+hidden-count note so long-dead sessions cannot bury the fresh signal.
+Pass `--stale N` (days) to widen the window or `--stale all` to see
+every stale row. Color is added only when the
 output is a terminal; a pipe prints plain aligned text.
 
 `chat tail` prints the conversation as a JSONL event log: one JSON

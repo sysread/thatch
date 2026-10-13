@@ -64,13 +64,16 @@ function usage(exitCode = 1): never {
                                    Full conversation as OpenAI chat-completions JSONL
   thatch session search <query> [--session <id>] [--regex] [--limit N]
                                    JSONL of matching parts across sessions (decoded content)
-  thatch chat list [--stale N|all]  Registered chat sessions. Default shows
-                                    only active (fresh-heartbeat) sessions:
-                                    name, session id, age, status, project,
-                                    topic. --stale adds the stale section:
-                                    N bounds it to sessions seen in the
-                                    last N days (default 1); all shows
-                                    every stale session.
+  thatch chat list [--recent] [--stale N|all]
+                                    Registered chat sessions. Default shows
+                                    only open sessions (plus MCP rows, which
+                                    read mail at their next prompt): name,
+                                    session id, age, status, project, topic.
+                                    Tab-less fresh sessions collapse into a
+                                    hidden-count note; --recent shows them.
+                                    --stale adds the stale section: N bounds
+                                    it to sessions seen in the last N days
+                                    (default 1); all shows every stale one.
   thatch chat tail [--once] [--limit N|all] [--match RE]
                    [--from NAME] [--to NAME] [--since DT] [--until DT]
                                    Follow cross-session chat as a JSONL
@@ -437,29 +440,42 @@ async function sessionCommand(rest: string[]): Promise<void> {
 const CHAT_ROSTER_HEADER = ["NAME", "SESSION ID", "AGE", "STATUS", "PROJECT", "TOPIC"];
 
 /**
- * Renders the `chat list` roster as two sections - Active and Stale - each
- * an aligned-column table under a header row. Section headers are bold,
- * the stale explainer is muted italic; rows use green names, dim age,
- * green/red status, and a muted italic topic. The STATUS column carries
- * the liveness verdict: open (tab open now), recent (host alive, no open
- * tab), active/idle (MCP rows), stale (host presumed gone).
+ * Renders the `chat list` roster as three sections - Active, Recent, and
+ * Stale - each an aligned-column table under a header row. Section headers
+ * are bold, the Recent and Stale explainers are muted italic; rows use
+ * green names, dim age, green/yellow/red status, and a muted italic topic.
+ * The STATUS column carries the liveness verdict: open (tab open now),
+ * recent (host alive, no open tab), active/idle (MCP rows), stale (host
+ * presumed gone).
+ * showRecent = false (the CLI default without `--recent`) collapses the
+ * Recent section into a muted hidden-count note pointing at the flag.
+ * Unlike the Stale hide - which the caller does by pre-filtering rows
+ * before this function, dropping them silently - the recent hide needs
+ * the rows in hand to count them, so it happens here as a note. An
+ * all-recent roster therefore renders the note alone, with no section
+ * header: there is no Recent section on the page to head, while the
+ * stale hidden note rides under a header because its section IS
+ * displayed;
  * staleCapMs bounds how old a stale row is displayed (null = no bound);
  * rows past the cap collapse into a muted hidden-count note so the reader
  * knows rows exist that the window left out.
+ * now is the render's single clock sample: the split, every per-row
+ * verdict, and the caller's pre-filter must agree, or a row aging past
+ * the staleness boundary mid-render could land in two sections at once.
  * Color is applied only when stdout is an interactive terminal (and
  * NO_COLOR is unset), so piped output - grep, redirect, QA runners - stays
  * clean plain text.
  */
-function formatChatRoster(sessions: ChatSessionRow[], staleCapMs: number | null = null, openTabs?: ReadonlySet<string>): string {
+function formatChatRoster(sessions: ChatSessionRow[], staleCapMs: number | null = null, openTabs?: ReadonlySet<string>, showRecent = true, now = Date.now()): string {
   const colored = process.stdout.isTTY === true && !process.env.NO_COLOR;
   const paint = (code: string, s: string) => (colored ? `\x1b[${code}m${s}\x1b[0m` : s);
-  const { active, stale, staleHidden } = splitChatRoster(sortChatRoster(sessions), Date.now(), staleCapMs);
+  const { active, recent, stale, staleHidden } = splitChatRoster(sortChatRoster(sessions), now, staleCapMs, openTabs);
   const renderTable = (rows: ChatSessionRow[]) => {
     const cells = (r: ChatSessionRow) => [
       r.name,
       r.session_id,
       humanAge(r.last_seen),
-      chatLiveness(r, Date.now(), openTabs),
+      chatLiveness(r, now, openTabs),
       r.project ?? "unknown",
       r.topic ?? "",
     ];
@@ -487,6 +503,20 @@ function formatChatRoster(sessions: ChatSessionRow[], staleCapMs: number | null 
   const parts: string[] = [];
   if (active.length > 0) {
     parts.push([paint("1", "# Active Sessions"), renderTable(active)].join("\n"));
+  }
+  if (recent.length > 0) {
+    if (showRecent) {
+      const explainer = "These sessions have a fresh heartbeat but no open tab, so a wake may not reach them until their tab reopens; headless subordinates may still read mail on their own turns.";
+      parts.push([paint("1", "# Recent Sessions"), paint("3;90", explainer), renderTable(recent)].join("\n"));
+    } else {
+      // Bare note, no section header: there is no Recent section on the
+      // page, so a header would announce a section the view does not
+      // render. The stale hidden note rides under a header because with
+      // --stale its section IS rendered.
+      parts.push(
+        paint("3;90", `${recent.length} recent session${recent.length === 1 ? "" : "s"} hidden (alive, no open tab); --recent to show`),
+      );
+    }
   }
   if (stale.length > 0 || staleHidden > 0) {
     const lines = [paint("1", "# Stale Sessions")];
@@ -517,13 +547,24 @@ async function chatCommand(rest: string[]): Promise<void> {
       // sessions from burying the fresh signal. --stale all restores the
       // unbounded view. A bad value dies loudly rather than silently
       // shrinking the roster.
-      // Default: active sessions only. --stale [N|all] opts into the
-      // stale section - bare --stale keeps the one-day display cap, N
-      // bounds it, all removes it. The value is parsed by hand (not
-      // flagValue) because bare --stale is meaningful.
+      // Default: open sessions only (plus MCP rows, which read mail at
+      // their next prompt - "open" is meaningless for them). --recent
+      // opts into the Recent section (alive, no open tab). The two hidden
+      // defaults work differently: --recent's leaves a muted count note
+      // in the renderer (it needs the rows in hand to count them);
+      // --stale's drops the rows silently in the pre-filter below, and
+      // only the empty-roster message points at the flag. Unlike --stale
+      // it takes no window value: recent rows are bounded by the heartbeat
+      // window itself, so there is nothing to cap. The value is parsed by
+      // hand (not flagValue) because bare --stale is meaningful.
+      const showRecent = restArgs.includes("--recent");
       const showStale = restArgs.includes("--stale");
       const staleIdx = restArgs.indexOf("--stale");
-      const staleNext = showStale ? restArgs[staleIdx + 1] : undefined;
+      const rawNext = showStale ? restArgs[staleIdx + 1] : undefined;
+      // A token starting with "--" is a sibling flag (e.g. "--stale
+      // --recent"), not --stale's value: --stale stays bare instead of
+      // eating the flag.
+      const staleNext = rawNext !== undefined && rawNext.startsWith("--") ? undefined : rawNext;
       let staleCapMs: number | null = 24 * 60 * 60 * 1000;
       if (staleNext !== undefined) {
         if (staleNext === "all") staleCapMs = null;
@@ -535,17 +576,25 @@ async function chatCommand(rest: string[]): Promise<void> {
       // The open-tab set is read once per invocation at render time: rows
       // with a tab render "open", fresh rows without one "recent".
       const openTabs = chatOpenTabsProvider(() => db.chatTabClosures())();
-      let sessions = db.listChatSessions();
-      if (!showStale) sessions = sessions.filter((r) => chatLiveness(r, Date.now(), openTabs) !== "stale");
+      // One clock sample per render: the pre-filter, the split, and every
+      // per-row verdict must agree, or a row aging past the staleness
+      // boundary mid-render could land in two sections at once.
+      const now = Date.now();
+      const registered = db.listChatSessions();
+      // Stale rows are hidden here (not in the renderer) so the
+      // emptiness check can tell an empty directory from a stale-only
+      // one; recent rows are left in because formatChatRoster needs them
+      // to render the hidden-count note.
+      const sessions = registered.filter((r) => showStale || chatLiveness(r, now, openTabs) !== "stale");
       if (sessions.length === 0) {
         console.log(
-          showStale
+          registered.length === 0
             ? "No sessions registered. Sessions join the directory automatically on their first idle (opencode), or via chat_register."
             : "No active sessions. (Stale sessions are hidden; run with --stale to include them.)",
         );
         break;
       }
-      console.log(formatChatRoster(sessions, showStale ? staleCapMs : null, openTabs));
+      console.log(formatChatRoster(sessions, showStale ? staleCapMs : null, openTabs, showRecent, now));
       break;
     }
 

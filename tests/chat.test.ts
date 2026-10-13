@@ -779,13 +779,22 @@ describe("chatLiveness and roster split", () => {
     expect(chatLiveness(row({ host_kind: "mcp", last_seen: ago(CHAT_STALE_MS + 1) }), NOW)).toBe("idle");
   });
 
-  test("splitChatRoster separates stale opencode rows; mcp rows are always active", () => {
-    const fresh = row({ session_id: "ses_f", name: "f-00001" });
+  test("splitChatRoster splits fresh opencode rows into active (open tab) and recent; mcp rows are always active", () => {
+    const tabbed = row({ session_id: "ses_f", name: "f-00001" });
+    const tabless = row({ session_id: "ses_r", name: "r-00001" });
     const dead = row({ session_id: "ses_d", name: "d-00001", last_seen: ago(CHAT_STALE_MS + 1) });
     const mcp = row({ session_id: "ses_m", name: "m-00001", host_kind: "mcp", last_seen: ago(CHAT_STALE_MS + 1) });
-    const { active, stale } = splitChatRoster([fresh, dead, mcp], NOW);
-    expect(active.map((r) => r.session_id)).toEqual(["ses_f", "ses_m"]);
-    expect(stale.map((r) => r.session_id)).toEqual(["ses_d"]);
+    // Without the tab set every fresh opencode row degrades to recent -
+    // chatLiveness's honest-degradation rule, never a false open.
+    const degraded = splitChatRoster([tabbed, tabless, dead, mcp], NOW);
+    expect(degraded.active.map((r) => r.session_id)).toEqual(["ses_m"]);
+    expect(degraded.recent.map((r) => r.session_id)).toEqual(["ses_f", "ses_r"]);
+    expect(degraded.stale.map((r) => r.session_id)).toEqual(["ses_d"]);
+    // With the tab set, the tabbed row is active, the tab-less one recent.
+    const split = splitChatRoster([tabbed, tabless, dead, mcp], NOW, null, new Set(["ses_f"]));
+    expect(split.active.map((r) => r.session_id)).toEqual(["ses_f", "ses_m"]);
+    expect(split.recent.map((r) => r.session_id)).toEqual(["ses_r"]);
+    expect(split.stale.map((r) => r.session_id)).toEqual(["ses_d"]);
   });
 
   test("sortChatRoster orders by project, then most recently seen; unknown project last", () => {
@@ -811,8 +820,9 @@ describe("chatLiveness and roster split", () => {
     // One-day cap (the CLI default): the week-old row is hidden and
     // counted, the day-old row sits exactly at the boundary so it shows,
     // and the old-but-idle MCP row stays active (the cap only bounds the
-    // stale section).
-    const capped = splitChatRoster([fresh, dayOld, weekOld, idleMcp], NOW, DAY);
+    // stale section). The fresh row gets a tab so it stays in active -
+    // without one it degrades to recent, per chatLiveness's honest-degradation rule tested above.
+    const capped = splitChatRoster([fresh, dayOld, weekOld, idleMcp], NOW, DAY, new Set(["ses_f"]));
     expect(capped.stale.map((r) => r.session_id)).toEqual(["ses_d1"]);
     expect(capped.staleHidden).toBe(1);
     expect(capped.active.map((r) => r.session_id)).toEqual(["ses_f", "ses_m"]);

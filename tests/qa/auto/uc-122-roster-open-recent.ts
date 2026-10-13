@@ -16,9 +16,12 @@ import { readOpenTabSessions } from "../../../src/tab-state";
  * a broadcast to it spends a model turn on a wake that can be swallowed
  * without a tab to receive it. The roster therefore splits fresh rows
  * into open (tab present) and recent (no tab), and broadcast targets
- * only open rows plus MCP rows, listing every skip by name. With no tab
- * signal at all (tabs disabled, no state tree) everything degrades to
- * recent - a broadcast reaches only MCP sessions, never a false fan-out.
+ * only open rows plus MCP rows, listing every skip by name. The CLI
+ * guards the Recent section behind `--recent` (default: a muted
+ * hidden-count note), mirroring how it guards the Stale section behind
+ * `--stale`. With no tab signal at all (tabs disabled, no state tree)
+ * everything degrades to recent - a broadcast reaches only MCP
+ * sessions, never a false fan-out.
  */
 
 const useCase: UseCase = {
@@ -28,14 +31,14 @@ const useCase: UseCase = {
   ].join("\n"),
   steps: [
     "1. Seed a DB with four sessions: stale (aged past two beats), tabbed and tabless (fresh heartbeats), and an MCP row; write a tabs.json fixture giving a tab only to the tabbed session.",
-    "2. Broadcast from the tabbed session and inspect the result's recipients and skipped lists.",
-    "3. Run `thatch chat list` and check the per-row status verdicts (open, recent, stale sections and columns).",
-    "4. Remove the tabs fixture (no tab signal) and verify the roster degrades every fresh row to recent, and a broadcast reaches only the MCP row.",
+    "2. Broadcast from the MCP row and inspect the result's recipients and skipped lists.",
+    "3. Run `thatch chat list` (default hides recent rows behind a muted note) and `thatch chat list --recent`; check the per-row status verdicts.",
+    "4. Remove the tabs fixture (no tab signal) and verify the roster degrades every fresh row to recent (hidden by default, revealed by --recent), and a broadcast from the MCP row reaches nobody (the sender is the only MCP row).",
   ].join("\n"),
   expected: [
     "- Step 2: recipients = the tabbed session; skipped names both the tab-less fresh row and the stale row.",
-    "- Step 3: the tabbed row renders open, the tab-less fresh row renders recent, the stale row is in the Stale section.",
-    "- Step 4: with no tab signal every fresh opencode row renders recent, and a broadcast reaches nobody - no false OPEN-driven fan-out.",
+    "- Step 3: the default roster renders the tabbed row open and collapses the tab-less fresh row into the hidden-count note pointing at --recent; `--recent` renders the Recent section with the tab-less row.",
+    "- Step 4: with no tab signal every fresh opencode row renders recent (hidden by default, shown by --recent), and a broadcast reaches nobody - no false OPEN-driven fan-out.",
   ].join("\n"),
 
   async run(ctx: QaContext) {
@@ -98,20 +101,37 @@ const useCase: UseCase = {
         return "FAIL";
       }
 
-      // Step 3: the roster renders the verdicts per row.
+      // Step 3: the default roster shows only open rows - the tab-less
+      // fresh row collapses into the hidden-count note pointing at
+      // --recent, which reveals the Recent section.
       const list = await run(["chat", "list"]);
       if (list.exitCode !== 0) {
         console.log(`  FAIL: chat list exited ${list.exitCode}`);
         return "FAIL";
       }
       const listText = list.stdout.toString();
-      if (!/# Active Sessions/.test(listText) || !/ago\s+open\b/.test(listText) || !/ago\s+recent\b/.test(listText)) {
-        console.log(`  FAIL: roster missing open/recent verdicts:\n${listText}`);
+      if (!/# Active Sessions/.test(listText) || !/ago\s+open\b/.test(listText)) {
+        console.log(`  FAIL: roster missing Active section or open verdict:\n${listText}`);
+        return "FAIL";
+      }
+      if (/ago\s+recent\b/.test(listText) || !/1 recent session hidden/.test(listText) || !/--recent to show/.test(listText)) {
+        console.log(`  FAIL: default roster should hide the recent row behind the note:\n${listText}`);
+        return "FAIL";
+      }
+      const withRecent = await run(["chat", "list", "--recent"]);
+      if (withRecent.exitCode !== 0) {
+        console.log(`  FAIL: chat list --recent exited ${withRecent.exitCode}`);
+        return "FAIL";
+      }
+      const withRecentText = withRecent.stdout.toString();
+      if (!/# Recent Sessions/.test(withRecentText) || !/ago\s+recent\b/.test(withRecentText)) {
+        console.log(`  FAIL: --recent roster missing the Recent section:\n${withRecentText}`);
         return "FAIL";
       }
 
-      // Step 4: no tab signal - everything degrades to recent, and the
-      // broadcast's only recipient is the MCP row.
+      // Step 4: no tab signal - everything degrades to recent (hidden
+      // by default, revealed by --recent), and the broadcast's only
+      // would-be recipient is the MCP row.
       writeTabs([]);
       const bare = await run(["chat", "list"]);
       if (bare.exitCode !== 0) {
@@ -119,8 +139,18 @@ const useCase: UseCase = {
         return "FAIL";
       }
       const bareText = bare.stdout.toString();
-      if (/ago\s+open\b/.test(bareText) || !/ago\s+recent\b/.test(bareText)) {
-        console.log(`  FAIL: no-tab-signal roster should degrade to recent:\n${bareText}`);
+      if (/ago\s+open\b/.test(bareText) || !/2 recent sessions hidden/.test(bareText)) {
+        console.log(`  FAIL: no-tab-signal roster should degrade to recent behind the note:\n${bareText}`);
+        return "FAIL";
+      }
+      const bareRecent = await run(["chat", "list", "--recent"]);
+      if (bareRecent.exitCode !== 0) {
+        console.log(`  FAIL: bare chat list --recent exited ${bareRecent.exitCode}`);
+        return "FAIL";
+      }
+      const bareRecentText = bareRecent.stdout.toString();
+      if (/ago\s+open\b/.test(bareRecentText) || !/ago\s+recent\b/.test(bareRecentText)) {
+        console.log(`  FAIL: degraded --recent roster should show only recent rows:\n${bareRecentText}`);
         return "FAIL";
       }
       const degraded = seeded.broadcastChatMessage("ses_mcp", "anyone mounted?");

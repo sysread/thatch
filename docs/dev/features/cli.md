@@ -53,12 +53,21 @@ Inherits stdio, exits with the child's exit code. Errors and exits 1 if none fou
 Read-only window on the cross-session chat directory ([cross-session-chat.md](cross-session-chat.md)):
 
 - `chat list` renders the roster as aligned columns under a header row
-  (NAME/AGE/STATUS/PROJECT/TOPIC), colorized only when stdout is a TTY
-  (`formatChatRoster()` in `bin/thatch`; pipes and QA runners get plain
-  text). Rows are split into Active and Stale sections by
-  `splitChatRoster()`; the status column is `chatLiveness()`'s verdict
+  (NAME/SESSION ID/AGE/STATUS/PROJECT/TOPIC), colorized only when stdout
+  is a TTY (`formatChatRoster()` in `bin/thatch`; pipes and QA runners
+  get plain text). Rows are split into Active, Recent, and Stale
+  sections by `splitChatRoster()` (it takes the open-tab set, so fresh
+  opencode rows split into open versus recent); the status column is
+  `chatLiveness()`'s verdict
   (`open`/`recent`/`stale` for opencode rows - the open-tab reader feeds
-  the open/recent split - `active`/`idle` for MCP rows).
+  the open/recent split - `active`/`idle` for MCP rows). The Recent and
+  Stale sections are flag-guarded, and the two guards hide differently:
+  without `--recent` the Recent section is replaced by a muted
+  hidden-count note (the renderer keeps the rows to count them), while
+  without `--stale` stale rows are dropped entirely by a pre-filter in
+  the command case - only the empty-roster message points at the flag.
+  `--stale [N|all]` reveals the stale rows under a one-day display cap
+  whose overflow collapses into a hidden-count note.
 - `chat tail` follows the message stream as JSONL: one `ChatTailEvent`
   per line via `formatChatTailJsonl()` (a bare `JSON.stringify`; no ANSI,
   no markdown rendering, no local-time conversion - the tail is a log for
