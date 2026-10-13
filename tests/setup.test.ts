@@ -224,7 +224,7 @@ describe("setupClaudeCode (project-local)", () => {
     // Shared skills only — opencode-only skills (thatch-code-review) are not
     // installed for Claude Code because they require sub-agent support.
     expect(result.skills.dir).toBe(join(projectDir, ".claude", "skills"));
-    expect(result.skills.added.length).toBe(35);
+    expect(result.skills.added.length).toBe(36);
     expect(result.skills.updated).toEqual([]);
     expect(result.skills.unchanged).toEqual([]);
     expect(result.skills.removed).toEqual([]);
@@ -238,6 +238,7 @@ describe("setupClaudeCode (project-local)", () => {
     expect(skillNames).toContain("thatch-review-state-flow");
     expect(skillNames).toContain("thatch-review-economy");
     expect(skillNames).toContain("thatch-review-no-slop");
+    expect(skillNames).toContain("thatch-review-clarity");
     expect(skillNames).toContain("thatch-review-breadcrumbs");
     expect(skillNames).toContain("thatch-review-mark-and-sweep");
     expect(skillNames).toContain("thatch-review-highlights");
@@ -387,7 +388,7 @@ describe("CLAUDE_CONFIG_DIR override", () => {
       expect(result.settings).toBe(join(customDir, "settings.json"));
       // skills are installed under the custom dir
       expect(result.skills.dir).toBe(join(customDir, "skills"));
-      expect(result.skills.added.length).toBe(35);
+      expect(result.skills.added.length).toBe(36);
       for (const skill of result.skills.added) {
         expect(skill.path.startsWith(customDir + "/")).toBe(true);
       }
@@ -417,7 +418,7 @@ describe("CLAUDE_CONFIG_DIR override", () => {
       expect(existsSync(join(projectDir, ".claude", "settings.json"))).toBe(true);
 
       expect(result.skills.dir).toBe(join(projectDir, ".claude", "skills"));
-      expect(result.skills.added.length).toBe(35);
+      expect(result.skills.added.length).toBe(36);
       for (const skill of result.skills.added) {
         expect(skill.path.startsWith(projectDir + "/")).toBe(true);
       }
@@ -798,7 +799,7 @@ describe("setupCursor (project-local)", () => {
     const result = setupCursor("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
     expect(result.skills.dir).toBe(join(projectDir, ".cursor", "skills"));
-    expect(result.skills.added.length).toBe(35);
+    expect(result.skills.added.length).toBe(36);
     expect(result.skills.updated).toEqual([]);
     expect(result.skills.unchanged).toEqual([]);
     expect(result.skills.removed).toEqual([]);
@@ -870,7 +871,7 @@ describe("setupCursor (global)", () => {
     const result = setupCursor("/usr/local/bin/thatch", true, projectDir, fakeHome);
 
     expect(result.skills.dir).toBe(join(fakeHome, ".cursor", "skills"));
-    expect(result.skills.added.length).toBe(35);
+    expect(result.skills.added.length).toBe(36);
     for (const skill of result.skills.added) {
       expect(skill.path.startsWith(join(fakeHome, ".cursor", "skills"))).toBe(true);
     }
@@ -1252,7 +1253,7 @@ describe("skill artifact registry parity", () => {
 
   test("REVIEW_COMMON is interpolated only into review specialist skills", () => {
     // The loader interpolates `${REVIEW_COMMON}` when it appears on its own
-    // line (the directive form used by the seven problem-finding review specialists). Inline
+    // line (the directive form used by the eight problem-finding review specialists). Inline
     // mentions of the token in other skills (e.g. as prose examples) must
     // NOT trigger interpolation — that would splice the review framework
     // into the middle of an unrelated skill body and corrupt the content.
@@ -1261,13 +1262,14 @@ describe("skill artifact registry parity", () => {
     // so the marker must be a phrase unique to common.md.
     // (Named REVIEW_COMMON_SPECIALISTS, not REVIEW_SPECIALISTS, to avoid
     // confusion with the roster const in src/prompts.ts: this set is the
-    // ${REVIEW_COMMON} interpolators only, a seven-name subset.)
+    // ${REVIEW_COMMON} interpolators only, an eight-name subset.)
     const REVIEW_COMMON_SPECIALISTS = new Set([
       "thatch-review-pedantic",
       "thatch-review-acceptance",
       "thatch-review-state-flow",
       "thatch-review-economy",
       "thatch-review-no-slop",
+      "thatch-review-clarity",
       "thatch-review-breadcrumbs",
       "thatch-review-mark-and-sweep",
     ]);
@@ -1277,6 +1279,31 @@ describe("skill artifact registry parity", () => {
       const isReviewSpecialist = REVIEW_COMMON_SPECIALISTS.has(skill.name);
       const hasInterpolatedBody = skill.content.includes(REVIEW_COMMON_BODY);
       expect(hasInterpolatedBody).toBe(isReviewSpecialist);
+    }
+  });
+
+  test("the clarity lens carries the clear-writing skill's pinned rule phrasings", () => {
+    // thatch-review-clarity condenses thatch-clear-writing's rules into a
+    // review checklist. Both files are hand-maintained prose, so the
+    // condensed rules can drift from the canonical ones. This test pins the
+    // phrasings the lens shares with the skill: an edit to one that misses
+    // the other fails here. The pins are exact rule statements, not the
+    // full rule list.
+    const lens = SHARED_SKILLS.find((s) => s.name === "thatch-review-clarity")!;
+    const rules = SHARED_SKILLS.find((s) => s.name === "thatch-clear-writing")!;
+    const PINNED_PHRASES = [
+      "Every term must exist somewhere",
+      "Brevity means fewer claims, not denser claims",
+      "Lead with the answer",
+      "A README is not",
+      "inverted pyramid",
+      "Basics before advanced",
+      "still gets the story",
+      "Presentation, not specificity",
+    ];
+    for (const phrase of PINNED_PHRASES) {
+      expect(lens.content).toContain(phrase);
+      expect(rules.content).toContain(phrase);
     }
   });
 

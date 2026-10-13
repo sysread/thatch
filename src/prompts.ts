@@ -19,6 +19,7 @@ export const REVIEW_SPECIALISTS: readonly string[] = [
   "thatch-review-state-flow",
   "thatch-review-economy",
   "thatch-review-no-slop",
+  "thatch-review-clarity",
   "thatch-review-breadcrumbs",
   "thatch-review-mark-and-sweep",
   "thatch-review-highlights",

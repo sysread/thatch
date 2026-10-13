@@ -43,6 +43,7 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-state-flow` | Data flow and contracts: module boundaries, implicit FSMs, error propagation. |
 | `thatch-review-economy` | Design simplicity and maintainability: is the complexity earned? Evaluates both the overall change design (forest) and individual touch points (trees) for unnecessary complexity, redundancy, and simpler available alternatives. |
 | `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth-wall breaks, em dashes, filler. |
+| `thatch-review-clarity` | Prose clarity in comments, docstrings, error strings, and docs: made-up phrases, buzzwords, untranslated jargon, clause chains, buried leads, doc/code responsibility splits, checked against the project's clear-writing rules regardless of who wrote the text. |
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of behavior? |
 | `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |
 | `thatch-review-highlights` | Positive finding detection: notably clever solutions, cleanup done along the way, documentation that helps. Medium-high bar against generic praise. |
@@ -79,7 +80,7 @@ description: Extract durable project facts ... Use when ...
 
 ## REVIEW_COMMON
 
-The seven problem-finding review specialists share a framework interpolated via `${REVIEW_COMMON}` (the technique and highlights specialists do not use it: technique reports informational notes and highlights finds positive things, each with its own structure):
+The problem-finding review specialists share a framework interpolated via `${REVIEW_COMMON}` (the technique and highlights specialists do not use it: technique reports informational notes and highlights finds positive things, each with its own structure):
 
 - **Static analysis only** — no running tests/linters/compilers.
 - **Scope gathering** — resolve the git range, `git diff --stat`, read changed

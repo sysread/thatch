@@ -168,6 +168,17 @@ The wart shape, for code that looks wrong but is correct:
 Simple and good beats complex and great. Cut whole claims to shorten;
 never compress the survivors.
 
+## Documentation files
+
+Standalone documentation - package docs (a doc.go or package comment), READMEs, and anything under a docs/ directory - serves readers that symbol-anchored text never meets: someone onboarding and an expert looking up one fact, in the same pass. An inline comment or a docstring has the code as its context. A standalone doc has only its own order, so the standard is higher: clear sentences are the floor; the document must also serve the skimmer and the learner.
+
+- **The inverted pyramid, at the document and the section level.** Lead with the answer at the top of the doc, and again at the top of each section: what the thing is and what the reader gets, first; the mechanism after; caveats and edge cases last. The reader decides when to stop reading, so stopping early must be safe.
+- **Basics before advanced.** Each section stands on the ones before it. A reader who knows the basics can stop or skip ahead; a reader who does not gets each idea in the order they can absorb it.
+- **Scan anchors.** Bold the load-bearing phrases so a reader who skims only the bold fragments still gets the story; the first sentence of each section carries the section's point. Bold sparingly outside the opening sections; a doc bolded throughout cannot be skimmed.
+- **Presentation, not specificity.** These rules demand better order, never more content. Judge a doc against its own level of detail; do not add enumerations or file pointers the doc's level never promised.
+
+No section template follows from this. Headings and structure belong to the repo's own conventions; apply the intent, not a shape.
+
 ## Clarity pass
 
 Before you post, save, or send: reread the draft as a reader with zero context. Fix what they would stumble on. Do not announce the pass; just return clean prose.

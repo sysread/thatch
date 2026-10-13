@@ -57,6 +57,15 @@ docs skill for style; the surface checklist:
 
 - Features change the **two tiers together**: `docs/user/<feature>.md`
   (product guide) and `docs/dev/features/<feature>.md` (architecture).
+- User-visible changes get a **root `README.md` check**: a new command,
+  tool, skill, or behavior a user would notice may belong there, not only
+  the per-feature doc. The README is a shipping surface, not an
+  afterthought.
+- If `docs/plans/` or `docs/in-progress/` holds a plan for the feature
+  that just landed, **graduate it** per the docs skill: remove the plan
+  file, fold the durable architecture into `docs/dev/`, and ensure the
+  QA use case exists. Plans are temporary; dev docs and use-case tests
+  are the permanent record.
 - New or removed tools touch `docs/dev/README.md` (module table) and
   `docs/user/README.md` (tool reference) plus both feature tiers.
 - New plugin hooks go in the hook table in `docs/dev/README.md`. New

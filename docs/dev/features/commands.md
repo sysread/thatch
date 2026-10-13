@@ -55,8 +55,8 @@ same source as the install list in src/skills.ts and both host
 instruction skill lists. `peer-review` weights org
 velocity and walks the project's persistent memory (the one tool it
 names, spelled through the `ToolNamer` so MCP renderings stay correct);
-`self-review` weights the reputation lenses (no-slop, technique,
-breadcrumbs) and iterates rounds until a round produces no meaningful
+`self-review` weights the reputation lenses (no-slop, clarity,
+technique, breadcrumbs) and iterates rounds until a round produces no meaningful
 findings. The couching also names the MCP `Focus:` line as a target
 source, because MCP prompts replace the file commands' `$ARGUMENTS`
 section with a `Focus:` line.

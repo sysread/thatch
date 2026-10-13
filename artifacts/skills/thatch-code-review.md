@@ -58,7 +58,7 @@ Dispatch a sub-agent using the Task tool to research the code workflows affected
 
 The sub-agent produces a code guide with one section per affected workflow or feature. Wait for it to complete and collect the guide.
 
-This guide gives specialists the code-level context (purpose, data flow, evolutions, constraints) they need to avoid false positives about intentional behavior and long-standing design decisions, and reduces duplicate code-tracing across the nine specialist lenses.
+This guide gives specialists the code-level context (purpose, data flow, evolutions, constraints) they need to avoid false positives about intentional behavior and long-standing design decisions, and reduces duplicate code-tracing across the ten specialist lenses.
 
 If the context brief includes a sibling register (from Step 2's related-PR discovery), fold it into the guide per the `Cross-PR context` section of the thatch-code-archaeology skill — whether you dispatch a sub-agent or do this research inline. The traps the guide exists to catch are comments referencing sibling work, contracts consumed from a sibling, and ordering assumptions across the stack or train.
 
@@ -90,7 +90,7 @@ For changes estimated at 3 points or fewer, skip partitioning — dispatch one s
 
 ## Step 6: Dispatch specialist sub-agents
 
-For each review unit, dispatch sub-agents using the Task tool. Each sub-agent runs one specialist lens on one review unit. The nine specialists are:
+For each review unit, dispatch sub-agents using the Task tool. Each sub-agent runs one specialist lens on one review unit. The ten specialists are:
 
 1. **Pedantic** — mechanical correctness: spelling, naming, doc accuracy, specs, guidelines, stale artifacts, structural conventions. Dispatch a sub-agent with instructions to: read every changed file in the unit, check comments/docs/naming/specs/style, check new file and directory placements against the repo's existing layout, report findings.
 
@@ -102,13 +102,15 @@ For each review unit, dispatch sub-agents using the Task tool. Each sub-agent ru
 
 5. **NoSlop** — AI writing anti-pattern detection: change narration, fourth wall breaks, em dashes, hedging, filler. Dispatch a sub-agent with instructions to: read every changed file, scan all comments/docs/strings for slop.
 
-6. **Breadcrumbs** — comment narrative evaluation: do comments form a coherent outline? Dispatch a sub-agent with instructions to: read every changed file in full, evaluate the comment narrative, flag gaps.
+6. **Clarity** — prose clarity against the project's clear-writing rules, regardless of who wrote the text: made-up phrases, buzzwords, untranslated jargon, clause chains, buried leads, doc/code responsibility splits, plus document-level presentation in standalone docs (the inverted pyramid, scan anchors, basics before advanced). Dispatch a sub-agent with instructions to: read every changed file in full plus every changed doc, scan all comments/docstrings/error strings/UI strings/doc paragraphs for reader-cost prose, check standalone docs that are new or substantially rewritten for structure, report each finding with the plain-English fix (the replacement, the split, or the claim to cut).
 
-7. **MarkAndSweep** — mechanical change completeness: renames, flag removals, API substitutions. Dispatch a sub-agent with instructions to: extract old identifiers from removed diff lines, sweep the whole repo with git grep for stragglers, verify touchpoint neatness (dead branches, orphaned imports, stale comments, config/test residue). Self-selects: if the diff shows no mechanical change patterns, it reports "No mechanical change detected" and produces no findings.
+7. **Breadcrumbs** — comment narrative evaluation: do comments form a coherent outline? Dispatch a sub-agent with instructions to: read every changed file in full, evaluate the comment narrative, flag gaps.
 
-8. **Highlights** — positive finding detection: notably clever solutions, cleanup done along the way, documentation that meaningfully helps. Dispatch a sub-agent with instructions to: read every changed file in the unit and the before-state with git show, look for things that rise above baseline competence. Medium-high bar: no generic praise, no baseline competence. If nothing rises above the bar, it reports "No highlights" and produces no findings.
+8. **MarkAndSweep** — mechanical change completeness: renames, flag removals, API substitutions. Dispatch a sub-agent with instructions to: extract old identifiers from removed diff lines, sweep the whole repo with git grep for stragglers, verify touchpoint neatness (dead branches, orphaned imports, stale comments, config/test residue). Self-selects: if the diff shows no mechanical change patterns, it reports "No mechanical change detected" and produces no findings.
 
-9. **Technique** — teaching-grade lens on better ways to do it: helpers and internal packages the author may not have seen, companion techniques, house patterns, test-craft, API-shape principles, next-reader discoverability. Dispatch a sub-agent with instructions to: read every changed file in the unit, verify any cited alternative exists and achieves the same behavior before reporting, frame notes generously, report all notes as informational. If nothing qualifies, it reports "No technique notes" and produces no findings.
+9. **Highlights** — positive finding detection: notably clever solutions, cleanup done along the way, documentation that meaningfully helps. Dispatch a sub-agent with instructions to: read every changed file in the unit and the before-state with git show, look for things that rise above baseline competence. Medium-high bar: no generic praise, no baseline competence. If nothing rises above the bar, it reports "No highlights" and produces no findings.
+
+10. **Technique** — teaching-grade lens on better ways to do it: helpers and internal packages the author may not have seen, companion techniques, house patterns, test-craft, API-shape principles, next-reader discoverability. Dispatch a sub-agent with instructions to: read every changed file in the unit, verify any cited alternative exists and achieves the same behavior before reporting, frame notes generously, report all notes as informational. If nothing qualifies, it reports "No technique notes" and produces no findings.
 
 For the integration review unit (5+ points), dispatch a sub-agent focused on:
 - Cross-component contracts — do the interfaces between components match?
@@ -137,7 +139,7 @@ Pass the synthesizer:
 
 The final user-facing report MUST begin with a concise explanation of the workflow(s) this PR changes before listing findings. Use one `### Workflow changes` section, with one subheading per affected workflow when there are multiple. Use the before/now walkthrough shape from the thatch-pr-description skill: numbered step = existing behavior; `NOW` sub-bullet = what the PR changes; `N/A` for new stages. This gives the user a map of the change before the findings. Keep it short: 3-6 steps per workflow.
 
-Confirmed LOW findings are mandatory in the final report, including mechanical findings (pedantic, no-slop, breadcrumbs, docs, naming, style, comments, structural conventions). Do not omit them for being non-functional.
+Confirmed LOW findings are mandatory in the final report, including mechanical findings (pedantic, no-slop, clarity, breadcrumbs, docs, naming, style, comments, structural conventions). Do not omit them for being non-functional.
 
 Confirmed highlights (from the highlights specialist) appear in a `### Highlights` section after the workflow changes and before the confirmed findings. Most PRs will have none — that is expected. Do not pad with borderline calls. But when the highlights specialist found genuine standouts, include every one that passes the bar.
 
@@ -164,7 +166,7 @@ When dispatching each sub-agent, include in the prompt:
 - The git range to review
 - **The resolved head SHA of the range** — all file reads, file:line citations, and anchors MUST be computed against this ref (`git show <head-sha>:<path>`), never the working tree, which may be on a different branch than the change under review
 - The specific files in this unit's scope
-- The specialist focus (from the nine specialists above)
+- The specialist focus (from the ten specialists above)
 - The diff stat for this unit's files
 - **The project context brief** from Step 2, filtered to what is relevant to this unit's scope. Explicitly list any deferred work that falls within this unit's files, and call out TODO ($ticket) markers the specialists should recognize as intentional.
 - **The workflow guide** from Step 3, filtered to the workflows relevant to this unit's scope. Use it to understand the purpose and evolution of the code before flagging issues. It provides the code-level context (flows, contracts, history, constraints) that prevents false positives about intentional behavior and long-standing design decisions.
