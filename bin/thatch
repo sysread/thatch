@@ -18,13 +18,25 @@ import { createDebugLog } from "../src/debug";
 
 const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 const dbPath = process.env.THATCH_DB_PATH ?? join(configHome, "thatch", "thatch.db");
+
+const argv = process.argv.slice(2);
+
+// Help is checked before the DB is opened or any subcommand runs, and
+// against the WHOLE argument list - not just the leading flags - so
+// `thatch chat list -h` and `thatch -h chat list` print usage instead of
+// executing. Asking for help is not an error: exit 0, where a bad
+// command still exits 1.
+if (argv.includes("-h") || argv.includes("--help")) usage(0);
+
+const [command, ...args] = argv;
+
 const db: ThatchDB = new ThatchDB(dbPath, { chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()) });
 
-const [command, ...args] = process.argv.slice(2);
-
-function usage(): never {
+function usage(exitCode = 1): never {
   console.error(`USAGE
   thatch --version, -v             Print version and exit
+  thatch -h, --help                Print this usage and exit (the flag
+                                    works anywhere in the command line)
   thatch stores                    List all stores
   thatch list   [store]            List memory labels in a store  
   thatch show   <label> [store]    Display a memory by label
@@ -75,7 +87,7 @@ function usage(): never {
 
 Stores default to the repo detected from git remote. Use "global" for the
 global store. Use "all" with search to search project + global together.`);
-  process.exit(1);
+  process.exit(exitCode);
 }
 
 async function defaultStore(): Promise<string> {

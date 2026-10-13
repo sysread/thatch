@@ -4,6 +4,10 @@ Thatch ships with a command-line tool for inspecting memories and
 running maintenance tasks outside the agent. It requires `bun` on your
 PATH.
 
+`thatch --help` (or `-h`) prints the full command list and exits 0.
+The flag works anywhere in the command line: `thatch chat list -h`
+shows help instead of running the command.
+
 ## Memory inspection
 
 ```bash

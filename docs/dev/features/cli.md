@@ -27,7 +27,13 @@ The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection, M
 
 ## Global behavior
 
-- No `--version`, `--help`, `-h`, or short flags. No subcommand aliases.
+- `--version` and `-v` print the package version and exit 0.
+- `-h` and `--help` print usage and exit 0. The check runs before the DB
+  is opened and before any subcommand dispatch, and scans the WHOLE
+  argument list - not just the leading flags - so `thatch chat list -h`
+  and `thatch -h chat list` show usage instead of executing. Explicit
+  help exits 0 where a usage error exits 1.
+- No other short flags. No subcommand aliases.
 - Unknown command or missing required arg calls `usage()` and exits 1.
 - Args are positional, parsed by hand from `process.argv.slice(2)`. No arg-parsing library.
 - DB opened once at startup, closed at end (except `mcp` which closes early).
@@ -114,7 +120,7 @@ Read-only window on the cross-session chat directory ([cross-session-chat.md](cr
 ## Key invariants
 
 - No arg-parsing library. Args are positional, parsed by hand from `process.argv.slice(2)`.
-- No `--version`, `--help`, `-h`, or short flags. No subcommand aliases.
+- `--version`/`-v` prints the version; `-h`/`--help` prints usage from anywhere in the argument list (checked upstream of dispatch, before the DB opens) and exits 0. No other short flags. No subcommand aliases.
 - DB opened once at startup, closed at end (except `mcp` which closes early).
 - Store name auto-detected from git remote. "global" is the shared store. "all" (search only) means project + global.
 - Unknown command or missing required arg calls `usage()` and exits 1.

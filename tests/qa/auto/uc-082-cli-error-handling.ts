@@ -2,11 +2,14 @@ import { $ } from "bun";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 
 /**
- * UC-082: CLI error handling.
+ * UC-082: CLI error handling and help flags.
  *
- * Automatable: pure CLI calls testing three error paths: unquoted
- * multi-word query, bogus store name, and missing label argument.
- * All should exit non-zero with actionable messages, not stack traces.
+ * Automatable: pure CLI calls testing three error paths (unquoted
+ * multi-word query, bogus store name, missing label argument) plus the
+ * help flags. Errors exit non-zero with actionable messages, not stack
+ * traces. -h/--help print usage and exit 0 from anywhere in the
+ * argument list - before or after the subcommand - without executing
+ * the subcommand.
  */
 
 const useCase: UseCase = {
@@ -21,13 +24,16 @@ const useCase: UseCase = {
     "3. Run `thatch show` (missing label argument).",
     "4. Run `thatch forget` (missing label argument).",
     "5. Run `thatch` with no arguments (unknown/no command).",
+    "6. Run `thatch chat list -h` (help flag AFTER the subcommand).",
+    "7. Run `thatch -h chat list` (help flag BEFORE the subcommand).",
+    "8. Run `thatch --help` (help as the whole command).",
   ].join("\n"),
   expected: [
     "- Step 1 exits non-zero with an error message telling the user to quote the query.",
     "- Step 2 exits non-zero with an error message listing the stores that do exist.",
-    "- Step 3 calls usage() and exits 1.",
-    "- Step 4 calls usage() and exits 1.",
-    "- Step 5 calls usage() and exits 1.",
+    "- Steps 3-5 call usage() and exit 1.",
+    "- Steps 6-8 print USAGE, exit 0, and produce no stdout (the subcommand",
+    "  does not run; usage goes to stderr).",
     "- No command produces a stack trace or silent success on bad input.",
   ].join("\n"),
 
@@ -93,6 +99,30 @@ const useCase: UseCase = {
     if (!err5.includes("USAGE")) {
       console.log(`  FAIL: no args should print usage: ${err5}`);
       return "FAIL";
+    }
+
+    // Steps 6-8: help flags print usage, exit 0, and never execute the
+    // subcommand. Usage goes to stderr, so empty stdout proves the roster
+    // (or any subcommand output) never ran.
+    const helpProbes: Array<[string, string[]]> = [
+      ["thatch chat list -h", ["chat", "list", "-h"]],
+      ["thatch -h chat list", ["-h", "chat", "list"]],
+      ["thatch --help", ["--help"]],
+    ];
+    for (const [label, argv] of helpProbes) {
+      const r = await $`${bin} ${argv}`.env(env).quiet().nothrow();
+      if (r.exitCode !== 0) {
+        console.log(`  FAIL: \`${label}\` should exit 0, got ${r.exitCode}`);
+        return "FAIL";
+      }
+      if (!r.stderr.toString().includes("USAGE")) {
+        console.log(`  FAIL: \`${label}\` should print usage to stderr`);
+        return "FAIL";
+      }
+      if (r.stdout.toString().length > 0) {
+        console.log(`  FAIL: \`${label}\` should produce no stdout (subcommand ran?): ${r.stdout.toString()}`);
+        return "FAIL";
+      }
     }
 
     return "PASS";
