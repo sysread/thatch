@@ -59,6 +59,56 @@ function truncate(text: string, maxLen: number): string {
   return text.slice(0, maxLen) + "...";
 }
 
+/**
+ * Output bytes kept per interaction. The extractor payload truncates output
+ * to 500 chars, so anything beyond a small multiple of that exists only to
+ * bloat the runtime_state journal: rows are rewritten in full on every tool
+ * call, and untruncated read/executable outputs produced 415KB rows
+ * (2026-10-14 census). 2000 chars still carries 4x what the extractor reads.
+ */
+export const INTERACTION_OUTPUT_MAX = 2000;
+
+/**
+ * Cap oversized top-level string arg values (execute `code`, write
+ * `content`, bash `command`). The payload reads at most 120 chars of
+ * serialized args, and args ride the journal row on every rewrite, so an
+ * uncapped code block becomes the dominant row term once output is capped.
+ * Returns the caller's object unchanged when nothing needs capping, so
+ * identity-based matching downstream keeps working.
+ */
+function capArgs(args: Record<string, unknown>): Record<string, unknown> {
+  let changed = false;
+  const capped: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === "string" && value.length > INTERACTION_OUTPUT_MAX) {
+      capped[key] = value.slice(0, INTERACTION_OUTPUT_MAX) + "...";
+      changed = true;
+    } else {
+      capped[key] = value;
+    }
+  }
+  return changed ? capped : args;
+}
+
+/**
+ * The extraction buffer's in-memory shape, capped for journal persistence:
+ * output and string args truncated to INTERACTION_OUTPUT_MAX when they
+ * exceed it. Returns the caller's object UNCHANGED when nothing truncates -
+ * consumeSnapshot and the claim machinery match entries by reference
+ * identity, so the common short case must preserve it.
+ */
+function capInteraction(interaction: ToolInteraction): ToolInteraction {
+  const cappedArgs = capArgs(interaction.args);
+  if (interaction.output.length <= INTERACTION_OUTPUT_MAX && cappedArgs === interaction.args) {
+    return interaction;
+  }
+  return {
+    ...interaction,
+    args: cappedArgs,
+    output: truncate(interaction.output, INTERACTION_OUTPUT_MAX),
+  };
+}
+
 /** The scan result for a Code Mode `execute` call - see unwrapExecuteThatchCalls. */
 export interface ExecuteUnwrap {
   /** Distinct thatch_* tool names the code invokes, in first-appearance order. */
@@ -191,8 +241,11 @@ export class ExtractionPipeline {
 
   /** Record a tool execution for later extraction. */
   push(interaction: ToolInteraction): void {
+    // Cap here, at the single entry point, so every consumer (payload,
+    // child snapshots, the runtime_state journal) sees the bounded shape.
+    const capped = capInteraction(interaction);
     const buf = this.#buffers.get(interaction.sessionID) ?? [];
-    buf.push(interaction);
+    buf.push(capped);
     this.#buffers.set(interaction.sessionID, buf.slice(-this.#maxBuffer));
     this.#journal?.("buffer", interaction.sessionID, this.#buffers.get(interaction.sessionID));
   }
@@ -390,4 +443,49 @@ export class ExtractionPipeline {
   buildPayload(interactions: ToolInteraction[], projectStore: string): string {
     return buildExtractionPayload(interactions, projectStore);
   }
+}
+
+/** Identity fields of one runtime_state journal row, for the prune planner. */
+export interface JournalRowRef {
+  kind: string;
+  sessionID: string;
+  directory: string;
+  createdAt: string;
+}
+
+/**
+ * The journal kinds this module owns. These are the rows that can strand:
+ * a buffer/accepted row is written per session per directory, and its only
+ * deletion paths are the pipeline's own consume/complete calls - which never
+ * run again once the owning session ends or its worktree is deleted.
+ */
+export const EXTRACTION_JOURNAL_KINDS = ["buffer", "accepted"] as const;
+
+/** Age at which an untouched journal row counts as a corpse. Matches the
+ * chat table TTLs: a live session rewrites its row on every tool call, so
+ * a week of silence means nobody is coming back for it. */
+export const RUNTIME_STATE_TTL_MS = 7 * 86_400_000;
+
+/**
+ * Decide which journal rows the sweep should drop. A row is doomed when its
+ * directory no longer exists (a merged + deleted worktree - no instance can
+ * ever boot there to rehydrate or consume the row, and the rehydration
+ * partition only finalizes child rows for dead directories) or when it has
+ * not been rewritten for ttlMs (the owning session went quiet). Rows with an
+ * empty directory (pre-directory-column legacy writes) are exempt from the
+ * path check; only age can doom them. The startup-resumed session's rows are
+ * always kept when keepSessionID names one: the rehydration partition
+ * deliberately inherited them for crash recovery, and the sweep must not
+ * contradict that decision for a row that is old only because the session
+ * sat idle before it was resumed.
+ */
+export function planJournalPrune(
+  rows: JournalRowRef[],
+  opts: { nowMs: number; ttlMs: number; pathExists: (p: string) => boolean; keepSessionID?: string },
+): JournalRowRef[] {
+  return rows.filter((row) => {
+    if (opts.keepSessionID !== undefined && row.sessionID === opts.keepSessionID) return false;
+    if (row.directory && !opts.pathExists(row.directory)) return true;
+    return opts.nowMs - Date.parse(row.createdAt) > opts.ttlMs;
+  });
 }

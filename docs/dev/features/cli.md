@@ -104,6 +104,7 @@ Read-only window on the cross-session chat directory ([cross-session-chat.md](cr
 | `THATCH_CHILD_RECONCILE_MS` | Reload window before a restored extraction child is judged finished (test knob) | `10000` |
 | `THATCH_STRAND_SWEEP_MS` | Interval for the stranded-session self-heal sweep | `21600000` (6h) |
 | `THATCH_STRAND_SWEEP` | Set to `off` (or `0`/`false`) to disarm the strand sweep (test knob) | falls through (sweep on) |
+| `THATCH_RUNTIME_STATE_TTL_MS` | Age at which the journal sweep drops untouched extraction journal rows | `604800000` (7d) |
 | `CLAUDE_PROJECT_DIR` | Claude Code project dir | `process.cwd()` |
 | `CURSOR_PROJECT_DIR` | Cursor project dir | falls through |
 | `THATCH_WATCH_DEATH_MINUTES` | Pending-age threshold for watcher death detection | `120` |

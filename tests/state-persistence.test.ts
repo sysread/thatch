@@ -2,8 +2,9 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
-import { ExtractionPipeline, type ToolInteraction } from "../src/extraction";
+import { ExtractionPipeline, planJournalPrune, EXTRACTION_JOURNAL_KINDS, RUNTIME_STATE_TTL_MS, type ToolInteraction } from "../src/extraction";
 import { WatcherRegistry } from "../src/watchers";
 import { SharedModelPool } from "../src/embeddings";
 import { server } from "../src/index";
@@ -710,9 +711,11 @@ describe("dormant watcher recovery through server()", () => {
     // Two v1 TUI windows on different projects share one thatch db: this
     // instance's restart prune must not sweep the other location's rows -
     // they belong to a live sibling instance's lifecycle, and deleting them
-    // destroyed its crash-recovery state.
+    // destroyed its crash-recovery state. The foreign directory must exist
+    // on disk: the extraction journal sweep reclaims rows whose directory
+    // is gone, and this test pins the sibling rule for live ones.
     const db = new ThatchDB(dbPath);
-    db.runtimeStatePut("buffer", "ses_otherdir", [ix("ses_otherdir")], "/tmp/thatch-state-somewhere-else", -1);
+    db.runtimeStatePut("buffer", "ses_otherdir", [ix("ses_otherdir")], "/tmp/thatch-state-b", -1);
     db.runtimeStatePut("buffer", "ses_own", [ix("ses_own")], WORK_DIR, -1);
     db.close();
 
@@ -856,4 +859,169 @@ describe("dormant watcher recovery through server()", () => {
       await done();
     }
   }, 30_000);
+});
+
+describe("extraction journal sweep", () => {
+  // Minimal boot harness: same shape as the startServer helper in the
+  // dormant-watcher describe (which scopes that helper to itself). Env
+  // isolation is NOT optional: without THATCH_DB_PATH/XDG_CONFIG_HOME the
+  // server boots against the developer's real ~/.config/thatch/thatch.db
+  // and the boot sweep acts on it.
+  const bootServer = async () => {
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    process.env.THATCH_DB_PATH = dbPath;
+    process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+    const hooks = (await server({
+      client: {
+        session: {
+          prompt: async () => {}, promptAsync: async () => {}, create: async () => ({ data: { id: "c" } }),
+          delete: async () => {}, get: async () => ({ data: { title: "Test session" } }),
+          messages: async () => ({ data: [] }), status: async () => ({ data: {} }), list: async () => ({ data: [] }),
+        },
+        tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
+      },
+      worktree: "/tmp/thatch-test-worktree",
+      directory: WORK_DIR,
+    } as any)) as any;
+    return {
+      hooks,
+      finally: async () => {
+        await hooks?.dispose?.();
+        if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+        else process.env.THATCH_DB_PATH = prevDbPath;
+        if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+        else process.env.XDG_CONFIG_HOME = prevConfig;
+      },
+    };
+  };
+
+  // The sweep's decision core is planJournalPrune (unit-tested in
+  // extraction.test.ts); here it is wired to the real db API: rows seeded
+  // through ThatchDB, one backdated past the TTL through raw SQL, deletes
+  // applied the way runtime.ts applies them.
+  test("prunes dead-directory and past-TTL extraction rows, leaves other kinds", () => {
+    const live = "/tmp/thatch-state-a"; // created eagerly at file top
+    const dead = join(dbDir, "swept-away-dir"); // never created
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut("buffer", "ses_dead", [ix("ses_dead")], dead);
+    db.runtimeStatePut("buffer", "ses_live", [ix("ses_live")], live);
+    db.runtimeStatePut("buffer", "ses_stale", [ix("ses_stale")], live);
+    db.runtimeStatePut("accepted", "ses_dead", [ix("ses_dead")], dead);
+    db.runtimeStatePut("wrapup", "ses_wrap", { token: "T", kind: "compact" }, dead);
+    // Backdate one live-directory row past the TTL (8 days).
+    const raw = new Database(dbPath);
+    raw.run(`UPDATE runtime_state SET created_at = ? WHERE kind = 'buffer' AND session_id = 'ses_stale'`, [
+      new Date(Date.now() - RUNTIME_STATE_TTL_MS - 86_400_000).toISOString(),
+    ]);
+    raw.close();
+
+    const doomed = planJournalPrune(db.runtimeStateJournalRows(EXTRACTION_JOURNAL_KINDS), {
+      nowMs: Date.now(),
+      ttlMs: RUNTIME_STATE_TTL_MS,
+      pathExists: (p) => p === live,
+    });
+    for (const r of doomed) db.runtimeStateDelete(r.kind, r.sessionID);
+
+    const survivors = db.runtimeStateAll().map((r) => `${r.kind}:${r.sessionID}`);
+    expect(survivors.sort()).toEqual(["buffer:ses_live", "wrapup:ses_wrap"]);
+    db.close();
+  });
+
+  test("session.deleted drops the session's buffer journal row", async () => {
+    const { hooks, finally: done } = await bootServer();
+    try {
+      await hooks["tool.execute.after"]!(
+        { tool: "bash", sessionID: "ses_delrow", callID: "dr1", args: { command: "ls" } },
+        { title: "list", output: "file.txt", metadata: {} },
+      );
+      // The row exists while the session lives...
+      const before = new ThatchDB(dbPath);
+      expect(before.runtimeStateAll().some((r) => r.kind === "buffer" && r.sessionID === "ses_delrow")).toBe(true);
+      before.close();
+
+      await hooks.event({ event: { type: "session.deleted", properties: { info: { id: "ses_delrow" } } } });
+
+      // ...and the journal row dies with the session - no future prompt can
+      // nudge it, so the row would otherwise strand until a restart.
+      const after = new ThatchDB(dbPath);
+      expect(after.runtimeStateAll().some((r) => r.kind === "buffer" && r.sessionID === "ses_delrow")).toBe(false);
+      after.close();
+    } finally {
+      await done();
+    }
+  });
+
+  test("THATCH_RUNTIME_STATE_TTL_MS shortens the sweep's age bound end-to-end", async () => {
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut("buffer", "ses_hour_old", [ix("ses_hour_old")], WORK_DIR);
+    db.runtimeStatePut("buffer", "ses_fresh", [ix("ses_fresh")], WORK_DIR);
+    db.close();
+    const raw = new Database(dbPath);
+    raw.run(`UPDATE runtime_state SET created_at = ? WHERE session_id = 'ses_hour_old'`, [
+      new Date(Date.now() - 3_600_000).toISOString(),
+    ]);
+    raw.close();
+
+    // A 1-minute TTL dooms the hour-old row but not the fresh one; the env
+    // knob is read at sweep time, so no rebuild is needed.
+    process.env.THATCH_RUNTIME_STATE_TTL_MS = "60000";
+    const { finally: done } = await bootServer();
+    try {
+      const end = Date.now() + 5000;
+      let ids: string[] = [];
+      const check = () => {
+        const sweeped = new ThatchDB(dbPath);
+        ids = sweeped.runtimeStateAll().filter((r) => r.kind === "buffer").map((r) => r.sessionID);
+        sweeped.close();
+      };
+      check();
+      while (ids.includes("ses_hour_old")) {
+        if (Date.now() > end) throw new Error("boot journal sweep never honored the TTL env override");
+        await new Promise((r) => setTimeout(r, 25));
+        check();
+      }
+      expect(ids).toEqual(["ses_fresh"]);
+    } finally {
+      delete process.env.THATCH_RUNTIME_STATE_TTL_MS;
+      await done();
+    }
+  });
+
+  test("the interval sweep reclaims rows that go stale while the process lives", async () => {
+    // Boot wiring for the recurring path: a short THATCH_STRAND_SWEEP_MS
+    // makes the shared timer fire the journal sweep every 50ms. The row is
+    // doomed by the TTL env knob, not the timer speed.
+    process.env.THATCH_STRAND_SWEEP_MS = "50";
+    process.env.THATCH_RUNTIME_STATE_TTL_MS = "60000";
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut("buffer", "ses_ages", [ix("ses_ages")], WORK_DIR);
+    db.close();
+    const raw = new Database(dbPath);
+    raw.run(`UPDATE runtime_state SET created_at = ? WHERE session_id = 'ses_ages'`, [
+      new Date(Date.now() - 3_600_000).toISOString(),
+    ]);
+    raw.close();
+
+    const { finally: done } = await bootServer();
+    try {
+      const end = Date.now() + 5000;
+      let ids: string[] = [];
+      const check = () => {
+        const swept = new ThatchDB(dbPath);
+        ids = swept.runtimeStateAll().filter((r) => r.kind === "buffer").map((r) => r.sessionID);
+        swept.close();
+      };
+      check();
+      while (ids.includes("ses_ages")) {
+        if (Date.now() > end) throw new Error("interval journal sweep never ran");
+        await new Promise((r) => setTimeout(r, 25));
+        check();
+      }
+    } finally {
+      delete process.env.THATCH_STRAND_SWEEP_MS;
+      delete process.env.THATCH_RUNTIME_STATE_TTL_MS;
+      await done();
+    }
+  });
 });

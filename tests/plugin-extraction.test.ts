@@ -379,6 +379,34 @@ describe("plugin entry", () => {
     expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("file.txt");
   });
 
+  test("session.deleted drops the session's pending buffer (journal row included)", async () => {
+    await hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_delbuf", callID: "db1", args: { command: "ls" } },
+      { title: "list", output: "file.txt", metadata: {} },
+    );
+    // The buffer is served before deletion...
+    const served = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+      { session_id: "ses_delbuf" },
+      { sessionID: "ses_ext_delbuf" },
+    );
+    expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("file.txt");
+
+    await hooks.event!({ event: {
+      type: "session.deleted",
+      properties: { info: { id: "ses_delbuf" } } } as any,
+    });
+
+    // ...and gone after: no future prompt can nudge a deleted session, so
+    // keeping the buffer (and its runtime_state journal row) would strand
+    // it until a restart - forever, if the directory dies first.
+    const after = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+      { session_id: "ses_delbuf" },
+      { sessionID: "ses_ext_delbuf2" },
+    );
+    const afterText = typeof after === "string" ? after : JSON.stringify(after);
+    expect(afterText).not.toContain("file.txt");
+  });
+
   test("accept/complete: child fetch + extraction_done completes the parent's accepted entries", async () => {
     await hooks["tool.execute.after"]!(
       { tool: "bash", sessionID: "ses_ack", callID: "ak1", args: { command: "ls" } },

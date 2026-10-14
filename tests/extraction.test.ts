@@ -1,5 +1,14 @@
 import { describe, test, expect } from "bun:test";
-import { ExtractionPipeline, unwrapExecuteThatchCalls, type ToolInteraction } from "../src/extraction";
+import {
+  ExtractionPipeline,
+  unwrapExecuteThatchCalls,
+  planJournalPrune,
+  EXTRACTION_JOURNAL_KINDS,
+  INTERACTION_OUTPUT_MAX,
+  RUNTIME_STATE_TTL_MS,
+  type ToolInteraction,
+  type JournalRowRef,
+} from "../src/extraction";
 
 const ix = (sessionID: string): ToolInteraction => ({
   tool: "bash",
@@ -545,5 +554,123 @@ describe("ExtractionPipeline claim semantics", () => {
     pipeline.claim("parent", "child-1");
     expect(pipeline.completeClaimed("child-1")).toBe(true);
     expect(pipeline.peekAccepted("parent").length).toBe(0);
+  });
+});
+
+describe("journal size bounds", () => {
+  test("push truncates oversized output before buffering and journaling", () => {
+    const journaled: ToolInteraction[] = [];
+    const pipeline = new ExtractionPipeline((_kind, _sessionID, value) => {
+      if (value) journaled.push(...value);
+    });
+    const big = "x".repeat(INTERACTION_OUTPUT_MAX * 4);
+
+    pipeline.push({ tool: "read", sessionID: "ses_big", args: { filePath: "/f" }, title: "f", output: big });
+
+    // The buffered interaction and the journaled row both carry the capped
+    // shape; the caller's object is untouched.
+    expect(pipeline.peek("ses_big")[0].output.length).toBe(INTERACTION_OUTPUT_MAX + 3);
+    expect(journaled[0].output.length).toBe(INTERACTION_OUTPUT_MAX + 3);
+    expect(big.length).toBe(INTERACTION_OUTPUT_MAX * 4);
+  });
+
+  test("push caps oversized string args (execute code, write content) but keeps the Record shape", () => {
+    const pipeline = new ExtractionPipeline();
+    const code = "y".repeat(INTERACTION_OUTPUT_MAX * 2);
+    pipeline.push({ tool: "execute", sessionID: "ses_args", args: { code, n: 7 }, title: "t", output: "ok" });
+
+    const stored = pipeline.peek("ses_args")[0];
+    expect(typeof stored.args).toBe("object");
+    expect((stored.args as any).code.length).toBe(INTERACTION_OUTPUT_MAX + 3);
+    expect((stored.args as any).code.startsWith("yyy")).toBe(true);
+    expect((stored.args as any).n).toBe(7);
+  });
+
+  test("push passes short output and args through UNCHANGED, same object (identity invariant)", () => {
+    const pipeline = new ExtractionPipeline();
+    const interaction: ToolInteraction = { tool: "bash", sessionID: "ses_ok", args: { command: "ls" }, title: "t", output: "small" };
+    pipeline.push(interaction);
+    expect(pipeline.peek("ses_ok")[0]).toBe(interaction);
+  });
+
+  test("consumeSnapshot still drains oversized entries (cloned at push) by pipeline identity", () => {
+    const pipeline = new ExtractionPipeline();
+    pipeline.push({
+      tool: "read",
+      sessionID: "ses_snap",
+      args: { filePath: "/f" },
+      title: "f",
+      output: "z".repeat(INTERACTION_OUTPUT_MAX * 3),
+    });
+    // The snapshot is taken from the PIPELINE's objects (peek), the same
+    // shape the child-dispatch journal path uses.
+    const snapshot = [...pipeline.peek("ses_snap")];
+    pipeline.push({ tool: "bash", sessionID: "ses_snap", args: {}, title: "later turn", output: "new" });
+
+    pipeline.consumeSnapshot("ses_snap", snapshot);
+
+    const remaining = pipeline.peek("ses_snap");
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].title).toBe("later turn");
+  });
+
+  test("push passes short output through unchanged", () => {
+    const pipeline = new ExtractionPipeline();
+    pipeline.push({ tool: "bash", sessionID: "ses_ok", args: {}, title: "t", output: "small" });
+    expect(pipeline.peek("ses_ok")[0].output).toBe("small");
+  });
+});
+
+describe("planJournalPrune", () => {
+  const now = Date.parse("2026-10-14T12:00:00Z");
+  const opts = { nowMs: now, ttlMs: RUNTIME_STATE_TTL_MS, pathExists: (p: string) => p === "/live" };
+  const row = (kind: string, sessionID: string, directory: string, ageMs: number): JournalRowRef => ({
+    kind,
+    sessionID,
+    directory,
+    createdAt: new Date(now - ageMs).toISOString(),
+  });
+
+  test("dead-directory rows are doomed regardless of age; live fresh rows survive", () => {
+    const plan = planJournalPrune(
+      [row("buffer", "ses_dead", "/dead", 0), row("buffer", "ses_live", "/live", 0)],
+      opts,
+    );
+    expect(plan.map((r) => r.sessionID)).toEqual(["ses_dead"]);
+  });
+
+  test("rows silent past the TTL are doomed even in live directories", () => {
+    const plan = planJournalPrune(
+      [row("accepted", "ses_old", "/live", RUNTIME_STATE_TTL_MS + 60_000), row("accepted", "ses_new", "/live", 60_000)],
+      opts,
+    );
+    expect(plan.map((r) => r.sessionID)).toEqual(["ses_old"]);
+  });
+
+  test("legacy empty-directory rows are exempt from the path check, not doomed by it", () => {
+    const plan = planJournalPrune([row("buffer", "ses_legacy", "", 0)], opts);
+    expect(plan).toEqual([]);
+  });
+
+  test("the startup-resumed session's rows are kept even when dead-dir and TTL would doom them", () => {
+    const plan = planJournalPrune(
+      [
+        row("buffer", "ses_resumed", "/dead", RUNTIME_STATE_TTL_MS * 2),
+        row("accepted", "ses_resumed", "/dead", RUNTIME_STATE_TTL_MS * 2),
+        row("buffer", "ses_other", "/dead", 0),
+      ],
+      { ...opts, keepSessionID: "ses_resumed" },
+    );
+    // The partition deliberately inherited the resumed session's rows for
+    // crash recovery; the sweep must not contradict that decision.
+    expect(plan.map((r) => r.sessionID)).toEqual(["ses_other"]);
+  });
+
+  test("only the extraction journal kinds are in scope by design", () => {
+    // Child rows are finalized (with session cleanup) by the rehydration
+    // partition; watchers/hosted/wrapup rows own their lifecycles. The
+    // sweep's kind list must stay narrow even though the planner itself is
+    // kind-agnostic.
+    expect(EXTRACTION_JOURNAL_KINDS).toEqual(["buffer", "accepted"]);
   });
 });

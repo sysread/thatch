@@ -153,6 +153,30 @@ degrades silently. A summary toast fires only when something was healed. Set
 `THATCH_STRAND_SWEEP=off` to disarm the sweep entirely (tests do, so it can
 never act on a developer's real database through mocks).
 
+### Extraction journal sweep
+
+The `runtime_state` rows for the extraction pipeline (`buffer`, `accepted`)
+can strand: their only deletion paths are the pipeline's own consume/complete
+calls, which stop running when the owning session ends or its worktree is
+deleted. The rehydrate pass prunes foreign-pid rows for the booting
+directory, but another directory's rows wait for that directory's own
+restart - and a deleted worktree never restarts (a 2026-10-14 census found
+7.9MB stranded in ten dead worktrees). A sweep on the same boot + interval
+timer as the strand sweep drops rows that are past the TTL
+(`THATCH_RUNTIME_STATE_TTL_MS`, default 7 days - a live session rewrites its
+row on every tool call, so a week of silence means nobody is coming back) or
+whose directory no longer exists. It touches only thatch.db, so
+`THATCH_STRAND_SWEEP=off` does not cover it, and the `-c`/`-s` startup
+resume's inherited rows are always kept - the rehydrate pass deliberately
+kept those, and the sweep must not contradict it. Three companion bounds
+keep rows small in the first place: journaled tool outputs and top-level
+string args are truncated to `INTERACTION_OUTPUT_MAX` (2000 chars; the
+extractor payload reads only 500 chars of output and 120 of args), a deleted
+session's pending buffer row is dropped with the session instead of
+stranding until the next restart, and live sessions re-journal their
+in-memory state on the next tool call, so a swept-but-alive row heals
+itself.
+
 ### Internal state maps
 
 - **childToParent**: `Map<childID, parentID>` -- maps child sessions to their parents

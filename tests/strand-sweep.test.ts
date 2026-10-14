@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planStrandActions, type StrandPlan } from "../src/runtime";
+import { ThatchDB } from "../src/db";
 import { server } from "../src/index";
 
 // The stranded-session self-heal: opencode v2 records the directory on every
@@ -120,6 +121,65 @@ describe("planStrandActions", () => {
       sessions: [{ id: "ses_child", title: "review lens", directory: DEAD_DIR, parentId: "ses_parent", projectId: "p1" }],
     });
     expect(plan).toEqual<StrandPlan>({ remove: [], move: [], skipped: 1 });
+  });
+});
+
+describe("extraction journal sweep integration (boot trigger)", () => {
+  test("boot sweep prunes dead-directory and past-TTL journal rows", async () => {
+    ensureFixtureDirs();
+    // Seed the journal before the runtime boots: a dead-directory buffer
+    // row (no instance can ever consume it) and a live fresh one.
+    const seed = new ThatchDB(join(dbDir, "test.db"));
+    seed.runtimeStatePut("buffer", "ses_dead_row", [{ tool: "read", sessionID: "ses_dead_row", args: {}, title: "f", output: "x" }], DEAD_DIR);
+    seed.runtimeStatePut("buffer", "ses_live_row", [{ tool: "read", sessionID: "ses_live_row", args: {}, title: "f", output: "x" }], LIVE_DIR);
+    seed.close();
+
+    let hooks: { dispose?: () => Promise<void> } | undefined;
+    try {
+      hooks = (await server({
+        client: {
+          session: {
+            prompt: async () => {},
+            promptAsync: async () => {},
+            create: async () => ({ data: { id: "test-child" } }),
+            delete: async () => {},
+            get: async () => ({ data: { title: "Test session" } }),
+            messages: async () => ({ data: [] }),
+            status: async () => ({ data: {} }),
+            list: async () => ({ data: [] }),
+          },
+          tui: {
+            showToast: async () => {},
+            executeCommand: async () => ({ data: true }),
+            publish: async () => ({ data: true }),
+          },
+        },
+        worktree: LIVE_DIR,
+        directory: LIVE_DIR,
+      } as any)) as any;
+
+      // The boot sweep runs fire-and-forget inside setup(); poll for the
+      // dead-directory row's deletion.
+      const check = () => {
+        const db = new ThatchDB(join(dbDir, "test.db"));
+        const ids = db.runtimeStateAll().filter((r) => r.kind === "buffer").map((r) => r.sessionID);
+        db.close();
+        return ids;
+      };
+      const end = Date.now() + 5000;
+      let ids = check();
+      while (ids.includes("ses_dead_row")) {
+        if (Date.now() > end) throw new Error("boot journal sweep never pruned the dead-directory row");
+        await new Promise((r) => setTimeout(r, 25));
+        ids = check();
+      }
+      expect(ids).toEqual(["ses_live_row"]);
+    } finally {
+      await hooks?.dispose?.();
+      rmSync(DEAD_DIR, { recursive: true, force: true });
+      rmSync(LIVE_DIR, { recursive: true, force: true });
+      rmSync(CANONICAL, { recursive: true, force: true });
+    }
   });
 });
 

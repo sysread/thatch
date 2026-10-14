@@ -171,10 +171,22 @@ here first. These are the things that have already cost time.
 
 - **Tests touching the config must set `THATCH_DB_PATH`.** The config tools
   derive the config file path from the environment (`THATCH_DB_PATH`, then the
-  XDG default), not from the test's tempdir `ThatchDB`. A config test that
+  XDG default), not from a test's tempdir `ThatchDB`. A config test that
   skips this reads and writes the developer's real
   `~/.config/thatch/config.json`. See `tests/notify.test.ts` for the
-  save-and-restore pattern.
+  save-and-restore pattern. The same rule is sharper for tests that boot
+  `server()` directly: without `THATCH_DB_PATH` + `XDG_CONFIG_HOME` isolation
+  the boot rehydrates from, and its boot sweeps mutate, the developer's real
+  `thatch.db` - the strand sweep deletes sessions through the host and the
+  journal sweep deletes `runtime_state` rows. Backstop: the
+  `tests/clean-env.ts` preload defaults unset `THATCH_DB_PATH`,
+  `XDG_CONFIG_HOME`, and `XDG_DATA_HOME` into a per-process sandbox dir, so
+  an un-isolated boot lands in a throwaway db. That covers omission, not
+  removal - a test that actively DELETES the vars at runtime undoes the
+  default (env is read at call time). Every harness helper
+  (`tests/mocks/plugin-harness.ts`, the `startServer` helpers in
+  `state-persistence.test.ts`) sets and restores both; copy one rather than
+  hand-rolling a boot.
 - **osascript exits 0 even when macOS drops the banner.** Focus/Do Not Disturb
   or missing notification permission silently swallow it. `notify_user` result
   text therefore reports command success only; never interpret exit 0 as
@@ -286,6 +298,20 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   wrap-up arming write, whose command executes are not drained by the v2
   cleanup). Do not "fix" the guard away by moving it into db.ts: the
   accessor cannot tell a legitimate in-flight caller from a stale writer.
+
+## ExtractionPipeline entries are matched by reference identity
+
+- **Never clone an interaction inside the pipeline's mutation methods.**
+  `consumeSnapshot` and the claim machinery identify entries by reference
+  (`new Set(snapshot)`, `filter((ix) => !claimed.has(ix))`), and the
+  rehydrated-child path feeds journaled snapshots back through that
+  identity chain. A "harmless" spread that normalizes the stored shape
+  makes every identity match silently miss - `consumeSnapshot` then drains
+  nothing and the entries get re-extracted. The failure signal is
+  confusing: deep-equal assertions pass and only `.toBe(x)` reference
+  assertions fail with "serializes to the same string". If a stored shape
+  must change, clone only when the value actually differs (see the
+  truncation guard in `push`).
 
 ## Command frontmatter descriptions must be quoted YAML scalars
 

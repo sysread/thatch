@@ -1168,6 +1168,26 @@ export class ThatchDB {
       });
   }
 
+  /**
+   * Extraction-journal rows (given kinds) with their age fields, for the
+   * staleness sweep. Unlike runtimeStateAll this skips JSON parsing - the
+   * values can be large and the sweep only needs identity + age.
+   */
+  runtimeStateJournalRows(kinds: readonly string[]): { kind: string; sessionID: string; directory: string; createdAt: string }[] {
+    const placeholders = kinds.map(() => "?").join(", ");
+    return this.#db
+      .query(
+        `SELECT kind, session_id, directory, created_at FROM runtime_state WHERE kind IN (${placeholders})`,
+      )
+      .all(...kinds)
+      .map((row: any) => ({
+        kind: row.kind as string,
+        sessionID: row.session_id as string,
+        directory: (row.directory ?? "") as string,
+        createdAt: row.created_at as string,
+      }));
+  }
+
   listChatSessions() {
     return this.#chat.list();
   }

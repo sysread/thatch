@@ -18,7 +18,15 @@ import {
   skewWarningText,
   type NudgeMatch,
 } from "./prompts";
-import { ExtractionPipeline, isMetaToolName, unwrapExecuteThatchCalls, type ToolInteraction } from "./extraction";
+import {
+  ExtractionPipeline,
+  isMetaToolName,
+  unwrapExecuteThatchCalls,
+  planJournalPrune,
+  EXTRACTION_JOURNAL_KINDS,
+  RUNTIME_STATE_TTL_MS,
+  type ToolInteraction,
+} from "./extraction";
 import { createAlerts, deriveRoundShape, isNoWorkTool, replyRequestID } from "./alerts";
 import { mostRecentTopLevelSessionId } from "./session-db";
 import type { CoreContext } from "./tool-defs";
@@ -1322,6 +1330,38 @@ export async function createRuntime(input: {
       sweepInFlight = false;
     }
   };
+  // Journal sweep for the extraction pipeline's runtime_state rows: rows
+  // whose directory died (a merged + deleted worktree - no instance will
+  // ever boot there to consume them) or that have gone untouched past the
+  // TTL are dropped. The rehydration partition above prunes foreign-pid
+  // rows for THIS directory at boot, but nothing reclaims other
+  // directories' rows between that directory's restarts, and dead
+  // directories never restart (observed 7.9MB stranded in deleted
+  // worktrees, 2026-10-14). Runs on the same timer as the strand sweep
+  // (boot + interval) but reads its own gate: it touches only thatch.db,
+  // never opencode.db, so THATCH_STRAND_SWEEP does not cover it.
+  const sweepExtractionJournal = (trigger: string): void => {
+    if (disposed) return;
+    try {
+      const ttlMs = Number(process.env.THATCH_RUNTIME_STATE_TTL_MS) || RUNTIME_STATE_TTL_MS;
+      const doomed = planJournalPrune(db.runtimeStateJournalRows(EXTRACTION_JOURNAL_KINDS), {
+        nowMs: Date.now(),
+        ttlMs,
+        pathExists: (p) => existsSync(p),
+        keepSessionID: inheritSession,
+      });
+      for (const row of doomed) db.runtimeStateDelete(row.kind, row.sessionID);
+      if (doomed.length > 0) {
+        debug(
+          "journal-sweep",
+          `pruned ${doomed.length} stale journal row(s) (${doomed.map((r) => r.kind).join(", ")}) [${trigger}]`,
+        );
+      }
+    } catch (err) {
+      debug("journal-sweep", `sweep failed (${trigger}): ${err}`);
+    }
+  };
+
   const STRAND_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
   let strandSweepTimer: ReturnType<typeof setInterval> | undefined;
   const armStrandSweep = () => {
@@ -1329,10 +1369,12 @@ export async function createRuntime(input: {
     const ms = Number(process.env.THATCH_STRAND_SWEEP_MS) || STRAND_SWEEP_INTERVAL_MS;
     strandSweepTimer = setInterval(() => {
       void sweepStrandedSessions("interval");
+      sweepExtractionJournal("interval");
     }, ms);
     strandSweepTimer.unref?.();
   };
   void sweepStrandedSessions("boot");
+  sweepExtractionJournal("boot");
   armStrandSweep();
 
   // Skills always install to the global opencode config - installing into the
@@ -2415,6 +2457,11 @@ export async function createRuntime(input: {
         // watchers die with it - the session that would receive their
         // notifications no longer exists.
         extraction.completeAccepted(id);
+        // The pending buffer goes too: no future prompt can nudge a deleted
+        // session, so leaving the journaled buffer row in place would strand
+        // it until the owning directory's next process restart - forever,
+        // if that directory is deleted first.
+        extraction.consume(id);
         extraction.dropClaim(id);
         extracting.delete(id);
         watchers.cancelSession(id);
