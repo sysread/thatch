@@ -16,7 +16,12 @@ import {
   isTabClosedEvent,
   isExitTabClosedEvent,
   isToastEvent,
+  actsOnTabEvent,
   passesDirectoryGuard,
+  tabOpenedEventType,
+  tabClosedEventType,
+  exitTabClosedEventType,
+  toastEventType,
 } from "../src/session-tab-shared";
 import { TOOL_DEFS } from "../src/tool-defs";
 import { ThatchDB } from "../src/db";
@@ -150,6 +155,25 @@ describe("TUI plugin guard logic", () => {
     expect(passesDirectoryGuard("/repo", "/other")).toBe(false);
     expect(passesDirectoryGuard(undefined, "/repo")).toBe(false);
     expect(passesDirectoryGuard("/repo", undefined)).toBe(false);
+  });
+
+  test("actsOnTabEvent: close events act session-scoped, regardless of directories", () => {
+    // A moved session stamps its close with the NEW directory while the tab
+    // lives in the ORIGINAL window - the close must not be guarded.
+    expect(actsOnTabEvent(tabClosedEventType, "/wt-thog/branch", "/thog")).toBe(true);
+    expect(actsOnTabEvent(exitTabClosedEventType, "/wt-thog/branch", "/thog")).toBe(true);
+    expect(actsOnTabEvent(exitTabClosedEventType, "/wt-thog/branch", "/elsewhere")).toBe(true);
+    expect(actsOnTabEvent(exitTabClosedEventType, undefined, undefined)).toBe(true);
+  });
+
+  test("actsOnTabEvent: open and toast events keep the directory guard", () => {
+    expect(actsOnTabEvent(tabOpenedEventType, "/repo", "/repo")).toBe(true);
+    expect(actsOnTabEvent(tabOpenedEventType, "/repo", "/other")).toBe(false);
+    expect(actsOnTabEvent(toastEventType, "/repo", "/repo")).toBe(true);
+    expect(actsOnTabEvent(toastEventType, "/repo", "/other")).toBe(false);
+    // Missing locations still fail closed for non-close events.
+    expect(actsOnTabEvent(tabOpenedEventType, undefined, "/repo")).toBe(false);
+    expect(actsOnTabEvent(toastEventType, "/repo", undefined)).toBe(false);
   });
 });
 

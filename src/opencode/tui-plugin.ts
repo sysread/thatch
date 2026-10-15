@@ -8,9 +8,12 @@
 // the flow crosses processes over an rpc event: the adapter emits
 // rpc.thatch-tabs.tab-opened (sessionID + the coordinator instance's
 // directory), the SSE feed fans it to every window, and THIS plugin acts on
-// it with ui.tabs.open. The guard mirrors the built-in tui.* handlers
-// (packages/tui/src/app.tsx): an event only acts on the window whose
-// directory matches the event's location. ui.tabs.open is idempotent and
+// it with ui.tabs.open. Routing (actsOnTabEvent in src/session-tab-shared.ts):
+// open and toast events act only in the window whose directory matches the
+// event's location (the same guard the built-in tui.* handlers apply), while
+// close events act session-scoped with no directory guard - a session that
+// moved after its tab was opened stamps its close with the new directory
+// while the tab lives in the original window. ui.tabs.open is idempotent and
 // never steals focus, so no dedupe state is kept - a hot reload re-runs
 // setup from fresh state and double events are no-ops.
 //
@@ -20,31 +23,33 @@
 // peer).
 
 import { Plugin } from "@opencode/plugin/tui";
-import { isExitTabClosedEvent, isTabClosedEvent, isTabOpenedEvent, isToastEvent, passesDirectoryGuard } from "../session-tab-shared";
+import { actsOnTabEvent, isExitTabClosedEvent, isTabClosedEvent, isTabOpenedEvent, isToastEvent } from "../session-tab-shared";
 
 export default Plugin.define({
   id: "jeffober-thatch-tui",
   setup(context) {
     const off = context.data.listen(({ details }) => {
       const windowDirectory = context.location?.directory ?? context.data.location.default().directory;
-      if (!passesDirectoryGuard(details.location?.directory, windowDirectory)) return;
+      if (!actsOnTabEvent(details.type, details.location?.directory, windowDirectory)) return;
       // Two close events, one TUI action: tab-closed (the session_tab_close
       // tool's confirmed close - the pump also runs its death bookkeeping)
       // and exit-tab-closed (the wrap-up exit's close - the runtime records
       // the deaths itself before emitting, so the pump ignores that one).
       if (isTabClosedEvent(details.type) || isExitTabClosedEvent(details.type)) {
         // Close the tab if THIS window has one for the session. Windows that
-        // never opened it (and windows at other directories, filtered above)
-        // return false - that is the correct no-op, not an error. The close
-        // is reopenable by the user (the strip's reopen stack), so this is
-        // tab-level, not session deletion.
+        // never opened it are the expected majority now that close events
+        // act session-scoped (no directory guard) - a silent no-op there.
+        // A window HOLDING the tab whose close fails means session tabs got
+        // disabled mid-session. The close is reopenable by the user (the
+        // strip's reopen stack), so this is tab-level, not session deletion.
         const closeID = (details.data as { sessionID?: string }).sessionID;
         if (!closeID) {
           console.error("[thatch] tab-close event without a sessionID");
           return;
         }
+        if (!context.ui.tabs.list().some((tab) => tab.sessionID === closeID)) return;
         if (!context.ui.tabs.close(closeID)) {
-          console.error("[thatch] tab-close requested but no tab matched (or tabs are disabled)");
+          console.error("[thatch] tab-close failed for a held tab (session tabs disabled mid-session?)");
         }
         return;
       }

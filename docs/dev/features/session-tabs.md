@@ -30,9 +30,12 @@ v2 adapter (src/opencode/v2.ts, buildSessionTabHost via CoreContext.sessionTabHo
 SSE event feed (isOpenCodeEvent passes rpc.*; fans out across all locations)
   v
 TUI CLI plugin (src/opencode/tui-plugin.ts, loaded from package exports "./tui")
-  |  data.listen -> type filter -> directory guard (mirrors the built-in
-  |  tui.* handlers: the event routes by the coordinator instance's
-  |  directory) -> data.session.sync -> ui.tabs.open(sessionID)
+  |  data.listen -> type filter -> routing (actsOnTabEvent): open/toast events
+  |  act only in the window matching the coordinator instance's directory
+  |  (built-in tui.* guard); close events act session-scoped with no guard -
+  |  a moved session stamps its close with the NEW directory while its tab
+  |  stays in the original window
+  |  -> data.session.sync -> ui.tabs.open(sessionID)
   v
 Tab strip: subordinate tab appears, unfocused
 ```
@@ -115,11 +118,13 @@ import only `@opencode/plugin/tui` and this module.
 `thatch_session_tab_close {session}` (the target: the subordinate's chat
 name or session id, resolved name-first through the chat roster) emits
 `rpc.thatch-tabs.tab-closed {sessionID, chatName?}` over the same rpc
-bridge. The TUI plugin consumes it symmetrically with open: the directory
-guard applies, and `ui.tabs.close(sessionID)` closes the tab in every
-window showing one (windows not showing it no-op). Close is TAB-LEVEL: the
-session survives, the strip's reopen stack can restore it, and chat history
-is untouched.
+bridge. The TUI plugin consumes it symmetrically with open, except that the
+close is session-scoped: no directory guard, because a session that moved
+after its tab was opened stamps the close with its new directory while the
+tab lives in the original window. `ui.tabs.close(sessionID)` closes the tab
+in every window showing one (windows not showing it no-op silently). Close
+is TAB-LEVEL: the session survives, the strip's reopen stack can restore
+it, and chat history is untouched.
 
 Two consumers ride the event: the death-detection machinery
 (generalized-session-heartbeat) treats a tool-initiated close as a

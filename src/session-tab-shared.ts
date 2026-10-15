@@ -229,3 +229,21 @@ export function passesDirectoryGuard(eventDirectory: string | undefined, windowD
   if (!eventDirectory || !windowDirectory) return false;
   return eventDirectory === windowDirectory;
 }
+
+/**
+ * Whether a fed rpc event should act in the window that received it. CLOSE
+ * events (tab-closed, exit-tab-closed) always act: the close is
+ * session-scoped. A session that moved after its tab was opened (root ->
+ * worktree via session.move) stamps its exit with the NEW directory while
+ * the tab lives in the ORIGINAL window, so the directory guard would drop
+ * every moved session's close (observed live 2026-10-15: an exit-tab-closed
+ * stamped /wt-thog/<branch> reached the /thog window holding the tab and was
+ * dropped; the tab stayed open). Matching by sessionID within the window's
+ * own tab list is the scoping that matters - a window can only close tabs
+ * it actually holds. Open and toast events keep the directory guard: they
+ * are coordinator-driven and must not leak across projects.
+ */
+export function actsOnTabEvent(type: string, eventDirectory: string | undefined, windowDirectory: string | undefined): boolean {
+  if (isTabClosedEvent(type) || isExitTabClosedEvent(type)) return true;
+  return passesDirectoryGuard(eventDirectory, windowDirectory);
+}
