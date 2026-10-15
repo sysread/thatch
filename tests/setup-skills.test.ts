@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import yaml from "yaml";
-import { setupClaudeCode, setupCursor, setupSkillsOnly } from "../src/setup";
+import { setupClaudeCode, setupCursor, setupSkillsOnly, thatchMcpServerEntry } from "../src/setup";
 import { REVIEW_SPECIALISTS } from "../src/prompts";
 import { SHARED_SKILLS, OPENCODE_ONLY_SKILLS, installSkills } from "../src/skills";
 import { installSetupHarness, projectDir, fakeHome } from "./mocks/setup-harness";
@@ -237,6 +237,25 @@ describe("setupSkillsOnly", () => {
     } finally {
       rmSync(customDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("thatchMcpServerEntry", () => {
+  test("the mcpServers shape other clients use: stdio + the mcp subcommand", () => {
+    expect(thatchMcpServerEntry("/usr/local/bin/thatch")).toEqual({
+      type: "stdio",
+      command: "/usr/local/bin/thatch",
+      args: ["mcp"],
+    });
+  });
+
+  test("project dir pins THATCH_PROJECT_DIR for project-local configs", () => {
+    const entry = thatchMcpServerEntry("/usr/local/bin/thatch", "/repo");
+    expect(entry.env).toEqual({ THATCH_PROJECT_DIR: "/repo" });
+  });
+
+  test("no project dir means no env pin (global semantics)", () => {
+    expect(thatchMcpServerEntry("/usr/local/bin/thatch").env).toBeUndefined();
   });
 });
 

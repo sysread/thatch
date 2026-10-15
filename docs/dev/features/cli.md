@@ -19,7 +19,7 @@ The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection, M
 | `buffer-tool` | none | none | JSON | Append single postToolUse interaction to queue (Cursor hook) |
 | `flush-tools [--json]` | none | `--json` | JSON | Peek queue + extraction/recall/prediction/behavior/write nudge |
 | `flush-predictions [--json]` | none | `--json` | JSON | Standalone prediction-only nudge |
-| `setup --claude [--cursor] [--global]` | none | `--claude`, `--cursor`, `--global` | none | Install config + instructions + hooks + skills |
+| `setup --claude [--cursor] [--local\|--global] [--skills-only [dir]] [--mcp-json]` | none | `--claude`, `--cursor`, `--global`, `--local`, `--skills-only [dir]`, `--mcp-json` | none | Install config + instructions + hooks + skills; `--skills-only <dir>` installs into any directory; `--mcp-json` prints the server config as JSON |
 | `session list/get/transcript/search` | per subcommand | `-s/--session`, `--id`, `--after`, `--before`, `--regex`, `--limit` | none | Read-only archaeology on the opencode session database (JSONL output) |
 | `chat list` | none | none | none | Registered chat sessions: name, human-readable age, project, topic |
 | `chat tail` | none | `--once`, `--limit N\|all`, `--match RE` (repeatable), `--from NAME`, `--to NAME`, `--since DT`, `--until DT` | none | Follow cross-session chat: sent and read events. Backlog defaults to the last 20 messages; filters apply to follow mode too. |

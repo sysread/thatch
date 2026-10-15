@@ -66,6 +66,26 @@ function resolvePaths(global: boolean, projectDir: string, homeDir: string): Set
 // .mcp.json - MCP server registration
 // ---------------------------------------------------------------------------
 
+/**
+ * The thatch MCP server entry in the `mcpServers` shape shared by Claude
+ * Code, Cursor, and many other MCP clients. writeMcpConfig persists it
+ * into a config file; `thatch setup --mcp-json` prints it for harnesses
+ * thatch does not configure itself.
+ */
+export function thatchMcpServerEntry(thatchBin: string, projectDir?: string) {
+  return {
+    type: "stdio",
+    command: thatchBin,
+    args: ["mcp"],
+    // Project-LOCAL configs pin the project directory so the server's
+    // identity resolution is deterministic regardless of the cwd the host
+    // spawns it with. Global-scope configs must NEVER pin: one entry serves
+    // every project, and a first-in-chain env override would clobber all
+    // of them. (The projectDir chain in src/mcp.ts.)
+    ...(projectDir ? { env: { THATCH_PROJECT_DIR: projectDir } } : {}),
+  };
+}
+
 function writeMcpConfig(path: string, thatchBin: string, projectDir?: string): void {
   let config: any = { mcpServers: {} };
   if (existsSync(path)) {
@@ -77,17 +97,7 @@ function writeMcpConfig(path: string, thatchBin: string, projectDir?: string): v
   }
   if (!config.mcpServers) config.mcpServers = {};
 
-  config.mcpServers.thatch = {
-    type: "stdio",
-    command: thatchBin,
-    args: ["mcp"],
-    // Project-LOCAL configs pin the project directory so the server's
-    // identity resolution is deterministic regardless of the cwd the host
-    // spawns it with. Global-scope configs must NEVER pin: one entry serves
-    // every project, and a first-in-chain env override would clobber all
-    // of them. (setup.ts:projectDir chain in src/mcp.ts.)
-    ...(projectDir ? { env: { THATCH_PROJECT_DIR: projectDir } } : {}),
-  };
+  config.mcpServers.thatch = thatchMcpServerEntry(thatchBin, projectDir);
 
   mkdirSync(join(path, ".."), { recursive: true });
   writeFileSync(path, JSON.stringify(config, null, 2) + "\n");

@@ -116,6 +116,40 @@ skips the MCP config, instructions, and hooks.
 Cursor uses a flat hooks format (`{version, hooks:{event:[{command}]}}`)
 and `--json` output for hook commands.
 
+## Other harnesses
+
+The MCP server and the skills are not tied to Claude Code or Cursor.
+For any other MCP harness, print the server config, paste it into your
+harness's config, and install the skills where that harness reads them.
+
+Print the config:
+
+```bash
+thatch setup --mcp-json
+```
+
+The output is the `mcpServers` shape used by Claude Code, Cursor, Gemini
+CLI, and many other MCP clients. Some harnesses use a different key or
+format; check your harness's docs. (opencode uses a different shape; its
+users get everything from the plugin instead.) The printed entry sets no
+project directory. The project-local configs that setup writes for
+Claude Code and Cursor add the project directory for you. If your
+harness starts the server from the project root, the server finds the
+project on its own.
+
+Install the skills into a directory of your choosing by passing the
+directory to `--skills-only`. No host flag is needed:
+
+```bash
+thatch setup --skills-only ~/.my-harness/skills
+```
+
+A relative path is read from the directory you run the command from.
+Both flags combine into one run, and stdout then carries only the JSON
+so it can be piped. Passing `--claude`, `--cursor`, or `--local`
+alongside an explicit directory has no effect (setup prints a note).
+`--global` with an explicit directory is an error.
+
 ## Environment variables
 
 | Variable | Default | What it controls |

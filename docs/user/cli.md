@@ -150,6 +150,17 @@ memories.
 This is the same skill the agent can load manually, but `thatch prime`
 runs it in a dedicated session focused on project investigation.
 
+## Setup
+
+Run once per host (or per harness) to install thatch:
+
+```bash
+thatch setup --claude [--cursor] [--local|--global]  # install config + instructions + hooks + skills
+thatch setup --claude --skills-only             # refresh just the skill files
+thatch setup --skills-only <dir>                # install skills to any directory
+thatch setup --mcp-json                         # print the MCP server config as JSON
+```
+
 ## Infrastructure commands
 
 These commands are called by hooks installed by `thatch setup`. You
@@ -161,8 +172,6 @@ thatch buffer-batch             # append tool batch to queue (Claude Code hook)
 thatch buffer-tool              # append single tool to queue (Cursor hook)
 thatch flush-tools [--json]     # peek queue + print nudges (hook)
 thatch flush-predictions [--json]  # prediction-only nudge (hook)
-thatch setup --claude [--cursor] [--global]     # install config + hooks + skills
-thatch setup --claude --skills-only             # refresh just the skill files
 ```
 
 ## Environment variables

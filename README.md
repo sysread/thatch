@@ -154,14 +154,19 @@ survives upgrades. `THATCH_MODEL_CACHE` overrides the location.
 
 ### Other MCP-compatible harnesses
 
-```json
-{
-  "mcpServers": {
-    "thatch": { "command": "thatch", "args": ["mcp"] }
-  }
-}
+Thatch wires itself up for Claude Code and Cursor. For any other MCP
+harness, print the server config, paste it into your harness's config,
+and install the skills where that harness reads them:
+
+```bash
+thatch setup --mcp-json               # print the server config as JSON
+thatch setup --skills-only <dir>      # install skills into any directory
 ```
 
+`--mcp-json` prints the `mcpServers` shape (a stdio server that runs
+`thatch mcp`) that Claude Code, Cursor, Gemini CLI, and many other MCP
+clients use. Some harnesses use a different key or format; check your
+harness's docs.
 Include thatch's instructions in your agent's system prompt manually; see
 [MCP parity](https://github.com/sysread/thatch/wiki/Mcp-Parity) for the prompt text.
 

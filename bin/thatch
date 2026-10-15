@@ -8,7 +8,8 @@ import { detectRepo } from "../src/git";
 import { BgeEmbeddingModel } from "../src/embeddings";
 import { hygieneReport } from "../src/hygiene";
 import { claudeSessionStartReminder } from "../src/prompts";
-import { setupClaudeCode, setupCursor, setupSkillsOnly, registerClaudeMcpServer } from "../src/setup";
+import { setupClaudeCode, setupCursor, setupSkillsOnly, registerClaudeMcpServer, thatchMcpServerEntry, type OtherScopeSkills } from "../src/setup";
+import { installSkills, type InstallReport } from "../src/skills";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
 import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
@@ -51,10 +52,16 @@ function usage(exitCode = 1): never {
   thatch flush-tools [--json]      Peek the queue + print an extraction nudge (hook only)
   thatch chat-notify               Print a chat follow-up message when mail is unread (Cursor stop hook)
   thatch flush-predictions [--json] Query predictions for the prompt (hook only)
-  thatch setup --claude [--cursor] [--local|--global] [--skills-only]
+  thatch setup --claude [--cursor] [--local|--global] [--skills-only [dir]]
                                    Install config + instructions + hooks + skills.
-                                   --skills-only refreshes just the skill files
-                                   (skips MCP config, instructions, hooks, commands)
+                                   --skills-only refreshes just the skill files; with
+                                   an explicit directory, installs the skills into
+                                   that directory (no host flag needed)
+  thatch setup --skills-only <dir> Install the skills into <dir> for any harness
+                                   (no host flag; --global is rejected)
+  thatch setup --mcp-json          Print the MCP server config as JSON on stdout
+                                   (can be combined with other setup flags; writes
+                                   nothing, stdout carries only the JSON when set)
   thatch session list -s <id> [--after T] [--before T]
                                    JSONL timeline of a session's parts (one line per part)
   thatch session get --id <part_id|msg_id>
@@ -915,16 +922,49 @@ switch (command) {
     const isCursor = args.includes("--cursor");
     // --skills-only narrows the run to the skill install: same host and
     // scope rules, but MCP config, instructions, hooks, and commands are
-    // left untouched.
-    const skillsOnly = args.includes("--skills-only");
+    // left untouched. With an explicit directory it instead installs into
+    // that directory for any harness that reads a skills dir: host and
+    // scope selection does not apply. A host flag (--claude, --cursor) or
+    // --local only names a default skills location, and the directory
+    // replaces it, so the flag is ignored with a note. --global claims a
+    // scope the explicit directory cannot have, so it is refused.
+    const skillsOnlyIdx = args.indexOf("--skills-only");
+    const skillsOnlyEq = args.find((a) => a.startsWith("--skills-only="));
+    const skillsOnly = skillsOnlyIdx !== -1 || skillsOnlyEq !== undefined;
+    // The directory value is parsed by hand (not flagValue) because the
+    // bare flag is meaningful, same as --stale. The --skills-only=<dir>
+    // form is honored too; a token starting with -- is always a sibling
+    // flag, never the directory.
+    const eqValue = skillsOnlyEq?.slice("--skills-only=".length);
+    const bareNext = skillsOnlyIdx !== -1 ? args[skillsOnlyIdx + 1] : undefined;
+    const skillsTarget = eqValue || (bareNext && !bareNext.startsWith("--") ? bareNext : null);
+    const customSkillsDir = skillsTarget ? resolve(process.cwd(), skillsTarget) : null;
+    // --mcp-json prints the MCP server entry as JSON on stdout for hosts
+    // thatch does not configure itself. It writes nothing and the entry
+    // itself is host-agnostic, so it needs no host flag: it is valid
+    // alone and can be combined with any other setup run.
+    const mcpJson = args.includes("--mcp-json");
+    // When --mcp-json is set, stdout carries only the JSON so scripts can
+    // pipe it; human-readable output goes to stderr. Error paths keep
+    // console.error in both modes: errors are never stdout data.
+    const say = mcpJson ? console.error : console.log;
 
     if (isGlobal && isLocal) {
       console.error("Choose one scope: --local or --global.");
       process.exit(1);
     }
-    if (!isClaude && !isCursor) {
+    if (customSkillsDir && isGlobal) {
+      console.error("A directory passed to --skills-only cannot be combined with --global.");
+      process.exit(1);
+    }
+    if (skillsOnly && !customSkillsDir && !isClaude && !isCursor) {
+      console.error("Specify at least one host: --claude and/or --cursor, or give --skills-only a directory.");
+      console.error("Usage: thatch setup --claude [--cursor] [--local|--global] [--skills-only [dir]] [--mcp-json]");
+      process.exit(1);
+    }
+    if (!skillsOnly && !mcpJson && !isClaude && !isCursor) {
       console.error("Specify at least one host: --claude and/or --cursor.");
-      console.error("Usage: thatch setup --claude [--cursor] [--local|--global]");
+      console.error("Usage: thatch setup --claude [--cursor] [--local|--global] [--skills-only [dir]] [--mcp-json]");
       process.exit(1);
     }
 
@@ -937,45 +977,82 @@ switch (command) {
     const dir = projectDir();
 
     // Shared reporting: where skills went and what the pass did, so an
-    // idempotent re-run still tells the user something true.
-    const printSkills = (result: { skills: { dir: string; added: unknown[]; updated: unknown[]; removed: string[]; unchanged: string[] }; otherScopeSkills: { dir: string; count: number } | null; global: boolean }) => {
+    // idempotent re-run still tells the user something true. Closes over
+    // `say`, so every setup path follows the --mcp-json stderr routing.
+    const printSkills = (result: { skills: InstallReport; otherScopeSkills: OtherScopeSkills | null; global: boolean }) => {
       const { added, updated, removed, unchanged } = result.skills;
-      console.log(`  Skills:        ${result.skills.dir}`);
-      console.log(`                 ${added.length} added, ${updated.length} updated, ${removed.length} removed, ${unchanged.length} unchanged`);
+      say(`  Skills:        ${result.skills.dir}`);
+      say(`                 ${added.length} added, ${updated.length} updated, ${removed.length} removed, ${unchanged.length} unchanged`);
       if (result.otherScopeSkills) {
         const { dir: otherDir, count } = result.otherScopeSkills;
         if (result.global) {
-          console.log(`  Note: ${count} thatch skills exist in ${otherDir} (project scope); --global does not update them.`);
+          say(`  Note: ${count} thatch skills exist in ${otherDir} (project scope); --global does not update them.`);
         } else {
-          console.log(`  Note: ${count} thatch skills remain in ${otherDir} (user scope; not updated by this run). Run setup with --global to refresh them, or remove them if this repo now owns its skills.`);
+          say(`  Note: ${count} thatch skills remain in ${otherDir} (user scope; not updated by this run). Run setup with --global to refresh them, or remove them if this repo now owns its skills.`);
         }
       }
     };
 
-    if (isClaude) {
+    // A host or scope flag names a default location; an explicit directory
+    // replaces it. Keep the run going, but say the flag did nothing.
+    if (customSkillsDir && (isClaude || isCursor || isLocal)) {
+      say("  Note: host and scope flags have no effect with an explicit skills directory.");
+    }
+    // Same note when a scope flag names nothing that runs: with no
+    // explicit directory and no host flag, the run has nothing to scope,
+    // so --local/--global did nothing. A host flag makes the scope real
+    // (the install below uses it), so no note in that case. `say` keeps
+    // the note off stdout when --mcp-json is set.
+    if (!customSkillsDir && !isClaude && !isCursor && mcpJson && (isGlobal || isLocal)) {
+      say("  Note: scope flags have no effect with --mcp-json.");
+    }
+
+    if (customSkillsDir) {
+      // Host-agnostic install: the explicit directory is the only input, so
+      // there is no other-scope copy to probe and no host restart note.
+      let skills: InstallReport;
+      try {
+        skills = installSkills(customSkillsDir);
+      } catch (err) {
+        // installSkills writes each skill file as it goes and does not roll
+        // back, so the directory can hold a partial install when we get here.
+        console.error(`Error: cannot install skills into ${customSkillsDir}: ${err instanceof Error ? err.message : err}`);
+        console.error("Fix the path or permissions and run again; some skill files may already be written.");
+        process.exit(1);
+      }
+      const result = { skills, otherScopeSkills: null, global: false };
+
+      say(`Thatch skills installed to ${customSkillsDir}.`);
+      say("");
+      printSkills(result);
+      say("");
+      say(`Point your harness's skills directory at ${customSkillsDir} to pick up the skills.`);
+    }
+
+    if (isClaude && !customSkillsDir) {
       if (skillsOnly) {
         const result = setupSkillsOnly("claude", isGlobal, dir);
 
-        console.log(`Thatch skills updated for Claude Code (${isGlobal ? "global" : "project-local"}).`);
-        console.log();
+        say(`Thatch skills updated for Claude Code (${isGlobal ? "global" : "project-local"}).`);
+        say("");
         printSkills(result);
-        console.log();
-        console.log("Restart Claude Code for the changes to take effect.");
+        say("");
+        say("Restart Claude Code for the changes to take effect.");
       } else {
         const result = setupClaudeCode(thatchBin, isGlobal, dir);
 
-        console.log(`Thatch setup complete for Claude Code (${isGlobal ? "global" : "project-local"}).`);
-        console.log();
+        say(`Thatch setup complete for Claude Code (${isGlobal ? "global" : "project-local"}).`);
+        say("");
         if (result.mcpConfig) {
-          console.log(`  MCP config:    ${result.mcpConfig}`);
+          say(`  MCP config:    ${result.mcpConfig}`);
         }
-        console.log(`  Instructions:  ${result.claudeMd}`);
-        console.log(`  Hooks:         ${result.settings}`);
+        say(`  Instructions:  ${result.claudeMd}`);
+        say(`  Hooks:         ${result.settings}`);
         printSkills(result);
         if (result.commands.length > 0) {
-          console.log(`  Commands:      ${result.commands.length} written (${result.commands.map((p) => p.split("/").pop()).join(", ")})`);
+          say(`  Commands:      ${result.commands.length} written (${result.commands.map((p) => p.split("/").pop()).join(", ")})`);
         }
-        console.log();
+        say("");
         if (result.mcpAddCommand) {
           // Global setup cannot write ~/.claude.json directly, so run the
           // registration on the user's behalf. Idempotent: an existing
@@ -983,43 +1060,56 @@ switch (command) {
           // falls back to printing the manual command.
           const reg = await registerClaudeMcpServer(thatchBin);
           if (reg.status === "registered") {
-            console.log(`  MCP server:    ${reg.detail}`);
+            say(`  MCP server:    ${reg.detail}`);
           } else if (reg.status === "already-registered") {
-            console.log(`  MCP server:    already registered (claude mcp get thatch to inspect)`);
+            say(`  MCP server:    already registered (claude mcp get thatch to inspect)`);
           } else {
-            console.log("To register the MCP server globally, run:");
-            console.log(`  ${result.mcpAddCommand}`);
-            console.log(`  (${reg.detail})`);
+            say("To register the MCP server globally, run:");
+            say(`  ${result.mcpAddCommand}`);
+            say(`  (${reg.detail})`);
           }
-          console.log();
+          say("");
         }
-        console.log("Restart Claude Code for the changes to take effect.");
+        say("Restart Claude Code for the changes to take effect.");
       }
     }
 
-    if (isCursor) {
+    if (isCursor && !customSkillsDir) {
       if (skillsOnly) {
         const result = setupSkillsOnly("cursor", isGlobal, dir);
 
-        console.log();
-        console.log(`Thatch skills updated for Cursor (${isGlobal ? "global" : "project-local"}).`);
-        console.log();
+        say("");
+        say(`Thatch skills updated for Cursor (${isGlobal ? "global" : "project-local"}).`);
+        say("");
         printSkills(result);
-        console.log();
-        console.log("Restart Cursor for the changes to take effect.");
+        say("");
+        say("Restart Cursor for the changes to take effect.");
       } else {
         const result = setupCursor(thatchBin, isGlobal, dir);
 
-        console.log();
-        console.log(`Thatch setup complete for Cursor (${isGlobal ? "global" : "project-local"}).`);
-        console.log();
-        console.log(`  MCP config:    ${result.mcpConfig}`);
-        console.log(`  Instructions:  ${result.agentsMd}`);
-        console.log(`  Hooks:         ${result.hooks}`);
+        say("");
+        say(`Thatch setup complete for Cursor (${isGlobal ? "global" : "project-local"}).`);
+        say("");
+        say(`  MCP config:    ${result.mcpConfig}`);
+        say(`  Instructions:  ${result.agentsMd}`);
+        say(`  Hooks:         ${result.hooks}`);
         printSkills(result);
-        console.log();
-        console.log("Restart Cursor for the changes to take effect.");
+        say("");
+        say("Restart Cursor for the changes to take effect.");
       }
+    }
+
+    // The printed entry is deliberately unpinned: the user chooses where to
+    // paste it, and one entry may serve many projects. A pinned
+    // THATCH_PROJECT_DIR in a global config would force that one project
+    // directory on every project sharing the config (see
+    // thatchMcpServerEntry). The server instead resolves the project from
+    // the project-directory env vars the host sets, or from its spawn cwd
+    // (src/mcp.ts projectDir chain).
+    // console.log, not say: `say` is the stderr detour, and this JSON is
+    // the one output that must stay on stdout when --mcp-json is set.
+    if (mcpJson) {
+      console.log(JSON.stringify({ mcpServers: { thatch: thatchMcpServerEntry(thatchBin) } }, null, 2));
     }
     break;
   }

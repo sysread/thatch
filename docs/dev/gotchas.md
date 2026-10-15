@@ -166,6 +166,17 @@ here first. These are the things that have already cost time.
   The unit gate is `mise run check` (`bun test tests/*.test.ts`); QA runs
   belong to the `mise run qa-auto` / `qa-live` tasks, which select a UC
   subset by name.
+- **QA use-case `console.log` output is swallowed by the concurrent runner.**
+  `registerLeg` runs every use case under `test.concurrent`, and bun captures
+  concurrent-test stdout. A failing use case prints only its name plus an
+  `Error` whose message is the use-case name and the result string, built in
+  `registerLeg` (`tests/qa/runner.ts`) when the result is FAIL or PARTIAL.
+  The `console.log("  FAIL: ...")` detail lines never appear, even with `-t`
+  filtering.
+- **Debug a failing use case by writing to a file beside the fixture.** Use
+  `appendFileSync` for step-by-step results. If you restructure the run body
+  to throw instead, the runner reports the same bare `FAIL`. (2026-10-15,
+  uc-124 custom-dir skills)
 
 ## Config and notifications
 

@@ -19,7 +19,12 @@ resolution fit together.
 - `--global` flag --- installs to user-scoped config dirs instead of
   project-local
 - `--skills-only` flag --- refreshes just the skill files (same host and
-  scope rules), skipping MCP config, instructions, hooks, and commands
+  scope rules), skipping MCP config, instructions, hooks, and commands;
+  with an explicit directory, installs the skills into that directory for
+  any harness, no host flag needed
+- `--mcp-json` flag --- prints the `mcpServers` thatch entry as JSON on
+  stdout (`thatchMcpServerEntry` in `src/setup.ts`) for harnesses setup
+  does not configure itself
 - **Marker system** --- idempotent replacement of the thatch instruction block
   in `CLAUDE.md` or `AGENTS.md` via start/end markers
 - **`checkSetup`** --- detects installed, not-installed, or markers-broken at
@@ -35,13 +40,27 @@ resolution fit together.
 
 ### Setup commands
 
-At least one of `--claude` or `--cursor` is required. Both can be passed
-together. `--global` applies to whichever host or hosts are selected.
+A run needs a host flag (`--claude` and/or `--cursor`) unless it uses
+only the host-agnostic modes: `--mcp-json`, `--skills-only <dir>`, or
+both together. Both host flags can be passed together. `--global`
+applies to whichever host or hosts are selected.
+
 `--skills-only` narrows the run to the skill install (`setupSkillsOnly`
 in `src/setup.ts`): it reuses the same path resolution and other-scope
 probe as the full setup paths but only calls `installSkills`, so it is
 safe to run in an already-set-up host when only the skill files need
 refreshing.
+
+`--skills-only <dir>` with an explicit directory is a second, separate
+mode for harnesses thatch does not configure: the CLI resolves the dir
+against the cwd and calls `installSkills` directly. No host resolution,
+no scope, no other-scope probe. A host or scope flag prints a no-effect
+note; `--global` exits 1. The `--mcp-json` flag prints
+`thatchMcpServerEntry(thatchBin)` as JSON and writes nothing, so it is
+valid alone and can be combined with any other setup run. The printed
+entry intentionally sets no project directory, so one entry can serve
+every project. When `--mcp-json` is set, stdout carries only the JSON
+and the human-readable report goes to stderr.
 
 ### Claude Code setup (`setupClaudeCode` in `src/setup.ts`)
 
@@ -93,10 +112,12 @@ Four artifacts, same idempotent pattern:
    before the start marker and after the end marker. This is the normal
    update path: re-running setup replaces the thatch block without touching
    user-written content elsewhere in the file.
-2. **Start marker found but end missing** --- leave the file alone. This is a
-   corrupted state --- someone edited the file and accidentally removed the
-   end marker. Writing would risk clobbering content that follows the start
-   marker. `checkSetup` reports this as `markers-broken`.
+2. **Start marker found but end missing** --- heal when the tail is
+   recognizably the instructions, otherwise leave the file alone. A missing
+   end marker means someone edited the file and corrupted the block. The
+   heal replaces from the start marker to EOF, but only when the file tail
+   matches the instructions' last line, so content after the block is never
+   clobbered. `checkSetup` reports an unhealed file as `markers-broken`.
 3. **No markers** --- append instructions to the end of the file (with a
    separator). Create the file if it does not exist.
 
@@ -205,9 +226,11 @@ example, an older `thatch echo` hook is replaced with the current
    dirs. Setup reports the directory plus added/updated/removed/unchanged
    counts, and notes (without touching) any thatch skills found in the
    opposite scope.
-3. **`appendBlock` leaves content alone if markers do not parse.** A start
-   marker without an end marker means the file was edited externally. Writing
-   would risk clobbering content after the start marker.
+3. **`appendBlock` heals a broken block only when the tail matches.** A start
+   marker without an end marker means the file was edited externally. The
+   heal replaces the block through EOF only when the tail test (the
+   instructions' last line) passes, so content after the block is never
+   clobbered.
 4. **Binary path is baked into hook commands.** Hooks are short-lived
    processes that outlive the setup session. The resolved path ensures they
    keep working.
