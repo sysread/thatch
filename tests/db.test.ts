@@ -750,6 +750,34 @@ describe("migration", () => {
     check.close();
   });
 
+  test("opening a pre-reason tombstone database adds the reason column as explicit", () => {
+    // A database whose chat_leave_tombstones predates the reason column (a
+    // pre-restore-rejoin build) must gain the column, and its rows must
+    // read as "explicit": the conservative default - the restore-rejoin
+    // paths must not clear a leave they cannot identify.
+    const oldPath = join(dbDir, "reason-tombstones.db");
+    const legacy = new Database(oldPath, { create: true });
+    legacy.run(`
+      CREATE TABLE chat_leave_tombstones (
+        session_id TEXT PRIMARY KEY,
+        left_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+      )
+    `);
+    legacy.run("INSERT INTO chat_leave_tombstones (session_id) VALUES ('ses_legacy')");
+    legacy.close();
+
+    const migrated = new ThatchDB(oldPath);
+    const row = new Database(oldPath)
+      .query("SELECT session_id, reason FROM chat_leave_tombstones WHERE session_id = 'ses_legacy'")
+      .get() as any;
+    expect(row?.reason).toBe("explicit");
+    expect(migrated.clearRejoinableTombstone("ses_legacy")).toBe(false);
+    expect(migrated.hasChatLeaveTombstone("ses_legacy")).toBe(true);
+    migrated.close();
+    // Idempotent: a second open finds the column present and must not error.
+    new ThatchDB(oldPath).close();
+  });
+
   test("opening a pre-telemetry database adds the new columns", () => {
     const oldPath = join(dbDir, "old.db");
     const raw = new Database(oldPath, { create: true });

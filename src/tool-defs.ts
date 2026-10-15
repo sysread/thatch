@@ -2356,7 +2356,10 @@ const chatUnregisterDef: ToolDef = {
   async execute(_args, ctx, host) {
     const identity = await resolveChatIdentity(ctx, host, _args.as);
     if (!identity.ok) return identity.error;
-    const removed = ctx.db.unregisterChatSession(identity.sessionID);
+    // "explicit": a deliberate leave persists until an explicit
+    // chat_register rejoin - restoring or resuming the session does not
+    // undo it (the "exit" tombstone reason is what resumes clear).
+    const removed = ctx.db.unregisterChatSession(identity.sessionID, "explicit");
     if (!removed) return "You are not registered.";
     return "[unregistered] this session left the chat directory.";
   },

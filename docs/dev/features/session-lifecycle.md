@@ -78,8 +78,22 @@ User-invoked slash commands, shipped as command markdown synced by the plugin (s
 2. On the session's next idle, the plugin fetches the session's messages (v1: SDK client; v2: `session.context`, mapped into the v1 shape) and checks the final assistant message's trailing text for the token (trimmed, exact match)
 3. Token present: trigger the host action and return early -- compaction is starting (the checklist drained the buffer) or the session is closing
    - compact: v1 dispatches the TUI's `session_compact` command (`client.tui.executeCommand` -- the execute-command route only accepts legacy alias names; `session_compact` maps to the TUI's `session.compact` action, the same thing the built-in `/compact` runs). v2 calls `session.compact({sessionID})` on the promise domain directly (upstream #52385), runtime-guarded because the pinned dev types predate the surface -- an older host degrades to a logged no-op
-   - exit: record the session's watcher deaths first (`watchers.sessionDied` -- BEFORE the unregister below, because the death row is placed by the session's chat row and the unregister deletes it; the runtime also captures the project there, so the async death-notice delivery still places after the row is gone), unregister the session from the chat directory (a greenlit exit's host is about to vanish; other sessions must stop addressing mail to it), then close the session out on the host. v1 publishes the `app.exit` TUI keymap command directly (`client.tui.publish` -- no exit alias exists). v2 emits the session-tab bridge's `exit-tab-closed` event, a TUI-ONLY close of the session's OWN tab: the daemon hosts every tab, so `app.exit` would take down unrelated sessions, and the pump deliberately never translates this event (the deaths were already recorded; a second pass would erase the durable death row). The unregister is plugin-side only, after the death recording: the template deliberately does NOT ask the model to call `thatch_chat_unregister`, because a mid-turn unregister would delete the chat row before the death placement could use it. Compaction deliberately does NOT unregister - the session continues
+   - exit: record the session's watcher deaths first (`watchers.sessionDied` -- BEFORE the unregister below, because the death row is placed by the session's chat row and the unregister deletes it; the runtime also captures the project there, so the async death-notice delivery still places after the row is gone), unregister the session from the chat directory (a greenlit exit's host is about to vanish; other sessions must stop addressing mail to it; the tombstone's `exit` reason is what a later restore clears), then close the session out on the host. v1 publishes the `app.exit` TUI keymap command directly (`client.tui.publish` -- no exit alias exists). v2 emits the session-tab bridge's `exit-tab-closed` event, a TUI-ONLY close of the session's OWN tab: the daemon hosts every tab, so `app.exit` would take down unrelated sessions, and the pump deliberately never translates this event (the deaths were already recorded; a second pass would erase the durable death row). The unregister is plugin-side only, after the death recording: the template deliberately does NOT ask the model to call `thatch_chat_unregister`, because a mid-turn unregister would delete the chat row before the death placement could use it. Compaction deliberately does NOT unregister - the session continues
 4. Token absent: warning toast pointing at the blockers in the response, then fall through -- the model may have buffered tool interactions that still need extraction (on v2 the toast rides the bridge's toast event; a TUI-less environment shows nothing - the blockers themselves are in the model's response)
+
+### Restore-rejoin
+
+Restoring an exited session undoes the exit's chat-directory leave: the
+startup resume paths (`-s <id>` / `-c`) and the prompt auto-register path
+clear the session's `exit` (or `deleted`) leave tombstone and register a
+fresh roster row (the "rejoined chat as ..." toast announces it). A
+deliberate leave -- the `chat_unregister` tool's `explicit` tombstone --
+is NOT cleared by restore; it persists until an explicit
+`thatch_chat_register`. The clear lives at those call sites only
+(`db.clearRejoinableTombstone`), never inside the register path's
+tombstone gate, which stays reason-blind as the in-flight-race and
+deleted-zombie backstop. See cross-session-chat.md's Leave tombstones
+section for the full reason list.
 
 ### Command file install
 

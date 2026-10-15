@@ -289,6 +289,56 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
     }
   });
 
+  test("-s startup restore-rejoin clears an exit tombstone and registers", async () => {
+    // The session left via the wrap-up exit (the host vanished); resuming
+    // it IS the host coming back, so it rejoins instead of staying
+    // chat-deaf. The registration is fresh (created: true), so the
+    // chatStartupNames toast path announces it.
+    const seedDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    seedDb.registerChatSession("ses_restore", "thatch-restore", null, "opencode", "restorer");
+    seedDb.unregisterChatSession("ses_restore", "exit");
+    expect(seedDb.hasChatLeaveTombstone("ses_restore")).toBe(true);
+    seedDb.close();
+    const argvSave = process.argv;
+    process.argv = [...argvSave, "-s", "ses_restore"];
+    let hooks: Awaited<ReturnType<typeof server>> | undefined;
+    try {
+      hooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-restore" } as any);
+      await settle();
+      const db = new ThatchDB(process.env.THATCH_DB_PATH!);
+      const row = db.listChatSessions().find((r) => r.session_id === "ses_restore");
+      expect(row).toBeDefined();
+      expect(db.hasChatLeaveTombstone("ses_restore")).toBe(false);
+      db.close();
+    } finally {
+      process.argv = argvSave;
+      hooks?.dispose?.();
+    }
+  });
+
+  test("-s startup keeps an explicit tombstone while clearing an exit one", async () => {
+    // Both tombstone reasons exist on the same db for different sessions:
+    // the explicit leave suppresses, the exit leave rejoins.
+    const seedDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    seedDb.registerChatSession("ses_explicit", "thatch-explicit", null, "opencode", "explicit");
+    seedDb.unregisterChatSession("ses_explicit", "explicit");
+    seedDb.close();
+    const argvSave = process.argv;
+    process.argv = [...argvSave, "-s", "ses_explicit"];
+    let hooks: Awaited<ReturnType<typeof server>> | undefined;
+    try {
+      hooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-explicit" } as any);
+      await settle();
+      const db = new ThatchDB(process.env.THATCH_DB_PATH!);
+      expect(db.listChatSessions().find((r) => r.session_id === "ses_explicit")).toBeUndefined();
+      expect(db.hasChatLeaveTombstone("ses_explicit")).toBe(true);
+      db.close();
+    } finally {
+      process.argv = argvSave;
+      hooks?.dispose?.();
+    }
+  });
+
   test("-c resume reclaims the most recent top-level session at startup", async () => {
     // `opencode -c` continues the most recent top-level session in this
     // directory. The plugin resolves the same target through the SDK at
@@ -510,7 +560,11 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
     }
   });
 
-  test("chat.message honors a leave tombstone", async () => {
+  test("chat.message honors an explicit leave tombstone", async () => {
+    // unregisterChatSession's default reason is "explicit" (the
+    // chat_unregister tool's leave): a deliberate leave persists - the
+    // restored session's next prompt does NOT undo it. Only an explicit
+    // chat_register rejoin clears it.
     const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr-left" } as any);
     try {
       const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
@@ -519,6 +573,43 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
       await prHooks["chat.message"]!({ sessionID: "ses_pr_left", messageID: "msg_left" } as any, promptOutput("msg_left"));
       expect(prDb.listChatSessions().find((r) => r.session_id === "ses_pr_left")).toBeUndefined();
       expect(prDb.hasChatLeaveTombstone("ses_pr_left")).toBe(true);
+      prDb.close();
+    } finally {
+      prHooks.dispose?.();
+    }
+  });
+
+  test("chat.message restore-rejoin clears an exit tombstone and registers", async () => {
+    // A restored session's first real user message clears the wrap-up
+    // exit's tombstone (the host is back) and rejoins the directory.
+    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr-restore" } as any);
+    try {
+      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+      prDb.registerChatSession("ses_pr_restore", "thatch-pr", null, "opencode", "restorer");
+      prDb.unregisterChatSession("ses_pr_restore", "exit");
+      expect(prDb.hasChatLeaveTombstone("ses_pr_restore")).toBe(true);
+      await prHooks["chat.message"]!({ sessionID: "ses_pr_restore", messageID: "msg_restore" } as any, promptOutput("msg_restore"));
+      const row = prDb.listChatSessions().find((r) => r.session_id === "ses_pr_restore");
+      expect(row).toBeDefined();
+      expect(prDb.hasChatLeaveTombstone("ses_pr_restore")).toBe(false);
+      prDb.close();
+    } finally {
+      prHooks.dispose?.();
+    }
+  });
+
+  test("chat.message restore-rejoin clears a deleted-reason tombstone (resumed subordinate)", async () => {
+    // session.deleted tombstones are "deleted" reason: a dispatched
+    // subordinate is deleted routinely, and resuming one should rejoin on
+    // the next prompt rather than stay roster-deaf forever.
+    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr-deleted" } as any);
+    try {
+      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+      prDb.registerChatSession("ses_pr_deleted", "thatch-pr", null, "opencode", "deleted");
+      prDb.unregisterChatSession("ses_pr_deleted", "deleted");
+      await prHooks["chat.message"]!({ sessionID: "ses_pr_deleted", messageID: "msg_deleted" } as any, promptOutput("msg_deleted"));
+      expect(prDb.listChatSessions().find((r) => r.session_id === "ses_pr_deleted")).toBeDefined();
+      expect(prDb.hasChatLeaveTombstone("ses_pr_deleted")).toBe(false);
       prDb.close();
     } finally {
       prHooks.dispose?.();

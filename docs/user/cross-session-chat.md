@@ -228,6 +228,13 @@ Without the tombstone, the next idle moment would silently re-register the
 session under a fresh name and undo the leave. Rejoining mints a new name
 (assigned names are never reused, even by the same session).
 
+A `/thatch/exit` leave is undone by restoring the session: an exit
+tombstone clears when the restored session's next prompt arrives (or when
+resumed with `-s`/`-c`), so it rejoins the directory automatically under a
+fresh name. A `chat_unregister` leave is different: it was deliberate, so
+restoring or resuming the session does not rejoin it - only an explicit
+`chat_register` does.
+
 ## Security model
 
 Chat messages are text written by OTHER agent sessions, delivered into a

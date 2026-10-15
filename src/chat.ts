@@ -209,6 +209,13 @@ export function resolveRegisteredPredecessor(
  *  (liveness = a turn ran recently; mail is read at the next prompt). */
 export type ChatHostKind = "opencode" | "mcp";
 
+/** Why a session left the chat directory (chat_leave_tombstones.reason).
+ *  "exit": the wrap-up exit's unregister - a restored session auto-rejoins.
+ *  "explicit": the chat_unregister tool - persists until chat_register.
+ *  "deleted": session.deleted bookkeeping - clears like "exit" (a resumed
+ *  subordinate's rejoin is desired). */
+export type LeaveTombstoneReason = "exit" | "explicit" | "deleted";
+
 // Display names appear inside wake prompts and chat_list output, so they are
 // capped tight. MAX_BODY_LEN remains the per-ROW bound: every stored row
 // (a split part, or a body within the part budget) stays under it, so no
@@ -652,9 +659,17 @@ export class ChatStore {
     return { ok: false, error: "Could not assign a unique name after several attempts." };
   }
 
-  /** Leaves the directory. Messages already sent to or from the session are
-   *  kept as history; departed senders show as unknown names to readers. */
-  unregister(sessionID: string): boolean {
+  /**
+   * Leaves the directory. Messages already sent to or from the session are
+   * kept as history; departed senders show as unknown names to readers.
+   * The reason records which leave it was: "exit" (the wrap-up exit's
+   * unregister - a restored session auto-rejoins), "explicit" (the
+   * chat_unregister tool - the leave persists until an explicit
+   * chat_register rejoin), or "deleted" (session.deleted bookkeeping - no
+   * restore exists for a deleted session, but a resumed subordinate's
+   * rejoin is desired, so it clears like "exit").
+   */
+  unregister(sessionID: string, reason: LeaveTombstoneReason = "explicit"): boolean {
     const existing = this.#find(sessionID);
     if (!existing) return false;
     this.#db.transaction(() => {
@@ -662,15 +677,20 @@ export class ChatStore {
       // absent, so without a marker the next idle event would silently
       // re-register the session under a brand-new name and the user's
       // "leave the directory" would last until the turn ended. The
-      // tombstone survives the delete and suppresses auto-registration
-      // until the session explicitly rejoins via chat_register (which
-      // clears it). Both leave paths come through here - chat_unregister
-      // AND session.deleted (a deleted TUI session is an exit too; without
-      // the tombstone an in-flight auto-register could resurrect it).
-      this.#db.run("INSERT OR REPLACE INTO chat_leave_tombstones (session_id, left_at) VALUES (?, ?)", [
-        sessionID,
-        nowIso(),
-      ]);
+      // tombstone survives the delete and suppresses auto-registration -
+      // for "explicit" until the session explicitly rejoins via
+      // chat_register (which clears it), for "exit"/"deleted" until a
+      // resume or next prompt clears it (the restore-rejoin paths; the
+      // #tombstoneGate here must stay reason-blind either way - it is the
+      // in-flight-race and deleted-zombie backstop, so a clear inside it
+      // would resurrect deleted sessions). Both leave paths come through
+      // here - chat_unregister AND session.deleted (a deleted TUI session
+      // is an exit too; without the tombstone an in-flight auto-register
+      // could resurrect it).
+      this.#db.run(
+        "INSERT OR REPLACE INTO chat_leave_tombstones (session_id, left_at, reason) VALUES (?, ?, ?)",
+        [sessionID, nowIso(), reason],
+      );
       this.#db.run("DELETE FROM chat_sessions WHERE session_id = ?", [sessionID]);
     })();
     return true;
@@ -689,6 +709,23 @@ export class ChatStore {
   /** Clears the leave tombstone (chat_register rejoin path). */
   clearLeaveTombstone(sessionID: string): void {
     this.#db.run("DELETE FROM chat_leave_tombstones WHERE session_id = ?", [sessionID]);
+  }
+
+  /**
+   * Clears the session's leave tombstone ONLY when the leave was not
+   * deliberate: "exit" (the wrap-up unregister - restoring the session
+   * means the host is back) and "deleted" (session.deleted - a resumed
+   * subordinate's rejoin is desired). Returns whether it cleared. An
+   * "explicit" leave (the chat_unregister tool) survives - rejoining it is
+   * chat_register's job. The restore-rejoin call sites (startup resume and
+   * the prompt path) run this BEFORE registering; the register path's own
+   * tombstone gate stays reason-blind: it is the in-flight-race and
+   * deleted-zombie backstop and must never clear anything itself.
+   */
+  clearRejoinableTombstone(sessionID: string): boolean {
+    const result = this.#db
+      .run("DELETE FROM chat_leave_tombstones WHERE session_id = ? AND reason IN ('exit', 'deleted')", [sessionID]);
+    return result.changes > 0;
   }
 
   /**
@@ -1290,8 +1327,11 @@ export class ChatStore {
    * derived session ID matches the tombstone), so the gate clears it and
    * lets the registration proceed. Defense in depth: no current
    * production caller reaches the MCP branch with a tombstoned ID (the
-   * tool's rejoin clears at its own layer first); UC-101 pins the DB
-   * contract. Returns the failure result when the gate refuses, or null
+   * tool's rejoin clears at its own layer first); uc-102 pins the DB
+   * contract. Reason-blind by design: the restore-rejoin paths clear
+   * rejoinable tombstones at their call sites (clearRejoinableTombstone),
+   * never here - this gate is the in-flight-race and deleted-zombie
+   * backstop. Returns the failure result when the gate refuses, or null
    * to proceed.
    */
   #tombstoneGate(sessionID: string, kind: ChatHostKind): { ok: false; error: string } | null {

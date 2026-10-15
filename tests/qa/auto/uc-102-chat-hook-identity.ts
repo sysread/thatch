@@ -17,7 +17,9 @@ import { ThatchDB } from "../../../src/db";
  * prompts (same name), the line reports unread counts, and an explicit
  * unregister STICKS - the leave tombstone blocks the hook's ensure on
  * every later prompt (the line announces the leave instead of silently
- * rejoining), until an explicit rejoin clears it.
+ * rejoining), until an explicit rejoin clears it. The tombstone's reason
+ * decides restore semantics: exit/deleted tombstones clear as rejoinable
+ * (a restored session rejoins), explicit ones persist.
  *
  * Automatable: yes - the hook is a subprocess over a seeded SQLite file.
  */
@@ -34,6 +36,7 @@ const useCase: UseCase = {
     "4. Register a peer, send mail to the hook session, run flush-tools; verify the line reports the unread count.",
     "5. Unregister the hook session, run flush-tools; verify the leave line shows instead of an identity, the row is gone, and a tombstone exists.",
     "6. Rejoin explicitly (register + tombstone clear), run flush-tools; verify the new identity line.",
+    "7. Tombstone reasons: exit and deleted tombstones clear via clearRejoinableTombstone; an explicit tombstone survives it.",
   ].join("\n"),
   expected: [
     "- flush-tools prints `[thatch] chat: you are <name> (...)` on every prompt for a session_id-bearing host, even with zero mail.",
@@ -41,6 +44,7 @@ const useCase: UseCase = {
     "- The identity is stable across prompts of the same host conversation.",
     "- The line reports the caller's unread count.",
     "- chat_unregister sticks: the hook prints the leave line instead of re-registering, the row stays deleted, and a tombstone row exists.",
+    "- Restore-rejoin: exit/deleted tombstones clear as rejoinable; an explicit tombstone persists until chat_register.",
   ].join("\n"),
 
   async run(ctx) {
@@ -157,6 +161,35 @@ const useCase: UseCase = {
       const fifth = await flush("claude-session-abc");
       if (!fifth.out.includes(`you are ${rejoined.name}`)) {
         console.log(`  FAIL: rejoin did not register the identity. Output: ${fifth.out.slice(-400)}`);
+        return "FAIL";
+      }
+      // Restore-rejoin contract: a tombstone's reason decides whether a
+      // restored/resumed session auto-rejoins. The exit reason (the
+      // wrap-up unregister) and the deleted reason (session.deleted)
+      // clear via clearRejoinableTombstone; the explicit reason (the
+      // chat_unregister tool's deliberate leave) survives it and needs an
+      // explicit chat_register.
+      const db4 = new ThatchDB(dbPath);
+      db4.registerChatSession("ses_rr_exit", dir.split("/").pop()!, null, "mcp");
+      db4.unregisterChatSession("ses_rr_exit", "exit");
+      if (!db4.clearRejoinableTombstone("ses_rr_exit") || db4.hasChatLeaveTombstone("ses_rr_exit")) {
+        console.log("  FAIL: an exit-reason tombstone must clear as rejoinable");
+        db4.close();
+        return "FAIL";
+      }
+      db4.registerChatSession("ses_rr_del", dir.split("/").pop()!, null, "mcp");
+      db4.unregisterChatSession("ses_rr_del", "deleted");
+      if (!db4.clearRejoinableTombstone("ses_rr_del")) {
+        console.log("  FAIL: a deleted-reason tombstone must clear as rejoinable");
+        db4.close();
+        return "FAIL";
+      }
+      db4.registerChatSession("ses_rr_explicit", dir.split("/").pop()!, null, "mcp");
+      db4.unregisterChatSession("ses_rr_explicit", "explicit");
+      const explicitSurvived = db4.clearRejoinableTombstone("ses_rr_explicit") === false && db4.hasChatLeaveTombstone("ses_rr_explicit");
+      db4.close();
+      if (!explicitSurvived) {
+        console.log("  FAIL: an explicit-reason tombstone must persist (only chat_register clears it)");
         return "FAIL";
       }
       return "PASS";

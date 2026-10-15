@@ -670,13 +670,28 @@ export async function createRuntime(input: {
       chatStartupNames.set(startupSession, res.name);
       reclaimTail(startupSession);
     }
+  } else if (chatOn && autoRegisterOn && startupSession && tombstoned) {
+    // Restore-rejoin: a resumed session whose tombstone came from an exit
+    // (or a deleted-and-resumed subordinate) rejoins instead of staying
+    // chat-deaf. Deliberate leaves ("explicit") keep suppressing - only an
+    // explicit chat_register undoes those.
+    if (db.clearRejoinableTombstone(startupSession)) {
+      resumedSessions.add(startupSession);
+      const res = db.registerChatSession(startupSession, repo, null, "opencode", null, detectWorktreeKind(worktree));
+      debug("chat:startup", `restore-rejoin for ${startupSession}: ok=${res.ok} name=${res.ok ? res.name : res.error}`);
+      if (res.ok) {
+        chatStartupNames.set(startupSession, res.name);
+        reclaimTail(startupSession);
+      }
+    }
   } else if (chatOn && autoRegisterOn && continueLast) {
     void (async () => {
       try {
         const data = await caps.sessionList();
         const target = continuesLastSessionId(data ?? []);
         debug("chat:startup", `-c resolved: ${target ?? "none"}`);
-        if (!target || db.hasChatLeaveTombstone(target)) return;
+        if (!target) return;
+        if (db.hasChatLeaveTombstone(target) && !db.clearRejoinableTombstone(target)) return;
         resumedSessions.add(target);
         const res = db.registerChatSession(target, repo, null, "opencode", null, detectWorktreeKind(worktree));
         debug("chat:startup", `registration for ${target}: ok=${res.ok} name=${res.ok ? res.name : res.error}`);
@@ -1864,8 +1879,20 @@ export async function createRuntime(input: {
       // SQLite, so it runs inline; on an already-registered session this
       // is a free mid-turn heartbeat touch. Sub-agent children are excluded
       // (they register only by mistake, and their deletion tombstones the
-      // row), as are sessions that left via chat_unregister. The idle path
-      // below stays as the backstop and converges the topic.
+      // row), as are sessions with a surviving leave tombstone. The idle
+      // path below stays as the backstop and converges the topic.
+      //
+      // Restore-rejoin: a restored session's first real user message clears
+      // an exit/deleted tombstone (the wrap-up exit's "the host is about to
+      // vanish" leave, or session.deleted bookkeeping - restoring the
+      // session means the host is back). A deliberate "explicit" leave
+      // (chat_unregister) survives and keeps suppressing; rejoining it is
+      // chat_register's job. The clear is here and at the startup-resume
+      // path ONLY - never inside register's tombstone gate, which is the
+      // in-flight-race and deleted-zombie backstop.
+      if (chatOn && chatAutoRegister(loadConfig(dbPath).config) && input.sessionID) {
+        db.clearRejoinableTombstone(input.sessionID);
+      }
       if (
         chatOn &&
         chatAutoRegister(loadConfig(dbPath).config) &&
@@ -2257,7 +2284,7 @@ export async function createRuntime(input: {
                 console.error(`[thatch] watcher death recording on exit failed: ${err}`);
               }
               try {
-                db.unregisterChatSession(sessionID);
+                db.unregisterChatSession(sessionID, "exit");
               } catch (err) {
                 console.error(`[thatch] chat unregister on exit failed: ${err}`);
               }
@@ -2318,9 +2345,11 @@ export async function createRuntime(input: {
               // Machinery marker check first: a plugin-created extraction
               // child whose in-memory mapping was lost (reload/restart
               // window) must not register - and a corpse row an earlier
-              // race did register is deleted here (self-healing).
+              // race did register is deleted here (self-healing). The
+              // tombstone this writes is "deleted" machinery bookkeeping;
+              // the machinery marker keeps the session out regardless.
               if (db.isChatMachinery(sessionID)) {
-                db.unregisterChatSession(sessionID);
+                db.unregisterChatSession(sessionID, "deleted");
                 return;
               }
               const data = await caps.sessionGet(sessionID);
@@ -2467,9 +2496,12 @@ export async function createRuntime(input: {
         watchers.cancelSession(id);
         // Leaving the chat directory is the graceful-exit fast path; a
         // crashed process never fires session.deleted, so the heartbeat
-        // staleness in chat_list is the covering signal for that case.
+        // staleness in chat_list is the covering signal for that case. The
+        // "deleted" tombstone reason keeps a deleted session out of the
+        // roster's auto-register paths, while a resumed subordinate's
+        // rejoin stays possible (the prompt path clears this reason).
         try {
-          db.unregisterChatSession(id);
+          db.unregisterChatSession(id, "deleted");
         } catch (err) {
           console.error(`[thatch] chat unregister on delete failed: ${err}`);
         }

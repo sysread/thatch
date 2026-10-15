@@ -188,6 +188,28 @@ describe("ChatStore via ThatchDB", () => {
     expect(inbox[0].body).toBe("hello");
   });
 
+  test("tombstones record their leave reason; only rejoinable reasons clear", () => {
+    reg("ses_exit", "exitcase");
+    reg("ses_explicit", "explicitcase");
+    reg("ses_deleted", "deletedcase");
+    db.unregisterChatSession("ses_exit", "exit");
+    db.unregisterChatSession("ses_explicit", "explicit");
+    db.unregisterChatSession("ses_deleted", "deleted");
+    // The reason column carries the writer's path.
+    const reasons = raw.query("SELECT session_id, reason FROM chat_leave_tombstones").all() as any[];
+    expect(reasons.find((r) => r.session_id === "ses_exit")?.reason).toBe("exit");
+    expect(reasons.find((r) => r.session_id === "ses_explicit")?.reason).toBe("explicit");
+    expect(reasons.find((r) => r.session_id === "ses_deleted")?.reason).toBe("deleted");
+    // The rejoin clear takes the exit and deleted tombstones, leaves the
+    // explicit one for chat_register.
+    expect(db.clearRejoinableTombstone("ses_exit")).toBe(true);
+    expect(db.clearRejoinableTombstone("ses_deleted")).toBe(true);
+    expect(db.clearRejoinableTombstone("ses_explicit")).toBe(false);
+    expect(db.hasChatLeaveTombstone("ses_exit")).toBe(false);
+    expect(db.hasChatLeaveTombstone("ses_deleted")).toBe(false);
+    expect(db.hasChatLeaveTombstone("ses_explicit")).toBe(true);
+  });
+
   test("send validates endpoints", () => {
     const bob = reg("ses_b", "bob").name;
     reg("ses_a", "alice");

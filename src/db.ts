@@ -6,14 +6,14 @@ import {
   PredictionEngine,
 } from "./prediction";
 import { BehaviorEngine } from "./behavior";
-import { ChatStore, type ChatHostKind, type ChatWorktreeKind } from "./chat";
+import { ChatStore, type ChatHostKind, type ChatWorktreeKind, type LeaveTombstoneReason } from "./chat";
 import { PREDICTION_K, PREDICTION_P0, PREDICTION_W_SOFT } from "./scoring-engine";
 import type { RepoPathCache, RepoPathRow } from "./git";
 
 export { cosineSimilarity } from "./vector-math";
 export type { PredictionNudgeItem, MatcherRow, PredictionRow, ScoredPrediction, PredictionDedupCandidate } from "./prediction";
 export type { BehaviorNudgeItem, BehaviorRow, ScoredBehavior } from "./behavior";
-export type { ChatSessionRow, ChatInboxItem, ChatNotificationRow, ChatWorktreeKind } from "./chat";
+export type { ChatSessionRow, ChatInboxItem, ChatNotificationRow, ChatWorktreeKind, LeaveTombstoneReason } from "./chat";
 
 export interface MemoryRow {
   slug: string;
@@ -391,14 +391,23 @@ export class ThatchDB {
       )
     `);
 
-    // Explicit leaves (chat_unregister). Suppresses auto-registration so
-    // the next idle event cannot silently re-register the session; cleared
-    // when the session explicitly rejoins via chat_register. Survives the
-    // directory-row delete, which is the point.
+    // Leave tombstones. Written on every path that removes a directory row
+    // while the session stays alive; suppresses auto-registration so the
+    // next idle event cannot silently re-register the session. reason
+    // distinguishes the leaves a RESUME may undo from the leaves that
+    // persist: 'exit' (the wrap-up exit's unregister - the host vanished,
+    // so restoring the session rejoins it) clears at the startup-resume and
+    // prompt paths; 'explicit' (the chat_unregister tool - a deliberate
+    // leave) persists until the session explicitly rejoins via
+    // chat_register; 'deleted' (session.deleted bookkeeping - there is no
+    // restore path for a deleted session, and a resumed subordinate's
+    // rejoin is desired). Survives the directory-row delete, which is the
+    // point.
     this.#db.run(`
       CREATE TABLE IF NOT EXISTS chat_leave_tombstones (
         session_id TEXT PRIMARY KEY,
-        left_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+        left_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        reason     TEXT NOT NULL DEFAULT 'explicit'
       )
     `);
 
@@ -457,6 +466,18 @@ export class ThatchDB {
     this.#migrateChatWorktree();
     this.#migrateChatHostPid();
     this.#migrateRuntimeStateDirectory();
+    this.#migrateChatLeaveReason();
+  }
+
+  // chat_leave_tombstones tables created before the reason column lack it;
+  // the ALTER adds it, and existing rows read as explicit (which they were
+  // - every tombstone writer predating the column was a leave that should
+  // persist until an explicit rejoin).
+  #migrateChatLeaveReason(): void {
+    const cols = (this.#db.query("PRAGMA table_info(chat_leave_tombstones)").all() as any[]).map((r) => r.name);
+    if (cols.length > 0 && !cols.includes("reason")) {
+      this.#db.run("ALTER TABLE chat_leave_tombstones ADD COLUMN reason TEXT NOT NULL DEFAULT 'explicit'");
+    }
   }
 
   #migrateRuntimeStateDirectory(): void {
@@ -1079,6 +1100,14 @@ export class ThatchDB {
     return this.#chat.clearLeaveTombstone(sessionID);
   }
 
+  /** Clears the session's tombstone only when the leave was rejoinable
+   *  ("exit"/"deleted"); an "explicit" leave persists. Returns whether it
+   *  cleared. Used by the restore-rejoin call sites (startup resume +
+   *  prompt path), never by the register gate. */
+  clearRejoinableTombstone(sessionID: string) {
+    return this.#chat.clearRejoinableTombstone(sessionID);
+  }
+
   markChatMachinery(sessionID: string, reason: string) {
     return this.#chat.markMachinery(sessionID, reason);
   }
@@ -1122,8 +1151,8 @@ export class ThatchDB {
     return this.#chat.messageFeed();
   }
 
-  unregisterChatSession(sessionID: string) {
-    return this.#chat.unregister(sessionID);
+  unregisterChatSession(sessionID: string, reason: LeaveTombstoneReason = "explicit") {
+    return this.#chat.unregister(sessionID, reason);
   }
 
   /**

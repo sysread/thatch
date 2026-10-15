@@ -150,7 +150,9 @@ Every exit path - `chat_unregister`, `session.deleted`, and a greenlit
 host close-out - v1 publishes `app.exit`, v2 closes the session's own
 tab - so the roster stops advertising a host that is about to vanish)
 - writes a
-`chat_leave_tombstones` row in the same transaction that deletes the
+`chat_leave_tombstones` row (with a `reason` naming the path: `exit` for
+the wrap-up unregister, `explicit` for `chat_unregister`, `deleted` for
+session.deleted) in the same transaction that deletes the
 directory row. The tombstone is what makes a leave stick: all
 registration paths consult it (the plugin's idle and prompt auto-registerers are
 suppressed outright; the MCP hook's ensure-register prints the leave line
@@ -163,6 +165,16 @@ tombstone and stops instead of resurrecting a dead session. An explicit
 assigned identities are never reused), and tombstones age out in the
 hourly prune (7-day TTL; a resumed session after expiry simply
 auto-registers under a fresh name).
+
+Restoring an exited session undoes the leave when the leave was not
+deliberate: the startup resume (`-s`/`-c`) and prompt auto-register
+paths clear `exit` and `deleted` tombstones (the host is back; a resumed
+subordinate's rejoin is desired) and re-register under a fresh name.
+`explicit` tombstones - the `chat_unregister` tool's deliberate leave -
+keep suppressing until an explicit `chat_register`. The clearing happens
+at those two call sites only (`clearRejoinableTombstone`); the register
+gate itself stays reason-blind because it is the in-flight-race and
+deleted-zombie backstop.
 
 Because names are system-minted and never recycled, the impersonation
 surface shrinks to whatever the operator runs: every agent on this machine
