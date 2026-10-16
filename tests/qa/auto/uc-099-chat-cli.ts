@@ -43,6 +43,7 @@ const useCase: UseCase = {
     "5. Run `thatch chat tail --once` and verify every stdout line is one JSON object with event/at/id/from/to/body fields, broadcast copies carry broadcast: true with their real recipient, and already-read messages have a read event linked by id.",
     "6. Verify a departed sender renders as unknown in the tail.",
     "7. Seed 25 numbered filler messages, then run filtered tails: verify --limit line counts and the stderr elision note, ANDed --match, --from name matching, and the --since/--until window.",
+    "8. Run `thatch chat tail --once --pretty --limit all` and verify the pretty cards: header block per message, the broadcast bullhorn, a full-width rule between cards, a read receipt citing its message, and - piped - no ANSI and no JSONL lines.",
   ].join("\n"),
   expected: [
     "- The default roster is open-only: fresh tabbed sessions with a human-readable age, project, and topic; no Stale or Recent section, and tab-less rows collapse into a hidden-count note.",
@@ -51,6 +52,7 @@ const useCase: UseCase = {
     "- The tail is JSONL: one sent event per line with the body verbatim and each participant's topic; via_broadcast rows are one sent event per recipient with broadcast: true.",
     "- A sender whose directory row is gone renders as 'unknown (id, departed)'.",
     "- --limit caps the backlog with an elision note on stderr; --match ANDs; --from/--to match names; --since/--until bound the window.",
+    "- `--pretty` renders the same events as email-style cards: To/From/Subject/Date headers, the topic as subject, a bullhorn in To: for broadcasts, a rule between cards, receipts citing their message; piped output stays plain.",
   ].join("\n"),
 
   async run(ctx: QaContext) {
@@ -282,6 +284,49 @@ const useCase: UseCase = {
     const reads = events.filter((e) => e.event === "read");
     if (reads.length !== 3 || !reads.every((e) => e.reader === "beta-00001" && events.some((s) => s.event === "sent" && s.id === e.id))) {
       console.log(`  FAIL: expected 3 read events by beta linked to sent events, got:\n${JSON.stringify(reads)}`);
+      return "FAIL";
+    }
+
+    // --pretty: the same event stream as email-style cards instead of
+    // JSONL. Piped (non-TTY) output must stay plain - structure without
+    // escape codes - with the header block, the broadcast bullhorn, a
+    // full-width rule between cards, and the read receipt citing its
+    // message. Glow may or may not be installed in the sandbox; bodies
+    // must appear either way (glow renders the markdown, the fallback
+    // wraps it raw).
+    const pretty = await run(["chat", "tail", "--once", "--pretty", "--limit", "all"]);
+    if (pretty.exitCode !== 0) {
+      console.log(`  FAIL: chat tail --pretty exited ${pretty.exitCode}`);
+      return "FAIL";
+    }
+    const prettyText = pretty.stdout.toString();
+    if (prettyText.includes("\x1b[")) {
+      console.log(`  FAIL: --pretty piped output contains ANSI escapes:\n${prettyText}`);
+      return "FAIL";
+    }
+    if (prettyText.split("\n").some((l) => l.startsWith('{"event"'))) {
+      console.log(`  FAIL: --pretty output still carries JSONL lines:\n${prettyText}`);
+      return "FAIL";
+    }
+    for (const needle of [
+      "To: beta-00001",
+      "From: alpha-00001",
+      "Subject: watching CI",
+      "direct ping",
+      "the machine age begins",
+      "\u{1F4E3}",
+    ]) {
+      if (!prettyText.includes(needle)) {
+        console.log(`  FAIL: --pretty output missing "${needle}":\n${prettyText}`);
+        return "FAIL";
+      }
+    }
+    if (!/─{20,}/.test(prettyText)) {
+      console.log(`  FAIL: --pretty output has no card-separating rule:\n${prettyText}`);
+      return "FAIL";
+    }
+    if (!prettyText.includes("beta-00001 read alpha-00001's message (re watching CI: direct ping)")) {
+      console.log(`  FAIL: --pretty read receipt missing or not citing its message:\n${prettyText}`);
       return "FAIL";
     }
 

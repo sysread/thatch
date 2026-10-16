@@ -436,6 +436,10 @@ renders the roster as aligned columns under a header row (TTY-gated
 color; `formatChatRoster()` in `bin/thatch`), and `thatch chat tail`
 follows the message stream as JSONL: one event per line, `sent` and
 `read` as separate events linked by message id, bodies verbatim.
+`--pretty` opt-in renders the same events as email-style cards for
+terminal reading (`createChatTailPretty()` in `src/chat.ts`; glow for
+markdown bodies, TTY-gated color) - the JSONL log stays the default and
+the pipe format.
 The backlog prints only the
 last `CHAT_TAIL_DEFAULT_LIMIT` (20) messages via `chatTailBacklog()`;
 `filterChatTailRows()` narrows every feed snapshot (backlog and follow
@@ -603,12 +607,13 @@ within their clamps - invalid values silently fall back to the default.
   absent-tools note
 - `tests/chat-store.test.ts`, `tests/chat-poller.test.ts`,
   `tests/chat-tail.test.ts`, `tests/chat-echo.test.ts` - store, pool,
-  migration, echo-text, liveness, tail diff/backlog, and poller unit tests
+  migration, echo-text, liveness, tail diff/backlog/pretty, and poller
+  unit tests
   (temp-dir SQLite, injected delivery; shared fixtures in
   `tests/mocks/chat-harness.ts`)
 - `tests/qa/auto/uc-097-chat.ts` - full lifecycle against a mocked poller
 - `tests/qa/auto/uc-099-chat-cli.ts` - `chat list` roster and `chat tail`
-  JSONL contract over a seeded DB
+  JSONL and `--pretty` contracts over a seeded DB
 - `tests/qa/auto/uc-116-chat-send-dedupe.ts` - a retried send is suppressed
 - `tests/qa/auto/uc-119-chat-split-long-messages.ts` - an oversized body is
   auto-split into marker-decorated parts

@@ -11,7 +11,7 @@ import { claudeSessionStartReminder } from "../src/prompts";
 import { setupClaudeCode, setupCursor, setupSkillsOnly, registerClaudeMcpServer, thatchMcpServerEntry, type OtherScopeSkills } from "../src/setup";
 import { installSkills, type InstallReport } from "../src/skills";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
-import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailFilter } from "../src/chat";
+import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, createChatTailPretty, markdownBodyLines, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailFilter, type ChatTailEvent } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
 import { chatNotificationNudge } from "../src/prompts";
 import { chatOpenTabs as chatOpenTabsProvider } from "../src/tab-state";
@@ -81,7 +81,7 @@ function usage(exitCode = 1): never {
                                     --stale adds the stale section: N bounds
                                     it to sessions seen in the last N days
                                     (default 1); all shows every stale one.
-  thatch chat tail [--once] [--limit N|all] [--match RE]
+  thatch chat tail [--once] [--pretty] [--limit N|all] [--match RE]
                    [--from NAME] [--to NAME] [--since DT] [--until DT]
                                    Follow cross-session chat as a JSONL
                                    event log: one line per event, "sent"
@@ -94,6 +94,11 @@ function usage(exitCode = 1): never {
                                    participant names; --since/--until bound
                                    the window ("YYYY-MM-DD [HH:MM]" local
                                    time). Filters apply to follow mode too.
+                                   --pretty renders each event as an
+                                   email-style card for terminal reading
+                                   (markdown bodies through glow when
+                                   installed; color only on a terminal,
+                                   NO_COLOR disables it).
 
 Stores default to the repo detected from git remote. Use "global" for the
 global store. Use "all" with search to search project + global together.`);
@@ -322,6 +327,23 @@ function flagValues(flags: string[], ...names: string[]): string[] {
     }
   }
   return out;
+}
+
+/** Terminal width for `chat tail --pretty`: the real terminal when stdout
+ *  is one, then COLUMNS, then 100 - the same ladder chat-pretty uses. */
+function tailWidth(): number {
+  if (process.stdout.isTTY && typeof process.stdout.columns === "number" && process.stdout.columns > 0) {
+    return process.stdout.columns;
+  }
+  const columns = process.env.COLUMNS;
+  if (columns !== undefined && /^\d+$/.test(columns)) return Number(columns);
+  return 100;
+}
+
+/** Prints one tail event: pretty cards line by line, or the JSONL log. */
+function printTailEvent(pretty: { render(event: ChatTailEvent): string[] } | null, event: ChatTailEvent): void {
+  if (pretty) console.log(pretty.render(event).join("\n"));
+  else console.log(formatChatTailJsonl(event));
 }
 
 function openSessionDb(): SessionDB {
@@ -607,6 +629,18 @@ async function chatCommand(rest: string[]): Promise<void> {
 
     case "tail": {
       const onceOnly = restArgs.includes("--once");
+      // --pretty swaps the JSONL log for email-style cards (see
+      // createChatTailPretty); the JSONL contract is untouched without it.
+      const pretty = restArgs.includes("--pretty")
+        ? createChatTailPretty({
+            width: tailWidth(),
+            // The same color rule as the chat roster: a terminal and no
+            // NO_COLOR. Piped pretty output stays plain so downstream
+            // tools see text, not escape codes.
+            color: process.stdout.isTTY === true && !process.env.NO_COLOR,
+            renderBody: markdownBodyLines,
+          })
+        : null;
       // Parse and validate everything up front: a bad regex or date must
       // fail before any lines print, not mid-follow.
       const matches = flagValues(restArgs, "--match").map((pattern) => {
@@ -688,7 +722,7 @@ async function chatCommand(rest: string[]): Promise<void> {
             `[thatch chat tail] showing last ${backlog.shown} of ${backlog.elided + backlog.shown} messages (--limit N, --limit all)`,
           );
         }
-        for (const event of backlog.events) console.log(formatChatTailJsonl(event));
+        for (const event of backlog.events) printTailEvent(pretty, event);
         if (onceOnly || (filter.untilMs !== null && filter.untilMs <= Date.now())) break;
 
         process.on("SIGINT", () => {
@@ -701,7 +735,7 @@ async function chatCommand(rest: string[]): Promise<void> {
             // Follow polls re-filter the live feed: matching messages
             // surface as they arrive, non-matching ones stay invisible.
             for (const event of chatTailDiff(state, filterChatTailRows(db.chatMessageFeed(), filter)).events) {
-              console.log(formatChatTailJsonl(event));
+              printTailEvent(pretty, event);
             }
           } catch (err) {
             // The surface's whole job is watching a shared, mutable file;

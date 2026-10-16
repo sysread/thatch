@@ -58,6 +58,7 @@ thatch chat tail --once --limit 50   # a longer backlog (or --limit all)
 thatch chat tail --match "rebase" --match "payments"   # body must match both
 thatch chat tail --from al --to bob        # substring match on names
 thatch chat tail --since 2026-09-12 --until "2026-09-13 09:00"   # a window
+thatch chat tail --pretty              # email-style cards instead of JSONL
 ```
 
 `chat list` renders the chat roster in three sections - Active, Recent,
@@ -105,6 +106,17 @@ one-liners:
 thatch chat tail | jq -r '"\(.at) \(.event) \(.from) -> \(.to // .reader): \(.body // "")"'
 thatch chat tail --once --limit all | jq -c 'select(.event == "read")'
 ```
+
+For reading instead of parsing, `--pretty` renders the same events as
+email-style cards: a To / From / Subject / Date header over each
+message, the session topic as the Subject (the join key to the tab
+titles in the TUI), and a full-width rule between messages. Broadcasts
+show a bullhorn in To:. Read receipts render as one-line notes citing
+the message they acknowledge. Message bodies are markdown, and render as markdown when glow or gum
+is installed (plain word-wrapping otherwise).
+Color appears only when the output is a terminal, and `NO_COLOR`
+turns it off; piped output stays plain text. The default without
+`--pretty` is still the JSONL log.
 
 Follow mode runs until Ctrl-C. The backlog includes the `read` event of
 every message already read; in follow mode, reads appear as inboxes

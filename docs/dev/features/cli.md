@@ -21,8 +21,8 @@ The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection, M
 | `flush-predictions [--json]` | none | `--json` | JSON | Standalone prediction-only nudge |
 | `setup --claude [--cursor] [--local\|--global] [--skills-only [dir]] [--mcp-json]` | none | `--claude`, `--cursor`, `--global`, `--local`, `--skills-only [dir]`, `--mcp-json` | none | Install config + instructions + hooks + skills; `--skills-only <dir>` installs into any directory; `--mcp-json` prints the server config as JSON |
 | `session list/get/transcript/search` | per subcommand | `-s/--session`, `--id`, `--after`, `--before`, `--regex`, `--limit` | none | Read-only archaeology on the opencode session database (JSONL output) |
-| `chat list` | none | none | none | Registered chat sessions: name, human-readable age, project, topic |
-| `chat tail` | none | `--once`, `--limit N\|all`, `--match RE` (repeatable), `--from NAME`, `--to NAME`, `--since DT`, `--until DT` | none | Follow cross-session chat: sent and read events. Backlog defaults to the last 20 messages; filters apply to follow mode too. |
+| `chat list` | none | `--recent`, `--stale [N\|all]` | none | Registered chat sessions: name, human-readable age, status, project, topic |
+| `chat tail` | none | `--once`, `--pretty`, `--limit N\|all`, `--match RE` (repeatable), `--from NAME`, `--to NAME`, `--since DT`, `--until DT` | none | Follow cross-session chat: sent and read events as a JSONL log (`--pretty` for email-style cards instead). Backlog defaults to the last 20 messages; filters apply to follow mode too. |
 | (unknown) | none | none | none | Print usage, exit 1 |
 
 ## Global behavior
@@ -78,6 +78,19 @@ Read-only window on the cross-session chat directory ([cross-session-chat.md](cr
   exits; the snapshot includes a `read` event for every shown message
   whose `read_at` is set, sorted by time, so it is the same log a follow
   would have accumulated.
+- `chat tail --pretty` renders the same events as email-style cards for
+  terminal reading instead of the JSONL log (opt-in; the default and the
+  pipe format stay JSONL). The renderer is `createChatTailPretty()` in
+  `src/chat.ts` (stateful: the rule prints only between cards, and read
+  receipts cite the subject and body head of the sent event they
+  follow), with bodies through `markdownBodyLines()` - a fallback chain
+  of markdown renderers: glow (wraps to the card width), then `gum
+  format` (same glamour engine, but no width flag, so long lines do not
+  wrap), then `wrapChatBody()`, the plain word wrap. A missing tool or a
+  failed render steps down silently. Color is the roster's rule (`isTTY && !NO_COLOR`),
+  width is `tailWidth()` (terminal, then `COLUMNS`, then 100); the
+  look is pinned against `~/bin/chat-pretty`, the perl script the flag
+  replaces.
 - The backlog prints only the last `CHAT_TAIL_DEFAULT_LIMIT` (20) messages;
   `chatTailBacklog()` in `src/chat.ts` filters the feed, seeds the diff
   state from every feed row (so the limit hides lines, not history, and a

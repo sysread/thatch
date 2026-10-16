@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { chatTailDiff, formatChatTailJsonl, parseChatTimeBound, filterChatTailRows, chatTailBacklog, type ChatTailRow, type ChatTailFilter } from "../src/chat";
+import { chatTailDiff, formatChatTailJsonl, parseChatTimeBound, filterChatTailRows, chatTailBacklog, createChatTailPretty, createMarkdownBodyRenderer, markdownBodyLines, wrapChatBody, type ChatTailRow, type ChatTailFilter, type ChatTailEvent } from "../src/chat";
 
 /** Shared ChatTailRow factory for the tail test blocks: a direct message
  *  from alice to bob, with every field overridable. */
@@ -269,5 +269,173 @@ describe("chat tail backlog", () => {
     );
     const events = chatTailDiff(state, poll).events;
     expect(events.map((e) => (e.event === "sent" ? e.body : null))).toEqual(["direct hit"]);
+  });
+});
+
+describe("chat tail pretty rendering", () => {
+  const sent = (over: Partial<Extract<ChatTailEvent, { event: "sent" }>> & { id: number }): Extract<ChatTailEvent, { event: "sent" }> => ({
+    event: "sent",
+    at: "2026-09-12T10:00:00Z",
+    from: "alice",
+    from_topic: null,
+    to: "bob",
+    to_topic: null,
+    broadcast: false,
+    body: "hello",
+    ...over,
+  });
+  const read = (over: Partial<Extract<ChatTailEvent, { event: "read" }>> & { id: number }): Extract<ChatTailEvent, { event: "read" }> => ({
+    event: "read",
+    at: "2026-09-12T10:05:00Z",
+    reader: "bob",
+    reader_topic: null,
+    from: "alice",
+    from_topic: null,
+    ...over,
+  });
+  const plain = (width = 100) => createChatTailPretty({ width, color: false });
+
+  // The expected Date-field string, built independently of the renderer:
+  // the UTC event time shown in the terminal's local zone, "%a %b %d %H:%M".
+  const expectedLocal = (at: string): string => {
+    const d = new Date(at);
+    const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
+    const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()];
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${day} ${month} ${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  test("a sent card renders pine-style headers with the topic as subject, no rule before the first card", () => {
+    const lines = plain().render(sent({ id: 1, from_topic: "watching CI" }));
+    expect(lines).toEqual([
+      "     To: bob",
+      "   From: alice",
+      "Subject: watching CI",
+      `   Date: ${expectedLocal("2026-09-12T10:00:00Z")}`,
+      "",
+      "hello",
+      "",
+    ]);
+  });
+
+  test("a rule separates cards: the second card opens with a full-width rule and blank line", () => {
+    const r = plain(40);
+    r.render(sent({ id: 1 }));
+    const second = r.render(sent({ id: 2, body: "again" }));
+    expect(second.slice(0, 3)).toEqual(["\u2500".repeat(40), "", "     To: bob"]);
+  });
+
+  test("a broadcast renders the bullhorn in To:, keeping the real recipient in the event only", () => {
+    const lines = plain().render(sent({ id: 1, broadcast: true, to: "carol" }));
+    expect(lines[0]).toBe("     To: \u{1F4E3}");
+  });
+
+  test("the subject falls back to the recipient's topic, then to (no subject)", () => {
+    expect(plain().render(sent({ id: 1, from_topic: null, to_topic: "plotting rebase" }))[2]).toBe("Subject: plotting rebase");
+    expect(plain().render(sent({ id: 2 }))[2]).toBe("Subject: (no subject)");
+  });
+
+  test("a read receipt is a one-line card citing the message's subject and body head", () => {
+    const r = plain();
+    r.render(sent({ id: 7, from_topic: "watching CI", body: "CI is green\nsecond line" }));
+    const lines = r.render(read({ id: 7 }));
+    expect(lines).toEqual([
+      "\u2500".repeat(100),
+      "",
+      `${expectedLocal("2026-09-12T10:05:00Z")} bob read alice's message (re watching CI: CI is green)`,
+      "",
+    ]);
+  });
+
+  test("a receipt for a message outside the render window omits the citation", () => {
+    const r = plain();
+    r.render(sent({ id: 1 }));
+    const lines = r.render(read({ id: 404 }));
+    expect(lines).toEqual(["\u2500".repeat(100), "", `${expectedLocal("2026-09-12T10:05:00Z")} bob read alice's message`, ""]);
+  });
+
+  test("a long receipt subject is clipped with an ellipsis", () => {
+    const r = plain();
+    r.render(sent({ id: 8, from_topic: "w".repeat(30), body: "hello" }));
+    const line = r.render(read({ id: 8 }))[2];
+    // 25 cells of clipped subject plus the ellipsis, then the body head.
+    expect(line).toBe(`${expectedLocal("2026-09-12T10:05:00Z")} bob read alice's message (re ${"w".repeat(25)}\u2026: hello)`);
+  });
+
+  test("color mode wraps labels inverted and values green; the rule is green", () => {
+    const r = createChatTailPretty({ width: 40, color: true });
+    const lines = r.render(sent({ id: 1, from_topic: "watching CI" }));
+    expect(lines[0]).toBe(`     \x1b[102;30mTo:\x1b[0m \x1b[92mbob\x1b[0m`);
+    expect(lines[1]).toBe(`   \x1b[102;30mFrom:\x1b[0m \x1b[92malice\x1b[0m`);
+    expect(lines[2]).toBe(`\x1b[102;30mSubject:\x1b[0m \x1b[92mwatching CI\x1b[0m`);
+    const sep = r.render(sent({ id: 2 }))[0];
+    expect(sep).toBe(`\x1b[92m${"\u2500".repeat(40)}\x1b[0m`);
+  });
+
+  test("a colored receipt keeps names green inside the bright-black status line", () => {
+    const r = createChatTailPretty({ width: 100, color: true });
+    r.render(sent({ id: 7, from_topic: "watching CI" }));
+    const line = r.render(read({ id: 7 }))[2];
+    expect(line.startsWith(`\x1b[90;3m${expectedLocal("2026-09-12T10:05:00Z")} \x1b[0m\x1b[92mbob\x1b[0m\x1b[90;3m read \x1b[0m`)).toBe(true);
+  });
+
+  test("plain rendering emits no ANSI anywhere", () => {
+    const r = plain();
+    const out = [...r.render(sent({ id: 1, body: "**bold** markdown stays as written" })), ...r.render(read({ id: 1 }))].join("\n");
+    expect(out.includes("\x1b")).toBe(false);
+  });
+});
+
+describe("chat tail body wrapping", () => {
+  test("long lines wrap to the width; short lines pass through; paragraphs split on newlines", () => {
+    const long = Array.from({ length: 12 }, (_, i) => `word${i}`).join(" ");
+    const lines = wrapChatBody(`short\n${long}`, 20);
+    expect(lines[0]).toBe("short");
+    expect(lines.slice(1).every((l) => l.length <= 20)).toBe(true);
+    expect(lines.slice(1).join(" ")).toBe(long);
+  });
+
+  test("a single word longer than the width stays on its own line", () => {
+    expect(wrapChatBody("x".repeat(30), 10)).toEqual(["x".repeat(30)]);
+  });
+
+  test("the color path italicizes each wrapped line", () => {
+    expect(wrapChatBody("hello world", 5, true)).toEqual(["\x1b[3mhello\x1b[0m", "\x1b[3mworld\x1b[0m"]);
+  });
+});
+
+describe("chat tail markdown body rendering", () => {
+  test("with glow installed, markdown bodies render (markup consumed, plain mode emits no ANSI)", () => {
+    if (Bun.which("glow") === null) return; // glow is optional; the chain moves on
+    const lines = markdownBodyLines("**hold off** on deploys", 100, false);
+    expect(lines.join("\n")).toContain("hold off on deploys");
+    expect(lines.join("\n").includes("**")).toBe(false);
+    expect(lines.join("\n").includes("\x1b")).toBe(false);
+  });
+
+  test("with gum installed (and glow absent), gum format takes the middle step", () => {
+    const gum = Bun.which("gum");
+    if (gum === null) return; // gum is optional; the plain wrap covers the rest
+    const lines = createMarkdownBodyRenderer({ glow: null, gum })("**hold off** on deploys", 100, false);
+    expect(lines.join("\n")).toContain("hold off on deploys");
+    expect(lines.join("\n").includes("**")).toBe(false);
+    expect(lines.join("\n").includes("\x1b")).toBe(false);
+  });
+
+  test("color mode rides CLICOLOR_FORCE through the non-TTY stdout (gum path)", () => {
+    const gum = Bun.which("gum");
+    if (gum === null) return;
+    const out = createMarkdownBodyRenderer({ glow: null, gum })("**bold** move", 100, true).join("\n");
+    // The SGR codes split the words, so assert words and styling apart.
+    expect(out.includes("bold")).toBe(true);
+    expect(out.includes("move")).toBe(true);
+    expect(out.includes("**")).toBe(false);
+    expect(out.includes("\x1b[")).toBe(true);
+  });
+
+  test("with neither renderer available, the body falls back to the plain word wrap", () => {
+    expect(createMarkdownBodyRenderer({ glow: null, gum: null })("wrap me because this line is much longer than ten cells", 10, false)).toEqual(
+      wrapChatBody("wrap me because this line is much longer than ten cells", 10, false),
+    );
   });
 });

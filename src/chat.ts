@@ -1,5 +1,7 @@
 import type { Database } from "bun:sqlite";
-import { openSync, readSync, closeSync, readdirSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { openSync, readSync, closeSync, readdirSync, statSync, mkdtempSync, writeFileSync, readFileSync, accessSync, constants } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { CHAT_NAME_POOL } from "./chat-names";
 
@@ -1651,6 +1653,370 @@ export function chatTailBacklog(
  */
 export function formatChatTailJsonl(event: ChatTailEvent): string {
   return JSON.stringify(event);
+}
+
+// ---------------------------------------------------------------------------
+// Tail pretty rendering (--pretty): the human-facing mode of the same
+// event stream. The JSONL log above stays the default and the pipe format;
+// --pretty is opt-in for terminal eyes.
+// ---------------------------------------------------------------------------
+
+/**
+ * Renders one message body into terminal lines. The CLI injects the
+ * glow-backed markdown renderer (glowBodyLines); the plain word wrap is
+ * both the default (so unit tests need no subprocess) and glow's fallback.
+ */
+export type ChatTailBodyRenderer = (body: string, width: number, color: boolean) => string[];
+
+/** The --pretty render options. `color` is the caller's decision (TTY and
+ *  NO_COLOR, the same rule as the chat roster); `width` bounds all wrapping
+ *  and the separator rule. */
+export interface ChatTailPrettyOptions {
+  width: number;
+  color: boolean;
+  renderBody?: ChatTailBodyRenderer;
+}
+
+/**
+ * Builds the stateful pretty renderer behind `thatch chat tail --pretty`.
+ * Each render() call consumes one tail event and returns the card's lines
+ * (the caller prints them, one console.log per line). The look is pine's
+ * message reader: right-aligned header fields (To / From / Subject / Date)
+ * over the body, a full-width rule separating cards, broadcasts marked
+ * with a bullhorn in To:, and read receipts as one-line status notes
+ * citing the message they acknowledge. The Subject is the sender's topic
+ * (falling back to the recipient's), the join key to the TUI tab titles.
+ *
+ * State spans events: the rule prints only between cards (never before
+ * the first), and a receipt cites its message's subject and body head,
+ * so the renderer remembers every sent event it has seen. Receipts for
+ * messages outside the render window just omit the citation.
+ */
+export function createChatTailPretty(options: ChatTailPrettyOptions) {
+  const { width, color } = options;
+  const renderBody = options.renderBody ?? wrapChatBody;
+  const reset = color ? "\x1b[0m" : "";
+  // Inverted-color header labels: solid bright-green background, black text.
+  const lbl = color ? "\x1b[102;30m" : "";
+  // Field values: bright green.
+  const val = color ? "\x1b[92m" : "";
+  // Read-receipt lines: bright black italic, names stay green inside.
+  const stat = color ? "\x1b[90;3m" : "";
+  // The separator: a continuous rule spanning the full terminal width.
+  // Box-drawing U+2500 reads as a line in both color and plain mode, where
+  // ASCII dashes read as dashes; it is East-Asian-Ambiguous width, narrow
+  // (1 cell) in Western terminals, which is the assumption chatVwidth
+  // makes everywhere else too.
+  const hr = val + "\u2500".repeat(Math.max(width, 1)) + reset;
+  const bullhorn = "\u{1F4E3}"; // broadcast marker, 2 terminal cells wide
+
+  let shownAny = false;
+  const sentSeen = new Map<number, { subject: string; head: string }>();
+
+  // One right-aligned header row: padded label in an inverted-color block,
+  // then the value. "Subject" is the longest label and sets the column.
+  const headerField = (label: string, value: string): string =>
+    " ".repeat(7 - label.length) + `${lbl}${label}:${reset} ${value}`;
+
+  function render(event: ChatTailEvent): string[] {
+    if (event.event === "read") return renderRead(event);
+    return renderSent(event);
+  }
+
+  function renderSent(event: Extract<ChatTailEvent, { event: "sent" }>): string[] {
+    const lines: string[] = [];
+    lines.push(...separator());
+    const dt = tailLocalTime(event.at);
+    const from = event.from ?? "(unknown)";
+    // The subject is the sender's topic when set, else the recipient's;
+    // both can be null (a session registered without a title).
+    const topicSrc = event.from_topic ? event.from_topic : (event.to_topic ?? "");
+    const topic = clipTopic(topicSrc, width - 10);
+    const to = event.broadcast ? val + bullhorn + reset : val + (event.to ?? "(unknown)") + reset;
+    const subject = val + (topic !== "" ? topic : "(no subject)") + reset;
+    lines.push(
+      headerField("To", to),
+      headerField("From", val + from + reset),
+      headerField("Subject", subject),
+      headerField("Date", val + dt + reset),
+      "",
+    );
+    lines.push(...renderBody(event.body ?? "", width, color), "");
+    // Remember the message so a later read receipt can cite it.
+    if (event.id !== undefined) {
+      sentSeen.set(event.id, { subject: topic !== "" ? topic : "(no subject)", head: bodyHead(event.body ?? "") });
+    }
+    return lines;
+  }
+
+  // A one-line italic status card: who read whose message, citing its
+  // subject and the head of its body (both carried by the earlier sent
+  // event; receipts for messages outside the render window just omit
+  // the citation). Names stay green inside the bright-black line.
+  function renderRead(event: Extract<ChatTailEvent, { event: "read" }>): string[] {
+    const lines: string[] = [];
+    lines.push(...separator());
+    const dt = tailLocalTime(event.at);
+    const reader = event.reader ?? "(unknown)";
+    const from = event.from ?? "(unknown)";
+    let line = color
+      ? `${stat}${dt} ${reset}${val}${reader}${reset}${stat} read ${reset}${val}${from}${reset}${stat}'s message`
+      : `${dt} ${reader} read ${from}'s message`;
+    const info = event.id !== undefined ? sentSeen.get(event.id) : undefined;
+    if (info) {
+      const base = `${dt} ${reader} read ${from}'s message`;
+      const avail = width - chatVwidth(base) - 3;
+      const subj = clipTopic(info.subject, 24);
+      const headBudget = avail - 3 - chatVwidth(subj) - 2; // "re " + ": "
+      if (headBudget >= 10) {
+        line += `${stat} (re ${subj}: ${clipTopic(info.head, headBudget)})${reset}`;
+      } else if (3 + chatVwidth(subj) <= avail) {
+        line += `${stat} (re ${subj})${reset}`;
+      }
+    }
+    lines.push(line + reset, "");
+    return lines;
+  }
+
+  // The rule prints before every card except the first.
+  function separator(): string[] {
+    const first = !shownAny;
+    shownAny = true;
+    return first ? [] : [hr, ""];
+  }
+
+  return { render };
+}
+
+/** First line of a body, whitespace-collapsed, for citation in receipts. */
+function bodyHead(body: string): string {
+  return (body.split("\n")[0] ?? "").replace(/\s+/g, " ");
+}
+
+/** Word-truncate a session topic to max display cells with an ellipsis.
+ *  Operates on code points, so astral characters (emoji in titles) cut
+ *  cleanly. */
+function clipTopic(t: string | null | undefined, max: number): string {
+  if (t === undefined || t === null || t === "") return "";
+  if (chatVwidth(t) > max) {
+    const cut = Array.from(t)
+      .slice(0, max + 1)
+      .join("")
+      .replace(/\s+\S*$/, ""); // drop the partial word the cut landed in
+    return cut + "\u2026";
+  }
+  return t;
+}
+
+/** Display-cell width of a string (wide east-asian and emoji code points
+ *  count as 2). The renderer puts only the bullhorn in a prefix, but
+ *  session topics and bodies come from other sessions and can hold
+ *  anything. */
+function chatVwidth(s: string): number {
+  let w = 0;
+  for (const ch of s) w += (ch.codePointAt(0) ?? 0) >= 0x1f000 ? 2 : 1;
+  return w;
+}
+
+/** UTC ISO timestamp -> local "Fri Oct 16 11:40" for the Date field. */
+function tailLocalTime(at: string | undefined): string {
+  const m = at !== undefined ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(at) : null;
+  if (m) {
+    const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6])));
+    if (!Number.isNaN(d.getTime())) {
+      const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
+      const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()];
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return `${day} ${month} ${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+  }
+  return "(unknown time)";
+}
+
+/** Greedy word wrap: the last step of the markdown chain (after glow and
+ *  gum). Each body line wraps independently; a line that fits passes
+ *  through. */
+export function wrapChatBody(text: string, w: number, color = false): string[] {
+  const ital = color ? "\x1b[3m" : "";
+  const reset = color ? "\x1b[0m" : "";
+  const out: string[] = [];
+  for (const para of text.split("\n")) {
+    if (chatVwidth(para) <= w) {
+      out.push(para);
+      continue;
+    }
+    let line = "";
+    for (const word of para.split(/\s+/)) {
+      if (line !== "" && chatVwidth(line) + 1 + chatVwidth(word) > w) {
+        out.push(line);
+        line = word;
+      } else {
+        line = line === "" ? word : `${line} ${word}`;
+      }
+    }
+    if (line !== "") out.push(line);
+  }
+  return color ? out.map((l) => `${ital}${l}${reset}`) : out;
+}
+
+// --- markdown rendering for --pretty bodies ---
+
+/**
+ * Renders one message body into terminal lines through the best
+ * markdown renderer available. Bodies are chat text that often IS
+ * markdown (other sessions' prose), so the pretty mode renders it rather
+ * than displaying the markup. The fallback chain: glow (wraps to the
+ * card width), then gum format (same glamour engine, but no width flag -
+ * long lines do not wrap), then the plain word wrap. Every step degrades
+ * silently; a missing tool or a failed render just means the next step.
+ * Tests pin the chain order through createMarkdownBodyRenderer, which
+ * takes the resolved tool paths; this entry scans PATH.
+ */
+export function markdownBodyLines(body: string, width: number, color: boolean): string[] {
+  return createMarkdownBodyRenderer({ glow: findOnPath("glow"), gum: findOnPath("gum") })(body, width, color);
+}
+
+/** Builds the body renderer with explicit tool locations (null = not
+ *  installed), so tests can pin the fallback order without PATH games. */
+export function createMarkdownBodyRenderer(tools: { glow: string | null; gum: string | null }): ChatTailBodyRenderer {
+  return (body, width, color) => {
+    if (tools.glow !== null) {
+      try {
+        const lines = runGlow(tools.glow, body, width, color);
+        if (lines.length > 0) return lines;
+      } catch {
+        // Fall through to gum.
+      }
+    }
+    if (tools.gum !== null) {
+      try {
+        const lines = runGum(tools.gum, body, color);
+        if (lines.length > 0) return lines;
+      } catch {
+        // Fall through to the plain wrap.
+      }
+    }
+    return wrapChatBody(body, width, color);
+  };
+}
+
+// One temp dir per process holds the style files and the per-render body
+// and output files. Files are rewritten in place per render; the dir is
+// left for the OS tmp cleaner (no exit hook from a library module).
+let renderTempDir: string | null = null;
+let glowStylePaths: { styled: string; plain: string } | null = null;
+let glowBodyFile: string | null = null;
+let renderOutFile: string | null = null;
+
+function ensureRenderTemp(): void {
+  if (renderTempDir !== null) return;
+  renderTempDir = mkdtempSync(join(tmpdir(), "thatch-chat-tail-"));
+  glowStylePaths = {
+    styled: join(renderTempDir, "style-styled.json"),
+    plain: join(renderTempDir, "style-plain.json"),
+  };
+  writeFileSync(glowStylePaths.styled, JSON.stringify(glowStyleObject(false)));
+  writeFileSync(glowStylePaths.plain, JSON.stringify(glowStyleObject(true)));
+  glowBodyFile = join(renderTempDir, "body.md");
+  renderOutFile = join(renderTempDir, "rendered.txt");
+}
+
+function runGlow(glow: string, body: string, width: number, color: boolean): string[] {
+  ensureRenderTemp();
+  writeFileSync(glowBodyFile!, body, "utf8");
+  const out = openSync(renderOutFile!, "w");
+  try {
+    const res = spawnSync(glow, ["-s", color ? glowStylePaths!.styled : glowStylePaths!.plain, "-w", String(width), glowBodyFile!], {
+      env: { ...process.env, TERM: "dumb" },
+      stdio: ["ignore", out, "ignore"],
+    });
+    if (res.error || res.status !== 0) throw new Error(`glow exited ${res.status ?? "with error"}`);
+  } finally {
+    closeSync(out);
+  }
+  return cleanRenderedLines(readFileSync(renderOutFile!, "utf8"));
+}
+
+/**
+ * The gum fallback: `gum format` speaks the same glamour markdown. It has
+ * no width flag, so long lines pass through unwrapped - the trade for
+ * keeping markdown semantics when glow is absent. Styling cannot be
+ * forced through a pipe by a flag; CLICOLOR_FORCE=1 (termenv) is what
+ * makes color survive the non-TTY stdout, and with color off the pipe
+ * detection strips styling on its own. The `notty` theme is NOT the plain
+ * mode here: it passes markup through raw instead of rendering structure.
+ * The body rides in on stdin; stdout is captured through a file fd so a
+ * controlling terminal cannot be probed.
+ */
+function runGum(gum: string, body: string, color: boolean): string[] {
+  ensureRenderTemp();
+  const out = openSync(renderOutFile!, "w");
+  try {
+    const res = spawnSync(gum, ["format"], {
+      input: body,
+      env: color ? { ...process.env, CLICOLOR_FORCE: "1" } : process.env,
+      stdio: ["pipe", out, "ignore"],
+    });
+    if (res.error || res.status !== 0) throw new Error(`gum exited ${res.status ?? "with error"}`);
+  } finally {
+    closeSync(out);
+  }
+  return cleanRenderedLines(readFileSync(renderOutFile!, "utf8"));
+}
+
+/** Shared renderer post-processing: strip terminal queries (background
+ *  color and cursor-position probes; SGR styling and OSC-8 hyperlinks are
+ *  kept), the renderer's styled-space line padding, and the surrounding
+ *  blank lines. */
+function cleanRenderedLines(rendered: string): string[] {
+  const stripped = rendered.replace(/\x1b\]1[01];[^\x07\x1b]*(?:\x07|\x1b\\)/g, "").replace(/\x1b\[6n/g, "");
+  const lines = stripped.split("\n").map((l) => l.replace(/(?:\x1b\[[0-9;]*m \x1b\[m)+\s*$/, "").replace(/\s+$/, ""));
+  while (lines.length > 0 && lines[0].trim() === "") lines.shift();
+  while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
+  return lines;
+}
+
+/** Scans PATH for an executable tool by name. */
+function findOnPath(name: string): string | null {
+  for (const dir of (process.env.PATH ?? "").split(":")) {
+    if (dir === "") continue;
+    const p = join(dir, name);
+    try {
+      accessSync(p, constants.X_OK);
+      return p;
+    } catch {
+      // Keep scanning.
+    }
+  }
+  return null;
+}
+
+/** The glamour style driving glow: a calm terminal palette for color mode,
+ *  and a style with every attribute dropped for plain mode - the same
+ *  wrapping and structure, no escape codes. */
+function glowStyleObject(plain: boolean): Record<string, unknown> {
+  const base = plain ? {} : { color: "252", italic: true };
+  const head = plain ? {} : { bold: true, color: "39", italic: false };
+  const code = plain ? {} : { color: "203", background_color: "236" };
+  return {
+    document: { ...base, block_prefix: "", block_suffix: "", margin: 0 },
+    paragraph: { ...base },
+    strong: plain ? {} : { bold: true, color: "15" },
+    emph: { ...base },
+    code: { ...code },
+    code_block: plain ? {} : { color: "245", italic: false },
+    h1: { ...head },
+    h2: { ...head },
+    h3: plain ? {} : { bold: true, color: "75", italic: false },
+    h4: { ...head },
+    h5: plain ? {} : { bold: true, color: "117", italic: false },
+    h6: { ...head },
+    item: plain ? { block_prefix: "- " } : { block_prefix: "\u2022 " },
+    enumeration: plain ? {} : { color: "75" },
+    link: plain ? {} : { color: "75", underline: true },
+    link_text: plain ? {} : { bold: true, color: "75" },
+    blockquote: { indent: 2, indent_token: "| " },
+  };
 }
 
 // ---------------------------------------------------------------------------
