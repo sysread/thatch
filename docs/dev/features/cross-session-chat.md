@@ -199,9 +199,26 @@ with the roster already in hand.
 `chat_send` addresses a recipient by display name or session ID. Both
 endpoints must be registered and distinct. `chat_read` drains the calling
 session's inbox oldest-first and stamps rows read. Message history survives
-unregistration; a departed sender degrades to an unknown name in the
-reader's view (the endpoints are deliberately not foreign keys - leaving the
-directory must not be blocked by history).
+unregistration: each row snapshots the sender's and recipient's roster
+names at send time (`from_name`/`to_name`), so a departed sender renders
+under the name it sent with, not "unknown". Names are never reused or
+reassigned, so a name captured at send time cannot go stale the way a
+cache would. Rendering prefers the snapshot. Rows without one (legacy
+rows, sent before the columns existed) fall back to the live roster
+join. Only a departed participant with no snapshot degrades to the
+`unknown (id, departed)` convention. The endpoints are
+deliberately not foreign keys - leaving the directory must not be blocked
+by history.
+
+Two consequences follow. A departed sender with a snapshot is
+indistinguishable from a live one in `chat_read`, the tail, and wake
+prompts; only chat_list still shows that the sender left. And a lost
+name-claim race (a reclaim insert colliding with a taken name) mints a
+fresh name, so one session's history can mix two names: rows sent before
+the race carry the old name in their snapshot; rows sent after it carry
+the new name. A legacy row sent after the race has no snapshot, so it
+renders the live name. Both are correct under the immutability rule;
+neither is a sync bug to fix.
 
 Bodies over the part budget are not refused: `splitChatBody` (src/chat.ts)
 auto-splits them into parts, and the first part is prefixed "(message 1 of

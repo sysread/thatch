@@ -133,8 +133,10 @@ too, so a filtered tail keeps watching the same way:
 - `--match PATTERN` filters message bodies. Repeat it to AND patterns
   together: every one must match the message body.
 - `--from NAME` and `--to NAME` match participant names (case doesn't
-  matter). A departed sender can only be found as the `unknown`
-  rendering the tail shows. Broadcast events carry their real recipient,
+  matter). Names are snapshotted when a message is sent, so a departed
+  sender is still found under the name it sent with. Only rows sent
+  before name snapshots existed appear as the `unknown` rendering.
+  Broadcast events carry their real recipient,
   so `--to <name>` finds the fan-out copies that reached them.
 - `--since DT` and `--until DT` bound the window; a message counts if
   it was sent at or after `--since` and before `--until`. The date

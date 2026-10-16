@@ -210,13 +210,25 @@ describe("ChatPoller", () => {
     expect(deliveries[0].count).toBe(3);
   });
 
-  test("a departed sender renders as unknown in the wake prompt", async () => {
+  test("a departed sender renders under its snapshotted name in the wake prompt", async () => {
     db.sendChatMessage("ses_a", "bob-00001", "from a sender about to leave");
     db.unregisterChatSession("ses_a");
     gateOpen = true;
     await poller.deliverPending();
-    // Same convention chat_read uses: the directory row is gone, so the
-    // sender is unknown, not merely unnamed.
+    // The send captured the sender's name on the row, and names are never
+    // reassigned - the name survives the directory row disappearing.
+    const last = deliveries[deliveries.length - 1];
+    expect(last.senders).toEqual(["alice-00001"]);
+  });
+
+  test("a legacy NULL-snapshot row from a departed sender still renders unknown", async () => {
+    // Fixture surgery: a row written before the snapshot columns existed.
+    raw.run("INSERT INTO chat_messages (from_session, to_session, body) VALUES ('ses_a', 'ses_b', 'legacy')");
+    db.unregisterChatSession("ses_a");
+    gateOpen = true;
+    await poller.deliverPending();
+    // No snapshot and no roster row: the shared unknown convention is the
+    // last fallback, same as chat_read.
     const last = deliveries[deliveries.length - 1];
     expect(last.senders).toEqual([`unknown (${"ses_a".slice(0, 12)}, departed)`]);
   });

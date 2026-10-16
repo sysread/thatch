@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { nowIso, isoMinutesAgo as cutoffAgo, NAME_CHARSET, slugifyTitle, isDefaultSessionTitle, humanAge } from "../src/chat";
+import { nowIso, isoMinutesAgo as cutoffAgo, NAME_CHARSET, slugifyTitle, isDefaultSessionTitle, humanAge, renderChatParticipant } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { TOOL_DEFS } from "../src/tool-defs";
 import { makeChatDbFixture, disposeChatDbFixture, makeReg } from "./mocks/chat-harness";
@@ -178,14 +178,80 @@ describe("ChatStore via ThatchDB", () => {
     const alice = reg("ses_a", "alice").name;
     const bob = reg("ses_b", "bob").name;
     db.sendChatMessage("ses_a", bob, "hello");
-    expect(db.unregisterChatSession("ses_a")).toBe(true);
+    db.unregisterChatSession("ses_a");
     expect(db.unregisterChatSession("ses_a")).toBe(false);
     expect(db.findChatSession(alice)).toBeNull();
-    // The message survives as history; the sender degrades to unknown.
+    // The message survives as history, and the sender's name rides on the
+    // row: the send-time snapshot is immune to the later unregister.
     const inbox = db.readChatMessages("ses_b");
     expect(inbox.length).toBe(1);
-    expect(inbox[0].from_name).toBeNull();
+    expect(inbox[0].from_name).toBe(alice);
     expect(inbox[0].body).toBe("hello");
+  });
+
+  test("sends snapshot both participants' names onto the message row", () => {
+    const alice = reg("ses_a", "alice").name;
+    const bob = reg("ses_b", "bob").name;
+    db.sendChatMessage("ses_a", bob, "hello");
+    const row = raw.query("SELECT from_name, to_name FROM chat_messages").get() as any;
+    expect(row.from_name).toBe(alice);
+    expect(row.to_name).toBe(bob);
+  });
+
+  test("a broadcast row snapshots the sender and its real recipient", () => {
+    const alice = reg("ses_a", "alice").name;
+    reg("ses_b", "bob");
+    reg("ses_c", "carol");
+    db.broadcastChatMessage("ses_a", "heads up");
+    const rows = raw.query("SELECT from_name, to_name FROM chat_messages").all() as any[];
+    expect(rows.length).toBe(2);
+    expect(rows.every((r) => r.from_name === alice)).toBe(true);
+    expect(rows.map((r) => r.to_name).sort()).toEqual(["bob-00001", "carol-00001"]);
+  });
+
+  test("legacy rows without a snapshot resolve through the live join, then the unknown fallback", () => {
+    const alice = reg("ses_a", "alice").name;
+    // Rows written before the snapshot columns existed carry NULL names.
+    // Sender still registered: the live roster join supplies the name.
+    raw.run("INSERT INTO chat_messages (from_session, to_session, body) VALUES ('ses_a', 'ses_b', 'legacy live')");
+    // Sender gone and never snapshotted: nothing resolves, so rendering
+    // degrades to the shared unknown-departed convention.
+    raw.run("INSERT INTO chat_messages (from_session, to_session, body) VALUES ('ses_ghost', 'ses_b', 'legacy departed')");
+    const inbox = db.readChatMessages("ses_b");
+    expect(inbox.length).toBe(2);
+    const live = inbox.find((m) => m.body === "legacy live")!;
+    expect(live.from_name).toBe(alice);
+    const departed = inbox.find((m) => m.body === "legacy departed")!;
+    expect(departed.from_name).toBeNull();
+    expect(renderChatParticipant(departed.from_name, departed.from_session)).toBe(
+      `unknown (${departed.from_session.slice(0, 12)}, departed)`,
+    );
+  });
+
+  test("messageById prefers the snapshot and falls back like read does", () => {
+    // The chat_read paging path (tool-defs chat_read --message) reads one
+    // row by id through messageById; its COALESCE chain must match read()'s:
+    // snapshot first, live join for legacy rows, null for a departed sender.
+    const alice = reg("ses_a", "alice").name;
+    reg("ses_b", "bob");
+    db.sendChatMessage("ses_a", "bob-00001", "snapshotted");
+    const snapshotted = raw.query("SELECT id FROM chat_messages WHERE body = 'snapshotted'").get() as any;
+    // Legacy row: same shape a pre-snapshot build left behind.
+    raw.run("INSERT INTO chat_messages (from_session, to_session, body) VALUES ('ses_a', 'ses_b', 'legacy')");
+    const legacyId = (raw.query("SELECT id FROM chat_messages WHERE body = 'legacy'").get() as any).id;
+
+    db.unregisterChatSession("ses_a", "explicit");
+
+    // The snapshotted row still renders the sender's name after departure.
+    const snap = db.chatMessageById("ses_b", snapshotted.id);
+    expect(snap).not.toBeNull();
+    expect(snap!.from_name).toBe(alice);
+    // The legacy row has no snapshot and no roster row: nothing resolves.
+    const legacy = db.chatMessageById("ses_b", legacyId);
+    expect(legacy).not.toBeNull();
+    expect(legacy!.from_name).toBeNull();
+    // Wrong-recipient reads stay rejected (the id is scoped to the inbox).
+    expect(db.chatMessageById("ses_a", legacyId)).toBeNull();
   });
 
   test("tombstones record their leave reason; only rejoinable reasons clear", () => {
@@ -489,6 +555,60 @@ describe("chat name-collation migration", () => {
     db = new ThatchDB(dbPath);
     // 2 migrated survivors + the assigned ses_new row.
     expect(db.listChatSessions().length).toBe(3);
+  });
+});
+
+describe("chat message name-snapshot migration", () => {
+  test("a pre-snapshot chat_messages table gains the columns and old rows read", () => {
+    // A database written by a pre-snapshot build carries chat_messages
+    // without from_name/to_name. Opening it must add the columns (the
+    // compat surface for every installed user's thatch.db), keep the old
+    // rows NULL, and render them through the live-join fallback.
+    db.close();
+    raw.close();
+    rmSync(dbDir, { recursive: true, force: true });
+    dbDir = mkdtempSync(join(tmpdir(), "thatch-chat-mig-"));
+    dbPath = join(dbDir, "test.db");
+    const legacy = new Database(dbPath);
+    legacy.run(`
+      CREATE TABLE chat_messages (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_session  TEXT NOT NULL,
+        to_session    TEXT NOT NULL,
+        body          TEXT NOT NULL,
+        created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        delivered_at  TEXT,
+        read_at       TEXT,
+        via_broadcast INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    legacy.run("INSERT INTO chat_messages (from_session, to_session, body) VALUES ('ses_old', 'ses_me', 'before the snapshot')");
+    legacy.close();
+
+    // Opening with ThatchDB runs the migration at schema init.
+    db = new ThatchDB(dbPath);
+    raw = new Database(dbPath);
+    db.registerChatSession("ses_old", "thatch-mig", null, "opencode", "oldtimer");
+    db.registerChatSession("ses_me", "thatch-mig", null, "opencode", "reader");
+    const cols = (raw.query("PRAGMA table_info(chat_messages)").all() as any[]).map((r) => r.name);
+    expect(cols).toContain("from_name");
+    expect(cols).toContain("to_name");
+    // The pre-snapshot row survived with NULL names and renders through
+    // the live join (the sender is registered here).
+    const inbox = db.readChatMessages("ses_me");
+    expect(inbox.length).toBe(1);
+    expect(inbox[0].from_name).toBe("oldtimer-00001");
+    const rowId = inbox[0].id;
+    // And re-opening is a no-op for the schema. The first read DRAINED the
+    // row (read_at stamped - that is the drain's contract), so the
+    // post-reopen render goes through messageById (paging has no read_at
+    // filter) and must still resolve the sender through the live join.
+    db.close();
+    db = new ThatchDB(dbPath);
+    expect(db.readChatMessages("ses_me").length).toBe(0);
+    const paged = db.chatMessageById("ses_me", rowId);
+    expect(paged).not.toBeNull();
+    expect(paged!.from_name).toBe("oldtimer-00001");
   });
 });
 

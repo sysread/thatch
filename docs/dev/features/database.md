@@ -250,7 +250,9 @@ chat_messages(
   created_at TEXT NOT NULL,
   delivered_at TEXT,
   read_at TEXT,
-  via_broadcast INTEGER NOT NULL DEFAULT 0
+  via_broadcast INTEGER NOT NULL DEFAULT 0,
+  from_name TEXT,
+  to_name TEXT
 )
 ```
 
@@ -260,8 +262,13 @@ chat_messages(
   events carry it as `broadcast: true` beside the real recipient). The
   endpoints are
   plain columns, not foreign keys: unregistering a session must not be
-  blocked by message history, and a departed sender degrades to an unknown
-  name in the reader's view.
+  blocked by message history.
+- `from_name`/`to_name` snapshot each participant's roster name at send
+  time. Names are never reused, so a snapshot cannot go stale the way a
+  cache would, and a departed sender renders under the name it sent with.
+- Rows written before the snapshot columns existed have NULL snapshots:
+  rendering falls back to the live roster join for them, and to the
+  `unknown (id, departed)` fallback when the sender has also left.
 
 See [cross-session-chat.md](cross-session-chat.md) for the delivery model.
 
@@ -292,6 +299,8 @@ rules.
 ## Schema migration
 
 `recall_count`, `last_recalled_at`, and `archived` are added to pre-existing databases by an idempotent column migration at init. The migration uses `PRAGMA table_info` to check for the column's existence, then `ALTER TABLE ADD COLUMN` if missing. This handles databases created before these columns existed.
+
+The chat tables' later columns (`auto`, `worktree`, `host_kind`, `via_broadcast`, the `chat_messages` name snapshots, the tombstone `reason`) follow the same pattern: a guarded `PRAGMA table_info` + conditional `ALTER TABLE` per column, run at every open.
 
 ## Embedding serialization
 

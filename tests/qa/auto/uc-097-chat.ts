@@ -42,7 +42,7 @@ const useCase: UseCase = {
     "- Delivery groups a recipient's messages into one prompt (senders + count) and stamps delivered_at.",
     "- read drains the inbox oldest-first and stamps read_at on exactly the returned rows; read mail is never re-nudged.",
     "- The per-recipient nudge cap stops repeated wake prompts within the hour window.",
-    "- Unregister keeps messages as history (departed senders degrade to unknown names) and stops wake selection for the unregistered recipient's unread mail.",
+    "- Unregister keeps messages as history (senders keep the name snapshotted at send time) and stops wake selection for the unregistered recipient's unread mail.",
   ].join("\n"),
 
   async run() {
@@ -224,8 +224,8 @@ const useCase: UseCase = {
         return "FAIL";
       }
       const history = db.pendingChatNotifications(["ses_beta"], nowIso());
-      if (history.length !== 1 || history[0].from_name !== null) {
-        console.log("  FAIL: departed sender did not degrade to unknown name");
+      if (history.length !== 1 || history[0].from_name !== alpha.name) {
+        console.log("  FAIL: departed sender did not render under its snapshotted name");
         return "FAIL";
       }
       // The recipient leaving the directory stops wake prompts for its

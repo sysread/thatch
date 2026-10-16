@@ -224,14 +224,15 @@ describe("chat tail backlog", () => {
 
   test("state seeds from every feed row, matching or not", () => {
     // A non-matching row is still in the diff state: its filter outcome
-    // can flip mid-follow (a rename or unregister changes rendered
-    // names), and it must never resurface as a sent event.
+    // can flip mid-follow for legacy rows (a rename or unregister changes
+    // their rendered names), and it must never resurface as a sent event.
     const { state } = chatTailBacklog(feed(), { ...noFilter(), matches: [/t/] }, null);
     expect([...state.keys()]).toEqual([1, 2, 3, 4, 5]);
   });
 
   test("a rendered-name flip in follow mode resurfaces no sent events", () => {
-    // A peer's unregister re-renders its whole history as "unknown
+    // Only a legacy row (no snapshot) can flip its rendered name: a peer's
+    // unregister re-renders its whole history as "unknown
     // (... departed)". Backlog time: the peer is alive and its rows do
     // not match --from unknown, so nothing renders. Poll time: the peer
     // is gone, the same rows now match the filter - and none may re-emit

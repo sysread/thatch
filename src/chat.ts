@@ -663,7 +663,9 @@ export class ChatStore {
 
   /**
    * Leaves the directory. Messages already sent to or from the session are
-   * kept as history; departed senders show as unknown names to readers.
+   * kept as history; a departed sender renders under the name snapshotted
+   * on its message rows at send time (rows written before the snapshot
+   * columns shipped degrade to unknown names).
    * The reason records which leave it was: "exit" (the wrap-up exit's
    * unregister - a restored session auto-rejoins), "explicit" (the
    * chat_unregister tool - the leave persists until an explicit
@@ -793,9 +795,11 @@ export class ChatStore {
    * cutoff: unread mail newer than the cutoff survives this sweep and is
    * removed by a later one once it ages past the moving cutoff - the
    * cutoff is a conservative bound, not an exact age match. Delivered/read
-   * history and mail from pruned senders to live recipients are kept -
-   * departed senders already render as unknown names. Counters are NOT
-   * touched: never decrementing is what makes reissued names impossible.
+   * history and mail from pruned senders to live recipients are kept. A
+   * pruned sender's mail renders under the send-time name snapshot on
+   * each row; legacy pre-snapshot rows degrade to unknown names. Counters
+   * are NOT touched: never decrementing is what makes reissued names
+   * impossible.
    * Returns the number of directory rows pruned.
    */
   pruneStaleAuto(cutoff: string): number {
@@ -902,9 +906,15 @@ export class ChatStore {
         return;
       }
       for (const part of parts) {
+        // The name columns are load-bearing, not a convenience: they are
+        // the row's permanent record of who sent what (names are never
+        // reused, so a send-time snapshot is correct forever). Every
+        // message-insert path must populate them - a path that omits them
+        // mints legacy-style rows whose departed sender renders as
+        // "unknown".
         this.#db.run(
-          "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast) VALUES (?, ?, ?, ?, 0)",
-          [fromSession, recipient.session_id, part, nowIso()],
+          "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast, from_name, to_name) VALUES (?, ?, ?, ?, 0, ?, ?)",
+          [fromSession, recipient.session_id, part, nowIso(), sender.name, recipient.name],
         );
       }
     })();
@@ -983,9 +993,12 @@ export class ChatStore {
           continue;
         }
         for (const part of parts) {
+          // Same name-snapshot contract as send() above: every
+          // message-insert path populates from_name/to_name - the row's
+          // permanent record of its participants.
           this.#db.run(
-            "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast) VALUES (?, ?, ?, ?, 1)",
-            [fromSession, row.session_id, part, nowIso()],
+            "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast, from_name, to_name) VALUES (?, ?, ?, ?, 1, ?, ?)",
+            [fromSession, row.session_id, part, nowIso(), sender.name, row.name],
           );
         }
         recipients.push(row.name);
@@ -1035,7 +1048,7 @@ export class ChatStore {
   read(sessionID: string): ChatInboxItem[] {
     const rows = this.#db
       .query(
-        `SELECT m.id, m.from_session, s.name AS from_name, m.body, m.created_at
+        `SELECT m.id, m.from_session, COALESCE(m.from_name, s.name) AS from_name, m.body, m.created_at
          FROM chat_messages m
          LEFT JOIN chat_sessions s ON s.session_id = m.from_session
          WHERE m.to_session = ? AND m.read_at IS NULL
@@ -1075,7 +1088,7 @@ export class ChatStore {
   messageById(sessionID: string, id: number): ChatInboxItem | null {
     const r = this.#db
       .query(
-        `SELECT m.id, m.from_session, s.name AS from_name, m.body, m.created_at
+        `SELECT m.id, m.from_session, COALESCE(m.from_name, s.name) AS from_name, m.body, m.created_at
          FROM chat_messages m
          LEFT JOIN chat_sessions s ON s.session_id = m.from_session
          WHERE m.id = ? AND m.to_session = ?`,
@@ -1209,10 +1222,14 @@ export class ChatStore {
   }
   /**
    * The full message feed for `thatch chat tail`: every row with sender and
-   * recipient display names resolved (departed senders degrade to unknown),
-   * oldest first. The CLI diffs consecutive snapshots to emit sent and
-   * read events; the table is machine-scale, so a full scan per poll is
-   * cheap.
+   * recipient display names resolved, oldest first. Each rendered name is
+   * the row's send-time name snapshot when it has one (immutable - names
+   * are never reused). Rows written before the snapshot columns existed
+   * have a NULL snapshot; rendering falls back to the live roster join for
+   * them, and only a departed participant with no snapshot degrades to the
+   * unknown-departed fallback. The CLI diffs consecutive feed snapshots to
+   * emit sent and read events; the table is machine-scale, so a full scan
+   * per poll is cheap.
    */
   messageFeed(): Array<{
     id: number;
@@ -1228,7 +1245,7 @@ export class ChatStore {
     return (
       this.#db
         .query(
-          `SELECT m.id, m.from_session, m.to_session, fs.name AS from_name, ts.name AS to_name, fs.topic AS from_topic, ts.topic AS to_topic, m.via_broadcast, m.body, m.created_at, m.read_at
+          `SELECT m.id, m.from_session, m.to_session, COALESCE(m.from_name, fs.name) AS from_name, COALESCE(m.to_name, ts.name) AS to_name, fs.topic AS from_topic, ts.topic AS to_topic, m.via_broadcast, m.body, m.created_at, m.read_at
            FROM chat_messages m
            LEFT JOIN chat_sessions fs ON fs.session_id = m.from_session
            LEFT JOIN chat_sessions ts ON ts.session_id = m.to_session
@@ -1264,7 +1281,7 @@ export class ChatStore {
     return (
       this.#db
         .query(
-          `SELECT m.id, m.to_session, m.from_session, s.name AS from_name
+          `SELECT m.id, m.to_session, m.from_session, COALESCE(m.from_name, s.name) AS from_name
            FROM chat_messages m
            LEFT JOIN chat_sessions s ON s.session_id = m.from_session
            WHERE m.read_at IS NULL
@@ -1421,9 +1438,12 @@ function rowFromSession(r: any): ChatSessionRow {
 
 /**
  * Renders a chat participant for user-visible surfaces (wake prompts, the
- * tail feed, chat_read): the display name when the directory row still
- * exists, otherwise the shared unknown-departed convention. One helper
- * because the exact string is a cross-surface convention - a reword here
+ * tail feed, chat_read). Callers pass a name they already resolved: the
+ * message row's send-time snapshot, else the live roster name. When no
+ * name resolves (a departed sender on a legacy pre-snapshot row), this
+ * renders the shared unknown-departed string:
+ * "unknown (ses_xxxxxxxxxxxx, departed)". One helper because
+ * the exact string is a cross-surface convention - a reword here
  * must reach every surface or the reader sees two names for the same
  * condition.
  */
@@ -1567,18 +1587,23 @@ function roundTrip(date: Date, y: number, mo: number, d: number, h: number, mi: 
 /**
  * Everything the tail can narrow a feed by, all ANDed together. `matches`
  * test the message body; `fromSubstr`/`toSubstr` are case-insensitive
- * substrings of the rendered participant names (so a departed sender can
- * only match as "unknown (...)", the string the reader actually sees).
+ * substrings of the rendered participant names. A row's rendered name is
+ * its send-time snapshot when it has one (rows written since the snapshot
+ * columns shipped), so `--from <name>` matches a departed sender by the
+ * name it sent under; only legacy rows without a snapshot can match as
+ * "unknown (...)".
  * Broadcast fan-out rows carry their real recipient in `to`, so `--to
  * <name>` matches them like any direct message. `sinceMs`/`untilMs`
  * bound created_at in a since-inclusive, until-exclusive window. An empty
  * field is no constraint.
  *
- * Name inputs are not stable across polls: they are re-resolved from the
- * live directory on every feed snapshot, so an unregister or rename
- * flips which rows match. chatTailBacklog's full-feed state seeding is
- * what keeps such flips from resurfacing old rows as sent events; reads
- * of rows whose name stopped matching simply go quiet.
+ * Name inputs are stable across polls for snapshot rows: the name is
+ * frozen on the row at send time, so an unregister or a re-register under
+ * a fresh name cannot flip which rows match. Only legacy rows (no
+ * snapshot) still resolve through the live directory, and only those can
+ * flip mid-follow. chatTailBacklog's full-feed state seeding is what
+ * keeps such flips from resurfacing old rows as sent events; reads of
+ * rows whose name stopped matching simply go quiet.
  */
 export interface ChatTailFilter {
   matches: RegExp[];
@@ -1608,12 +1633,13 @@ export function filterChatTailRows(rows: Array<ChatTailRow>, filter: ChatTailFil
  * the feed - filtered or not, rendered or not - for two reasons. First,
  * the limit hides messages, not history: a state seeded only from the
  * printed slice would re-emit the elided history as new sent events on
- * the first follow poll. Second, the name filters test JOIN-resolved
- * participant names that can flip mid-follow (a peer unregisters and its
- * history starts rendering as "unknown (... departed)", or it re-registers
- * under a new name); seeding everything means an old row can never resurface
- * as a sent event no matter how its rendered name changes. The last
- * `limit` filtered rows (null = all) shape into sent events, plus a read
+ * the first follow poll. Second, a row's rendered name is not part of the
+ * diff state, so a name change can never make the tail re-emit it. Rendered
+ * names can still change for legacy rows (no snapshot): a peer unregisters
+ * and its history starts rendering as "unknown (... departed)", or it
+ * re-registers under a new name. Seeding everything means an old row can
+ * never resurface as a sent event no matter how its rendered name changes.
+ * The last `limit` filtered rows (null = all) shape into sent events, plus a read
  * event for each row already read, via chatTailDiff, so event shaping
  * keeps a single source. `shown` and `elided` count MESSAGES (not
  * events: a shown message contributes one or two lines) for the CLI's
@@ -2229,9 +2255,10 @@ export class ChatPoller {
         if (!(await this.#opts.canDeliver(recipient))) continue;
         if (this.#nudgeBudget(recipient) <= 0) continue;
         try {
-          // "unknown (id, departed)" matches chat_read's rendering of a
-          // sender whose directory row is gone, so both surfaces use one
-          // convention for the same condition.
+          // renderChatParticipant keeps wake prompts and chat_read on one
+          // naming convention: the send-time snapshot when the row has
+          // one, and "unknown (id, departed)" only for a legacy row whose
+          // sender's directory row is gone.
           const senders = [...new Set(messages.map((m) => renderChatParticipant(m.from_name, m.from_session)))];
           await this.#opts.deliver(recipient, senders, messages.length);
           // Count the nudge before the stamp: the cap must bind on prompts

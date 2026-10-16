@@ -13,9 +13,11 @@ import { readOpenTabSessions } from "../../../src/tab-state";
  * CLI reads over a controlled DB. Seeds registered sessions with topics
  * (fresh and stale), a tabs.json fixture in the sandbox XDG state tree
  * (some sessions with tabs, some without), a direct message, a broadcast,
- * and a departed sender, then verifies the roster (including the
- * open/recent liveness verdicts) and the tail's JSONL events, including
- * the broadcast flag and the departed-sender fallback. The roster's
+ * a departed sender (snapshotted at send), and a pre-snapshot row (NULL
+ * names) from a sender that never registered. Verifies the roster
+ * (including the open/recent liveness verdicts) and the tail's JSONL
+ * events, including the broadcast flag, the snapshotted departed sender,
+ * and the unknown-departed fallback for legacy rows. The roster's
  * project grouping order is probed with two sibling-project seeds
  * (tab-less, so probed under --recent where they are visible), the
  * open-only default is verified against the long-stale ghost and the
@@ -36,12 +38,12 @@ const useCase: UseCase = {
     "- A DB with registered sessions and seeded messages",
   ].join("\n"),
   steps: [
-    "1. Seed a DB: three registered sessions (alpha with a topic, beta, ghost aged long stale), two ordering probes in sibling projects, a direct message, a broadcast, and a message from a sender that then unregisters.",
+    "1. Seed a DB: three registered sessions (alpha with a topic, beta, ghost aged long stale), two ordering probes in sibling projects, a direct message, a broadcast, a message from a sender that then unregisters, and a raw pre-snapshot row from a sender that never registers.",
     "2. Run `thatch chat list` and verify the default open-only roster: one Active section (aligned header row plus name, human age, status, project, and topic columns) with no Stale or Recent section, and tab-less rows collapsed into a hidden-count note pointing at `--recent`.",
     "3. Run `thatch chat list --recent` and verify the Recent section renders the tab-less seeds with the recent verdict (the open verdicts render in the Active section), then verify bare `--stale` adds the Stale section but still hides the long-stale ghost behind the default one-day display cap (hidden-count note), and `--stale all` shows it unbounded.",
     "4. Verify the flags compose in either order: `--stale --recent` keeps the one-day cap and shows Recent (the flag token is not eaten as --stale's value), and `--recent --stale all` renders the full three-section page in order (Active, Recent, Stale).",
     "5. Run `thatch chat tail --once` and verify every stdout line is one JSON object with event/at/id/from/to/body fields, broadcast copies carry broadcast: true with their real recipient, and already-read messages have a read event linked by id.",
-    "6. Verify a departed sender renders as unknown in the tail.",
+    "6. Verify a departed sender renders under the name snapshotted at send, and a pre-snapshot legacy row degrades to unknown.",
     "7. Seed 25 numbered filler messages, then run filtered tails: verify --limit line counts and the stderr elision note, ANDed --match, --from name matching, and the --since/--until window.",
     "8. Run `thatch chat tail --once --pretty --limit all` and verify the pretty cards: header block per message, the broadcast bullhorn, a full-width rule between cards, a read receipt citing its message, and - piped - no ANSI and no JSONL lines.",
   ].join("\n"),
@@ -50,7 +52,7 @@ const useCase: UseCase = {
     "- `--recent` reveals the Recent section with the tab-less seeds rendering the recent verdict; bare `--stale` adds a Stale section; rows older than the one-day default cap are hidden and counted in a note; `--stale all` displays every stale row.",
     "- The flags compose in either order: `--stale --recent` keeps the cap (no ghost) and renders Recent; `--recent --stale all` renders Active, Recent, and Stale in that page order with the ghost visible.",
     "- The tail is JSONL: one sent event per line with the body verbatim and each participant's topic; via_broadcast rows are one sent event per recipient with broadcast: true.",
-    "- A sender whose directory row is gone renders as 'unknown (id, departed)'.",
+    "- A sender whose directory row is gone renders under the name snapshotted at send time; a legacy row with no snapshot degrades to 'unknown (id, departed)'.",
     "- --limit caps the backlog with an elision note on stderr; --match ANDs; --from/--to match names; --since/--until bound the window.",
     "- `--pretty` renders the same events as email-style cards: To/From/Subject/Date headers, the topic as subject, a bullhorn in To: for broadcasts, a rule between cards, receipts citing their message; piped output stays plain.",
   ].join("\n"),
@@ -104,6 +106,11 @@ const useCase: UseCase = {
       seeded.registerChatSession("ses_mortal", "acme/widgets", null, "opencode", "mortal");
       seeded.sendChatMessage("ses_mortal", "ses_beta", "my last words");
       seeded.unregisterChatSession("ses_mortal");
+      // A row written before name snapshots existed: NULL from/to names,
+      // sender never registered - the tail's unknown-departed fallback.
+      const legacy = new Database(ctx.env.THATCH_DB_PATH);
+      legacy.run("INSERT INTO chat_messages (from_session, to_session, body) VALUES ('ses_legacy', 'ses_beta', 'legacy row, no snapshot')");
+      legacy.close();
       seeded.readChatMessages("ses_beta");
       // Ordering probes: sibling projects bracketing acme/widgets so the
       // roster's project grouping is observable end to end. Registered
@@ -272,9 +279,14 @@ const useCase: UseCase = {
       console.log(`  FAIL: expected 1 broadcast event to beta, got:\n${JSON.stringify(fanout)}`);
       return "FAIL";
     }
-    // The departed sender renders through the unknown fallback.
-    if (!events.some((e) => typeof e.from === "string" && e.from.startsWith("unknown ("))) {
-      console.log(`  FAIL: departed sender did not degrade to unknown:\n${tailText}`);
+    // The departed sender renders under the name snapshotted at send.
+    if (!events.some((e) => e.from === "mortal-00001" && e.body === "my last words")) {
+      console.log(`  FAIL: departed sender did not render under its snapshotted name:\n${tailText}`);
+      return "FAIL";
+    }
+    // The pre-snapshot legacy row degrades through the unknown fallback.
+    if (!events.some((e) => typeof e.from === "string" && e.from.startsWith("unknown (") && e.body === "legacy row, no snapshot")) {
+      console.log(`  FAIL: legacy NULL-snapshot row did not degrade to unknown:\n${tailText}`);
       return "FAIL";
     }
 
@@ -282,8 +294,8 @@ const useCase: UseCase = {
     // message it received carries a read event linked by id, timestamped
     // by the read.
     const reads = events.filter((e) => e.event === "read");
-    if (reads.length !== 3 || !reads.every((e) => e.reader === "beta-00001" && events.some((s) => s.event === "sent" && s.id === e.id))) {
-      console.log(`  FAIL: expected 3 read events by beta linked to sent events, got:\n${JSON.stringify(reads)}`);
+    if (reads.length !== 4 || !reads.every((e) => e.reader === "beta-00001" && events.some((s) => s.event === "sent" && s.id === e.id))) {
+      console.log(`  FAIL: expected 4 read events by beta linked to sent events, got:\n${JSON.stringify(reads)}`);
       return "FAIL";
     }
 
@@ -336,7 +348,7 @@ const useCase: UseCase = {
     // events (read events ride along with their message).
     const sentCount = (r: { stdout: Buffer }) => parseLines(r.stdout.toString()).filter((e) => e.event === "sent").length;
 
-    // Traffic for the filter checks: 25 numbered filler rows (28 total).
+    // Traffic for the filter checks: 25 numbered filler rows (29 total).
     const more = new ThatchDB(ctx.env.THATCH_DB_PATH);
     try {
       for (let i = 1; i <= 25; i++) more.sendChatMessage("ses_alpha", "ses_beta", `uc099 filler ${i}`);
@@ -351,7 +363,7 @@ const useCase: UseCase = {
     }
     // The note counts messages, not lines: the last 3 messages are unread
     // fillers, so 3 sent events and a note that agrees with them.
-    if (limited.stderr.toString().includes("showing last 3 of 28 messages") === false) {
+    if (limited.stderr.toString().includes("showing last 3 of 29 messages") === false) {
       console.log(`  FAIL: missing elision note on stderr:\n${limited.stderr.toString()}`);
       return "FAIL";
     }
@@ -364,10 +376,10 @@ const useCase: UseCase = {
     // limit with the same elision note.
     const defaulted = await run(["chat", "tail", "--once"]);
     if (defaulted.exitCode !== 0 || sentCount(defaulted) !== 20) {
-      console.log(`  FAIL: flagless --once should show 20 of 28 events, got ${sentCount(defaulted)}`);
+      console.log(`  FAIL: flagless --once should show 20 of 29 events, got ${sentCount(defaulted)}`);
       return "FAIL";
     }
-    if (!defaulted.stderr.toString().includes("showing last 20 of 28 messages")) {
+    if (!defaulted.stderr.toString().includes("showing last 20 of 29 messages")) {
       console.log(`  FAIL: default elision note missing:\n${defaulted.stderr.toString()}`);
       return "FAIL";
     }
@@ -379,11 +391,17 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // --from matches rendered names case-insensitively; the departed
-    // sender only matches through its unknown-departed rendering.
-    const departed = await run(["chat", "tail", "--once", "--from", "unknown"]);
+    // --from matches rendered names case-insensitively: the departed
+    // sender by the name snapshotted at its send, and the legacy
+    // NULL-snapshot row only through its unknown-departed rendering.
+    const departed = await run(["chat", "tail", "--once", "--from", "mortal"]);
     if (departed.exitCode !== 0 || sentCount(departed) !== 1) {
-      console.log("  FAIL: --from unknown should show exactly the departed sender's message");
+      console.log("  FAIL: --from mortal should show exactly the departed sender's snapshotted message");
+      return "FAIL";
+    }
+    const legacy = await run(["chat", "tail", "--once", "--from", "unknown"]);
+    if (legacy.exitCode !== 0 || sentCount(legacy) !== 1) {
+      console.log("  FAIL: --from unknown should show exactly the legacy row");
       return "FAIL";
     }
 
@@ -395,8 +413,8 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const today = await run(["chat", "tail", "--once", "--since", "1970-01-01", "--until", "2999-01-01", "--limit", "all"]);
-    if (today.exitCode !== 0 || sentCount(today) !== 28) {
-      console.log("  FAIL: a window covering the seed should print all 28 events");
+    if (today.exitCode !== 0 || sentCount(today) !== 29) {
+      console.log("  FAIL: a window covering the seed should print all 29 events");
       return "FAIL";
     }
     // Nothing elided means no note: --limit all must keep stderr quiet.

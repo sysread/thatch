@@ -334,8 +334,9 @@ export class ThatchDB {
     // case-insensitive ("Landru" and "landru" are one name), so two visually
     // identical identities cannot coexist. Message endpoints are plain
     // columns, not foreign keys, on purpose: unregistering a session must
-    // not be blocked by message history, and a departed sender degrades to
-    // an unknown name in the reader's view rather than vanishing rows.
+    // not be blocked by message history, and a departed sender still
+    // renders under the name snapshotted on its message rows (legacy rows
+    // without a snapshot degrade to an unknown name) rather than vanishing.
     this.#db.run(`
       CREATE TABLE IF NOT EXISTS chat_sessions (
         session_id    TEXT PRIMARY KEY,
@@ -355,6 +356,10 @@ export class ThatchDB {
     // re-nudge timer). read_at is set when the recipient drains its inbox.
     // via_broadcast marks rows a chat_broadcast fan-out created, so the
     // tail feed can render one broadcast line instead of N direct sends.
+    // from_name/to_name snapshot each participant's roster name at send
+    // time: names are never reused, so the snapshot cannot go stale the
+    // way a cache would, and it survives the participant leaving the
+    // directory.
     this.#db.run(`
       CREATE TABLE IF NOT EXISTS chat_messages (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -364,7 +369,9 @@ export class ThatchDB {
         created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
         delivered_at  TEXT,
         read_at       TEXT,
-        via_broadcast INTEGER NOT NULL DEFAULT 0
+        via_broadcast INTEGER NOT NULL DEFAULT 0,
+        from_name     TEXT,
+        to_name       TEXT
       )
     `);
 
@@ -462,6 +469,7 @@ export class ThatchDB {
     this.#migrateChatTopic();
     this.#migrateChatHostKind();
     this.#migrateChatBroadcastFlag();
+    this.#migrateChatMessageNameSnapshot();
     this.#migrateChatAuto();
     this.#migrateChatWorktree();
     this.#migrateChatHostPid();
@@ -533,6 +541,23 @@ export class ThatchDB {
     const cols = (this.#db.query("PRAGMA table_info(chat_messages)").all() as any[]).map((r) => r.name);
     if (cols.length > 0 && !cols.includes("via_broadcast")) {
       this.#db.run("ALTER TABLE chat_messages ADD COLUMN via_broadcast INTEGER NOT NULL DEFAULT 0");
+    }
+  }
+
+  // chat_messages tables created before the name snapshot columns lack
+  // them; the ALTER adds both. Rows written before the migration keep NULL
+  // names: no snapshot was captured at their send. Rendering falls back to
+  // the live roster join for those rows, and to the unknown-departed
+  // fallback when the sender has also left.
+  #migrateChatMessageNameSnapshot(): void {
+    const cols = (this.#db.query("PRAGMA table_info(chat_messages)").all() as any[]).map((r) => r.name);
+    if (cols.length > 0) {
+      if (!cols.includes("from_name")) {
+        this.#db.run("ALTER TABLE chat_messages ADD COLUMN from_name TEXT");
+      }
+      if (!cols.includes("to_name")) {
+        this.#db.run("ALTER TABLE chat_messages ADD COLUMN to_name TEXT");
+      }
     }
   }
 

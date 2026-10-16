@@ -372,9 +372,9 @@ behavior cycle (agent-driven, self-graded)
   `behavior_edges(matcher_id, behavior_id, weight REAL, PK(matcher_id, behavior_id), FK CASCADE)`,
   `behavior_provenance(id PK, behavior_id, signal, detail, created_at, FK CASCADE)`,
   `chat_sessions(session_id PK, name UNIQUE COLLATE NOCASE, topic, project, host_kind, registered_at, last_seen, auto, worktree)`,
-  `chat_messages(id PK AUTOINCREMENT, from_session, to_session, body, created_at, delivered_at, read_at, via_broadcast)`,
+  `chat_messages(id PK AUTOINCREMENT, from_session, to_session, body, created_at, delivered_at, read_at, via_broadcast, from_name, to_name)` - from_name/to_name snapshot each participant's roster name at send time (names are never reused, so the snapshot cannot go stale the way a cache would; legacy pre-snapshot rows are NULL and render via the live roster join, then the unknown-departed fallback).
   `chat_name_counters(base PK, next)` - per-base counters for assigned chat names; only ever increments.
-  `chat_leave_tombstones(session_id PK, left_at)` - explicit leaves; suppresses auto-registration until chat_register rejoins.
+  `chat_leave_tombstones(session_id PK, left_at, reason)` - reason: `exit` (the wrap-up exit's unregister) / `deleted` (session.deleted) clear as rejoinable on resume or the session's next prompt; `explicit` (the chat_unregister tool) suppresses auto-registration until chat_register rejoins.
 - `recall_count`, `last_recalled_at`, and `archived` are added to pre-existing
   databases by an idempotent column migration at init (`PRAGMA table_info` +
   `ALTER TABLE`). The `archived` column is `INTEGER NOT NULL DEFAULT 0` (0 =
