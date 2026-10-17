@@ -107,9 +107,9 @@ describe("notificationDefaults", () => {
     expect(notificationDefaults().mode).toBe("both");
   });
 
-  test("darwin pins Zarvox and Submarine", () => {
+  test("darwin pins Bell and Submarine", () => {
     if (process.platform !== "darwin") return;
-    expect(notificationDefaults().voice).toBe("Zarvox");
+    expect(notificationDefaults().voice).toBe("Bells");
     expect(notificationDefaults().sound).toBe("Submarine");
   });
 });

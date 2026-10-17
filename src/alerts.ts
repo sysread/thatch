@@ -24,6 +24,7 @@
 //   cannot answer the trigger side. Neither source alone is sufficient.
 
 import { alertMode, type AlertEventKind, type Config } from "./config";
+import type { NotifyTone } from "./notify";
 
 /**
  * What the message list says about the round that just ended. Derived by
@@ -358,3 +359,20 @@ export function createAlerts(deps: AlertsDeps) {
 }
 
 export type Alerts = ReturnType<typeof createAlerts>;
+
+/**
+ * The announcement tone for one alert event: an error is bad news (the
+ * "Sad sad sad" prefix), a finished round is good news ("Amaze! Amaze!"),
+ * and a pause is the LLM asking the user something - neither. A Record so
+ * a new AlertEventKind fails to compile until its tone is chosen.
+ */
+const ALERT_TONES: Record<AlertEventKind, NotifyTone> = {
+  pause: "neutral",
+  done: "positive",
+  error: "negative",
+};
+
+/** The announcement tone for one alert event. */
+export function alertTone(kind: AlertEventKind): NotifyTone {
+  return ALERT_TONES[kind];
+}

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { DEFAULT_VOICE } from "./notify";
 
 // Thatch user config: one JSON file beside thatch.db, hand-editable and
 // managed by the config_get / config_set tools. Sections are strict (unknown
@@ -148,7 +149,7 @@ export function chatAutoRegister(config: Config): boolean {
  */
 export function notificationDefaults(): { mode: "both" | "banner" | "voice" | "none"; voice?: string; sound?: string } {
   if (process.platform === "darwin") {
-    return { mode: "both", voice: "Zarvox", sound: "Submarine" };
+    return { mode: "both", voice: DEFAULT_VOICE, sound: "Submarine" };
   }
   return { mode: "both" };
 }

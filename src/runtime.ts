@@ -27,7 +27,7 @@ import {
   RUNTIME_STATE_TTL_MS,
   type ToolInteraction,
 } from "./extraction";
-import { createAlerts, deriveRoundShape, isNoWorkTool, replyRequestID } from "./alerts";
+import { createAlerts, alertTone, deriveRoundShape, isNoWorkTool, replyRequestID } from "./alerts";
 import { mostRecentTopLevelSessionId } from "./session-db";
 import type { CoreContext } from "./tool-defs";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
@@ -356,10 +356,16 @@ export async function createRuntime(input: {
     sessionTitle: async (sessionID) => (await caps.sessionGet(sessionID))?.title,
     notify: async ({ kind, title, message }) => {
       const defaults = notificationDefaults();
+      // The machine path composes the spoken line too, so it passes the
+      // alert's tone (error -> "Sad sad sad", done -> "Amaze! Amaze!",
+      // pause -> neutral - a needs-you ask is neither); sendNotification
+      // caps the source label structurally (the session title is
+      // model-generated and unbounded).
       await sendNotification({
         message,
         title,
         source: title,
+        tone: alertTone(kind),
         // The machine owns the per-event "none" gate and never calls here
         // with one - this cast records that contract.
         channel: alertMode(loadConfig(dbPath).config, kind) as "both" | "banner" | "voice",

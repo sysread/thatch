@@ -42,6 +42,19 @@ know which of your concurrent sessions is speaking. Voice text spells out
 letter sequences ("C I green", not "CI green") so text-to-speech pronounces
 them.
 
+Keep the message to a few words ("C I is green for P L A T 2 8 0", "found a
+problem with the plan"). A long spoken line takes a while to finish and the
+MacinTalk voice gets monotone and unclear on long sentences, so the tool
+hard-caps the spoken line at 140 characters. The banner text is not capped.
+The full report belongs in the chat response, not the notification.
+
+Pass `tone: "positive"` for good news or `tone: "negative"` for bad news and
+the tool starts the banner and the spoken line with the announcement prefix
+("Amaze! Amaze!" or "Sad sad sad", Rocky from Project Hail Mary style). The
+tool owns the prefixes: the agent must not compose them into the message
+text itself, and a message that already carries the prefix is left alone
+rather than doubled. Omitting `tone` prepends nothing.
+
 The tool result reports command success only. macOS focus modes can silently
 swallow banners; if you are not seeing them, check Focus settings and that
 your terminal app has notification permission.
@@ -61,7 +74,7 @@ You have two options, and they edit the same file:
 {
   "notifications": {
     "mode": "both",
-    "voice": "Zarvox",
+    "voice": "Bell",
     "sound": "Submarine"
   }
 }
@@ -70,7 +83,7 @@ You have two options, and they edit the same file:
 | Field | Values | Default | Applies to |
 |-------|--------|---------|------------|
 | `mode` | `both`, `banner`, `voice`, `none` | `both` | Which channels `notify_user` uses. `none` disables notifications entirely; the agent is told it no-opped. |
-| `voice` | any installed voice name | `Zarvox` (macOS) | Spoken announcements. List macOS voices with `/usr/bin/say -v '?'`. |
+| `voice` | any installed voice name | `Bell` (macOS) | Spoken announcements. List macOS voices with `/usr/bin/say -v '?'`. |
 | `sound` | any system sound name | `Submarine` (macOS) | Banner alert sound. Sounds live in `/System/Library/Sounds`. |
 
 Fields you leave out fall back to the defaults. Unknown sections or fields

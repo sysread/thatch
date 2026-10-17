@@ -160,7 +160,7 @@ Stores are created automatically. No setup required.
 
 | Tool | What it does |
 |------|-------------|
-| `thatch_notify_user` | Notify the user out-of-band: desktop banner and/or spoken voice. Use for long-running outcomes worth interrupting for (CI results, deploys, watcher events). macOS and Linux. |
+| `thatch_notify_user` | Notify the user out-of-band: desktop banner and/or spoken voice. Use for long-running outcomes worth interrupting for (CI results, deploys, watcher events). A `tone` argument adds the announcement prefix ("Amaze! Amaze!" / "Sad sad sad"); the spoken line is a few words, hard-capped at 140 characters. macOS and Linux. |
 
 See [notifications.md](notifications.md) for the full behavior and
 configuration.

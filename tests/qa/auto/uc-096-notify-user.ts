@@ -25,13 +25,15 @@ const useCase: UseCase = {
     "2. Use config_set to write notification prefs into a tempdir config file; verify field-level merge keeps sibling fields.",
     "3. Use config_get to read the config back; verify defaults are annotated for unset fields.",
     "4. Call notify_user with a mock spawner; verify the banner and voice commands and the source-prefixed spoken text.",
-    "5. Set mode to none and call notify_user; verify it no-ops without spawning.",
+    "5. Call notify_user with tone positive and tone negative; verify the Amaze! Amaze! / Sad sad sad prefix leads the banner text and the spoken line (source label right after), and that a message already carrying the prefix is not doubled.",
+    "6. Set mode to none and call notify_user; verify it no-ops without spawning.",
   ].join("\n"),
   expected: [
     "- The three tools exist in TOOL_DEFS with no opencodeOnly flag.",
     "- config_set merges fields (omitted siblings keep their values) and echoes the resulting section.",
     "- config_get annotates unset fields with their platform defaults.",
     "- notify_user constructs an osascript banner and a /usr/bin/say voice command (darwin), prefixes the spoken text with the source label, and reports success without claiming the banner was seen.",
+    "- tone positive/negative prepends the announcement prefix to both channels; a pre-prefixed message is left alone.",
     "- mode: none produces a [skipped] result with zero spawned commands.",
   ].join("\n"),
 
@@ -112,7 +114,42 @@ const useCase: UseCase = {
         }
       }
 
-      // Step 5: mode none no-ops.
+      // Step 5: tone prefixes lead both channels; the source label follows.
+      if (process.platform === "darwin") {
+        recorded.length = 0;
+        const positive = await notifyUser.execute(
+          { message: "C I is green", source: "UC-096", tone: "positive", channel: "both" },
+          ctx,
+        );
+        if (!recorded[0].includes('display notification "Amaze! Amaze! C I is green"')) {
+          console.log(`  FAIL: banner text missing the positive prefix: ${recorded[0]}`);
+          return "FAIL";
+        }
+        if (!recorded[1].includes("/usr/bin/say -v Fred Amaze! Amaze! UC-096: C I is green")) {
+          console.log(`  FAIL: spoken line missing prefix-then-source shape: ${recorded[1]}`);
+          return "FAIL";
+        }
+        if (!positive.startsWith("[notified]")) {
+          console.log(`  FAIL: tone call did not notify, got: ${positive}`);
+          return "FAIL";
+        }
+
+        recorded.length = 0;
+        await notifyUser.execute(
+          { message: "Sad sad sad C I is red", tone: "negative", channel: "voice" },
+          ctx,
+        );
+        if (!recorded[0].includes("/usr/bin/say -v Fred Sad sad sad C I is red")) {
+          console.log(`  FAIL: negative prefix wrong: ${recorded[0]}`);
+          return "FAIL";
+        }
+        if (recorded[0].includes("Sad sad sad Sad")) {
+          console.log("  FAIL: prefix was doubled for a message that already carries it");
+          return "FAIL";
+        }
+      }
+
+      // Step 6: mode none no-ops.
       await configSet.execute({ notifications: { mode: "none" } }, ctx);
       recorded.length = 0;
       const skipped = await notifyUser.execute({ message: "hello" }, ctx);

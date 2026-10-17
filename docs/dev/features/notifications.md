@@ -51,8 +51,10 @@ Key decisions:
   belong in the file the LLM manages.
 
 `notificationDefaults()` supplies the platform fallbacks shown by `config_get`
-and applied by `notify_user`: darwin pins `Zarvox` + `Submarine` (the author's
-preference); other platforms defer to their tools' defaults.
+and applied by `notify_user`: darwin pins `Bell` + `Submarine` (the author's
+preference); other platforms defer to their tools' defaults. The default
+voice constant lives in one place, `DEFAULT_VOICE` in `src/notify.ts`; the
+config default and the tool descriptions derive from it.
 
 ## Notification dispatch
 
@@ -85,6 +87,24 @@ Details that matter:
 - **The spoken line prefixes the `source` label** ("PLAT-280: CI is green") so
   a user with several concurrent agent sessions knows which one spoke. The
   tool description enforces this on the model side.
+- **The tool owns the tone prefixes, not the model.** `notify_user` takes
+  `tone: positive | negative | neutral` (default neutral) and prepends the
+  announcement prefix ("Amaze! Amaze! " / "Sad sad sad ", Rocky from Project
+  Hail Mary style) to the message before dispatch, so the prefix leads both
+  the banner text and the spoken line with the source label right after it.
+  The model is told never to compose the prefix into the message itself;
+  `applyTonePrefix` in `src/notify.ts` is idempotent (case-insensitive
+  startswith guard) so a pre-prefixed message is never doubled. A
+  hand-composed prefix is stripped from the raw message before the source
+  label is composed, so the prefix leads the line exactly once
+  ("Amaze! Amaze! P L A T 2 8 0: C I is green") even when a model with
+  the old hand-compose habit also passes tone.
+- **The spoken line is hard-capped** at `SPOKEN_LINE_MAX` (140 characters)
+  by `capSpokenLine`: long spoken output takes a while and MacinTalk gets
+  monotone and unclear on long sentences. The cut prefers a word boundary
+  and adds no ellipsis (spoken punctuation for a truncation marker is an
+  unverified TTS behavior an attention line does not need). The banner
+  text is never truncated.
 - Speech is awaited (the tool returns when the sentence finishes) so error
   reporting stays honest. There is no debounce; polling agents notify once at
   the end.
@@ -98,7 +118,11 @@ from the shared `onEvent` hook; delivery reuses `sendNotification` with the
 `banner`). Delivery is fire-and-forget (a spoken alert awaits the sentence
 for seconds and must never stall the event pump); the machine owns the
 per-event `none` gate and the per-delivery config re-read is what makes
-config changes apply without a restart.
+config changes apply without a restart. Alerts carry their own announcement
+tone (`alertTone`: error -> "Sad sad sad", done -> "Amaze! Amaze!", pause ->
+neutral) and cap the source label (the session title is model-generated and
+can eat the whole spoken budget) - the machine path owes the same brevity
+discipline the tool description demands of models.
 
 Events consumed:
 

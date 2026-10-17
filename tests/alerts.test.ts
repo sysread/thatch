@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { createAlerts, deriveRoundShape, roundDidRealWork, replyRequestID, type AlertInput, type AlertsDeps, type RoundMessage, type RoundShape } from "../src/alerts";
+import { createAlerts, alertTone, deriveRoundShape, roundDidRealWork, replyRequestID, type AlertInput, type AlertsDeps, type RoundMessage, type RoundShape } from "../src/alerts";
 import { alertMode, configFilePath, loadConfig, saveConfig, type Config } from "../src/config";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -350,5 +350,13 @@ describe("alertMode", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("alertTone", () => {
+  test("error is negative, done is positive, pause is neutral", () => {
+    expect(alertTone("error")).toBe("negative");
+    expect(alertTone("done")).toBe("positive");
+    expect(alertTone("pause")).toBe("neutral");
   });
 });

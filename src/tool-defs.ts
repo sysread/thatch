@@ -21,7 +21,7 @@ import {
   type ConfigSection,
   type NotificationPrefs,
 } from "./config";
-import { sendNotification, defaultSpawner, type NotifyChannel, type Spawner } from "./notify";
+import { sendNotification, defaultSpawner, DEFAULT_VOICE, SPOKEN_LINE_MAX, TONE_PREFIXES, type NotifyChannel, type NotifyTone, type Spawner } from "./notify";
 import { predictionVerb, formatWhenLine, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, describeBaselineCheckRuns, type WatcherRegistry, type Watcher, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
@@ -1307,8 +1307,8 @@ const configSetDef: ToolDef = {
         "or none (disable notifications entirely).",
       ),
       voice: z.string().optional().describe(
-        "Spoken voice name (macOS default: Zarvox). Omit to use the " +
-        "platform default.",
+        `Spoken voice name (macOS default: ${DEFAULT_VOICE}). Omit to use ` +
+        "the platform default.",
       ),
       sound: z.string().optional().describe(
         "Banner alert sound (macOS, from /System/Library/Sounds; default: " +
@@ -1402,15 +1402,28 @@ const notifyUserDef: ToolDef = {
     "Use for long-running terminal-event outcomes worth interrupting for: " +
     "CI results, merge or deploy completion, watcher events. ALWAYS include " +
     "source: a word or two identifying the session or work item (ticket " +
-    "number or feature name) so the user knows which session spoke. Honors " +
-    "the user's configured preferences; pass channel to override for this " +
-    "call only. If the configured mode is none, the tool no-ops and says " +
-    "so. The result reports command success only - OS focus modes can " +
-    "silently suppress banners.",
+    "number or feature name) so the user knows which session spoke - the " +
+    "ticket goes here, not in the message. " +
+    "BREVITY: a few words only, e.g. \"C I is green\" or " +
+    `"found a problem with the plan". The composed spoken line ` +
+    `(prefix + source + message) is hard-capped at ${SPOKEN_LINE_MAX} ` +
+    "characters; long spoken output takes a while and gets monotone and " +
+    "unclear, so keep the detail for chat. TONE: pass " +
+    `tone positive or negative for good or bad news and the tool adds the ` +
+    `announcement prefix ("${TONE_PREFIXES.positive.trim()}" / ` +
+    `"${TONE_PREFIXES.negative.trim()}") to the banner and the spoken ` +
+    "line. Do NOT compose Amaze or Sad into the " +
+    "message text yourself - the tool owns the prefixes and normalizes a " +
+    "hand-composed one. Honors the user's configured " +
+    "preferences; pass channel to override for this call only. If the " +
+    "configured mode is none, the tool no-ops and says so. The result " +
+    "reports command success only - OS focus modes can silently suppress " +
+    "banners.",
   args: {
     message: z.string().describe(
-      "The notification text. Spell out letter sequences so " +
-      "text-to-speech pronounces them (\"C I green\", not \"CI green\").",
+      "The notification text, a few words. Spell out letter sequences so " +
+      "text-to-speech pronounces them (\"C I green\", not \"CI green\"). " +
+      "Never include the tone prefix here; pass tone instead.",
     ),
     title: z.string().optional().describe(
       "Banner title. Defaults to source, then \"thatch\".",
@@ -1418,6 +1431,12 @@ const notifyUserDef: ToolDef = {
     source: z.string().optional().describe(
       "Short label identifying the session or work item (ticket number or " +
       "feature name), e.g. \"PLAT-280\". Prepended to the spoken message.",
+    ),
+    tone: z.enum(["positive", "negative", "neutral"]).optional().describe(
+      `News tone for the announcement prefix: positive prepends ` +
+      `"${TONE_PREFIXES.positive.trim()}", negative prepends ` +
+      `"${TONE_PREFIXES.negative.trim()}", neutral (the default) prepends ` +
+      "nothing. Omit for neutral.",
     ),
     channel: z.enum(["both", "banner", "voice"]).optional().describe(
       "Override the configured mode for this call only.",
@@ -1438,7 +1457,14 @@ const notifyUserDef: ToolDef = {
     return sendNotification({
       message: args.message as string,
       title: args.title as string | undefined,
+      // The spoken budget is finite: an unbounded source label (models
+      // ignore guidance under verbosity pressure) eats the composed line's
+      // cap and cuts the message - the part that carries the news.
+      // sendNotification caps the source label for the spoken line
+      // structurally (SOURCE_LABEL_MAX); the banner title keeps the full
+      // source.
       source: args.source as string | undefined,
+      tone: args.tone as NotifyTone | undefined,
       channel,
       voice: (args.voice as string | undefined) ?? prefs.voice,
       sound: prefs.sound,
