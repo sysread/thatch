@@ -109,7 +109,7 @@ describe("notificationDefaults", () => {
 
   test("darwin pins Bell and Submarine", () => {
     if (process.platform !== "darwin") return;
-    expect(notificationDefaults().voice).toBe("Bells");
+    expect(notificationDefaults().voice).toBe("Zarvox");
     expect(notificationDefaults().sound).toBe("Submarine");
   });
 });

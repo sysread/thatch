@@ -139,8 +139,8 @@ describe("sendNotification on darwin", () => {
     expect(cmds[0]).toContain('display notification "C I is green"');
     expect(cmds[0]).toContain('with title "PLAT-280"');
     expect(cmds[0]).toContain('sound name "Submarine"');
-    expect(cmds[1]).toContain("/usr/bin/say -v Bells PLAT-280: C I is green");
-    expect(result).toBe("[notified] banner (osascript) ok; voice (Bells) ok");
+    expect(cmds[1]).toContain("/usr/bin/say -v Zarvox PLAT-280: C I is green");
+    expect(result).toBe("[notified] banner (osascript) ok; voice (Zarvox) ok");
   });
 
   test("escapes quotes and backslashes in the AppleScript literal", async () => {
@@ -183,7 +183,7 @@ describe("sendNotification on darwin", () => {
       platform: "darwin",
     }, mockSpawner(new Map(), cmds));
     expect(cmds[0]).toContain(`display notification "${long}"`); // banner text intact
-    expect(cmds[1].length).toBeLessThanOrEqual("/usr/bin/say -v Bells ".length + SPOKEN_LINE_MAX);
+    expect(cmds[1].length).toBeLessThanOrEqual("/usr/bin/say -v Zarvox ".length + SPOKEN_LINE_MAX);
     expect(cmds[1].endsWith("...")).toBe(false);
   });
 
@@ -197,14 +197,14 @@ describe("sendNotification on darwin", () => {
       platform: "darwin",
     }, mockSpawner(new Map(), cmds));
     expect(cmds[0]).toContain('display notification "Amaze! Amaze! C I is green"');
-    expect(cmds[1]).toContain("/usr/bin/say -v Bells Amaze! Amaze! P L A T 2 8 0: C I is green");
+    expect(cmds[1]).toContain("/usr/bin/say -v Zarvox Amaze! Amaze! P L A T 2 8 0: C I is green");
   });
 
   test("say failure is reported but does not hide the banner success", async () => {
     const spawner = mockSpawner(new Map([["/usr/bin/say", { exitCode: 1, stderr: "Invalid voice" }]]));
     const result = await sendNotification({ message: "m", channel: "both", platform: "darwin" }, spawner);
     expect(result).toContain("[notified]");
-    expect(result).toContain("voice (Bells) failed: exited 1: Invalid voice");
+    expect(result).toContain("voice (Zarvox) failed: exited 1: Invalid voice");
   });
 
   test("every channel failing yields [failed]", async () => {
@@ -329,7 +329,7 @@ describe("config and notify tool execute functions", () => {
     expect(recorded.length).toBe(2);
     expect(recorded[0]).toContain("/usr/bin/osascript");
     expect(recorded[0]).toContain('with title "thatch-notify"');
-    expect(recorded[1]).toContain("/usr/bin/say -v Bells thatch-notify: deployed");
+    expect(recorded[1]).toContain("/usr/bin/say -v Zarvox thatch-notify: deployed");
     expect(result).toContain("[notified]");
   });
 
@@ -338,25 +338,25 @@ describe("config and notify tool execute functions", () => {
     const def = TOOL_DEFS.find((t) => t.name === "notify_user")!;
     await def.execute({ message: "C I is green", source: "P L A T 2 8 0", tone: "positive", channel: "both" }, ctx);
     expect(recorded[0]).toContain('display notification "Amaze! Amaze! C I is green"');
-    expect(recorded[1]).toContain("/usr/bin/say -v Bells Amaze! Amaze! P L A T 2 8 0: C I is green");
+    expect(recorded[1]).toContain("/usr/bin/say -v Zarvox Amaze! Amaze! P L A T 2 8 0: C I is green");
   });
 
   test("notify_user tone negative prepends the negative prefix; neutral stays clean", async () => {
     if (process.platform !== "darwin") return; // command construction is platform-specific
     const def = TOOL_DEFS.find((t) => t.name === "notify_user")!;
     await def.execute({ message: "C I is red", tone: "negative", channel: "voice" }, ctx);
-    expect(recorded[0]).toContain("/usr/bin/say -v Bells Sad sad sad C I is red");
+    expect(recorded[0]).toContain("/usr/bin/say -v Zarvox Sad sad sad C I is red");
 
     recorded.length = 0;
     await def.execute({ message: "deployed", tone: "neutral", channel: "voice" }, ctx);
-    expect(recorded[0]).toContain("/usr/bin/say -v Bells deployed");
+    expect(recorded[0]).toContain("/usr/bin/say -v Zarvox deployed");
   });
 
   test("notify_user does not double a prefix the message already carries", async () => {
     if (process.platform !== "darwin") return; // command construction is platform-specific
     const def = TOOL_DEFS.find((t) => t.name === "notify_user")!;
     await def.execute({ message: "Amaze! Amaze! C I is green", tone: "positive", channel: "voice" }, ctx);
-    expect(recorded[0]).toContain("/usr/bin/say -v Bells Amaze! Amaze! C I is green");
+    expect(recorded[0]).toContain("/usr/bin/say -v Zarvox Amaze! Amaze! C I is green");
     expect(recorded[0]).not.toContain("Amaze! Amaze! Amaze");
   });
 
@@ -368,7 +368,7 @@ describe("config and notify tool execute functions", () => {
     if (process.platform !== "darwin") return; // command construction is platform-specific
     const def = TOOL_DEFS.find((t) => t.name === "notify_user")!;
     await def.execute({ message: "Amaze! Amaze! C I is green", source: "P L A T 2 8 0", tone: "positive", channel: "voice" }, ctx);
-    expect(recorded[0]).toContain("/usr/bin/say -v Bells Amaze! Amaze! P L A T 2 8 0: C I is green");
+    expect(recorded[0]).toContain("/usr/bin/say -v Zarvox Amaze! Amaze! P L A T 2 8 0: C I is green");
     expect(recorded[0].split("Amaze! Amaze!").length - 1).toBe(1);
   });
 });

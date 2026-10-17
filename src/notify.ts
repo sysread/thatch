@@ -30,12 +30,11 @@ export interface NotifyRequest {
 
 /**
  * The macOS say voice used when neither the call nor the config picks one:
- * the Bell voice (installed as "Bells" - the exact catalog name from
- * `say -v '?'` must be used; say exits 0 for unknown voices and silently
- * speaks in the system default instead). It sounds like Rocky from
- * Project Hail Mary - the author's preference.
+ * Zarvox, the author's preference. The Bell voice was tried here
+ * (2026-10-16) and reverted: it sounds like Rocky from Project Hail Mary,
+ * but intelligibility beats musicality for a notification voice.
  */
-export const DEFAULT_VOICE = "Bells";
+export const DEFAULT_VOICE = "Zarvox";
 
 /**
  * Announcement prefixes in Rocky's exclamation style (Project Hail Mary).

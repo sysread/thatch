@@ -74,7 +74,7 @@ You have two options, and they edit the same file:
 {
   "notifications": {
     "mode": "both",
-    "voice": "Bell",
+    "voice": "Zarvox",
     "sound": "Submarine"
   }
 }
@@ -83,7 +83,7 @@ You have two options, and they edit the same file:
 | Field | Values | Default | Applies to |
 |-------|--------|---------|------------|
 | `mode` | `both`, `banner`, `voice`, `none` | `both` | Which channels `notify_user` uses. `none` disables notifications entirely; the agent is told it no-opped. |
-| `voice` | any installed voice name | `Bell` (macOS) | Spoken announcements. List macOS voices with `/usr/bin/say -v '?'`. |
+| `voice` | any installed voice name | `Zarvox` (macOS) | Spoken announcements. List macOS voices with `/usr/bin/say -v '?'`. |
 | `sound` | any system sound name | `Submarine` (macOS) | Banner alert sound. Sounds live in `/System/Library/Sounds`. |
 
 Fields you leave out fall back to the defaults. Unknown sections or fields

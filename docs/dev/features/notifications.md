@@ -51,7 +51,7 @@ Key decisions:
   belong in the file the LLM manages.
 
 `notificationDefaults()` supplies the platform fallbacks shown by `config_get`
-and applied by `notify_user`: darwin pins `Bell` + `Submarine` (the author's
+and applied by `notify_user`: darwin pins `Zarvox` + `Submarine` (the author's
 preference); other platforms defer to their tools' defaults. The default
 voice constant lives in one place, `DEFAULT_VOICE` in `src/notify.ts`; the
 config default and the tool descriptions derive from it.
