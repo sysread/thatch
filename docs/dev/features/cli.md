@@ -106,10 +106,15 @@ Read-only window on the cross-session chat directory ([cross-session-chat.md](cr
 
 ## Environment variables
 
+Only a subset of the knobs is listed here. `config_get`'s `environment`
+section lists every knob, its default, and the value in your running
+process; the registry itself is `src/env-knobs.ts`.
+
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `XDG_CONFIG_HOME` | Config home base | `~/.config` |
 | `THATCH_DB_PATH` | SQLite DB file location | `$XDG_CONFIG_HOME/thatch/thatch.db` |
+
 | `THATCH_MODEL` | Embedding model override | `Xenova/bge-small-en-v1.5` |
 | `THATCH_RECALL_THRESHOLD` | Cosine cutoff for recall nudge | `0.55` |
 | `THATCH_PREDICTION_THRESHOLD` | Cutoff for prediction auto-fire | `0.60` |

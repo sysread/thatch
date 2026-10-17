@@ -190,16 +190,20 @@ thatch flush-predictions [--json]  # prediction-only nudge (hook)
 
 ## Environment variables
 
+Only a subset of the knobs is listed here. `config_get`'s `environment`
+section lists every knob, its default, and the value in your running
+process; the registry itself is `src/env-knobs.ts`.
+
 | Variable | Default | What it controls |
 |----------|---------|-----------------|
 | `THATCH_DB_PATH` | `~/.config/thatch/thatch.db` | SQLite database path |
+
 | `THATCH_MODEL` | `Xenova/bge-small-en-v1.5` | Embedding model name |
 | `THATCH_RECALL_THRESHOLD` | `0.55` | Cosine threshold for recall nudge |
 | `THATCH_PREDICTION_THRESHOLD` | `0.60` | Cosine threshold for prediction auto-fire |
 | `THATCH_BEHAVIOR_THRESHOLD` | `0.60` | Cosine threshold for behavior auto-fire |
 | `CLAUDE_PROJECT_DIR` | `process.cwd()` | Claude Code project directory |
 | `CURSOR_PROJECT_DIR` | (falls through) | Cursor project directory |
-| `THATCH_PROJECT_DIR` | (falls through) | Project dir pinned by project-local MCP configs - first in the server's resolution chain |
 | `THATCH_WATCH_DEATH_MINUTES` | `120` | Pending-age threshold before a dead session's watchers are cancelled and announced |
 | `THATCH_PROJECT_DIR` | (falls through) | Project dir pinned by project-local MCP configs - first in the server's resolution chain |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code config directory |

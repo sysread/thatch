@@ -9,7 +9,10 @@ import {
   mergeChatPrefs,
   saveConfig,
   mergeNotificationPrefs,
+  mergeAlertsPrefs,
+  alertVoice,
   notificationDefaults,
+  type Config,
 } from "../src/config";
 
 let dbDir: string;
@@ -100,6 +103,78 @@ describe("mergeNotificationPrefs", () => {
     const merged = mergeNotificationPrefs({ mode: "banner" }, { mode: "voice" });
     expect(merged).toEqual({ mode: "voice" });
   });
+
+  test("a null field is deleted, returning the field to <unset>", () => {
+    const merged = mergeNotificationPrefs({ mode: "banner", voice: "Fred" }, { voice: null });
+    expect(merged).toEqual({ mode: "banner" });
+  });
+
+  test("merging every field null leaves an empty section", () => {
+    const merged = mergeNotificationPrefs({ mode: "banner", voice: "Fred", sound: "Ping" }, {
+      mode: null,
+      voice: null,
+      sound: null,
+    });
+    expect(merged).toEqual({});
+  });
+});
+
+describe("mergeChatPrefs", () => {
+  test("a null field is deleted", () => {
+    expect(mergeChatPrefs({ enabled: false, autoRegister: true }, { enabled: null })).toEqual({ autoRegister: true });
+    expect(mergeChatPrefs({ enabled: false }, { enabled: null })).toEqual({});
+  });
+});
+
+describe("mergeAlertsPrefs", () => {
+  test("a null event mode is deleted and an emptied event object is dropped", () => {
+    const merged = mergeAlertsPrefs({ pause: { mode: "voice" }, done: { mode: "none" } }, {
+      pause: { mode: null },
+    });
+    expect(merged).toEqual({ done: { mode: "none" } });
+  });
+
+  test("sibling events and untouched modes keep their values", () => {
+    const merged = mergeAlertsPrefs({ pause: { mode: "voice" }, error: { mode: "none" } }, {
+      pause: { mode: "both" },
+    });
+    expect(merged).toEqual({ pause: { mode: "both" }, error: { mode: "none" } });
+  });
+
+  test("a null event object deletes the event", () => {
+    const merged = mergeAlertsPrefs({ pause: { mode: "voice" } }, { pause: null });
+    expect(merged).toEqual({});
+  });
+
+  test("an unknown event key is rejected loudly, not silently dropped", () => {
+    // The merge iterates known kinds; a patch key outside them is a caller
+    // bug and must throw instead of being silently dropped with a "[saved]"
+    // echo.
+    expect(() =>
+      mergeAlertsPrefs({ done: { mode: "voice" } }, { bogus: { mode: "banner" } } as never),
+    ).toThrow(/Unknown alert event: bogus/);
+  });
+});
+
+describe("alertVoice", () => {
+  test("a configured notifications voice overrides the platform default", () => {
+    const config: Config = { notifications: { voice: "Fred", sound: "Ping" } };
+    expect(alertVoice(config, { voice: "Bells", sound: "Submarine" })).toEqual({
+      voice: "Fred",
+      sound: "Ping",
+    });
+  });
+
+  test("unset fields fall back to the platform defaults", () => {
+    expect(alertVoice({}, { voice: "Bells", sound: "Submarine" })).toEqual({
+      voice: "Bells",
+      sound: "Submarine",
+    });
+    expect(alertVoice({ notifications: { mode: "banner" } }, { voice: "Bells" })).toEqual({
+      voice: "Bells",
+      sound: undefined,
+    });
+  });
 });
 
 describe("notificationDefaults", () => {
@@ -107,7 +182,7 @@ describe("notificationDefaults", () => {
     expect(notificationDefaults().mode).toBe("both");
   });
 
-  test("darwin pins Bell and Submarine", () => {
+  test("darwin pins Zarvox and Submarine", () => {
     if (process.platform !== "darwin") return;
     expect(notificationDefaults().voice).toBe("Zarvox");
     expect(notificationDefaults().sound).toBe("Submarine");

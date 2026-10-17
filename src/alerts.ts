@@ -23,7 +23,7 @@
 //   the execute code - are not in message parts), and live bookkeeping
 //   cannot answer the trigger side. Neither source alone is sufficient.
 
-import { alertMode, type AlertEventKind, type Config } from "./config";
+import { alertMode, alertVoice, type AlertEventKind, type Config } from "./config";
 import type { NotifyTone } from "./notify";
 
 /**
@@ -53,6 +53,15 @@ export interface AlertInput {
   kind: AlertEventKind;
   title: string;
   message: string;
+  /**
+   * The config snapshot the channel gate decided on, passed through so the
+   * callback's delivery composes from the SAME read: re-reading the config
+   * here would let a concurrent config_set flip the mode between the gate
+   * and the callback, and send both channels right after the user silenced
+   * the alert. Optional only for test spies that record deliveries without
+   * composing them; the runtime callback falls back to a fresh read.
+   */
+  config?: Config;
 }
 
 /** Structural message view - the capabilities layer's sessionMessages shape. */
@@ -209,6 +218,10 @@ export function createAlerts(deps: AlertsDeps) {
     // able to answer "did the alert fire?" from the server log, and the
     // verdict log below covers the suppressed cases.
     console.info(`[thatch] alert: ${input.kind} -> "${input.message}" (${input.title})`);
+    // Snapshot the config the gate decided on, so the callback composes
+    // from the same read (a concurrent config_set cannot flip the mode
+    // between gate and delivery).
+    input.config = deps.config();
     // Fire-and-forget: a voice delivery awaits the sentence for seconds,
     // and the caller (the event pump) must not stall other sessions'
     // events behind it. Delivery failures are logged, never surfaced.
@@ -355,6 +368,30 @@ export function createAlerts(deps: AlertsDeps) {
     sessionDeleted(sessionID: string): void {
       sessions.delete(sessionID);
     },
+  };
+}
+
+/**
+ * The full delivery plan for one alert event: the channel gate, the user's
+ * configured voice/sound (falling back to the platform defaults), and the
+ * announcement tone - the composition the runtime's notify callback passes
+ * to sendNotification. Pure and pinned (tests/alerts.test.ts) so the
+ * wiring cannot silently regress: one config read per delivery feeds all
+ * three decisions.
+ */
+export function alertDelivery(
+  config: Config,
+  defaults: { voice?: string; sound?: string },
+  kind: AlertEventKind,
+): { channel: "both" | "banner" | "voice"; voice?: string; sound?: string; tone: NotifyTone } {
+  const { voice, sound } = alertVoice(config, defaults);
+  return {
+    // The machine owns the per-event "none" gate and never calls here
+    // with one - this cast records that contract.
+    channel: alertMode(config, kind) as "both" | "banner" | "voice",
+    voice,
+    sound,
+    tone: alertTone(kind),
   };
 }
 

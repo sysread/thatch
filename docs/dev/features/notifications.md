@@ -16,10 +16,11 @@ Two delivery paths share the dispatcher and the config file:
 
 | File | Role |
 |------|------|
-| `src/config.ts` | Zod section schemas, config file load/save/merge, platform defaults, `alertMode`. |
+| `src/config.ts` | Zod section schemas, config file load/save/merge, platform defaults, `alertMode`, `alertVoice`. |
 | `src/notify.ts` | Per-platform dispatch for banner + voice, with an injectable spawner. |
 | `src/tool-defs.ts` | `config_get`, `config_set`, `notify_user` tool definitions (shared registry, non-opencodeOnly). |
 | `src/alerts.ts` | Alert state machine: pause/done/error decisions from session events, per-session dedup (no timer-based debounce - one alert per busy->idle transition, per request id for pauses). |
+| `src/env-knobs.ts` | The registry of `THATCH_*` environment knobs (name, description, default) rendered by `config_get`'s `environment` section. |
 
 ## Config design
 
@@ -35,6 +36,14 @@ Key decisions:
   older process cannot lose data. An unparseable file is *ignored* (empty
   config + warning), never fatal -- a broken hand edit must not take the agent
   down.
+- **A null field value in `config_set` unsets the field** (the key is deleted
+  from the file; the default applies again). The stored schemas stay strict:
+  null is an arg-level marker only and never reaches the file. A null section
+  object is refused (null unsets fields, not sections).
+- **`config_set` refuses to write when the file failed to parse.** A save
+  would write a merged-whole file from the empty fallback config and silently
+  discard whatever the user hand-wrote; the refusal names the file and points
+  at the hand fix.
 - **Field-level merge in `config_set`.** `mergeNotificationPrefs` is a shallow
   spread of current + patch (with `undefined` values stripped first). The
   tool's description and the system prompt both state the merge semantics, and
@@ -42,6 +51,18 @@ Key decisions:
   in the same turn. This is the guardrail against the classic
   read-modify-write failure where a model reconstructs a document and drops
   sibling fields.
+- **Unset via null.** An explicitly set field would otherwise be sticky
+  forever (the merge keeps current values, so no tool call could ever
+  remove it -- the reason a user whose config pinned an old default voice
+  had to hand-edit the file). The `config_set` arg schemas accept `null` on
+  the leaf fields as an explicit UNSET marker: the merge functions delete
+  null-valued keys instead of merging them, so the key is gone from the
+  file, `config_get` shows `<unset>`, and the default applies again. The
+  stored section schemas stay strict -- `null` never persists to the file,
+  and a hand-edited null keeps the same ignore-with-warning treatment as
+  any other schema violation. A null in a section-object slot
+  (`notifications: null`) is refused by the arg schemas and again by a
+  guard in the setter's execute.
 - **Atomic writes.** `saveConfig` writes a temp file then renames, so a crash
   mid-write cannot leave a truncated config and concurrent readers never see a
   partial document.
@@ -49,6 +70,19 @@ Key decisions:
   single source of truth; `THATCH_*` env vars remain reserved for
   infrastructure (DB path, model, thresholds). Preferences the LLM manages
   belong in the file the LLM manages.
+
+### The environment section
+
+The `THATCH_*` environment knobs are invisible in the config file (they are process
+environment, not file state), so `config_get` gained a fourth section name,
+`environment`: `src/env-knobs.ts` holds the single registry (name,
+one-sentence description, default) and renders one line per knob with the
+effective value read from `process.env` at call time. `config_set` refuses
+the section with a pointer to the shell. The registry is the only place the
+descriptions live -- the docs link to it instead of restating the list --
+and `tests/env-knobs.test.ts` enforces the registry against the source tree
+in both directions: every registered name must appear in code, and every
+`THATCH_*` literal in code (minus protocol markers) must be registered.
 
 `notificationDefaults()` supplies the platform fallbacks shown by `config_get`
 and applied by `notify_user`: darwin pins `Zarvox` + `Submarine` (the author's
@@ -103,7 +137,7 @@ Details that matter:
   by `capSpokenLine`: long spoken output takes a while and MacinTalk gets
   monotone and unclear on long sentences. The cut prefers a word boundary
   and adds no ellipsis (spoken punctuation for a truncation marker is an
-  unverified TTS behavior an attention line does not need). The banner
+  TTS behavior the spoken line does not need). The banner
   text is never truncated.
 - Speech is awaited (the tool returns when the sentence finishes) so error
   reporting stays honest. There is no debounce; polling agents notify once at
@@ -115,14 +149,18 @@ Details that matter:
 runtime (both the v1 and v2 adapters feed it the same event stream) drives it
 from the shared `onEvent` hook; delivery reuses `sendNotification` with the
 `alerts` config section choosing the channel per event (`alertMode`, default
-`banner`). Delivery is fire-and-forget (a spoken alert awaits the sentence
-for seconds and must never stall the event pump); the machine owns the
-per-event `none` gate and the per-delivery config re-read is what makes
-config changes apply without a restart. Alerts carry their own announcement
-tone (`alertTone`: error -> "Sad sad sad", done -> "Amaze! Amaze!", pause ->
-neutral) and cap the source label (the session title is model-generated and
-can eat the whole spoken budget) - the machine path owes the same brevity
-discipline the tool description demands of models.
+`banner`). Voice and sound come from `alertVoice` (`src/config.ts`): the
+user's configured `notifications.voice` / `notifications.sound` apply to
+machine alerts exactly as they do to `notify_user`, with platform defaults
+for unset fields -- one config read per delivery feeds both the channel gate
+and the voice override. Delivery is fire-and-forget (a spoken alert awaits
+the sentence for seconds and must never stall the event pump); the machine
+owns the per-event `none` gate and the per-delivery config re-read is what
+makes config changes apply without a restart. Alerts carry their own
+announcement tone (`alertTone`: error -> "Sad sad sad", done ->
+"Amaze! Amaze!", pause -> neutral) and cap the source label (the session
+title is model-generated and can eat the whole spoken budget) - the machine
+path owes the same brevity discipline the tool description demands of models.
 
 Events consumed:
 
@@ -222,11 +260,18 @@ rejected for that reason (plus v1 has no TUI plugin surface at all).
 
 - `tests/config.test.ts` -- path derivation, missing/invalid/strict-schema
   handling, round-trip, atomic save leaves no temp files, merge keeps
-  siblings, darwin defaults.
+  siblings, null deletes the merged field, darwin defaults, `alertVoice`.
 - `tests/notify.test.ts` -- command construction per platform (mock spawner
   records argv), AppleScript escaping, partial vs total failure, unsupported
   platform, plus tool-level tests (merge-no-wipe, echo, `mode: none` no-op,
-  configured voice honored) with `THATCH_DB_PATH` pointed at a tempdir.
+  configured voice honored, unset via null deletes the key from the file,
+  environment section rendered, environment + null-section refusals, the
+  parse-warning refusal (a broken file is never overwritten; the raw file
+  is re-read and asserted untouched)) with
+  `THATCH_DB_PATH` pointed at a tempdir.
+- `tests/env-knobs.test.ts` -- the knob registry enforced against the source
+  tree in both directions, plus rendering (one line per knob, effective
+  value, default).
 - `tests/tool-defs-catalog-session.test.ts` -- registry count and name list (hardcoded literals that fail loudly when the surface changes).
 - `tests/alerts.test.ts` -- the alert state machine: `deriveRoundShape`
   (idle-marker delimiter, v1 fallback, synthetic trigger detection), the
@@ -241,6 +286,8 @@ three new names are in its `expected` array. `uc-108-llm-alerts.ts` drives
 the full alert event flow against a spy notifier, including the adapter
 seam: raw v2 bus events through `translateEvent` and real-shaped
 `session.context` lists through `mapSessionContextMessages` +
-`deriveRoundShape` (the seam where the idle-marker bug hid). A live
-banner-by-ear check remains a manual verification against a running
+`deriveRoundShape` (the seam where the idle-marker bug hid). `uc-096-notify-user.ts`
+covers the config tool round trip: field-level merge, unset via null (key
+deleted from the raw file), the environment section, and the two refusals. A
+live banner-by-ear check remains a manual verification against a running
 session.

@@ -30,9 +30,11 @@ export interface NotifyRequest {
 
 /**
  * The macOS say voice used when neither the call nor the config picks one:
- * Zarvox, the author's preference. The Bell voice was tried here
- * (2026-10-16) and reverted: it sounds like Rocky from Project Hail Mary,
- * but intelligibility beats musicality for a notification voice.
+ * Zarvox, the author's preference - intelligibility beats musicality for
+ * a notification voice (the Bell voice was tried once and failed that
+ * test). Use the exact catalog name from `say -v '?'`: say exits 0 for
+ * unknown voices and silently speaks in the system default instead, so a
+ * typo'd config voice fails quietly.
  */
 export const DEFAULT_VOICE = "Zarvox";
 

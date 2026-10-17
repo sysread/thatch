@@ -21,6 +21,7 @@ import {
   type ConfigSection,
   type NotificationPrefs,
 } from "./config";
+import { renderEnvKnobs } from "./env-knobs";
 import { sendNotification, defaultSpawner, DEFAULT_VOICE, SPOKEN_LINE_MAX, TONE_PREFIXES, type NotifyChannel, type NotifyTone, type Spawner } from "./notify";
 import { predictionVerb, formatWhenLine, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
@@ -1223,6 +1224,16 @@ const behaviorDeleteDef: ToolDef = {
 /** Notification preference fields, in presentation order. */
 const NOTIFICATION_FIELDS = ["mode", "voice", "sound"] as const;
 
+/**
+ * The alerts patch schema: the stored alertEventPrefsSchema, plus null as
+ * the explicit unset marker for the per-event mode. The stored schema stays
+ * strict so a null never persists to the config file - the merge deletes
+ * null fields first.
+ */
+const alertEventPatchSchema = alertEventPrefsSchema.extend({
+  mode: alertEventPrefsSchema.shape.mode.nullable(),
+});
+
 /** Renders one section with per-field default annotations for echo output. */
 function renderNotificationSection(prefs: NotificationPrefs | undefined): string {
   const defaults = notificationDefaults();
@@ -1263,20 +1274,30 @@ const configGetDef: ToolDef = {
   description:
     "Read thatch's user config, optionally restricted to one section. " +
     "Values are annotated with their defaults; unset fields show <unset>. " +
-    "The config file (~/.config/thatch/config.json, beside thatch.db) is " +
-    "also hand-editable. Call this before config_set.",
+    "The environment section is read-only: it lists the THATCH_* environment " +
+    "knobs and their effective values. The config file " +
+    "(~/.config/thatch/config.json, beside thatch.db) is also hand-editable. " +
+    "Call this before config_set.",
   args: {
-    section: z.enum(["notifications", "chat", "alerts"]).optional().describe(
+    section: z.enum(["notifications", "chat", "alerts", "environment"]).optional().describe(
       "Restrict output to one section. Omit to read all sections.",
     ),
   },
   async execute(args) {
     const loaded = loadConfig();
     const lines: string[] = [];
-    if (loaded.warning) lines.push(`[warning] ${loaded.warning}`, "");
-    const sections: ConfigSection[] = args.section
-      ? [args.section as ConfigSection]
-      : [...CONFIG_SECTIONS];
+    const environmentOnly = args.section === "environment";
+    // A parse warning means the file on disk is invalid and every file
+    // section is rendering fallback defaults - surface it, except on an
+    // environment-only read, which reads no file.
+    if (loaded.warning && !environmentOnly) lines.push(`[warning] ${loaded.warning}`, "");
+    // "environment" is a presentation-only section: it renders the env-knob
+    // registry, not the config file. It reads last, after the file sections.
+    // Values are THIS process's environment - a knob exported after startup,
+    // or in a shell that did not launch opencode, will not show here.
+    const sections: (ConfigSection | "environment")[] = args.section
+      ? [args.section as ConfigSection | "environment"]
+      : [...CONFIG_SECTIONS, "environment"];
     for (const name of sections) {
       if (name === "notifications") {
         lines.push(renderNotificationSection(loaded.config.notifications));
@@ -1287,8 +1308,14 @@ const configGetDef: ToolDef = {
       if (name === "alerts") {
         lines.push(renderAlertsSection(loaded.config.alerts));
       }
+      if (name === "environment") {
+        lines.push(renderEnvKnobs());
+      }
     }
-    lines.push("", `file: ${loaded.path}`);
+    // The file footer is noise for the environment section alone (it reads
+    // no file), so it prints only when a file section was requested.
+    const askedFileSection = sections.some((s) => s !== "environment");
+    if (askedFileSection) lines.push("", `file: ${loaded.path}`);
     return lines.join("\n");
   },
 };
@@ -1298,62 +1325,96 @@ const configSetDef: ToolDef = {
   description:
     "Update thatch's user config. Field-level merge: only fields you pass " +
     "change; omitted fields and omitted sections keep their current values. " +
-    "Returns the resulting section so you can verify the write. Call " +
-    "config_get first to see current values and defaults.",
+    "Pass null as a field's value to unset it: the key is deleted from the " +
+    "config file and the default applies again. The environment section is " +
+    "read-only. Returns the resulting section so you can verify the write. " +
+    "Call config_get first to see current values and defaults.",
   args: {
     notifications: z.strictObject({
-      mode: z.enum(["both", "banner", "voice", "none"]).optional().describe(
+      mode: z.enum(["both", "banner", "voice", "none"]).nullable().optional().describe(
         "Default channels for notify_user: both, banner only, voice only, " +
-        "or none (disable notifications entirely).",
+        "or none (disable notifications entirely). Pass null to unset " +
+        "(the default applies again).",
       ),
-      voice: z.string().optional().describe(
-        `Spoken voice name (macOS default: ${DEFAULT_VOICE}). Omit to use ` +
-        "the platform default.",
+      voice: z.string().nullable().optional().describe(
+        `Spoken voice name (macOS default: ${DEFAULT_VOICE}). Omit to keep ` +
+        "the current value; pass null to unset and use the platform default.",
       ),
-      sound: z.string().optional().describe(
+      sound: z.string().nullable().optional().describe(
         "Banner alert sound (macOS, from /System/Library/Sounds; default: " +
-        "Submarine). Omit to use the platform default.",
+        "Submarine). Omit to keep the current value; pass null to unset and " +
+        "use the platform default.",
       ),
     }).optional().describe(
       "Notification preferences to update. Fields you omit keep their " +
-      "current values.",
+      "current values; a field set to null is deleted from the config so " +
+      "its default applies again.",
     ),
     chat: z.strictObject({
-      enabled: z.boolean().optional().describe(
+      enabled: z.boolean().nullable().optional().describe(
         "Cross-session chat on/off. Unset or true is the default; false " +
-        "makes every chat tool refuse and stops wake delivery.",
+        "makes every chat tool refuse and stops wake delivery. Pass null " +
+        "to unset (the default applies again).",
       ),
-      autoRegister: z.boolean().optional().describe(
+      autoRegister: z.boolean().nullable().optional().describe(
         "Whether opencode sessions join the chat directory automatically " +
         "(assigned names, on the session's first idle event - not at " +
         "startup). Unset or true is the default; false restores " +
-        "opt-in joining via chat_register only.",
+        "opt-in joining via chat_register only. Pass null to unset.",
       ),
     }).optional().describe(
       "Chat preferences to update. Fields you omit keep their current " +
-      "values.",
+      "values; a field set to null is deleted from the config so its " +
+      "default applies again.",
     ),
     alerts: z.strictObject({
-      pause: alertEventPrefsSchema.optional().describe(
+      pause: alertEventPatchSchema.optional().describe(
         "Alert when the LLM blocks on a question or permission prompt.",
       ),
-      done: alertEventPrefsSchema.optional().describe(
+      done: alertEventPatchSchema.optional().describe(
         "Alert when a round of real work finishes. Rounds triggered by " +
         "synthetic input (thatch nudges, task completions, watcher " +
         "wake-ups) and rounds of only bookkeeping tools stay silent.",
       ),
-      error: alertEventPrefsSchema.optional().describe(
+      error: alertEventPatchSchema.optional().describe(
         "Alert when a session fails with nothing to recover it (user " +
         "aborts stay silent; retried failures stay silent).",
       ),
     }).optional().describe(
       "Automatic alert preferences (desktop notification when the LLM " +
       "pauses or finishes). Each event takes a mode: both, banner only, " +
-      "voice only, or none. Default: banner.",
+      "voice only, or none; null unsets it. Default: banner.",
+    ),
+    environment: z.unknown().optional().describe(
+      "Read-only. Environment knobs are set per process; export them in " +
+      "your shell.",
     ),
   },
   async execute(args) {
+    // Environment knobs are process state, not file state: no write path.
+    if (args.environment !== undefined) {
+      return "config_set cannot change the environment section: " +
+        "environment knobs are set per process; export them in your shell. " +
+        "config_get section \"environment\" lists them with their effective values.";
+    }
+    // A null section object is never valid - null unsets FIELDS, not whole
+    // sections. Hosts that validate args reject it at the schema; this
+    // guard covers calls that reach execute without validation.
+    if (args.notifications === null || args.chat === null || args.alerts === null) {
+      return "Invalid config_set: null is not a section value. To unset a " +
+        "field, pass null as the field's value (e.g. notifications: { voice: null }).";
+    }
     const loaded = loadConfig();
+    // A parse warning means the file on disk is invalid (a hand-edit went
+    // wrong - e.g. a null where the schema wants a string). config_set
+    // writes a merged-whole file, so saving now would REPLACE the broken
+    // file and silently discard whatever the user hand-wrote. Refuse and
+    // point at the fix instead.
+    if (loaded.warning) {
+      return "Config file failed to parse - fix " + loaded.path + " by " +
+        "hand before using config_set (a write now would overwrite the " +
+        "whole file). Parse warning: " + loaded.warning;
+    }
     const config: Config = { ...loaded.config };
     const notifPatch = args.notifications as Record<string, unknown> | undefined;
     const chatPatch = args.chat as Record<string, unknown> | undefined;

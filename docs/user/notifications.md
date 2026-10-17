@@ -21,8 +21,8 @@ Two mechanisms:
 | Tool | What it does |
 |------|-------------|
 | `thatch_notify_user` | Send a banner and/or spoken notification. |
-| `thatch_config_get` | Read the current config, with defaults annotated. |
-| `thatch_config_set` | Update config fields. Returns the resulting section. |
+| `thatch_config_get` | Read the current config, with defaults annotated. Also lists the `THATCH_` environment knobs (read-only). |
+| `thatch_config_set` | Update config fields; pass `null` as a field's value to unset it. Returns the resulting section. |
 
 ### notify_user
 
@@ -95,6 +95,46 @@ The agent can manage the whole file for you through `config_get` /
 `config_set`; edits merge at the field level, so the agent changing your
 voice cannot wipe your mode.
 
+### Unsetting a field
+
+A field you set sticks even if a later release changes the default. To go
+back to the default, unset the field: the agent passes `null` as the field's
+value and the key is deleted from the file.
+
+```text
+thatch_config_set(notifications: { voice: null })
+```
+
+After the unset, `config_get` shows the field as `<unset>` and the default
+applies again. Unsetting works on every leaf field (`mode`, `voice`,
+`sound`, `enabled`, `autoRegister`, and each alert event's `mode`). A `null`
+for a whole section is refused -- null unsets fields, not sections.
+
+One hand-edit rule: delete the line, never write `null` into the file by
+hand. The stored schema has no null (the tool deletes the key instead of
+storing it), and a null in the file makes the whole config fail to parse -
+every section reverts to its default until the line is removed.
+
+## Environment knobs
+
+Thatch also has a second layer of tuning: `THATCH_` environment variables
+(read at process startup, set in your shell -- `THATCH_DB_PATH`,
+`THATCH_DEBUG`, `THATCH_RECALL_THRESHOLD`, the `THATCH_WATCH_*` knobs, and
+more). They are not part of the config file and the agent cannot change
+them.
+
+To see what exists and what your current process is running with, ask the
+agent to read the environment section:
+
+```text
+thatch_config_get(section: "environment")
+```
+
+It renders one line per knob: the name, the effective value in the running
+process, the default, and a one-sentence description. `config_set` refuses
+the section -- environment knobs are per-process; export them in your
+shell. The full registry lives in `src/env-knobs.ts` in the thatch repo.
+
 ## Alerts: notifications without a tool call
 
 On opencode, the plugin watches your session and alerts you automatically:
@@ -119,6 +159,11 @@ bookkeeping; the child sessions never alert).
 Banners carry the session title, so when you juggle concurrent sessions you
 know which one spoke. Voice is opt-in per alert: set the mode to `voice` or
 `both` on the events you want spoken.
+
+Voice alerts speak in your configured voice: the `notifications.voice` and
+`notifications.sound` preferences apply to automatic alerts exactly as they
+do to `notify_user`. Fields you left unset fall back to the platform
+defaults.
 
 ```json
 {

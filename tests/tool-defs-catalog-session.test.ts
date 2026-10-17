@@ -10,7 +10,7 @@ import { setupToolDefsHarness, ctx } from "./mocks/tool-defs-harness";
 setupToolDefsHarness();
 
 describe("TOOL_DEFS", () => {
-  test("exports all 38 tools", () => {
+  test("exports the full tool catalog", () => {
     expect(TOOL_DEFS.length).toBe(39);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([

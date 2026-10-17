@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sendNotification, spokenText, applyTonePrefix, capSpokenLine, capSourceLabel, SPOKEN_LINE_MAX, defaultSpawner, type Spawner, type SpawnResult } from "../src/notify";
@@ -370,6 +370,93 @@ describe("config and notify tool execute functions", () => {
     await def.execute({ message: "Amaze! Amaze! C I is green", source: "P L A T 2 8 0", tone: "positive", channel: "voice" }, ctx);
     expect(recorded[0]).toContain("/usr/bin/say -v Zarvox Amaze! Amaze! P L A T 2 8 0: C I is green");
     expect(recorded[0].split("Amaze! Amaze!").length - 1).toBe(1);
+  });
+
+  test("config_set unsets a notification field via null and deletes the key from the file", async () => {
+    const dbPath = join(dbDir, "thatch.db");
+    saveConfig({ notifications: { mode: "banner", voice: "Fred" } }, dbPath);
+    const def = TOOL_DEFS.find((t) => t.name === "config_set")!;
+    const result = await def.execute({ notifications: { voice: null } }, ctx);
+    expect(result).toContain("[saved]");
+    expect(result).toContain("mode: banner");
+    expect(result).toContain("voice: <unset>");
+    const written = JSON.parse(readFileSync(join(dbDir, "config.json"), "utf8"));
+    expect(written.notifications).toEqual({ mode: "banner" });
+  });
+
+  test("config_set unsets chat and alerts fields via null", async () => {
+    const dbPath = join(dbDir, "thatch.db");
+    saveConfig(
+      { chat: { enabled: false, autoRegister: false }, alerts: { pause: { mode: "voice" }, done: { mode: "none" } } },
+      dbPath,
+    );
+    const def = TOOL_DEFS.find((t) => t.name === "config_set")!;
+    const result = await def.execute({ chat: { enabled: null }, alerts: { pause: { mode: null } } }, ctx);
+    expect(result).toContain("[saved]");
+    expect(result).toContain("enabled: <unset>");
+    expect(result).toContain("pause.mode: <unset>");
+    expect(result).toContain("done.mode: none");
+    const written = JSON.parse(readFileSync(join(dbDir, "config.json"), "utf8"));
+    expect(written.chat).toEqual({ autoRegister: false });
+    expect(written.alerts).toEqual({ done: { mode: "none" } });
+  });
+
+  test("defaults apply after an unset: config_get shows <unset> and the default", async () => {
+    const dbPath = join(dbDir, "thatch.db");
+    saveConfig({ notifications: { voice: "Fred" } }, dbPath);
+    const set = TOOL_DEFS.find((t) => t.name === "config_set")!;
+    await set.execute({ notifications: { voice: null } }, ctx);
+    const get = TOOL_DEFS.find((t) => t.name === "config_get")!;
+    const read = await get.execute({ section: "notifications" }, ctx);
+    expect(read).toContain("voice: <unset>");
+    // The default annotation returns with the platform default (whatever
+    // DEFAULT_VOICE currently is) - the unset deleted the pinned override.
+    if (process.platform === "darwin") {
+      expect(read).toMatch(/voice: <unset> \(default: .+\)/);
+    }
+  });
+
+  test("config_set refuses a null section object", async () => {
+    const def = TOOL_DEFS.find((t) => t.name === "config_set")!;
+    const result = await def.execute({ notifications: null }, ctx);
+    expect(result).toContain("null is not a section value");
+    expect(existsSync(join(dbDir, "config.json"))).toBe(false);
+  });
+
+  test("config_set refuses the environment section", async () => {
+    const def = TOOL_DEFS.find((t) => t.name === "config_set")!;
+    const result = await def.execute({ environment: { THATCH_DEBUG: "1" } }, ctx);
+    expect(result).toContain("environment knobs are set per process");
+    expect(existsSync(join(dbDir, "config.json"))).toBe(false);
+  });
+
+  test("config_set refuses to write when the file failed to parse", async () => {
+    // A broken file (e.g. a hand-edited null) means the in-memory config is
+    // empty defaults - saving would replace the whole file and silently
+    // discard the user's other sections. The tool must refuse instead.
+    writeFileSync(join(dbDir, "config.json"), '{ "notifications": { "voice": null } }');
+    const def = TOOL_DEFS.find((t) => t.name === "config_set")!;
+    const result = await def.execute({ notifications: { mode: "banner" } }, ctx);
+    expect(result).toContain("Config file failed to parse");
+    const onDisk = JSON.parse(readFileSync(join(dbDir, "config.json"), "utf8"));
+    expect(onDisk.notifications.voice).toBeNull(); // the file was not touched
+  });
+
+  test("config_get renders the environment section with effective values", async () => {
+    const prev = process.env.THATCH_RECALL_THRESHOLD;
+    process.env.THATCH_RECALL_THRESHOLD = "0.7";
+    try {
+      const def = TOOL_DEFS.find((t) => t.name === "config_get")!;
+      const result = await def.execute({ section: "environment" }, ctx);
+      expect(result).toContain("environment:");
+      expect(result).toContain("THATCH_RECALL_THRESHOLD: 0.7 (default: 0.55)");
+      // The test process's own THATCH_DB_PATH shows through - values are
+      // read from the live environment, not invented.
+      expect(result).toContain(`THATCH_DB_PATH: ${join(dbDir, "thatch.db")}`);
+    } finally {
+      if (prev === undefined) delete process.env.THATCH_RECALL_THRESHOLD;
+      else process.env.THATCH_RECALL_THRESHOLD = prev;
+    }
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { createAlerts, alertTone, deriveRoundShape, roundDidRealWork, replyRequestID, type AlertInput, type AlertsDeps, type RoundMessage, type RoundShape } from "../src/alerts";
+import { createAlerts, alertDelivery, alertTone, deriveRoundShape, roundDidRealWork, replyRequestID, type AlertInput, type AlertsDeps, type RoundMessage, type RoundShape } from "../src/alerts";
 import { alertMode, configFilePath, loadConfig, saveConfig, type Config } from "../src/config";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,7 +16,11 @@ function harness(config: Config | undefined, roundShape: RoundShape | null | (()
     roundShape: async () => (typeof roundShape === "function" ? roundShape() : roundShape),
     sessionTitle: async () => "test session",
     notify: async (input) => {
-      alerts.push(input);
+      // Record the alert's own fields, not the threaded config snapshot:
+      // the config is transport (the delivery composition's input), not
+      // part of the alert payload the state-machine tests assert on.
+      const { kind, title, message } = input;
+      alerts.push({ kind, title, message });
     },
   };
   return { alerts, machine: createAlerts(deps) };
@@ -358,5 +362,42 @@ describe("alertTone", () => {
     expect(alertTone("error")).toBe("negative");
     expect(alertTone("done")).toBe("positive");
     expect(alertTone("pause")).toBe("neutral");
+  });
+});
+
+describe("alertDelivery", () => {
+  test("composes channel, configured voice/sound, and tone from one config", () => {
+    // The runtime notify callback's whole contract in one pure function:
+    // the channel gate reads the alerts section, the voice/sound prefer
+    // the user's notifications section over the platform defaults, and
+    // the tone comes from the event kind. If this regresses to defaults
+    // only, a configured voice stops reaching machine alerts.
+    const config: Config = {
+      notifications: { voice: "Fred", sound: "Ping" },
+      alerts: { done: { mode: "voice" }, error: { mode: "banner" }, pause: { mode: "none" } },
+    };
+    const defaults = { voice: "Zarvox", sound: "Submarine" };
+    expect(alertDelivery(config, defaults, "done")).toEqual({
+      channel: "voice",
+      voice: "Fred",
+      sound: "Ping",
+      tone: "positive",
+    });
+    expect(alertDelivery(config, defaults, "error")).toEqual({
+      channel: "banner",
+      voice: "Fred",
+      sound: "Ping",
+      tone: "negative",
+    });
+  });
+
+  test("unset config fields fall back to the platform defaults", () => {
+    const config: Config = { alerts: { error: { mode: "voice" } } };
+    expect(alertDelivery(config, { voice: "Zarvox", sound: "Submarine" }, "error")).toEqual({
+      channel: "voice",
+      voice: "Zarvox",
+      sound: "Submarine",
+      tone: "negative",
+    });
   });
 });

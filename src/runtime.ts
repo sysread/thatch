@@ -27,7 +27,7 @@ import {
   RUNTIME_STATE_TTL_MS,
   type ToolInteraction,
 } from "./extraction";
-import { createAlerts, alertTone, deriveRoundShape, isNoWorkTool, replyRequestID } from "./alerts";
+import { createAlerts, alertDelivery, deriveRoundShape, isNoWorkTool, replyRequestID } from "./alerts";
 import { mostRecentTopLevelSessionId } from "./session-db";
 import type { CoreContext } from "./tool-defs";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
@@ -38,7 +38,7 @@ import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskV
 import { WatcherRegistry, ghApiRun, ghAvailable, runWatchedCommand, watcherTarget, withCwdFallback, type Watcher, type WatcherEvent } from "./watchers";
 import { watcherNotificationNudge, watcherRearmNotice, watcherDeathNotice, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
 import { ChatPoller, createWakeGate, EXTRACTION_CHILD_TITLE, hostedSessionIds, isDefaultSessionTitle, isMachinerySessionTitle, nowIso, unexpiredGraceRehosts } from "./chat";
-import { chatEnabled, chatAutoRegister, loadConfig, alertMode, notificationDefaults } from "./config";
+import { chatEnabled, chatAutoRegister, loadConfig, notificationDefaults } from "./config";
 import { sendNotification } from "./notify";
 import { osProcessArgs, startupSessionId, continuesLastSessionFromArgv, continuesLastSessionId } from "./os-args";
 import type { HostCapabilities } from "./capabilities";
@@ -354,23 +354,22 @@ export async function createRuntime(input: {
     roundShape: async (sessionID) =>
       deriveRoundShape(await caps.sessionMessages(sessionID)),
     sessionTitle: async (sessionID) => (await caps.sessionGet(sessionID))?.title,
-    notify: async ({ kind, title, message }) => {
-      const defaults = notificationDefaults();
-      // The machine path composes the spoken line too, so it passes the
-      // alert's tone (error -> "Sad sad sad", done -> "Amaze! Amaze!",
-      // pause -> neutral - a needs-you ask is neither); sendNotification
-      // caps the source label structurally (the session title is
-      // model-generated and unbounded).
+    notify: async ({ kind, title, message, config }) => {
+      // alertDelivery composes the whole machine-path contract - the
+      // channel gate, the user's configured voice/sound, the announcement
+      // tone - and is pinned in alerts.test.ts. The gate snapshots its
+      // config into the input so a concurrent config_set cannot flip the
+      // mode between gate and delivery; the fallback read covers test
+      // spies that record deliveries without composing them.
+      const delivery = alertDelivery(config ?? loadConfig(dbPath).config, notificationDefaults(), kind);
       await sendNotification({
         message,
         title,
         source: title,
-        tone: alertTone(kind),
-        // The machine owns the per-event "none" gate and never calls here
-        // with one - this cast records that contract.
-        channel: alertMode(loadConfig(dbPath).config, kind) as "both" | "banner" | "voice",
-        voice: defaults.voice,
-        sound: defaults.sound,
+        tone: delivery.tone,
+        channel: delivery.channel,
+        voice: delivery.voice,
+        sound: delivery.sound,
       });
     },
   });

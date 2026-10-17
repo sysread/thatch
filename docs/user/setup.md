@@ -152,9 +152,14 @@ alongside an explicit directory has no effect (setup prints a note).
 
 ## Environment variables
 
+Only a subset of the knobs is listed here. `config_get`'s `environment`
+section lists every knob, its default, and the value in your running
+process; the registry itself is `src/env-knobs.ts`.
+
 | Variable | Default | What it controls |
 |----------|---------|-----------------|
 | `THATCH_DB_PATH` | `~/.config/thatch/thatch.db` | SQLite database path |
+
 | `THATCH_MODEL` | `Xenova/bge-small-en-v1.5` | Hugging Face model name for embeddings |
 | `THATCH_EMBEDDING_BACKEND` | `wasm` | Set to `native` to run embeddings on onnxruntime-node (NAPI) instead of the wasm runtime |
 | `THATCH_MODEL_CACHE` | platform per-user cache dir | Where downloaded model files are stored |

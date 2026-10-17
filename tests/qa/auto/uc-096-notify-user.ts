@@ -27,6 +27,9 @@ const useCase: UseCase = {
     "4. Call notify_user with a mock spawner; verify the banner and voice commands and the source-prefixed spoken text.",
     "5. Call notify_user with tone positive and tone negative; verify the Amaze! Amaze! / Sad sad sad prefix leads the banner text and the spoken line (source label right after), and that a message already carrying the prefix is not doubled.",
     "6. Set mode to none and call notify_user; verify it no-ops without spawning.",
+    "7. Unset a field with config_set (field value null); verify the key is deleted from the raw config file and config_get shows <unset> again.",
+    "8. Read the environment section with config_get; verify THATCH_ knobs render with effective values and defaults.",
+    "9. Try config_set on the environment section and with a null section object; verify both are refused and nothing is written.",
   ].join("\n"),
   expected: [
     "- The three tools exist in TOOL_DEFS with no opencodeOnly flag.",
@@ -35,6 +38,9 @@ const useCase: UseCase = {
     "- notify_user constructs an osascript banner and a /usr/bin/say voice command (darwin), prefixes the spoken text with the source label, and reports success without claiming the banner was seen.",
     "- tone positive/negative prepends the announcement prefix to both channels; a pre-prefixed message is left alone.",
     "- mode: none produces a [skipped] result with zero spawned commands.",
+    "- config_set with a null field value deletes the key from the config file; the default applies again.",
+    "- config_get section environment renders one line per THATCH_ knob with its effective value and default.",
+    "- config_set refuses the environment section (read-only) and null section objects, without writing the file.",
   ].join("\n"),
 
   async run(_ctx: QaContext) {
@@ -155,6 +161,46 @@ const useCase: UseCase = {
       const skipped = await notifyUser.execute({ message: "hello" }, ctx);
       if (!skipped.startsWith("[skipped]") || recorded.length !== 0) {
         console.log(`  FAIL: mode none should no-op, got: ${skipped}`);
+        return "FAIL";
+      }
+
+      // Step 7: unset semantics - a null field value deletes the key from
+      // the file (the platform default applies again).
+      await configSet.execute({ notifications: { mode: "voice", voice: "Fred" } }, ctx);
+      const unset = await configSet.execute({ notifications: { voice: null } }, ctx);
+      if (!unset.includes("mode: voice") || !unset.includes("voice: <unset>")) {
+        console.log(`  FAIL: unset did not restore <unset>, got: ${unset}`);
+        return "FAIL";
+      }
+      const afterUnset = JSON.parse(readFileSync(join(dbDir, "config.json"), "utf8"));
+      if (afterUnset.notifications.voice !== undefined) {
+        console.log(`  FAIL: unset key still in the config file: ${JSON.stringify(afterUnset.notifications)}`);
+        return "FAIL";
+      }
+      const gotAfterUnset = await configGet.execute({ section: "notifications" }, ctx);
+      if (!gotAfterUnset.includes("voice: <unset>")) {
+        console.log(`  FAIL: config_get does not show the unset field as <unset>: ${gotAfterUnset}`);
+        return "FAIL";
+      }
+
+      // Step 8: the environment section renders the THATCH_ knob registry
+      // with effective values from the live process environment.
+      const env = await configGet.execute({ section: "environment" }, ctx);
+      if (!env.includes("environment:") || !env.includes("THATCH_DB_PATH:") || !env.includes("(default:")) {
+        console.log(`  FAIL: environment section did not render knobs, got: ${env.slice(0, 300)}`);
+        return "FAIL";
+      }
+
+      // Step 9: refusals - the environment section is read-only and null is
+      // never a section value; neither writes the file.
+      const refusedEnv = await configSet.execute({ environment: { THATCH_DEBUG: "1" } }, ctx);
+      if (!refusedEnv.includes("environment knobs are set per process")) {
+        console.log(`  FAIL: environment section was not refused, got: ${refusedEnv}`);
+        return "FAIL";
+      }
+      const refusedNull = await configSet.execute({ notifications: null }, ctx);
+      if (!refusedNull.includes("null is not a section value")) {
+        console.log(`  FAIL: null section object was not refused, got: ${refusedNull}`);
         return "FAIL";
       }
 

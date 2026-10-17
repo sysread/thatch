@@ -153,8 +153,8 @@ Stores are created automatically. No setup required.
 
 | Tool | What it does |
 |------|-------------|
-| `thatch_config_get` | Read the user config (`~/.config/thatch/config.json`), with defaults annotated. The agent manages config through these tools; you can also edit the file by hand. |
-| `thatch_config_set` | Update config fields. Field-level merge: only fields you pass change. Returns the resulting section so the agent can verify. |
+| `thatch_config_get` | Read the user config (`~/.config/thatch/config.json`), with defaults annotated. The `environment` section lists the `THATCH_*` env knobs and their effective values (read-only). The agent manages config through these tools; you can also edit the file by hand. |
+| `thatch_config_set` | Update config fields. Field-level merge: only fields you pass change; pass `null` as a field's value to unset it (the default applies again). The environment section is refused (set env vars in your shell). Returns the resulting section so the agent can verify. |
 
 ### Notification tools
 
@@ -474,9 +474,14 @@ Most configuration needs none. Two layers exist:
   edit the file by hand. See [notifications.md](notifications.md).
 - **Environment variables** for infrastructure:
 
+Only a subset of the knobs is listed here. `config_get`'s `environment`
+section lists every knob, its default, and the value in your running
+process; the registry itself is `src/env-knobs.ts`.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `THATCH_DB_PATH` | `$XDG_CONFIG_HOME/thatch/thatch.db` | Override database location (the config file follows it) |
+
 | `THATCH_MODEL` | `Xenova/bge-small-en-v1.5` | Override embedding model |
 | `THATCH_EMBEDDING_BACKEND` | `wasm` | Set to `native` to run embeddings on onnxruntime-node (NAPI) instead of the wasm runtime |
 | `THATCH_DEBUG` | unset (off) | Diagnostic logging to `debug.log` beside the database. `1` logs everything; or a comma-separated list of tags, e.g. `chat` or `chat:startup` |
