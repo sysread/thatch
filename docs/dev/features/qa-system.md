@@ -70,12 +70,12 @@ execution directly via bun assertions. These are fast and run in parallel.
 Spawn real opencode sessions. Test the full pipeline with a real model. These
 cost model tokens and have a 20-minute per-use-case timeout. Live use cases
 check for `opencode` on PATH at runtime: if it is present they run; if not,
-they skip with `[MANUAL]`. Six (UC-006, UC-010, UC-013, UC-083, UC-084,
-and UC-085) are
+they skip with `[MANUAL]`. Seven (UC-006, UC-010, UC-013, UC-083, UC-084,
+UC-085, and UC-125) are
 `manualOnly: true` for infrastructure reasons (Cursor hook lifecycle, nested
 opencode session timeout, compaction trigger, sub-agent support, skill
-loading, and a PR with prior review comments). Run them locally with
-`mise run qa-live`.
+loading, a PR with prior review comments, and the TUI-local tab strip). Run
+them locally with `mise run qa-live`.
 
 | UC | Name | What it tests |
 |----|------|---------------|
@@ -102,6 +102,7 @@ loading, and a PR with prior review comments). Run them locally with
 | UC-098 | chat-cross-session | two real opencode sessions exchange chat messages |
 | UC-119 | session-tab-spawn | the session_tab spawn flow end to end |
 | UC-122 | review-mode-commands | /thatch/self-review and /thatch/peer-review overlay efficacy (seeded fixture) |
+| UC-125 | session-tab-switched-window | coordinator-anchored tab routing: a spawn from a window viewing a different-directory tab still opens the strip tab (manualOnly - the strip is TUI-local) |
 
 ### mise tasks
 
@@ -251,7 +252,7 @@ No separate QA docs directory exists. QA use cases live in `tests/qa/` as execut
 1. **Automatable use cases never spawn an LLM.** They test CLI, hooks, DB, and
    tool execution directly.
 2. **Live use cases spawn real opencode sessions and cost model tokens.** They
-   skip with `[MANUAL]` when `opencode` is not on PATH; six are
+   skip with `[MANUAL]` when `opencode` is not on PATH; seven are
    `manualOnly: true` for infrastructure reasons.
 3. **`QA_DRY_RUN=1` lists use cases without executing.** Use this for CI and
    coverage review.

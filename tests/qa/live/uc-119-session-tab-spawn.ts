@@ -1,7 +1,7 @@
 import { registerUseCase, type UseCase } from "../runner";
 
 /**
- * UC-114: the session-tab spawn flow end to end.
+ * UC-119: the session-tab spawn flow end to end.
  *
  * The agent calls thatch_session_tab and the full response contract comes
  * back: the subordinate's chat name, session id, title, directory, and the

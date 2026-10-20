@@ -67,7 +67,10 @@ describe("opencode v2 adapter", () => {
     expect(sessionCreateCalls[0].location).toEqual({ directory: dbDir });
     expect(sessionCreateCalls[0].metadata.thatch.coordinatorSessionID).toBe("ses_coordinator");
     expect(rpcEmitted).toEqual([
-      { name: "tab-opened", data: { sessionID: "v2-test-child", directory: dbDir } },
+      {
+        name: "tab-opened",
+        data: { sessionID: "v2-test-child", directory: dbDir, coordinatorSessionID: "ses_coordinator" },
+      },
     ]);
     expect(sessionPromptCalls[0].sessionID).toBe("v2-test-child");
     expect(sessionPromptCalls[0].text.startsWith("Your work session was created by ")).toBe(true);

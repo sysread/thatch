@@ -24,16 +24,21 @@ v2 adapter (src/opencode/v2.ts, buildSessionTabHost via CoreContext.sessionTabHo
   |  1. session.create({title, metadata: {thatch: {...}}, location})
   |  2. worktree flow: session.move({directory: worktree})  (idle -> steer = immediate)
   |  3. db.registerChatSession(subordinate)   (participant, never machinery-marked)
-  |  4. rpc emit rpc.thatch-tabs.tab-opened {sessionID, directory}
+  |  4. rpc emit rpc.thatch-tabs.tab-opened {sessionID, directory,
+  |            coordinatorSessionID}
   |  5. session.prompt({text: preamble + task})
   v
 SSE event feed (isOpenCodeEvent passes rpc.*; fans out across all locations)
   v
 TUI CLI plugin (src/opencode/tui-plugin.ts, loaded from package exports "./tui")
-  |  data.listen -> type filter -> routing (actsOnTabEvent): open/toast events
-  |  act only in the window matching the coordinator instance's directory
-  |  (built-in tui.* guard); close events act session-scoped with no guard -
-  |  a moved session stamps its close with the NEW directory while its tab
+  |  data.listen -> type filter -> routing (actsOnTabEvent): open events
+  |  anchor on the coordinator - a window holding a tab for the coordinator
+  |  session acts, else the window whose default directory (its own cwd, the
+  |  directory the tab strip keys its tabs by) matches the event's
+  |  location; toast events act only in the window whose VIEWED directory
+  |  matches (the built-in tui.* guard - the location context follows the
+  |  viewed session); close events act session-scoped with no guard - a
+  |  moved session stamps its close with the NEW directory while its tab
   |  stays in the original window
   |  -> data.session.sync -> ui.tabs.open(sessionID)
   v
@@ -47,13 +52,23 @@ Key properties:
   system prompt lists the tool only when the runtime is built with
   `v2Tools: true` - a prompt listing a nonexistent tool is the
   first-call-mistake class.
-- **The event routes by the coordinator's location**, so the tab opens in
-  the coordinator's window under any `tabs.scope` - even when the session
-  lives in a worktree or temp dir. Tab ownership is by window, not by
-  session location.
+- **The event anchors on the coordinator**, so the tab opens in the
+  coordinator's window under any `tabs.scope` - even when the session
+  lives in a worktree or temp dir, and even when the coordinator window is
+  viewing a different tab. Tab ownership is by window, not by session
+  location. Two-step routing (with wire-compat fallbacks, see
+  `actsOnTabEvent`). Step 1: the window holding the coordinator session's
+  tab acts first. The tab is the stable identity of "the coordinator's
+  window": it survives both tab switching and a coordinator that itself
+  lives in a worktree. (The TUI's location context follows the viewed
+  session's directory, so a directory match against it drops every spawn
+  when the coordinator window is parked elsewhere.) Step 2: the fallback
+  matches the window whose own cwd is the coordinator instance's
+  directory, which covers a closed or never-tabbed coordinator and an
+  older server process that emits no `coordinatorSessionID`.
 - **The move precedes the emit**: a failed move leaves no stranded open tab
-  (placement is identical either way because routing is by coordinator
-  location).
+  (placement is identical either way because routing is anchored on the
+  coordinator's tab, not the session's location).
 - **No ack**: a headless run, a connecting TUI, or `tabs.mode: off` means
   the event lands nowhere (harmlessly). The tool response says "tab
   requested"; the session exists and is findable in the sessions list
@@ -85,7 +100,10 @@ Key properties:
 ## The cross-entry contract
 
 `src/session-tab-shared.ts` (SDK-free, per the isolation rule in
-`src/index.ts`) holds the rpc definition (`thatch-tabs`: `tab-opened`;
+`src/index.ts`) holds the rpc definition (`thatch-tabs`: `tab-opened`
+(carries the subordinate's `sessionID`, its final `directory`, and the
+spawning `coordinatorSessionID` - optional + nullable for wire compat
+across independently-loaded server/TUI halves);
 `tab-closed` - emitted by the close tool (below) and translated by the v2
 pump into the runtime's confirmed-death path, which also records a
 `chat_tab_closed` marker the chat roster's open-tab reader uses to demote
@@ -156,7 +174,9 @@ dependency for the TUI entry's runtime resolution.
   ordering via the `makeContext` double with `session.move` + the `rpc`
   domain).
 - QA: uc-059 (tool list + MCP leak check), uc-014/uc-060 (skill counts),
-  uc-119 (the live spawn flow through the docker sandbox).
+  uc-119 (the live spawn flow through the docker sandbox), uc-125
+  (manualOnly: a spawn from a window viewing a different-directory tab
+  still opens the strip tab).
 - Live smoke (recorded 2026-10-08, ALL SCENARIOS PASSED): headless legs -
   directory variant, worktree variant (the move persisted in the session
   row + metadata), headless no-tab; TUI-visual legs (a real container

@@ -419,3 +419,45 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   adds no microtask between the gate and the wrapped call. If you ever
   replace it with an async check, the callers' fire-and-forget timing -
   and the tests that pin it - break again. (2026-10-12, wake-delivery-guard)
+
+## TUI-process console.error never reaches opencode.log
+
+- **Symptom**: a code path in `src/opencode/tui-plugin.ts` (or anything
+  else running in the TUI process) logs `console.error("[thatch] ...")`,
+  you grep the daemon log for it, find nothing, and conclude the path
+  never ran. It may have run fine.
+- **Cause**: the TUI process forwards its LOG SINK (`useLog` -> the
+  `log:` callback in the CLI's TUI handler) to opencode.log, but
+  `console.error` writes straight to the process stderr - which is the
+  alt-screen terminal, i.e. invisible and unrecoverable. The daemon's
+  `console.error` DOES land in the log, so the two halves of the same
+  feature have different observability.
+- **Fix**: to trace the TUI plugin, append to a file directly (the plugin
+  has fs access): `appendFileSync("/tmp/diag.log", ...)` in a try/catch,
+  and revert it when done - every fed event appends a line (busy windows
+  produce thousands per minute). Log-sink messages (`useLog`) are the
+  clean channel but only exist inside components, not in the plugin
+  entrypoint's event listener. (2026-10-20, session-tab guard investigation)
+
+## A TUI started during a daemon replacement can bind a dead plugin listener
+
+- **Symptom**: one TUI window acts on rpc.thatch-tabs.* events while
+  another (same binary, same shim) silently never does - no tabs, no
+  toasts, no error anywhere. Survives spawns, daemon restarts, and the
+  plugin reconcile cycle.
+- **Cause**: on a version-mismatch restart (brew upgrade mid-session),
+  the TUI connects to the old daemon, discovers the mismatch, replaces
+  it, and reconnects. The plugin generation's first reconcile (and so
+  the `data.listen` subscription in tui-plugin.ts) can run BETWEEN
+  "event stream connecting" and "event stream connected" - bound to the
+  pre-replacement event source. Later reconciles no-op unchanged
+  generations, so the dead listener is never re-created. (Observed live
+  2026-10-20: the coordinator TUI started at 14:44:13 during the
+  2.0.32 -> 2.1.1 upgrade; its tab consumer stayed dead until a source
+  edit hot-reloaded the plugin at 15:54; the probe right after worked.)
+- **Fix/workaround**: any plugin-source change hot-reloads the TUI
+  plugin and re-runs setup with a fresh listener (edit a comment in the
+  checkout the shim re-exports from); a TUI restart also works. The real
+  hardening belongs upstream: re-run plugin setups on `server.connected`.
+  Diagnose with the file-append trick above - the daemon log cannot see
+  this layer. (2026-10-20, session-tab guard investigation)

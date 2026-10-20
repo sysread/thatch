@@ -6,11 +6,14 @@
 // The server-side adapter cannot reach the tab strip - the v2 plugin event
 // domain is subscribe-only and the HTTP surface has no publish route - so
 // the flow crosses processes over an rpc event: the adapter emits
-// rpc.thatch-tabs.tab-opened (sessionID + the coordinator instance's
-// directory), the SSE feed fans it to every window, and THIS plugin acts on
-// it with ui.tabs.open. Routing (actsOnTabEvent in src/session-tab-shared.ts):
-// open and toast events act only in the window whose directory matches the
-// event's location (the same guard the built-in tui.* handlers apply), while
+// rpc.thatch-tabs.tab-opened (sessionID + the subordinate's final directory
+// + the coordinator's session id), the SSE feed fans it to every window,
+// and THIS plugin acts on it with ui.tabs.open. Routing (actsOnTabEvent in
+// src/session-tab-shared.ts): open events anchor on the coordinator - a
+// window holding the coordinator's tab acts, else the window whose default
+// directory (its own cwd) matches the event's location; toast events act
+// only in the window whose VIEWED directory (the session on screen) matches
+// the event's location (the same guard the built-in tui.* handlers apply);
 // close events act session-scoped with no directory guard - a session that
 // moved after its tab was opened stamps its close with the new directory
 // while the tab lives in the original window. ui.tabs.open is idempotent and
@@ -29,8 +32,35 @@ export default Plugin.define({
   id: "jeffober-thatch-tui",
   setup(context) {
     const off = context.data.listen(({ details }) => {
-      const windowDirectory = context.location?.directory ?? context.data.location.default().directory;
-      if (!actsOnTabEvent(details.type, details.location?.directory, windowDirectory)) return;
+      // Two directory identities per window: the VIEWED session's directory
+      // (the location context follows navigation) and the window's own cwd
+      // (the default directory - the one the tab strip keys its tabs by).
+      // The guard routes opens by the coordinator's tab first, then the
+      // default directory; toasts keep the viewed-directory guard. See
+      // actsOnTabEvent.
+      const defaultDirectory = context.data.location.default().directory;
+      const viewedDirectory = context.location?.directory ?? defaultDirectory;
+      const payload = details.data as { coordinatorSessionID?: string | null };
+      // The strip holds ROOT session ids, and the coordinator could itself
+      // be a child session (a subordinate that coordinates) - compare roots.
+      // root() on an id this window never synced is unspecified; failure
+      // degrades to the directory fallback, never kills the listener.
+      const coordinatorSessionID = payload.coordinatorSessionID ?? null;
+      let windowHoldsCoordinatorTab = false;
+      if (coordinatorSessionID !== null) {
+        try {
+          windowHoldsCoordinatorTab = context.ui.tabs
+            .list()
+            .some((tab) => tab.sessionID === context.data.session.root(coordinatorSessionID));
+        } catch {}
+      }
+      if (!actsOnTabEvent({
+        type: details.type,
+        eventDirectory: details.location?.directory,
+        viewedDirectory,
+        defaultDirectory,
+        windowHoldsCoordinatorTab,
+      })) return;
       // Two close events, one TUI action: tab-closed (the session_tab_close
       // tool's confirmed close - the pump also runs its death bookkeeping)
       // and exit-tab-closed (the wrap-up exit's close - the runtime records

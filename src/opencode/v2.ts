@@ -156,7 +156,7 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     ? await context.rpc.register(SESSION_TAB_RPC, {})
     : undefined;
   if (tabRegistration) {
-    const emitTabOpened = (data: { sessionID: string; directory: string }) =>
+    const emitTabOpened = (data: { sessionID: string; directory: string; coordinatorSessionID: string | null }) =>
       tabRegistration.events.emit(TAB_OPENED_EVENT, data);
     // The session_tab_close tool's confirmed-close emitter: the pump
     // translates this event into the runtime's death path, so it is the
@@ -724,10 +724,10 @@ export function translateEvent(located: { type: string; data?: any }): { type: s
  * (The calling session's chat name is resolved by the tool definition - it
  * has the db handle and the session context.)
  *
- * The emit runs AFTER the move: the event routes by THIS instance's location
- * (the coordinator's directory) regardless of the session's directory, so
- * tab placement is identical either way, and a failed move leaves no
- * stranded open tab. The move targets an idle session, so its default
+ * The emit runs AFTER the move: the event anchors on the coordinator (the
+ * tab-open guard prefers the window holding the coordinator's tab, then a
+ * default-directory match), so tab placement is identical either way, and
+ * a failed move leaves no stranded open tab. The move targets an idle session, so its default
  * "steer" delivery applies immediately - the subordinate's whole first turn
  * runs in its final directory.
  *
@@ -740,7 +740,7 @@ function buildSessionTabHost(input: {
   /** This instance's directory - the coordinator session's cwd. */
   directory: string;
   db: ThatchDB;
-  emitTabOpened: (data: { sessionID: string; directory: string }) => Promise<unknown>;
+  emitTabOpened: (data: { sessionID: string; directory: string; coordinatorSessionID: string | null }) => Promise<unknown>;
   emitTabClosed: (data: { sessionID: string; chatName: string | null }) => Promise<unknown>;
   debug(tag: string, message: string): void;
 }): SessionTabHost {
@@ -807,8 +807,14 @@ function buildSessionTabHost(input: {
         // directory, not this instance's: the TUI guard routes by the event
         // envelope's location, while the pump caches this field so the
         // subordinate's later location-less execution events resolve to the
-        // instance that owns it.
-        await input.emitTabOpened({ sessionID, directory: finalDirectory });
+        // instance that owns it. The coordinator's session id rides along
+        // so the TUI can anchor routing on the window holding the
+        // coordinator's tab (see actsOnTabEvent).
+        await input.emitTabOpened({
+          sessionID,
+          directory: finalDirectory,
+          coordinatorSessionID: spec.coordinatorSessionID,
+        });
         steps.push("tab-opened emitted");
         await input.context.session.prompt({
           sessionID,

@@ -120,6 +120,15 @@ describe("SESSION_TAB_RPC definition", () => {
     expect(schema.properties.variant.enum).toEqual(["info", "success", "warning", "error"]);
     expect(schema.required).toEqual(["message", "variant", "duration"]);
   });
+
+  test("tab-opened carries the optional nullable coordinatorSessionID", () => {
+    // Optional + nullable, NOT required: an older server process (the shim's
+    // server and TUI halves load in separate processes) emits without it and
+    // the TUI guard degrades to default-directory matching.
+    const schema = SESSION_TAB_RPC.events[TAB_OPENED_EVENT].schema as any;
+    expect(schema.properties.coordinatorSessionID.type).toEqual(["string", "null"]);
+    expect(schema.required).toEqual(["sessionID", "directory"]);
+  });
 });
 
 describe("TUI plugin guard logic", () => {
@@ -160,20 +169,45 @@ describe("TUI plugin guard logic", () => {
   test("actsOnTabEvent: close events act session-scoped, regardless of directories", () => {
     // A moved session stamps its close with the NEW directory while the tab
     // lives in the ORIGINAL window - the close must not be guarded.
-    expect(actsOnTabEvent(tabClosedEventType, "/wt-thog/branch", "/thog")).toBe(true);
-    expect(actsOnTabEvent(exitTabClosedEventType, "/wt-thog/branch", "/thog")).toBe(true);
-    expect(actsOnTabEvent(exitTabClosedEventType, "/wt-thog/branch", "/elsewhere")).toBe(true);
-    expect(actsOnTabEvent(exitTabClosedEventType, undefined, undefined)).toBe(true);
+    expect(actsOnTabEvent({ type: tabClosedEventType, eventDirectory: "/wt-thog/branch", viewedDirectory: "/thog", defaultDirectory: "/thog", windowHoldsCoordinatorTab: false })).toBe(true);
+    expect(actsOnTabEvent({ type: exitTabClosedEventType, eventDirectory: "/wt-thog/branch", viewedDirectory: "/thog", defaultDirectory: "/thog", windowHoldsCoordinatorTab: false })).toBe(true);
+    expect(actsOnTabEvent({ type: exitTabClosedEventType, eventDirectory: "/wt-thog/branch", viewedDirectory: "/elsewhere", defaultDirectory: "/elsewhere", windowHoldsCoordinatorTab: false })).toBe(true);
+    expect(actsOnTabEvent({ type: exitTabClosedEventType, eventDirectory: undefined, viewedDirectory: undefined, defaultDirectory: undefined, windowHoldsCoordinatorTab: false })).toBe(true);
   });
 
-  test("actsOnTabEvent: open and toast events keep the directory guard", () => {
-    expect(actsOnTabEvent(tabOpenedEventType, "/repo", "/repo")).toBe(true);
-    expect(actsOnTabEvent(tabOpenedEventType, "/repo", "/other")).toBe(false);
-    expect(actsOnTabEvent(toastEventType, "/repo", "/repo")).toBe(true);
-    expect(actsOnTabEvent(toastEventType, "/repo", "/other")).toBe(false);
-    // Missing locations still fail closed for non-close events.
-    expect(actsOnTabEvent(tabOpenedEventType, undefined, "/repo")).toBe(false);
-    expect(actsOnTabEvent(toastEventType, "/repo", undefined)).toBe(false);
+  test("actsOnTabEvent: toast keeps the viewed-directory guard", () => {
+    // A toast is attached to the session whose runtime emitted it - "show it
+    // where that session is on screen" - the built-in tui.* guard exactly.
+    expect(actsOnTabEvent({ type: toastEventType, eventDirectory: "/repo", viewedDirectory: "/repo", defaultDirectory: "/other", windowHoldsCoordinatorTab: false })).toBe(true);
+    expect(actsOnTabEvent({ type: toastEventType, eventDirectory: "/repo", viewedDirectory: "/other", defaultDirectory: "/repo", windowHoldsCoordinatorTab: false })).toBe(false);
+    expect(actsOnTabEvent({ type: toastEventType, eventDirectory: "/repo", viewedDirectory: undefined, defaultDirectory: "/repo", windowHoldsCoordinatorTab: false })).toBe(false);
+  });
+
+  test("actsOnTabEvent: open acts in the window holding the coordinator's tab, whatever it is viewing", () => {
+    // The 2026-10-20 bug: the coordinator window parked on a worktree or
+    // foreign-repo tab dropped every spawn (the TUI location context follows
+    // the viewed session's directory). The coordinator's own tab is the
+    // stable anchor - the strip holds it regardless of what is on screen.
+    expect(actsOnTabEvent({ type: tabOpenedEventType, eventDirectory: "/repo", viewedDirectory: "/wt-other-repo", defaultDirectory: "/repo", windowHoldsCoordinatorTab: true })).toBe(true);
+    expect(actsOnTabEvent({ type: tabOpenedEventType, eventDirectory: undefined, viewedDirectory: "/anywhere", defaultDirectory: undefined, windowHoldsCoordinatorTab: true })).toBe(true);
+  });
+
+  test("actsOnTabEvent: open falls back to the window's default directory", () => {
+    // No window holds the coordinator's tab (closed or never tabbed): the
+    // window whose own cwd IS the coordinator instance's directory acts -
+    // that is the directory the opened tab is filed under.
+    expect(actsOnTabEvent({ type: tabOpenedEventType, eventDirectory: "/repo", viewedDirectory: "/viewed-elsewhere", defaultDirectory: "/repo", windowHoldsCoordinatorTab: false })).toBe(true);
+    expect(actsOnTabEvent({ type: tabOpenedEventType, eventDirectory: "/repo", viewedDirectory: "/repo", defaultDirectory: "/other", windowHoldsCoordinatorTab: false })).toBe(false);
+    // Missing locations still fail closed without the tab anchor.
+    expect(actsOnTabEvent({ type: tabOpenedEventType, eventDirectory: undefined, viewedDirectory: "/repo", defaultDirectory: "/repo", windowHoldsCoordinatorTab: false })).toBe(false);
+    expect(actsOnTabEvent({ type: tabOpenedEventType, eventDirectory: "/repo", viewedDirectory: "/repo", defaultDirectory: undefined, windowHoldsCoordinatorTab: false })).toBe(false);
+  });
+
+  test("actsOnTabEvent: open never leaks into a foreign-project window by viewed directory", () => {
+    // An open must not act just because the VIEWED session's directory
+    // matches: this window's own cwd is another project, so the tab would
+    // be filed under that project. Opens never consult the viewed directory.
+    expect(actsOnTabEvent({ type: tabOpenedEventType, eventDirectory: "/thog", viewedDirectory: "/thog", defaultDirectory: "/thatch", windowHoldsCoordinatorTab: false })).toBe(false);
   });
 });
 

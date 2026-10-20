@@ -63,7 +63,18 @@ export const SESSION_TAB_RPC = {
         type: "object",
         properties: {
           sessionID: { type: "string" },
+          // The subordinate's final (post-move) directory: the v2 pump caches
+          // it so the subordinate's later location-less execution events
+          // resolve to the instance that owns it. The OPEN guard never reads
+          // this field - it routes by the rpc envelope's location stamp.
           directory: { type: "string" },
+          // The id of the session that called the tool (host.sessionID), when
+          // the runtime reports the calling session. The TUI guard prefers
+          // it: the window holding the coordinator's tab is the routing
+          // anchor that survives both tab switching and worktree-resident
+          // coordinators. An older server process emits without it and the
+          // guard falls back to directory matching.
+          coordinatorSessionID: { type: ["string", "null"] },
         },
         required: ["sessionID", "directory"],
         additionalProperties: false,
@@ -165,8 +176,8 @@ export type LocationValidation =
 /**
  * The tool takes exactly one location arg. The two kinds differ in
  * validation and intent, not in tab placement: either way the tab opens in
- * the coordinator's window (the tab-open event routes by the coordinator
- * instance's location, never the session's).
+ * the coordinator's window (the tab-open event anchors on the coordinator
+ * session, never on the subordinate's location).
  */
 export function validateLocationArgs(args: { worktree?: unknown; directory?: unknown }): LocationValidation {
   const hasWorktree = typeof args.worktree === "string" && args.worktree.trim() !== "";
@@ -220,19 +231,37 @@ export function isToastEvent(type: string): boolean {
 }
 
 /**
- * The directory guard mirrors the built-in tui.* handlers: an event only
- * acts on the window whose directory matches the event's location (the
- * coordinator instance's directory). An event with no location never acts -
- * failing closed, the same as the built-ins' inequality check.
+ * Directory equality with fail-closed semantics: an event with no location
+ * (theirs or the window's) never acts, the same as the built-in tui.*
+ * handlers' inequality check. Callers pass the window directory identity the
+ * event class routes by - viewed directory for toasts, default directory for
+ * the open fallback (see actsOnTabEvent).
  */
 export function passesDirectoryGuard(eventDirectory: string | undefined, windowDirectory: string | undefined): boolean {
   if (!eventDirectory || !windowDirectory) return false;
   return eventDirectory === windowDirectory;
 }
 
+/** Named inputs to actsOnTabEvent - three same-typed directories would
+ * transpose silently as positional args. */
+export interface TabEventRoute {
+  /** The fully-qualified rpc event type (e.g. "rpc.thatch-tabs.tab-opened"). */
+  type: string;
+  /** The rpc envelope's location stamp (the emitting instance's directory). */
+  eventDirectory: string | undefined;
+  /** The directory of the session the window is viewing (follows tab switches). */
+  viewedDirectory: string | undefined;
+  /** The window's own cwd - the directory the tab strip keys its tabs by. */
+  defaultDirectory: string | undefined;
+  /** Whether this window's strip holds a tab for the coordinator session
+   *  (matched by root id). */
+  windowHoldsCoordinatorTab: boolean;
+}
+
 /**
- * Whether a fed rpc event should act in the window that received it. CLOSE
- * events (tab-closed, exit-tab-closed) always act: the close is
+ * Whether a fed rpc event should act in the window that received it.
+ *
+ * CLOSE events (tab-closed, exit-tab-closed) always act: the close is
  * session-scoped. A session that moved after its tab was opened (root ->
  * worktree via session.move) stamps its exit with the NEW directory while
  * the tab lives in the ORIGINAL window, so the directory guard would drop
@@ -240,10 +269,39 @@ export function passesDirectoryGuard(eventDirectory: string | undefined, windowD
  * stamped /wt-thog/<branch> reached the /thog window holding the tab and was
  * dropped; the tab stayed open). Matching by sessionID within the window's
  * own tab list is the scoping that matters - a window can only close tabs
- * it actually holds. Open and toast events keep the directory guard: they
- * are coordinator-driven and must not leak across projects.
+ * it actually holds.
+ *
+ * TOAST events keep the viewed-directory guard: a toast is attached to the
+ * session whose runtime emitted it, so "show it where that session is on
+ * screen" is the right routing, and the built-in tui.* guard (which compares
+ * the event's location against the window's current location context) is
+ * exactly that.
+ *
+ * OPEN events anchor on the COORDINATOR, in two steps. A viewed-directory
+ * guard would drop a spawn whenever the coordinator window is
+ * viewing another tab: the TUI's location context follows the viewed
+ * session's directory, and worktree or foreign-repo tabs never match the
+ * coordinator instance's directory. Observed live 2026-10-20: every spawn
+ * from a coordinator window parked on a worktree or thog-deployments tab
+ * produced no tab anywhere. (The same no-tab symptom also arises from the
+ * dead-listener race - docs/dev/gotchas.md, "A TUI started during a daemon
+ * replacement".) Step 1: a window holding a tab for the
+ * coordinator session itself acts - the coordinator's tab is the stable
+ * identity of "the coordinator's window" and survives both tab switching
+ * and a coordinator session that lives in a worktree. Step 2: the window
+ * whose default directory (its own cwd - the directory the tab strip keys
+ * its tabs by) matches the event's location. This covers a coordinator
+ * whose own tab is closed or was never opened, and an older server process
+ * that emits no coordinatorSessionID; same-cwd windows share one tab list,
+ * so both windows acting is the normal shared-strip outcome, not a bug.
+ * There is NO viewed-directory fallback: it would leak a spawn into a
+ * foreign-project window that happens to be viewing a same-directory
+ * session.
  */
-export function actsOnTabEvent(type: string, eventDirectory: string | undefined, windowDirectory: string | undefined): boolean {
+export function actsOnTabEvent(route: TabEventRoute): boolean {
+  const { type, eventDirectory, viewedDirectory, defaultDirectory, windowHoldsCoordinatorTab } = route;
   if (isTabClosedEvent(type) || isExitTabClosedEvent(type)) return true;
-  return passesDirectoryGuard(eventDirectory, windowDirectory);
+  if (isToastEvent(type)) return passesDirectoryGuard(eventDirectory, viewedDirectory);
+  if (windowHoldsCoordinatorTab) return true;
+  return passesDirectoryGuard(eventDirectory, defaultDirectory);
 }
