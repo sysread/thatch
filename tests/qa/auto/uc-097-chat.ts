@@ -41,7 +41,7 @@ const useCase: UseCase = {
     "- The poller delivers only when canDeliver passes; undelivered mail stays pending.",
     "- Delivery groups a recipient's messages into one prompt (senders + count) and stamps delivered_at.",
     "- read drains the inbox oldest-first and stamps read_at on exactly the returned rows; read mail is never re-nudged.",
-    "- The per-recipient nudge cap stops repeated wake prompts within the hour window.",
+    "- The per-recipient nudge cap stops repeated wake prompts within the hour window, and only binds re-nudges: a first delivery of never-delivered mail lands even with the budget spent.",
     "- Unregister keeps messages as history (senders keep the name snapshotted at send time) and stops wake selection for the unregistered recipient's unread mail.",
   ].join("\n"),
 
@@ -187,7 +187,11 @@ const useCase: UseCase = {
         return "FAIL";
       }
       // A fresh poller capped at one nudge per hour: its first delivery
-      // passes, the second (aged again) is blocked by the cap.
+      // passes, the second (aged again) is blocked by the cap. The budget
+      // lives in the shared chat_wakes table, so the scenario clears it to
+      // model a fresh hour - a reloaded instance inherits what earlier
+      // cycles spent.
+      raw.run("DELETE FROM chat_wakes");
       const capped = new ChatPoller({
         store: db,
         hostedSessions: () => ["ses_beta"],
@@ -211,6 +215,31 @@ const useCase: UseCase = {
         console.log("  FAIL: rate cap did not block the second nudge within the hour");
         return "FAIL";
       }
+
+      // The cap binds only re-nudges: a FIRST delivery of never-delivered
+      // mail lands even with the budget spent - a busy coordination hub
+      // must not go mail-deaf behind the brake. Own recipient (the
+      // already-registered ses_gamma): ses_beta's exact mail state feeds
+      // the unregister assertions below.
+      db.recordChatWake("ses_gamma"); // spend the 1-per-hour budget up front
+      db.sendChatMessage("ses_alpha", "alpha-00002", "fresh mail, spent budget");
+      const gammaHosted = new ChatPoller({
+        store: db,
+        hostedSessions: () => ["ses_gamma"],
+        deliver: async (sessionID, senders, count) => {
+          deliveries.push({ sessionID, senders, count });
+        },
+        canDeliver: () => true,
+        pollIntervalMs: 60_000,
+        maxNudgesPerHour: 1,
+      });
+      const gammaBefore = delivered();
+      await gammaHosted.deliverPending();
+      if (delivered() !== gammaBefore + 1) {
+        console.log("  FAIL: first delivery did not land with the budget exhausted");
+        return "FAIL";
+      }
+      gammaHosted.dispose();
 
       // Step 9: unregister keeps history - and unregistering the recipient
       // stops wake selection for kept-but-unread mail.

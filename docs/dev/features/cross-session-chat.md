@@ -386,6 +386,17 @@ and a count, pointer-only like watcher notifications, with the model calling
 `chat_read` for content. On success the poller stamps `delivered_at`
 (re-stamping on re-nudges resets the re-nudge timer).
 
+The hard rate cap (default 6 per recipient per rolling hour) counts every
+wake prompt in the shared `chat_wakes` table, written at send time so a
+failed stamp cannot turn the cap into an uncounted re-delivery loop. The
+cap binds only re-nudges: when the budget is spent, first deliveries of
+never-delivered mail still deliver - the recipient's actual inbox is never
+held behind the brake (a coordination hub receiving six report batches in
+an hour once went silently mail-deaf under the old cap-everything rule).
+A batch mixing new and re-nudge mail delivers the new rows and holds the
+re-nudges; a one-line-per-hour `console.error` names the held count.
+`chat_send` surfaces a spent budget to the sender.
+
 Before any wake attempt runs, the delivery guard (`guardDelivery` in
 `src/runtime.ts`) checks that the runtime instance's own directory - the
 bound directory of every session it hosts - still exists. A deleted

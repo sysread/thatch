@@ -428,6 +428,34 @@ describe("chat delivery model in tool output", () => {
     expect(stale).toContain("no wake will fire");
   });
 
+  test("chat_send surfaces a spent wake budget on the recipient", async () => {
+    await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_budget_to", agent: "build" });
+    await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_budget_from", agent: "build" });
+    // A fresh recipient carries no budget note.
+    const fresh = await findChatTool("chat_send").execute(
+      { to: "ses_budget_to", body: "first" },
+      ctx,
+      { sessionID: "ses_budget_from", agent: "build" },
+    );
+    expect(fresh).not.toContain("wake budget");
+    // Six wake prompts inside the hour: the cap is spent. The note names
+    // the renewal and makes clear THIS message still delivers (first
+    // delivery is exempt; only re-nudges wait).
+    const raw = new Database(dbPath);
+    for (let i = 0; i < 6; i++) {
+      raw.run("INSERT INTO chat_wakes (to_session, at) VALUES ('ses_budget_to', strftime('%Y-%m-%dT%H:%M:%SZ','now'))");
+    }
+    const spent = await findChatTool("chat_send").execute(
+      { to: "ses_budget_to", body: "second" },
+      ctx,
+      { sessionID: "ses_budget_from", agent: "build" },
+    );
+    expect(spent).toContain("wake budget (6/hour) is exhausted");
+    expect(spent).toMatch(/renews ~\w{3} \d{2} \d{2}:\d{2}Z/);
+    expect(spent).toContain("New mail like this still delivers");
+    raw.run("DELETE FROM chat_wakes WHERE to_session = 'ses_budget_to'");
+  });
+
   test("session_search guards a missing query with a usage line", async () => {
     // A caller that cross-wired another server's search schema (different
     // param name) lands here - usage line, not a raw dereference crash.

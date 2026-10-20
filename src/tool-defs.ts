@@ -26,7 +26,7 @@ import { sendNotification, defaultSpawner, DEFAULT_VOICE, SPOKEN_LINE_MAX, TONE_
 import { predictionVerb, formatWhenLine, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, describeBaselineCheckRuns, type WatcherRegistry, type Watcher, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
-import { CHAT_STALE_MS, CHAT_SPLIT_PART_LEN, CHAT_MAX_BODY_CHARS, chatLiveness, humanAge, renderChatParticipant, sortChatRoster, splitChatRoster, chatReadClip, chatReadPage, type ChatHostKind } from "./chat";
+import { CHAT_STALE_MS, CHAT_SPLIT_PART_LEN, CHAT_MAX_BODY_CHARS, CHAT_MAX_NUDGES_PER_HOUR, chatLiveness, humanAge, renderChatParticipant, sortChatRoster, splitChatRoster, chatReadClip, chatReadPage, type ChatHostKind, isoMinutesAgo } from "./chat";
 import { detectWorktreeKind, pathExists } from "./git";
 import { isSameMainCheckout, validateLocationArgs, validateTitle } from "./session-tab-shared";
 
@@ -2354,9 +2354,22 @@ const chatSendDef: ToolDef = {
           : liveness === "active"
             ? `The recipient is an MCP-host session; it sees this message at its next prompt.`
             : `NOTE: the recipient is STALE (last seen ${row ? humanAge(row.last_seen) : "unknown"}). Its harness may no longer be running - the message waits unread until that session resumes, and no wake will fire meanwhile. If you meant a different session, check chat_list and resend.`;
+    // Surface a spent wake budget: the sender otherwise has no way to tell
+    // a saturated recipient from a broken one when follow-up mail lags.
+    // First deliveries are exempt from the cap, so THIS message still wakes
+    // them; only re-nudges of older delivered-but-unread mail wait.
+    const hourCutoff = isoMinutesAgo(60);
+    let budgetNote = "";
+    if (ctx.db.chatWakeCount(session_id, hourCutoff) >= CHAT_MAX_NUDGES_PER_HOUR) {
+      const oldest = ctx.db.chatWakeOldest(session_id, hourCutoff);
+      const renewsAt = oldest ? formatChatTimestamp(new Date(Date.parse(oldest) + 3_600_000).toISOString()) : "within the hour";
+      budgetNote =
+        `\n\nNOTE: this recipient's wake budget (${CHAT_MAX_NUDGES_PER_HOUR}/hour) is exhausted; it renews ~${renewsAt}. ` +
+        `New mail like this still delivers on their next idle turn, but re-nudges of older delivered-but-unread mail wait for the renewal.`;
+    }
     return (
       `[sent] to ${name} (${session_id.slice(0, 12)})\n\n` +
-      `${delivery}${splitNote}${dedupeNote}`
+      `${delivery}${splitNote}${dedupeNote}${budgetNote}`
     );
   },
 };

@@ -18,12 +18,23 @@ import { ThatchDB } from "../../../src/db";
  * call from the harness.
  */
 
-/** Poll `fn` every 2s until it returns truthy; throw with `desc` on timeout. */
+/** Poll `fn` every 2s until it returns truthy; throw with `desc` on timeout.
+ *  A throw from `fn` is not a failure: the serve process writes the same
+ *  SQLite database this poll reads, and a transient SQLITE_IOERR (lock or
+ *  checkpoint race) must retry like any other not-ready signal. The last
+ *  error rides the timeout message so the real cause stays visible. */
 async function waitFor(desc: string, deadlineMs: number, fn: () => Promise<unknown> | unknown): Promise<void> {
   const end = Date.now() + deadlineMs;
+  let lastErr: unknown = null;
   for (;;) {
-    if (await fn()) return;
-    if (Date.now() > end) throw new Error(`UC-100 timed out waiting for: ${desc}`);
+    try {
+      if (await fn()) return;
+    } catch (err) {
+      lastErr = err;
+    }
+    if (Date.now() > end) {
+      throw new Error(`UC-100 timed out waiting for: ${desc}${lastErr ? ` (last error: ${lastErr})` : ""}`);
+    }
     await new Promise((r) => setTimeout(r, 2_000));
   }
 }
@@ -103,7 +114,11 @@ const useCase: UseCase = {
         return "FAIL";
       }
 
-      const sqlite = new Database(ctx.env.THATCH_DB_PATH, { readonly: true });
+      // NOT readonly: a readonly connection to a WAL database another
+      // process is actively writing hits fcntl/checkpoint races that
+      // surface as SQLITE_IOERR_VNODE. This is a throwaway fixture copy in
+      // a temp dir - the write flag just makes the polls reliable.
+      const sqlite = new Database(ctx.env.THATCH_DB_PATH);
       // send() returns the resolved recipient, not the row id; look the
       // row up by body (unique canary text).
       const rowFor = (body: string) => () =>

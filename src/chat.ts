@@ -72,12 +72,15 @@ export interface ChatSessionRow {
 }
 
 /** One message selected for wake-up delivery, with the sender's display name
- *  resolved for the nudge text. */
+ *  resolved for the nudge text. delivered_at splits the batch for the cap:
+ *  null means the mail has never been wake-delivered (a first delivery),
+ *  a stamp means this is a re-nudge of mail the recipient missed. */
 export interface ChatNotificationRow {
   id: number;
   to_session: string;
   from_session: string;
   from_name: string | null;
+  delivered_at: string | null;
 }
 
 /** A message as returned to the reading agent. */
@@ -345,7 +348,11 @@ export const CHAT_STALE_MS = 2 * CHAT_POLL_INTERVAL_MS;
 // Wake re-nudge window and the per-recipient hourly nudge cap (the anti-loop
 // hard brake); see ChatPoller.
 export const CHAT_RENUDGE_MINUTES = 15;
-const CHAT_MAX_NUDGES_PER_HOUR = 6;
+/** Hard brake on wake prompts: maximum per recipient per rolling hour.
+ *  Every prompt counts; only re-nudges of already-delivered mail are REFUSED
+ *  when it is spent - a message's first delivery is the recipient's actual
+ *  inbox and delivers regardless. */
+export const CHAT_MAX_NUDGES_PER_HOUR = 6;
 
 /** Human-readable age of an ISO timestamp: "45s ago", "5m ago", "3h ago",
  *  "2d ago". Shared by the CLI roster and the chat_list tool so both
@@ -1281,7 +1288,7 @@ export class ChatStore {
     return (
       this.#db
         .query(
-          `SELECT m.id, m.to_session, m.from_session, COALESCE(m.from_name, s.name) AS from_name
+          `SELECT m.id, m.to_session, m.from_session, COALESCE(m.from_name, s.name) AS from_name, m.delivered_at
            FROM chat_messages m
            LEFT JOIN chat_sessions s ON s.session_id = m.from_session
            WHERE m.read_at IS NULL
@@ -1296,6 +1303,7 @@ export class ChatStore {
       to_session: r.to_session,
       from_session: r.from_session,
       from_name: r.from_name ?? null,
+      delivered_at: r.delivered_at ?? null,
     }));
   }
 
@@ -1305,6 +1313,42 @@ export class ChatStore {
     if (ids.length === 0) return;
     const marks = ids.map(() => "?").join(",");
     this.#db.run(`UPDATE chat_messages SET delivered_at = ? WHERE id IN (${marks})`, [nowIso(), ...ids]);
+  }
+
+  // Wake-budget accounting. One chat_wakes row per wake PROMPT sent to a
+  // recipient (never per message), written at send time in the poller so a
+  // failed delivered_at stamp cannot turn the cap into an uncounted
+  // re-delivery loop. The DB (not process memory) holds the budget so every
+  // host process - including chat_send's MCP process - reads the same
+  // number, and a plugin reload no longer resets it.
+
+  /** Records one wake prompt sent to the recipient, at send time. */
+  recordWake(toSession: string): void {
+    this.#db.run("INSERT INTO chat_wakes (to_session, at) VALUES (?, ?)", [toSession, nowIso()]);
+  }
+
+  /** Wake prompts sent to the recipient within the rolling window ending at
+   *  the cutoff (the poller passes one hour). */
+  wakeCount(toSession: string, cutoff: string): number {
+    const row = this.#db
+      .query("SELECT COUNT(*) AS n FROM chat_wakes WHERE to_session = ? AND at > ?")
+      .get(toSession, cutoff) as { n: number };
+    return row.n;
+  }
+
+  /** Oldest wake prompt still inside the window, for the renewal-time note
+   *  in chat_send. Null when the budget has no entries in the window. */
+  wakeOldest(toSession: string, cutoff: string): string | null {
+    const row = this.#db
+      .query("SELECT MIN(at) AS oldest FROM chat_wakes WHERE to_session = ? AND at > ?")
+      .get(toSession, cutoff) as { oldest: string | null };
+    return row.oldest ?? null;
+  }
+
+  /** Drops wake rows fully outside the budget window; the hourly sweep
+   *  calls this so the table stays a rolling hour, not a history. */
+  pruneWakes(cutoff: string): void {
+    this.#db.run("DELETE FROM chat_wakes WHERE at <= ?", [cutoff]);
   }
 
   #find(sessionID: string): ChatSessionRow | null {
@@ -2060,9 +2104,18 @@ export interface ChatPollerStore {
   heartbeatChatSessions(sessionIDs: string[]): void;
   pendingChatNotifications(sessionIDs: string[], renudgeCutoff: string): ChatNotificationRow[];
   markChatDelivered(ids: number[]): void;
+  /** Records one wake prompt sent to the recipient, at send time. The
+   *  budget lives in the shared DB, not process memory, so a plugin reload
+   *  cannot reset it and chat_send can read it from another process. */
+  recordChatWake(toSession: string): void;
+  /** Wake prompts recorded for the recipient after the cutoff. */
+  chatWakeCount(toSession: string, cutoff: string): number;
   /** Hourly TTL prune of auto-registered directory rows (and the mail that
    *  can no longer reach a reader). Optional so test fakes stay minimal. */
   pruneStaleChatAuto?(cutoff: string): number;
+  /** Drops wake rows fully outside the budget window; the hourly sweep
+   *  calls this. Optional so test fakes stay minimal. */
+  pruneChatWakes?(cutoff: string): void;
 }
 
 export interface ChatPollerOptions {
@@ -2088,8 +2141,12 @@ export interface ChatPollerOptions {
   /** A delivered-but-unread message re-queues a nudge after this long.
    *  Default 15 minutes. */
   renudgeMinutes?: number;
-  /** Hard brake on wake cycles: maximum wake prompts per recipient per hour.
-   *  Default 6. In-memory on purpose - it is a loop guard, not accounting. */
+  /** Hard brake on wake cycles: maximum wake prompts per recipient per
+   *  rolling hour. Default 6. Every prompt counts; when the budget is
+   *  spent, only first deliveries of never-delivered mail still deliver -
+   *  re-nudges of already-delivered mail wait. The counter lives in the
+   *  shared DB (chat_wakes), so it survives reloads and is visible to
+   *  other processes. */
   maxNudgesPerHour?: number;
 }
 
@@ -2150,8 +2207,14 @@ export class ChatPoller {
   #timer: ReturnType<typeof setInterval> | null = null;
   #polling = false;
   #delivering = false;
-  /** Per-recipient wake-prompt timestamps inside the last hour. */
-  #nudges = new Map<string, number[]>();
+  /** Per-recipient ids this process wake-prompted whose delivered_at stamp
+   *  did not land. Their retries are budget-bound re-nudges, not exempt
+   *  first deliveries. Cleared by dispose; the DB stamp takes over for
+   *  everything that actually landed. */
+  #sentIds = new Map<string, Set<number>>();
+  /** Per-recipient epoch ms of the last budget-exhaustion log line, so the
+   *  diagnostic fires once per hour instead of once per cycle. */
+  #budgetLogged = new Map<string, number>();
   /** Last TTL prune epoch ms. Auto-registered rows are pruned hourly, not
    *  every cycle - the prune is a maintenance sweep, not delivery. */
   #lastPrune = 0;
@@ -2184,11 +2247,13 @@ export class ChatPoller {
     this.#timer = null;
   }
 
-  /** Stops polling and drops the nudge counters. The inbox itself is shared
-   *  SQLite state and outlives this process by design. */
+  /** Stops polling and drops the in-memory delivery markers. The wake
+   *  budget and the inbox itself are shared SQLite state and outlive this
+   *  process by design. */
   dispose(): void {
     this.stop();
-    this.#nudges.clear();
+    this.#sentIds.clear();
+    this.#budgetLogged.clear();
   }
 
   /**
@@ -2219,6 +2284,9 @@ export class ChatPoller {
       if (now - this.#lastPrune > 3_600_000 && this.#opts.store.pruneStaleChatAuto) {
         this.#lastPrune = now;
         this.#opts.store.pruneStaleChatAuto(isoMinutesAgo(CHAT_AUTO_TTL_DAYS * 24 * 60));
+        // Same sweep drops wake rows outside the rolling budget window, so
+        // chat_wakes stays an hour of accounting rather than a history.
+        this.#opts.store.pruneChatWakes?.(isoMinutesAgo(60));
       }
     } catch (err) {
       console.error(`[thatch] chat poll failed: ${err}`);
@@ -2234,6 +2302,16 @@ export class ChatPoller {
    * waiting for the next cycle. Failures stay pending and retry. Delivery
    * is at-least-once: a crash after the wake prompt but before
    * markChatDelivered re-nudges the same batch on the next cycle.
+   *
+   * The per-recipient cap counts every wake prompt in the rolling hour,
+   * but binds only RE-NUDGES of already-delivered mail - the ping-pong the
+   * brake exists to stop. A message's first delivery is the recipient's
+   * actual inbox and delivers whether or not the budget is spent, so a
+   * busy coordination hub receiving many legitimate report batches never
+   * goes silently mail-deaf (observed live 2026-10-20: six review-report
+   * wakes exhausted the cap and every later batch sat undelivered for 37
+   * minutes with no log line). A batch mixing new and re-nudge mail
+   * delivers the new rows and holds the re-nudges.
    */
   async deliverPending(): Promise<void> {
     if (this.#delivering) return;
@@ -2253,21 +2331,49 @@ export class ChatPoller {
 
       for (const [recipient, messages] of byRecipient) {
         if (!(await this.#opts.canDeliver(recipient))) continue;
-        if (this.#nudgeBudget(recipient) <= 0) continue;
+        // Split the batch: a row is a re-nudge when it was already
+        // wake-delivered (delivered_at stamp) or when this process sent it
+        // and the stamp write failed (sentIds - the at-least-once retry
+        // must not masquerade as exempt first delivery). Everything else is
+        // first delivery.
+        const sent = this.#sentIds.get(recipient);
+        const fresh = messages.filter((m) => m.delivered_at === null && !(sent?.has(m.id) ?? false));
+        const held = messages.length - fresh.length;
+        const budget = this.#opts.maxNudgesPerHour - this.#opts.store.chatWakeCount(recipient, isoMinutesAgo(60));
+        let deliverRows = messages;
+        if (held > 0 && budget <= 0) {
+          deliverRows = fresh;
+          this.#logBudgetExhausted(recipient, held);
+          if (deliverRows.length === 0) continue;
+        }
+        let prompted = false;
         try {
           // renderChatParticipant keeps wake prompts and chat_read on one
           // naming convention: the send-time snapshot when the row has
           // one, and "unknown (id, departed)" only for a legacy row whose
-          // sender's directory row is gone.
-          const senders = [...new Set(messages.map((m) => renderChatParticipant(m.from_name, m.from_session)))];
-          await this.#opts.deliver(recipient, senders, messages.length);
-          // Count the nudge before the stamp: the cap must bind on prompts
-          // actually sent, not on the DB write succeeding. A failing stamp
-          // leaves the mail pending, and an uncounted re-delivery every
-          // cycle would be the ping-pong the cap exists to stop.
-          this.#recordNudge(recipient);
-          this.#opts.store.markChatDelivered(messages.map((m) => m.id));
+          // sender's directory row is gone. The nudge reflects only the
+          // rows actually delivered this cycle.
+          const senders = [...new Set(deliverRows.map((m) => renderChatParticipant(m.from_name, m.from_session)))];
+          await this.#opts.deliver(recipient, senders, deliverRows.length);
+          prompted = true;
+          // Every prompt counts, fresh or re-nudge: the cap bounds prompts
+          // actually sent, not stamp writes, so a failing stamp cannot turn
+          // the exempt path into an uncounted re-delivery loop. The
+          // sentIds marker classifies a stamp-failure retry as a re-nudge,
+          // keeping the loop bounded by the same budget.
+          this.#opts.store.recordChatWake(recipient);
+          this.#opts.store.markChatDelivered(deliverRows.map((m) => m.id));
         } catch (err) {
+          // The prompt went out but a later write failed: mark the ids as
+          // sent so the next cycle counts the retry against the cap
+          // instead of treating it as exempt first delivery. A failed
+          // prompt (nothing went out) keeps retrying as first delivery,
+          // loud each cycle - today's semantics for a dead endpoint.
+          if (prompted) {
+            const marked = this.#sentIds.get(recipient) ?? new Set<number>();
+            for (const m of deliverRows) marked.add(m.id);
+            this.#sentIds.set(recipient, marked);
+          }
           console.error(`[thatch] chat delivery to ${recipient} failed: ${err}`);
         }
       }
@@ -2276,19 +2382,18 @@ export class ChatPoller {
     }
   }
 
-  /** Remaining wake prompts for this recipient in the current hour. */
-  #nudgeBudget(recipient: string): number {
+  /** One-line-per-hour diagnostic when the cap holds a recipient's
+   *  re-nudges. The skip itself stays silent by design; without this log
+   *  the only observable symptom is mail that never lands. */
+  #logBudgetExhausted(recipient: string, held: number): void {
     const now = Date.now();
-    const window = this.#nudges.get(recipient) ?? [];
-    const fresh = window.filter((t) => now - t < 3_600_000);
-    this.#nudges.set(recipient, fresh);
-    return this.#opts.maxNudgesPerHour - fresh.length;
-  }
-
-  #recordNudge(recipient: string): void {
-    const window = this.#nudges.get(recipient) ?? [];
-    window.push(Date.now());
-    this.#nudges.set(recipient, window);
+    const last = this.#budgetLogged.get(recipient) ?? 0;
+    if (now - last < 3_600_000) return;
+    this.#budgetLogged.set(recipient, now);
+    console.error(
+      `[thatch] chat wake budget exhausted for ${recipient}: holding ${held} re-nudge message(s) ` +
+        `past the ${this.#opts.maxNudgesPerHour}/hour cap; never-delivered mail still delivers`,
+    );
   }
 }
 

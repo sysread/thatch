@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { ChatStore, ChatPoller, isStale, nowIso, CHAT_STALE_MS, CHAT_POLL_INTERVAL_MS, CHAT_AUTO_TTL_DAYS, isoMinutesAgo as cutoffAgo, renderChatParticipant, chatLiveness, splitChatRoster, sortChatRoster, createWakeGate, continuedInTarget, scanPredecessorTranscript, resolveRegisteredPredecessor, type ChatSessionRow } from "../src/chat";
-import { silenceConsoleError } from "./mocks/console-error";
+import { silenceConsoleError, captureConsoleError } from "./mocks/console-error";
 import { makeChatDbFixture, disposeChatDbFixture, makeReg } from "./mocks/chat-harness";
 
 let dbDir: string;
@@ -133,7 +133,7 @@ describe("ChatPoller", () => {
     expect(db.pendingChatNotifications(["ses_a"], cutoffAgo(15)).length).toBe(1);
   });
 
-  test("the nudge rate cap stops repeated wake prompts", async () => {
+  test("the nudge rate cap stops repeated re-nudges", async () => {
     const capped = new ChatPoller({
       store: db,
       hostedSessions: () => hosted,
@@ -144,18 +144,20 @@ describe("ChatPoller", () => {
       pollIntervalMs: 60_000,
       maxNudgesPerHour: 1,
     });
-    db.sendChatMessage("ses_a", "bob-00001", "first batch");
-    await capped.deliverPending();
-    expect(deliveries.length).toBe(1);
-    // Age the delivery stamp so the re-nudge window re-opens, then poll
-    // again: the hard cap holds despite the pending message.
-    raw.run("UPDATE chat_messages SET delivered_at = '2020-01-01T00:00:00Z'");
-    await capped.deliverPending();
-    expect(deliveries.length).toBe(1);
+    await silenceConsoleError(async () => {
+      db.sendChatMessage("ses_a", "bob-00001", "first batch");
+      await capped.deliverPending();
+      expect(deliveries.length).toBe(1);
+      // Age the delivery stamp so the re-nudge window re-opens, then poll
+      // again: the hard cap holds despite the pending message.
+      raw.run("UPDATE chat_messages SET delivered_at = '2020-01-01T00:00:00Z'");
+      await capped.deliverPending();
+      expect(deliveries.length).toBe(1);
+    });
     capped.dispose();
   });
 
-  test("the cap counts a nudge even when the delivered_at stamp fails", async () => {
+  test("the cap counts a re-nudge even when the delivered_at stamp fails", async () => {
     // The record-before-stamp ordering exists so a failing stamp cannot
     // turn into an uncounted re-delivery loop - the exact ping-pong the
     // cap exists to stop. Deliver succeeds; the stamp throws.
@@ -166,6 +168,8 @@ describe("ChatPoller", () => {
         markChatDelivered: () => {
           throw new Error("db write failed");
         },
+        recordChatWake: (to) => db.recordChatWake(to),
+        chatWakeCount: (to, cutoff) => db.chatWakeCount(to, cutoff),
       },
       hostedSessions: () => hosted,
       deliver: async (sessionID, senders, count) => {
@@ -182,11 +186,153 @@ describe("ChatPoller", () => {
       await stampThrows.deliverPending();
       expect(deliveries.length).toBe(1);
       // The mail stays pending (the stamp failed), but the budget is spent:
-      // a later cycle must not re-deliver, stamp failure or not.
+      // a later cycle must not re-deliver, stamp failure or not. The
+      // sentIds marker classifies the retry as a budget-bound re-nudge
+      // even though delivered_at is still NULL.
       await stampThrows.deliverPending();
       expect(deliveries.length).toBe(1);
     });
     stampThrows.dispose();
+  });
+
+  test("a FIRST delivery still delivers with the budget exhausted", async () => {
+    // The live incident this fixes: a coordination hub received six
+    // legitimate report batches, spent its budget, and every later batch
+    // sat undelivered for 37 minutes. New mail is the recipient's actual
+    // inbox - it never waits behind the cap.
+    const capped = new ChatPoller({
+      store: db,
+      hostedSessions: () => hosted,
+      deliver: async (sessionID, senders, count) => {
+        deliveries.push({ sessionID, senders, count });
+      },
+      canDeliver: () => true,
+      pollIntervalMs: 60_000,
+      maxNudgesPerHour: 1,
+    });
+    await silenceConsoleError(async () => {
+      db.sendChatMessage("ses_a", "bob-00001", "first batch");
+      await capped.deliverPending();
+      expect(deliveries.length).toBe(1);
+      // A brand-new message: never delivered, budget spent. It lands.
+      db.sendChatMessage("ses_a", "bob-00001", "second batch, fresh mail");
+      await capped.deliverPending();
+      expect(deliveries.length).toBe(2);
+      // Only the re-nudge of delivered mail is budget-bound: age the first
+      // batch's stamp so it re-queues, and confirm it is the thing held.
+      db.sendChatMessage("ses_a", "bob-00001", "third batch, fresh mail");
+      raw.run("UPDATE chat_messages SET delivered_at = '2020-01-01T00:00:00Z' WHERE body = 'first batch'");
+      await capped.deliverPending();
+      expect(deliveries.length).toBe(3);
+      expect(deliveries[2].count).toBe(1);
+      const pending = db.pendingChatNotifications(["ses_b"], cutoffAgo(15));
+      expect(pending.length).toBe(1);
+    });
+    capped.dispose();
+  });
+
+  test("a mixed batch delivers the new mail and holds the re-nudge when spent", async () => {
+    const capped = new ChatPoller({
+      store: db,
+      hostedSessions: () => hosted,
+      deliver: async (sessionID, senders, count) => {
+        deliveries.push({ sessionID, senders, count });
+      },
+      canDeliver: () => true,
+      pollIntervalMs: 60_000,
+      maxNudgesPerHour: 1,
+    });
+    await silenceConsoleError(async () => {
+      db.sendChatMessage("ses_a", "bob-00001", "batch one");
+      await capped.deliverPending();
+      expect(deliveries.length).toBe(1);
+      // Budget now spent. Age batch one's stamp (re-nudge due) and send
+      // fresh mail: the cycle must deliver the fresh row and hold the
+      // re-nudge, in one wake that counts only what it delivered.
+      const heldId = (new Database(dbPath).query("SELECT id FROM chat_messages WHERE body = 'batch one'").get() as { id: number }).id;
+      db.sendChatMessage("ses_a", "bob-00001", "batch two, fresh");
+      raw.run("UPDATE chat_messages SET delivered_at = '2020-01-01T00:00:00Z' WHERE body = 'batch one'");
+      await capped.deliverPending();
+      expect(deliveries.length).toBe(2);
+      expect(deliveries[1].count).toBe(1);
+      const pending = db.pendingChatNotifications(["ses_b"], cutoffAgo(15));
+      expect(pending.length).toBe(1);
+      expect(pending[0].id).toBe(heldId);
+    });
+    capped.dispose();
+  });
+
+  test("the wake budget survives a poller reload", async () => {
+    // The budget lives in the shared DB, not process memory: a reloaded
+    // plugin instance inherits the spent budget instead of resetting it.
+    const first = new ChatPoller({
+      store: db,
+      hostedSessions: () => hosted,
+      deliver: async (sessionID, senders, count) => {
+        deliveries.push({ sessionID, senders, count });
+      },
+      canDeliver: () => true,
+      pollIntervalMs: 60_000,
+      maxNudgesPerHour: 1,
+    });
+    await silenceConsoleError(async () => {
+      db.sendChatMessage("ses_a", "bob-00001", "spent by the previous instance");
+      await first.deliverPending();
+      expect(deliveries.length).toBe(1);
+      first.dispose();
+
+      const second = new ChatPoller({
+        store: db,
+        hostedSessions: () => hosted,
+        deliver: async (sessionID, senders, count) => {
+          deliveries.push({ sessionID, senders, count });
+        },
+        canDeliver: () => true,
+        pollIntervalMs: 60_000,
+        maxNudgesPerHour: 1,
+      });
+      raw.run("UPDATE chat_messages SET delivered_at = '2020-01-01T00:00:00Z'");
+      await second.deliverPending();
+      // A re-nudge is due and the fresh instance has empty memory - the DB
+      // budget still holds it.
+      expect(deliveries.length).toBe(1);
+      second.dispose();
+    });
+  });
+
+  test("budget exhaustion logs once per recipient per hour, not per cycle", async () => {
+    const capped = new ChatPoller({
+      store: db,
+      hostedSessions: () => hosted,
+      deliver: async (sessionID, senders, count) => {
+        deliveries.push({ sessionID, senders, count });
+      },
+      canDeliver: () => true,
+      pollIntervalMs: 60_000,
+      maxNudgesPerHour: 1,
+    });
+    db.sendChatMessage("ses_a", "bob-00001", "one");
+    await capped.deliverPending();
+    raw.run("UPDATE chat_messages SET delivered_at = '2020-01-01T00:00:00Z'");
+    const { lines } = await captureConsoleError(async () => {
+      await capped.deliverPending();
+      await capped.deliverPending();
+      await capped.deliverPending();
+    });
+    const exhausted = lines.filter((l) => l.includes("wake budget exhausted"));
+    expect(exhausted.length).toBe(1);
+    expect(exhausted[0]).toContain("ses_b");
+    capped.dispose();
+  });
+
+  test("the hourly sweep prunes wake rows outside the budget window", async () => {
+    raw.run("INSERT INTO chat_wakes (to_session, at) VALUES ('ses_b', '2020-01-01T00:00:00Z')");
+    raw.run(`INSERT INTO chat_wakes (to_session, at) VALUES ('ses_b', '${nowIso()}')`);
+    await poller.poll();
+    const remaining = new Database(dbPath)
+      .query("SELECT COUNT(*) AS n FROM chat_wakes WHERE at <= '2020-01-02T00:00:00Z'")
+      .get() as { n: number };
+    expect(remaining.n).toBe(0);
   });
 
   test("re-nudges fire after the renudge window passes", async () => {
@@ -237,14 +383,20 @@ describe("ChatPoller", () => {
     // A store fake that records prune calls, wired through the optional
     // ChatPollerStore method - the exact seam a regression would hide in.
     const prunes: string[] = [];
+    const wakePrunes: string[] = [];
     const sweepPoller = new ChatPoller({
       store: {
         heartbeatChatSessions: () => {},
         pendingChatNotifications: (ids, cutoff) => db.pendingChatNotifications(ids, cutoff),
         markChatDelivered: (ids) => db.markChatDelivered(ids),
+        recordChatWake: (to) => db.recordChatWake(to),
+        chatWakeCount: (to, cutoff) => db.chatWakeCount(to, cutoff),
         pruneStaleChatAuto: (cutoff) => {
           prunes.push(cutoff);
           return 0;
+        },
+        pruneChatWakes: (cutoff) => {
+          wakePrunes.push(cutoff);
         },
       },
       hostedSessions: () => [],
@@ -255,6 +407,9 @@ describe("ChatPoller", () => {
     // First poll sweeps immediately (#lastPrune starts at 0).
     await sweepPoller.poll();
     expect(prunes.length).toBe(1);
+    // The wake-budget table rides the same sweep, pruned to its own window.
+    expect(wakePrunes.length).toBe(1);
+    expect(new Date(wakePrunes[0]).getTime()).toBeLessThan(Date.now() - 59 * 60_000);
     // The cutoff is the TTL: 7 days back.
     const cutoff = prunes[0];
     expect(new Date(cutoff).getTime()).toBeLessThan(Date.now() - 6.9 * 24 * 3600_000);

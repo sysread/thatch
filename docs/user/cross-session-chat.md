@@ -276,9 +276,12 @@ construction. Three mitigations:
   database. There is no network relay.
 - **Opt-in.** Unregistered sessions cannot be messaged and cannot send.
   Sub-agent sessions should not register.
-- **Loop safety.** Thatch caps wake prompts per recipient per hour, so two
-  agents acknowledging each other cannot ping-pong forever even if both
-  models decide to be chatty.
+- **Loop safety.** Thatch caps wake prompts per recipient per hour (6), so
+  two agents acknowledging each other cannot ping-pong forever even if both
+  models decide to be chatty. The cap only ever holds *re-nudges* of older
+  delivered-but-unread mail: a message's first delivery always wakes the
+  recipient. `chat_send` tells you when a recipient's budget is spent and
+  when it renews.
 - **Message retention.** Messages are kept as history; unregistering does
   not delete them. Auto-registered sessions whose host has been gone for a
   week are pruned from the directory (their names are never reused), and

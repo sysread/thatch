@@ -377,6 +377,20 @@ export class ThatchDB {
 
     this.#db.run("INSERT OR IGNORE INTO stores (name) VALUES ('global')");
 
+    // Wake-budget accounting: one row per wake PROMPT sent to a recipient,
+    // written at send time (before the delivered_at stamp), so a failed
+    // stamp cannot turn the nudge cap into an uncounted re-delivery loop.
+    // Shared state on purpose: the poller enforces the cap here, and
+    // chat_send in any other process reads the same budget. Rows outside
+    // the rolling one-hour window are pruned by the poller's hourly sweep.
+    this.#db.run(`
+      CREATE TABLE IF NOT EXISTS chat_wakes (
+        to_session TEXT NOT NULL,
+        at         TEXT NOT NULL
+      )
+    `);
+    this.#db.run("CREATE INDEX IF NOT EXISTS idx_chat_wakes_window ON chat_wakes (to_session, at)");
+
     // Per-base name counters for assigned chat names. A row only ever
     // increments (never on prune), so a name is minted exactly once.
     this.#db.run(`
@@ -1291,6 +1305,24 @@ export class ThatchDB {
 
   markChatDelivered(ids: number[]) {
     return this.#chat.markDelivered(ids);
+  }
+
+  recordChatWake(toSession: string) {
+    return this.#chat.recordWake(toSession);
+  }
+
+  chatWakeCount(toSession: string, cutoff: string) {
+    return this.#chat.wakeCount(toSession, cutoff);
+  }
+
+  /** Oldest wake row inside the budget window, for the renewal-time note in
+   *  chat_send. Null when the window holds no wakes for the recipient. */
+  chatWakeOldest(toSession: string, cutoff: string) {
+    return this.#chat.wakeOldest(toSession, cutoff);
+  }
+
+  pruneChatWakes(cutoff: string) {
+    return this.#chat.pruneWakes(cutoff);
   }
 
   // ---------------------------------------------------------------------------
