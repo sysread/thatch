@@ -48,11 +48,11 @@ The reader decides when to stop reading. Give them the point first so stopping e
 Hard rules. Not suggestions.
 
 1. **One idea per sentence.** Split clause-chains. One topic per paragraph.
-2. **Literal phrasing beats compressed idiom.** Write for an unfamiliar reader. Do not use method names as verbs. Prefer plain English nouns over code-domain nouns: "reading the row from the database" not "the row read"; "a request waiting for a worker" not "a waiter". If a word sounds like it belongs in a source file rather than a sentence, replace it.
+2. **Literal phrasing beats compressed idiom.** Write for an unfamiliar reader. Do not use method names as verbs. Prefer plain English nouns over code-domain nouns: "reading the row from the database" not "the row read"; "a request waiting for a worker" not "a waiter". If a word sounds like it belongs in a source file rather than a sentence, replace it. A compound of adjectives plus a domain noun standing where a clause belongs is compression in disguise: "timestamp-only re-finds", "cache-visible columns". Every word is real domain vocabulary, so a buzzword scan waves it through - the test is whether the phrase contains a verb. Write out the clause it abbreviates, subject and verb included: "a scan that re-detects a secret it already stored, and the only change is a timestamp column".
 3. **Define subsystem-specific terms on first use.** General engineering vocabulary needs no definition. "the DEK (the symmetric key that encrypts secrets at rest)" - yes. After the first definition, use the term freely.
-4. **Translate project-private labels.** Roadmap names, subsystem nicknames, ticket shorthand, and branch-local labels are not explanations. Say what the code does first: what reads, writes, blocks, retries, or changes. The label can follow if it helps the reader connect prose to code.
+4. **Translate project-private labels.** Roadmap names, subsystem nicknames, ticket shorthand, and branch-local labels are not explanations. Say what the code does first: what reads, writes, blocks, retries, or changes. The label can follow if it helps the reader connect prose to code. Ticket prose is a source of facts, not phrasing: a compression coined in a ticket ("the churn that heals", "land and stick") does not become acceptable by being quoted - it gets the same decode test as everything else.
 5. **Prefer concrete over ambiguous.** If a word can mean more than one thing here, qualify it or replace it with the specific behavior. Ordinary words can be ambiguous when the code gives them a special role: claim, owner, active, current, publish, resolve, sync, scope. "Persist the value in the database so the UI can display it" beats "publish the value".
-6. **Explain operations before naming them.** Refresh, repair, coalesce, reconcile, normalize, hydrate, fan out - these are not explanations. Name the object, the action, and the effect: "The worker waits up to 5 seconds, then reloads each stale cache key once."
+6. **Explain operations before naming them.** Refresh, repair, coalesce, reconcile, normalize, hydrate, fan out - these are not explanations. Name the object, the action, and the effect: "The worker waits up to 5 seconds, then reloads each stale cache key once." Plain-casual effect verbs are the same failure wearing work clothes: "gets bumped", "lands and sticks", "the next touch picks it up" hide what changed. When a sentence says a row or record changes, name the columns and what happened to them: "the rescan's write overwrites last_seen and modified_date", not "modified_date gets bumped".
 7. **Name both sides of a contrast.** If timing, ownership, or behavior changed, state the old behavior and the new close together.
 8. **Show causal links.** If a sentence uses "so", "because", or "prevents", make the middle step visible. Cause and effect that do not obviously touch need the missing step spelled out.
 9. **Clarity wins over compression.** Brevity means fewer claims, not denser claims. Shorten by deleting whole claims. Never rewrite surviving sentences into tighter ones. Keep the connective tissue that makes a sentence parse on first read.
@@ -71,6 +71,10 @@ Match length to complexity: how much new mental model the reader must build.
 - A one-line answer gets one line.
 - A real explanation gets as many sentences as the idea needs, and not one more.
 - When over length, cut the lowest-value claim. Do not compress the survivors.
+- Decompressing costs words, and that cost is required. When a rule says spell
+  something out, the longer sentence is the correct one even if it pushes the
+  draft over a budget. Recover the length by cutting a whole claim somewhere
+  else - never by squeezing the words that make a survivor parse.
 
 For chat replies: terse is fine, illegible is not. If a two-line answer only fits by inventing shorthand, spend five lines.
 
@@ -89,9 +93,11 @@ and general engineering vocabulary, and they have never touched this area.
 - **No metaphor standing in for a mechanism.** If a word labels behavior the
   comment never states, replace the word with the behavior: "re-enqueued
   rows get a fresh timestamp so they don't starve the rest", not "a
-  quarantine". A metaphor verb attached to the stated mechanism is fine
-  ("the sweep heals the dropped ids"). A metaphor noun doing the
-  mechanism's job is not.
+  quarantine". A metaphor verb attached to a stated mechanism still has to
+  pass the cold-reader test: if the reader cannot unpack which concrete
+  rows change and how, replace it ("the daily sweep deletes ids the retry
+  already dropped", not "the sweep heals the dropped ids"). A metaphor noun
+  doing the mechanism's job is never fine.
 - **Euphemisms die; call the thing what it is.** "later UPDATEs of the same
   row leave it unchanged", not "enqueued_at is not bumped by re-touches"
   ("bumped by re-touches" is a terrible phrase for "UPDATEs"). A pinned
@@ -127,7 +133,8 @@ and general engineering vocabulary, and they have never touched this area.
   DELETE whose only inputs are ids that exist in the queue. If we screwed
   up (a projection drift, a constraint we did not anticipate), the same
   batch would fail again on retry, so re-enqueueing would only churn. Log
-  it with the ids and drop it; the daily sweep heals the dropped ids."
+  it with the ids and drop it; the daily sweep deletes ids the retry
+  already dropped."
   Invariant, failure conditions, decision, recovery. No hedging.
 - **Rescope every label when behavior splits.** If re-enqueue now only
   happens for lock-blocked batches, "failed batch" is wrong everywhere it
@@ -184,3 +191,8 @@ No section template follows from this. Headings and structure belong to the repo
 Before you post, save, or send: reread the draft as a reader with zero context. Fix what they would stumble on. Do not announce the pass; just return clean prose.
 
 Check: Does every sentence parse on first read? Does every term carry its plain-English meaning before or with the label? Is every technical phrase real - could you find it in the code, the docs, or common usage? If not, say what the thing does instead of naming it. Would a reader who has never seen this codebase, ticket, or conversation understand it? If the draft runs long, cut a claim; never tighten the grammar.
+
+Two per-sentence tests catch what the checklist above misses. Run both on every sentence:
+
+1. **The isolation test.** Cover the rest of the document. Can a reader with general engineering knowledge parse this sentence alone - subject, verb, and outcome - with nothing from the surrounding paragraphs? A sentence that only makes sense after the reader has absorbed the neighborhood is compressed; decompress it.
+2. **The row-effect test.** For every verb that changes a stored row or record: does the sentence name the columns it changes and what happened to them? "Gets bumped", "sticks", "lands on the row" fail; "overwrites last_seen and modified_date" passes.
