@@ -284,6 +284,36 @@ working example. Also note Code Mode `execute` validation failures are only
 persisted in the v2 `session_message` store - they are invisible in the v1
 `part` table, so error-rate analysis on old data undercounts them.
 
+A second wave of the same audit (October 2026: 522 failed memory-tool
+calls in 30 days across all failure classes, of which ~402 were the
+missing-or-misnamed-key class) found the follow-on pattern: once the
+object shape is taught, models misname or drop KEYS (`text` instead of
+`content` on `memory_remember`, no `label` on `memory_show`/
+`memory_forget`). The fix generalizes into a rule that outlives the
+memory tools:
+
+- **A key left in the schema's required array is unteachable at runtime.**
+  On the opencode v2 host the plugin's zod schema is compiled to JSON Schema
+  and the HOST validates (src/opencode/v2.ts); plugin code never runs on a
+  rejected call. Execute-level teaching messages are dead code for any key
+  that validation rejects first. Making the key schema-optional ("required in
+  practice", guarded in execute) is the only signal that survives the JSON
+  Schema hop - an error-map or z.preprocess fix never fires on v2 because
+  the plugin's zod is not the validator there.
+- **Success markers shared between tool output and hook gates must be
+  constants, not literals.** A `[saved]` output drains the extraction
+  buffer, completes claims, and bumps child metrics; a `[forgotten]` output
+  only bumps the deletion metric. Both the opencode hook (src/runtime.ts)
+  and the MCP-host queue (src/extract-queue.ts) import
+  `MEMORY_SAVED_MARKER`/`MEMORY_FORGOTTEN_MARKER` from src/tool-defs.ts so a
+  wording change on one side cannot silently stall the drain on the other.
+- **Residual classes, accepted**: bare positional strings, wrong-type
+  values (`content: 123`, `label: 42`), and misnamed keys on tools whose
+  required params are semantically unavoidable (`memory_recall`'s `query`,
+  `prediction_update`'s `signal`) still hard-fail at validation by design -
+  there is no meaningful behavior to fall back to. Prompt shape lines are
+  their only mitigation.
+
 ## ThatchDB lazy reopen: new accessors must go through the private getters, and journal writes stay guarded at call sites
 
 `ThatchDB` reopens its SQLite connection on first use after `close()`

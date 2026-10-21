@@ -398,6 +398,15 @@ function renderClusters(candidates: DedupCandidate[]): string {  const parent = 
 // Tool definitions
 // ---------------------------------------------------------------------------
 
+// Success prefixes for the memory write and delete tools. The runtime hook
+// and the MCP-host queue (src/extract-queue.ts) read these constants: a
+// [saved] output drains the extraction buffer, completes claims, and bumps
+// child metrics; a [forgotten] output only bumps the deletion metric. Both
+// sides importing the constants means a wording change on either side moves
+// the gate with it.
+export const MEMORY_SAVED_MARKER = "[saved]";
+export const MEMORY_FORGOTTEN_MARKER = "[forgotten]";
+
 const rememberDef: ToolDef = {
   name: "memory_remember",
   description:
@@ -412,8 +421,9 @@ const rememberDef: ToolDef = {
       "Short descriptive title. Used for deduplication - same label in the same store is the same entry. " +
       "Omit to derive it from the content's first heading or line (capped at 80 characters).",
     ),
-    content: z.string().describe(
-      "The information to remember. Self-contained, understandable without session context.",
+    content: z.string().optional().describe(
+      "The information to remember. Self-contained, understandable without session context. " +
+      "Required in practice: a call without content saves nothing and returns guidance naming this parameter.",
     ),
     store: z.string().optional().describe(
       "Which store to write to. Defaults to the project store.",
@@ -435,6 +445,10 @@ const rememberDef: ToolDef = {
   },
   async execute(args, ctx) {
     const store = resolveStore(args, ctx);
+    // Content is optional at the schema for the same reason as show/forget's
+    // label below: a key left required dies at v2 host validation before any
+    // teaching can run, so the schema lets the call through and this guard
+    // teaches instead.
     const rawContent = (args.content as string | undefined)?.trim();
     if (!rawContent) {
       return "No content provided - pass the information to remember in the content parameter.";
@@ -476,7 +490,7 @@ const rememberDef: ToolDef = {
 
     if (!result.ok) return result.error;
 
-    const saved = `[saved] ${store} :: ${label}`;
+    const saved = `${MEMORY_SAVED_MARKER} ${store} :: ${label}`;
     if (similar.length === 0) return saved;
 
     return (
@@ -566,16 +580,31 @@ const showDef: ToolDef = {
     "Return the full content of a memory by exact label. " +
     "Use this to read a memory after memory_list or memory_recall has surfaced it.",
   args: {
-    label: z.string().describe("The exact label of the memory to read."),
+    label: z.string().optional().describe(
+      "The EXACT full label of the memory to read. Find exact labels with " +
+      "memory_list or memory_recall. Required in practice: a call without it " +
+      "returns guidance instead of reading anything.",
+    ),
     store: z.string().optional().describe(
       "Which store to read from. Defaults to the project store.",
     ),
   },
   async execute(args, ctx) {
     const store = resolveStore(args, ctx);
-    const entry = ctx.db.showEntry(store, args.label as string);
+    // Label optional at the schema so a missing or misnamed key reaches this
+    // guard instead of dying at host validation - teach the shape and how to
+    // find labels, then the caller retries with the real thing.
+    const label = (args.label as string | undefined)?.trim();
+    if (!label) {
+      return (
+        "No label provided - memory_show reads one memory by its EXACT full label. " +
+        "Find exact labels with memory_list or memory_recall, then call memory_show " +
+        "again with the label copied in full."
+      );
+    }
+    const entry = ctx.db.showEntry(store, label);
 
-    if (!entry) return `No memory labeled "${args.label as string}" found in store "${store}".`;
+    if (!entry) return `No memory labeled "${label}" found in store "${store}".`;
 
     return withMemoryCaveat(formatEntry(entry) || "Error formatting entry.");
   },
@@ -587,18 +616,33 @@ const forgetDef: ToolDef = {
     "Remove a memory by label from a store. " +
     "Use when asked to stop remembering something, or when consolidating duplicates.",
   args: {
-    label: z.string().describe("The exact label of the memory to remove."),
+    label: z.string().optional().describe(
+      "The EXACT full label of the memory to remove. Find exact labels with " +
+      "memory_list or memory_recall. Required in practice: a call without it " +
+      "returns guidance instead of removing anything.",
+    ),
     store: z.string().optional().describe(
       "Which store to remove from. Defaults to the project store.",
     ),
   },
   async execute(args, ctx) {
     const store = resolveStore(args, ctx);
-    const deleted = ctx.db.forgetEntry(store, args.label as string);
+    // Same accept-then-teach guard as memory_show: the schema-optional label
+    // routes missing/misnamed keys here instead of a host validation error.
+    const label = (args.label as string | undefined)?.trim();
+    if (!label) {
+      return (
+        "No label provided - memory_forget removes one memory by its EXACT full label. " +
+        "Find exact labels with memory_list or memory_recall, then call memory_forget " +
+        "again with the label copied in full. A label that matches no memory deletes " +
+        "nothing, so retrying is safe."
+      );
+    }
+    const deleted = ctx.db.forgetEntry(store, label);
 
-    if (!deleted) return `No memory labeled "${args.label as string}" found in store "${store}".`;
+    if (!deleted) return `No memory labeled "${label}" found in store "${store}".`;
 
-    return `[forgotten] ${store} :: ${args.label as string}`;
+    return `${MEMORY_FORGOTTEN_MARKER} ${store} :: ${label}`;
   },
 };
 

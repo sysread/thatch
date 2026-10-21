@@ -33,11 +33,11 @@ store when recalling.
 
 | Tool | What it does |
 |------|-------------|
-| `thatch_memory_remember` | Save a memory with a label and content. The label may be omitted - it is derived from the content's first heading or line. Optional: branch, confidence (1-10), archived flag, overwrite. |
+| `thatch_memory_remember` | Save a memory with a label and content. The label may be omitted - it is derived from the content's first heading or line. Content is required in practice: a call without it saves nothing and returns guidance naming the parameter. Optional: branch, confidence (1-10), archived flag, overwrite. |
 | `thatch_memory_recall` | Semantic search across stores. Returns matching memories with similarity scores. |
 | `thatch_memory_list` | List all memories in a store (metadata only, no content). |
-| `thatch_memory_show` | Show full content of a single memory by label. |
-| `thatch_memory_forget` | Delete a memory by label. |
+| `thatch_memory_show` | Show full content of a single memory by its exact, full label. A call without the label returns guidance pointing at `memory_list`/`memory_recall` for finding labels. |
+| `thatch_memory_forget` | Delete a memory by its exact, full label. A call without the label returns guidance pointing at `memory_list`/`memory_recall` for finding labels. |
 | `thatch_store_list` | List all active stores. |
 | `thatch_find_duplicates` | Surface pairs of memories with suspiciously similar content. |
 | `thatch_dedup_mark_checked` | Record a verdict for a reviewed pair so it stops being re-reported. |

@@ -5,7 +5,7 @@ import { ThatchDB, repoPathCache } from "./db";
 import { chatOpenTabs as chatOpenTabsProvider } from "./tab-state";
 import { SharedModelPool } from "./embeddings";
 import { detectRepo, detectWorktreeKind, resolveSpawnCwd } from "./git";
-import { buildCoreContext } from "./tool-defs";
+import { buildCoreContext, MEMORY_SAVED_MARKER, MEMORY_FORGOTTEN_MARKER } from "./tool-defs";
 import {
   systemPrompt,
   compactionContext,
@@ -1706,7 +1706,18 @@ export async function createRuntime(input: {
     onToolExecuteAfter: async (input, output) => {
       const { tool, sessionID } = input;
       if (tool === "thatch_memory_remember") {
-        await toolMemoryRemember(sessionID, (input.args as Record<string, unknown> | undefined)?.overwrite);
+        // A remember call whose output is a string either saved or returned
+        // teaching guidance (missing or misnamed args, nothing written).
+        // Only a save may drain the extraction buffer and complete claims -
+        // the write is the proof the delivered entries were processed. The
+        // gate is fail-open: an output shape we cannot read (legacy hosts)
+        // keeps the unconditional drain, so a payload change can only cost
+        // the false-positive it has today, never stall the buffer. The
+        // prefix test is exact because tool outputs are marker-first.
+        const outputText = typeof output.output === "string" ? output.output : null;
+        if (outputText === null || outputText.startsWith(MEMORY_SAVED_MARKER)) {
+          await toolMemoryRemember(sessionID, (input.args as Record<string, unknown> | undefined)?.overwrite);
+        }
         return;
       }
       // thatch_extraction_done has two roles depending on the session:
@@ -1720,10 +1731,14 @@ export async function createRuntime(input: {
         return;
       }
       // Track memory deletions in child sessions for the toast metrics.
-      // Same scoping as the remember handler above - only child sessions,
-      // not the parent or manual memory writes from the user's session.
+      // Same child-session scoping as the remember handler above; the
+      // MEMORY_FORGOTTEN_MARKER gate keeps a guidance-only forget (no
+      // label, nothing deleted) from counting as a deletion.
       if (tool === "thatch_memory_forget" && childToParent.has(sessionID)) {
-        toolMemoryForget(sessionID);
+        const outputText = typeof output.output === "string" ? output.output : null;
+        if (outputText === null || outputText.startsWith(MEMORY_FORGOTTEN_MARKER)) {
+          toolMemoryForget(sessionID);
+        }
         return;
       }
       // Chat conversational events echo back into the transcript as visible
@@ -1779,6 +1794,13 @@ export async function createRuntime(input: {
       if (input.tool === "execute") {
         const wrapped = unwrapExecuteThatchCalls(input.args);
         if (wrapped.tools.length > 0) {
+          // No success-marker gate here, unlike the direct tool paths above:
+          // the wrap is detected by scanning the execute call's CODE, which
+          // cannot see results. The wrapped tool's output rarely appears in
+          // the execute tool's own output, so a marker gate would
+          // false-negative real saves and stall the buffer. A guidance-only
+          // remember wrapped in execute still drains; that false-positive
+          // is accepted.
           for (const name of wrapped.tools) {
             if (name === "thatch_memory_remember") await toolMemoryRemember(sessionID, wrapped.overwrite);
             else if (name === "thatch_extraction_done") toolExtractionDone(sessionID, wrapped.sessionID);

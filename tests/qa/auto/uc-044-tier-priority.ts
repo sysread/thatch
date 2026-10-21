@@ -72,13 +72,14 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // Step 4: consume the queue by sending a memory_remember call.
+    // Step 4: consume the queue by sending a memory_remember call that
+    // saved (the drain gate reads the success marker from tool_response).
     const drainInput = JSON.stringify({
       session_id: sessionID,
       tool_calls: [{
         tool_name: "mcp__thatch__memory_remember",
         tool_input: {},
-        tool_response: "saved",
+        tool_response: "[saved] store :: x",
       }],
     });
     await $`echo ${drainInput} | ${bin} buffer-batch`.env(env).quiet().nothrow();

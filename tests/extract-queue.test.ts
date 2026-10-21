@@ -199,7 +199,12 @@ describe("missed-nudge counter", () => {
     expect(getMissedCount("reset-session")).toBe(0);
   });
 
-  test("appendBatch resets counter and consumes queue when memory_remember is in the batch", () => {
+  test("appendBatch resets counter and consumes queue when memory_remember SAVES", () => {
+    // Only a save drains: the response is gated on the shared
+    // MEMORY_SAVED_MARKER (src/extract-queue.ts), matching the opencode
+    // hook. A teaching-only return (missing or misnamed content key saved
+    // nothing) must leave the queue and the escalation counter intact -
+    // draining then would silently lose the queued interactions.
     incrementMissedCount("echo-session");
     expect(getMissedCount("echo-session")).toBe(1);
     appendBatch("echo-session", [
@@ -209,8 +214,29 @@ describe("missed-nudge counter", () => {
     appendBatch("echo-session", [
       call("mcp__thatch__memory_remember", { label: "x" }, "ok"),
     ]);
+    // A response without the save marker drains nothing.
+    expect(getMissedCount("echo-session")).toBe(1);
+    expect(peekQueue("echo-session").length).toBe(1);
+    appendBatch("echo-session", [
+      call("mcp__thatch__memory_remember", { label: "x" }, "[saved] store :: x"),
+    ]);
     expect(getMissedCount("echo-session")).toBe(0);
     expect(peekQueue("echo-session").length).toBe(0);
+  });
+
+  test("appendBatch drain gate accepts content-array responses wrapping a save", () => {
+    // MCP hosts deliver tool_response as content blocks; the stringified
+    // array carries the marker inside the JSON, not at the start.
+    incrementMissedCount("array-response-session");
+    appendBatch("array-response-session", [
+      call("Read", { file_path: "/a" }, "a"),
+    ]);
+    appendBatch("array-response-session", [
+      call("mcp__thatch__memory_remember", { label: "x" }, [
+        { type: "text", text: "[saved] store :: x" },
+      ]),
+    ]);
+    expect(peekQueue("array-response-session").length).toBe(0);
   });
 
   test("appendBatch does NOT drain the queue on extraction_done (accept-before-fetch race)", () => {

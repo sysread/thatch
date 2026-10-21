@@ -106,3 +106,4 @@ import "./uc-121-nudge-snapshot-footer";
 import "./uc-122-roster-open-recent";
 import "./uc-123-strand-self-heal";
 import "./uc-124-skills-custom-dir-mcp-json";
+import "./uc-126-memory-wrong-shape-teaching";

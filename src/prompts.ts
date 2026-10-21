@@ -187,6 +187,11 @@ Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
         thatch_chat_read, thatch_chat_unregister, thatch_chat_broadcast,
         thatch_chat_status${v2Tools ? `\n        thatch_session_tab (opencode v2 only - spawn a detached subordinate\n        LLM session in a new TUI tab and supervise it over cross-session chat)\n        thatch_session_tab_close (opencode v2 only - close a dispatched\n        subordinate's tab when its task is verified and done)` : ""}
 
+Argument shapes (one object argument, never a bare positional string):
+- thatch_memory_remember({ content, ... }) - content carries the information; label is optional (derived from the content's first heading or line)
+- thatch_memory_recall({ query })
+- thatch_memory_show({ label }) / thatch_memory_forget({ label }) - label is the EXACT full label, copied from memory_list or recall results
+
 ## Stores
 
 - \`global\`: user preferences, personality, system environment (shared across projects)
@@ -541,6 +546,11 @@ additionally require opencode
 v2 (TUI session tabs). On MCP hosts, cross-session chat works with
 the identity your thatch hook assigned (pass its printed name as \`as\`);
 wake-up delivery is opencode-only, so check chat_status or your inbox each turn.
+
+Argument shapes (one JSON object argument, never a bare positional string):
+- \`memory_remember\` with \`{"content": "..."}\` - content carries the information; label is optional (derived from the content's first heading or line)
+- \`memory_recall\` with \`{"query": "..."}\`
+- \`memory_show\` / \`memory_forget\` with \`{"label": "..."}\` - label is the EXACT full label, copied from memory_list or recall results
 
 ## Stores
 

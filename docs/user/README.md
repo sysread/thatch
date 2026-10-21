@@ -104,11 +104,11 @@ Stores are created automatically. No setup required.
 
 | Tool | What it does |
 |------|-------------|
-| `thatch_memory_remember` | Save a piece of information; thatch embeds it for later recall. The label is optional - it is derived from the content's first heading or line when omitted. |
+| `thatch_memory_remember` | Save a piece of information; thatch embeds it for later recall. The label is optional - it is derived from the content's first heading or line when omitted. Content is required in practice: a call without it saves nothing and returns guidance naming the parameter. |
 | `thatch_memory_recall` | Search for relevant information using natural language. Searches both the current project's store and `global` by default. |
 | `thatch_memory_list` | List all memory labels in a store. |
-| `thatch_memory_show` | Read the full content of a memory by exact label. |
-| `thatch_memory_forget` | Delete a memory by label. |
+| `thatch_memory_show` | Read the full content of a memory by its exact, full label. A call without the label returns guidance pointing at `memory_list`/`memory_recall`. |
+| `thatch_memory_forget` | Delete a memory by its exact, full label. A call without the label returns guidance pointing at `memory_list`/`memory_recall`. |
 
 ### Store tools
 

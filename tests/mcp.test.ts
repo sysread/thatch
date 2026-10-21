@@ -100,6 +100,21 @@ describe("MCP compileTools", () => {
   test("exposes 29 shared tools (session_tab is v2-opencode-only)", () => {
     expect(compileTools().size).toBe(29);
   });
+
+  test("accept-then-teach keys drop out of the compiled required array", () => {
+    // Optionality must survive z.toJSONSchema: opencode v2 validates against
+    // this JSON Schema in-host, so a key still listed in required would die
+    // at validation and never reach the execute-level teaching message.
+    const tools = compileTools();
+    const requiredFor = (name: string): string[] => {
+      const tool = tools.get(name)!;
+      const schema = tool.inputSchema as { required?: string[] };
+      return schema.required ?? [];
+    };
+    expect(requiredFor("memory_remember")).not.toContain("content");
+    expect(requiredFor("memory_show")).not.toContain("label");
+    expect(requiredFor("memory_forget")).not.toContain("label");
+  });
 });
 
 describe("MCP compilePrompts", () => {

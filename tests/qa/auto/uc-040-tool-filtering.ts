@@ -130,9 +130,11 @@ const useCase: UseCase = {
         if (peekQueue(sessionID).length !== 2) {
           failures.push("MCP drain: expected 2 entries before memory_remember");
         }
-        // Now a memory_remember call should drain the queue.
+        // Now a memory_remember call that SAVED should drain the queue
+        // (the drain gate reads the success marker from tool_response;
+        // a guidance-only response must not drain).
         appendBatch(sessionID, [
-          { tool_name: "mcp__thatch__memory_remember", tool_input: {}, tool_response: "saved" },
+          { tool_name: "mcp__thatch__memory_remember", tool_input: {}, tool_response: "[saved] store :: x" },
         ]);
         if (peekQueue(sessionID).length !== 0) {
           failures.push("MCP drain: queue should be empty after memory_remember");

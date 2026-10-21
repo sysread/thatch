@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { deriveTitle, type ToolInteraction } from "./extraction";
+import { MEMORY_SAVED_MARKER } from "./tool-defs";
 
 /**
  * File-backed per-session queue of buffered tool interactions. Replaces the
@@ -57,11 +58,23 @@ export function appendBatch(sessionID: string, toolCalls: BatchToolCall[]): void
   for (const tc of toolCalls) {
     const lower = tc.tool_name.toLowerCase();
     if (lower === "mcp__thatch__memory_remember") {
-      // The session that writes a memory has processed its queued
-      // interactions itself - drain. This is the parent's self-serve path.
-      resetMissedCount(sessionID);
-      consumeQueue(sessionID);
-      existing.length = 0;
+      // Success-marker gate, matching the opencode hook (src/runtime.ts):
+      // only a call that actually saved drains the queue. Accept-then-teach
+      // means a missing or misnamed content key returns guidance without
+      // saving, and draining then would silently lose the queued
+      // interactions. Unlike the opencode gate, the test is inclusion, not
+      // prefix: content-array responses stringify with the marker inside
+      // the JSON, not at the start. The reset moves inside the gate with
+      // the drain: a no-save call is not a write, so the missed-nudge
+      // escalation stands.
+      const response = typeof tc.tool_response === "string"
+        ? tc.tool_response
+        : JSON.stringify(tc.tool_response);
+      if (response.includes(MEMORY_SAVED_MARKER)) {
+        resetMissedCount(sessionID);
+        consumeQueue(sessionID);
+        existing.length = 0;
+      }
     } else if (lower === "mcp__thatch__extraction_done") {
       // An extraction_done ack must NOT drain the queue. When the PARENT
       // acks after dispatching (per the nudge), a drain here deletes the

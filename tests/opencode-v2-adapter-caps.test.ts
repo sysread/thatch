@@ -51,6 +51,24 @@ describe("opencode v2 adapter", () => {
     for (const tool of addedTools) expect(tool.description).toBeTruthy();
   });
 
+  test("accept-then-teach keys drop out of the REGISTERED v2 input schema", async () => {
+    // Pins the v2 compile site (src/opencode/v2.ts, registerTools): the
+    // input must be our own z.toJSONSchema conversion. If registration
+    // ever switched to letting v2's converter derive the schema, optionality
+    // could be lost and these keys would re-require on v2 - the host would
+    // again reject wrong-shape calls before the execute teaching runs.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    for (const [tool, key] of [
+      ["thatch_memory_remember", "content"],
+      ["thatch_memory_show", "label"],
+      ["thatch_memory_forget", "label"],
+    ] as const) {
+      const registered = addedTools.find((t) => t.name === tool)!;
+      const schema = registered.input as { required?: string[] };
+      expect(schema.required ?? [], tool).not.toContain(key);
+    }
+  });
+
   test("wrap-up commands deliver a real (non-synthetic) prompt", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     // The wrap-up body is the user-visible prompt (like v1's command file

@@ -132,10 +132,22 @@ describe("tool-defs validation", () => {
     expect(() => schema.parse({ content: "test" })).not.toThrow();
   });
 
-  test("memory_remember requires content", () => {
+  test("memory_remember content is schema-optional with execute-level guidance", () => {
+    // Optionality is the only signal that survives the v2 JSON Schema hop:
+    // required keys die at host validation, so a misnamed/missing content
+    // key could never reach the runtime teaching message. The empty parse
+    // is the stripped-misnamed-key shape execute must teach on.
     const def = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
     const schema = z.object(def.args);
-    expect(() => schema.parse({ label: "test" })).toThrow();
+    expect(() => schema.parse({ label: "test" })).not.toThrow();
+    expect(() => schema.parse({})).not.toThrow();
+  });
+
+  test("memory_show and memory_forget label is schema-optional", () => {
+    for (const name of ["memory_show", "memory_forget"]) {
+      const def = TOOL_DEFS.find((t) => t.name === name)!;
+      expect(() => z.object(def.args).parse({})).not.toThrow();
+    }
   });
 
   test("prediction_update and behavior_codify descriptions state the required-arg contract", () => {

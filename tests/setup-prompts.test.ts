@@ -91,6 +91,30 @@ describe("systemPrompt content", () => {
     expect(text).not.toContain("instructional-design scaffolding");
   });
 
+  test("teaches memory tool argument shapes in every host prompt", () => {
+    // The Oct 2026 audit (522 failed memory-tool calls in 30 days; ~402 of
+    // them missing or misnamed keys) showed models drop argument keys
+    // (content on remember, label on show/forget) unless the shape is
+    // stated at the mention site. Assertions stay prefix-agnostic so the
+    // same anchors hold for the thatch_ (opencode) and mcp__thatch__ (MCP
+    // hosts) spellings; assertions stay within single source lines.
+    for (const text of [systemPrompt("test/repo"), claudeInstructions(), cursorInstructions()]) {
+      expect(text).toContain("Argument shapes (one");
+      expect(text).toContain("never a bare positional string");
+      expect(text).toContain("content carries the information");
+      expect(text).toContain("label is optional (derived from the content's first heading or line)");
+      expect(text).toContain("EXACT full label, copied from memory_list or recall results");
+    }
+    // The shape lines carry the per-variant tool spellings.
+    const sys = systemPrompt("test/repo");
+    expect(sys).toContain("thatch_memory_remember({ content");
+    expect(sys).toContain("thatch_memory_show({ label })");
+    for (const text of [claudeInstructions(), cursorInstructions()]) {
+      expect(text).toContain('memory_remember` with `{"content"');
+      expect(text).toContain('memory_forget` with `{"label"');
+    }
+  });
+
   test("includes clear-writing guidance in every host prompt", () => {
     for (const text of [systemPrompt("test/repo"), claudeInstructions(), cursorInstructions()]) {
       expect(text).toContain("thatch-clear-writing");

@@ -2,7 +2,7 @@
 // formatAge prose helper they render.
 import { describe, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
-import { TOOL_DEFS, formatAge } from "../src/tool-defs";
+import { TOOL_DEFS, formatAge, MEMORY_SAVED_MARKER, MEMORY_FORGOTTEN_MARKER } from "../src/tool-defs";
 import { setupToolDefsHarness, ctx, db, model, dbPath, defaultStore } from "./mocks/tool-defs-harness";
 
 setupToolDefsHarness();
@@ -72,6 +72,73 @@ describe("tool-defs execute functions", () => {
     const def = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
     const result = await def.execute({ label: "Orphan" }, ctx);
     expect(result).toContain("content parameter");
+  });
+
+  test("memory_remember with an empty args object returns guidance and saves nothing", async () => {
+    // Simulates the production failure class: a misnamed content key (e.g.
+    // "text") is stripped by schema validation, so execute sees {}. The
+    // schema-optional content lets this reach the teaching message instead
+    // of dying at the host with "Missing key".
+    const def = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const result = await def.execute({}, ctx);
+    expect(result).toContain("content parameter");
+    expect(db.listEntries(defaultStore).length).toBe(0);
+  });
+
+  test("memory_remember success output is built from the shared save marker", async () => {
+    // The runtime hook gates extraction draining on MEMORY_SAVED_MARKER.
+    // Asserting via the constant (not a literal) catches someone editing
+    // the output string away from the constant, which would silently
+    // stall the buffer drain.
+    const def = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const result = await def.execute({ label: "Marker check", content: "body" }, ctx);
+    expect(result.startsWith(MEMORY_SAVED_MARKER)).toBe(true);
+  });
+
+  test("memory_show without a label returns guidance instead of crashing", async () => {
+    // Without the guard, an empty args object reaches db.slugify as an
+    // undefined label and crashes on label.trim() - a TypeError, not a
+    // teachable error.
+    const def = TOOL_DEFS.find((t) => t.name === "memory_show")!;
+    const result = await def.execute({}, ctx);
+    expect(result).toContain("No label provided");
+    expect(result).toContain("memory_list");
+  });
+
+  test("memory_forget without a label returns guidance instead of crashing", async () => {
+    const def = TOOL_DEFS.find((t) => t.name === "memory_forget")!;
+    const result = await def.execute({}, ctx);
+    expect(result).toContain("No label provided");
+    expect(result).toContain("memory_list");
+  });
+
+  test("empty or whitespace labels on show and forget return guidance", async () => {
+    const show = TOOL_DEFS.find((t) => t.name === "memory_show")!;
+    const forget = TOOL_DEFS.find((t) => t.name === "memory_forget")!;
+    expect(await show.execute({ label: "   " }, ctx)).toContain("No label provided");
+    expect(await forget.execute({ label: "" }, ctx)).toContain("No label provided");
+  });
+
+  test("memory_forget success output is built from the shared forgotten marker", async () => {
+    await TOOL_DEFS.find((t) => t.name === "memory_remember")!
+      .execute({ label: "Doomed", content: "body" }, ctx);
+    const forget = TOOL_DEFS.find((t) => t.name === "memory_forget")!;
+    const result = await forget.execute({ label: "Doomed" }, ctx);
+    expect(result.startsWith(MEMORY_FORGOTTEN_MARKER)).toBe(true);
+  });
+
+  test("misnamed keys are stripped by validation and routed to the teaching guards", async () => {
+    // The production shape: { text: "..." } instead of content, or { id: "..." }
+    // instead of label. z.object strips unknown keys, so the parsed args are
+    // empty and execute's guards teach the right shape.
+    const { z } = await import("zod");
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const show = TOOL_DEFS.find((t) => t.name === "memory_show")!;
+    const parsedRemember = z.object(remember.args).parse({ text: "hello" });
+    expect(await remember.execute(parsedRemember, ctx)).toContain("content parameter");
+    const parsedShow = z.object(show.args).parse({ id: "some-label" });
+    expect(await show.execute(parsedShow, ctx)).toContain("No label provided");
+    expect(db.listEntries(defaultStore).length).toBe(0);
   });
 
   test("memory_recall returns matches", async () => {

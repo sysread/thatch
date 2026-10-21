@@ -576,6 +576,60 @@ describe("plugin entry", () => {
     testHooks.dispose?.();
   });
 
+  test("toast: teaching-output remember (no save) drains nothing and bumps no metrics", async () => {
+    // The gate keeps a remember call whose output saved nothing from
+    // draining the extraction buffer, completing claims, or bumping the
+    // child's toast metrics. The child setup mirrors the positive toast
+    // test exactly (buffered parent tool call, parent idle, then the
+    // child linked by parentID) so the child is an extraction-kind child:
+    // with the gate disabled, the metrics bump and the toast fires, which
+    // fails this test.
+    let toastCalled = false;
+
+    const recClient = {
+      session: {
+        prompt: async () => {},
+        promptAsync: async () => {},
+        create: async () => ({ data: { id: "child_teach1" } }),
+        delete: async () => {},
+      },
+      tui: {
+        showToast: async () => { toastCalled = true; },
+      },
+    };
+    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
+
+    // Buffer a parent tool call, then send the parent idle so the pending
+    // extraction classifies the next linked child as extraction-kind.
+    await testHooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "ses_teach1", callID: "tt0", args: { command: "ls" } },
+      { title: "list", output: "file.txt", metadata: {} },
+    );
+    await testHooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_teach1", status: { type: "idle" } } } as any,
+    });
+    await testHooks.event!({ event: {
+      type: "session.created",
+      properties: { info: { id: "child_teach1", parentID: "ses_teach1" } } } as any,
+    });
+
+    await testHooks["tool.execute.after"]!(
+      { tool: "thatch_memory_remember", sessionID: "child_teach1", callID: "tt1", args: {} },
+      { title: "save", output: "No content provided - pass the information to remember in the content parameter.", metadata: {} },
+    );
+
+    // A teaching return is not a write: no metrics are bumped, so the
+    // child's idle stays toast-silent.
+    await testHooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "child_teach1", status: { type: "idle" } } } as any,
+    });
+    expect(toastCalled).toBe(false);
+
+    testHooks.dispose?.();
+  });
+
   test("toast: no toast on no-save extraction run", async () => {
     let toastCalled = false;
 

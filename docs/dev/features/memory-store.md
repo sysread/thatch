@@ -75,6 +75,27 @@ The save always proceeds. The warning asks the agent to reconcile — merge into
 
 On overwrite, the upsert clears stale dedup verdicts: any `dedup_pairs` rows referencing that slug are deleted, since the content change may resolve or create duplicates.
 
+### Accept-then-teach guards
+
+Three memory-tool keys are schema-optional but required in practice:
+`memory_remember`'s `content` and `memory_show`/`memory_forget`'s `label`.
+When a call omits the key (or misnames it — host validation strips unknown
+keys), execute returns a teaching message naming the right parameter and,
+for show/forget, how to find exact labels (`memory_list` or `memory_recall`,
+then retry with the label copied in full) instead of the call dying at
+validation. Optionality is what makes the teaching reachable: on the
+opencode v2 host the plugin's zod schema is compiled to JSON Schema and the
+HOST validates, so a key left in the schema's required array rejects the
+call before any plugin code runs. A `[saved]` output is what drains the
+extraction buffer and completes claims (both the opencode hook and the
+MCP-host queue gate on the shared `MEMORY_SAVED_MARKER` constant from
+`src/tool-defs.ts`), so a teaching-only call never drains; a `[forgotten]`
+output only bumps the child deletion metric. The gates are fail-open on
+output shapes they cannot read, and the execute-wrapped Code Mode path
+stays ungated (its code-scan cannot see results); the residual
+false-positives and the full contract are in `docs/dev/gotchas.md`
+("LLMs guess tool-call shapes").
+
 ### Read path (memory_recall)
 
 ```text
