@@ -26,18 +26,26 @@ import {
  * Two command families live here:
  *
  * - Actions (/thatch/bug-intake, defrag, extract, hygiene, peer-review,
- *   refine, reflect, self-review, whois): user-invoked commands. The nudge-backed
- *   ones (defrag, extract, hygiene, reflect) render prompt cores from
- *   src/prompts.ts, so nudge and command wording cannot drift. The rest
- *   (bug-intake, peer-review, refine, self-review, whois) are self-contained
- *   here: they have no nudge counterpart. peer-review and self-review couch the
- *   code review pipeline with a mode overlay: the same machinery, with
- *   findings weighted for whose work is under review. bug-intake couches
- *   the thatch-bug-intake skill (the coordinator protocol).
+ *   refine, reflect, self-review, whois): user-invoked commands.
  * - Wrap-ups (/thatch/compact, exit): greenlight-token commands that need
  *   the opencode plugin's host action routes (the compact trigger and the
  *   session close-out), so they are opencode-only.
+ *
+ * Every body's source text lives in artifacts/commands/<name>.md (the same
+ * artifacts layout as skills), NOT in this file. The artifacts are templates:
+ * a ${...} placeholder resolves at load time, and an unknown placeholder
+ * throws rather than passing through silently (the REVIEW_COMMON lesson -
+ * a naive passthrough once spliced the wrong content into skill bodies):
+ *
+ * - ${TOOL:name} (inline) - the named tool in the host's spelling.
+ * - ${CORE:name} (own line) - the prompt core from src/prompts.ts for the
+ *   nudge-backed actions, so nudge and command wording cannot drift.
+ * - ${COUCHING:name} (own line) - shared text shared by the review-mode
+ *   commands (target | pipeline), so those two cannot drift apart.
+ * - ${CHECKLIST} (own line) - the wrap-up persistence checklist.
+ * - ${TOKEN:name} (inline) - a greenlight token constant.
  */
+export const COMMANDS_ARTIFACTS_DIR = join(import.meta.dir, "..", "artifacts", "commands");
 
 /** Greenlight token ending /thatch/compact's assistant response when compaction is safe. */
 export const COMPACT_READY_TOKEN = "THATCH_COMPACT_READY";
@@ -70,14 +78,14 @@ $ARGUMENTS
  * thatch-code-review coordinator skill and sub-agent dispatch; Claude Code
  * and Cursor have neither, so the same procedure runs inline through the
  * shared specialist skills. The mode overlay that differentiates the two
- * commands lives in each command's own body and applies in both paths:
+ * commands lives in each command's artifact and applies in both paths:
  * sub-agent briefings on opencode, specialist passes inline elsewhere.
  *
- * Both couchings below are shared consts interpolated into the two bodies
- * so the commands' procedure and target resolution cannot drift; each body
- * keeps only its mode rules. The specialist roster and count come from
- * REVIEW_SPECIALISTS in src/prompts.ts, the same source as the install
- * list in src/skills.ts.
+ * Both couchings are spliced into the two artifacts at load so the commands'
+ * procedure and target resolution cannot drift; each artifact keeps only its
+ * mode rules. The specialist roster and count come from
+ * REVIEW_SPECIALISTS in src/prompts.ts, the same source as the install list
+ * in src/skills.ts.
  */
 const reviewPipelineCouching = `If the thatch-code-review skill is available, load it and follow its steps, with one addition: apply the mode rules below throughout - to context gathering, every specialist briefing, and the synthesis.
 
@@ -96,12 +104,75 @@ The mode rules below apply in every specialist pass and in the synthesis, on eve
 const reviewTargetCouching = `The user message may name the review target: a branch, a PR or MR number, or a git range. On MCP hosts the Focus: line carries that text instead. If no target is given, review the current branch against its base.`;
 
 /**
+ * Line-spliced shared text, resolved for ${COUCHING:name} and ${CHECKLIST}.
+ * These exist so text shared across command artifacts is single-sourced in
+ * code; the artifacts carry the directive, never a copy.
+ */
+const lineSplices: Record<string, string> = {
+  "COUCHING:target": reviewTargetCouching,
+  "COUCHING:pipeline": reviewPipelineCouching,
+  CHECKLIST: sharedChecklist,
+};
+
+/**
+ * The prompt cores for the nudge-backed actions, resolved for ${CORE:name}.
+ * The cores live in src/prompts.ts and take the host's tool namer; extract's
+ * core is opencode-only (it names the opencode-spelled session tools inside
+ * the dispatched sub-agent's prompt), so its tool names are literal.
+ */
+function coreSplice(name: string, tool: ToolNamer): string {
+  switch (name) {
+    case "defrag":
+      return defragCore(tool);
+    case "hygiene":
+      return hygieneCore();
+    case "reflect":
+      return reflectCore(tool);
+    case "extract":
+      return extractionCore("thatch_get_extraction_payload", "thatch_extraction_done", ' with session_id \\"SESSION_ID\\"');
+    default:
+      throw new Error(`unknown command template core: ${name}`);
+  }
+}
+
+function loadCommandTemplate(name: string): string {
+  return readFileSync(join(COMMANDS_ARTIFACTS_DIR, `${name}.md`), "utf8");
+}
+
+/**
+ * Resolve a command artifact's ${...} placeholders. Line-form splices
+ * (CORE, COUCHING, CHECKLIST) replace the whole line so multi-line text
+ * lands cleanly; inline forms (TOOL, TOKEN) replace in place. Any
+ * placeholder that survives resolution throws - a typo'd directive must
+ * fail at load, not ship broken prompt text.
+ */
+function interpolateTemplate(raw: string, tool: ToolNamer): string {
+  const resolved = raw
+    .replace(/^[ \t]*\$\{CORE:([a-z]+)\}[ \t]*$/gm, (_m, name: string) => coreSplice(name, tool))
+    .replace(/^[ \t]*\$\{(COUCHING:[a-z]+|CHECKLIST)\}[ \t]*$/gm, (_m, key: string) => {
+      const text = lineSplices[key];
+      if (text === undefined) throw new Error(`unknown command template splice: ${key}`);
+      return text;
+    })
+    .replace(/\$\{TOOL:([a-z_]+)\}/g, (_m, name: string) => tool(name))
+    .replace(/\$\{TOKEN:([A-Z_]+)\}/g, (_m, name: string) => {
+      const token = name === "COMPACT_READY_TOKEN" ? COMPACT_READY_TOKEN : name === "EXIT_READY_TOKEN" ? EXIT_READY_TOKEN : undefined;
+      if (!token) throw new Error(`unknown command template token: ${name}`);
+      return token;
+    });
+  const leftover = resolved.match(/\$\{[A-Z_]+(?::[a-zA-Z_]+)?\}/);
+  if (leftover) {
+    throw new Error(`unresolved command template placeholder: ${leftover[0]}`);
+  }
+  return resolved;
+}
+
+/**
  * One on-demand action: the command name (minus the thatch/ prefix), the
- * description shown in the command menu, and the instruction body (a prompt
- * core for the nudge-backed actions, self-contained text for the rest).
- * opencodeOnly marks actions that need a session identity or other
- * plugin-only capability; those are excluded from Claude Code command files
- * and MCP prompts.
+ * description shown in the command menu, and the instruction body loaded
+ * from artifacts/commands/<name>.md. opencodeOnly marks actions that need a
+ * session identity or other plugin-only capability; those are excluded from
+ * Claude Code command files and MCP prompts.
  */
 export interface ActionDef {
   name: string;
@@ -111,19 +182,16 @@ export interface ActionDef {
 }
 
 /**
- * The on-demand action set, shared by every host that renders actions. The
- * nudge-backed bodies (defrag, extract, hygiene, reflect) come from prompt
- * cores in src/prompts.ts so a wording change lands in the nudge and the
- * command at once; the rest (peer-review, refine, self-review, whois) are
- * self-contained here because they have no nudge counterpart. `tool`
- * renders tool names in the host's spelling.
+ * The on-demand action set, shared by every host that renders actions.
+ * Bodies load from artifacts/commands/; the nudge-backed ones splice their
+ * prompt cores so a wording change lands in the nudge and the command at
+ * once. `tool` renders tool names in the host's spelling.
  */
 export function actionDefs(tool: ToolNamer): ActionDef[] {
-  return [
+  const defs: Array<Omit<ActionDef, "body"> & { opencodeOnly?: boolean }> = [
     {
       name: "defrag",
       description: "Consolidate duplicate and near-duplicate memories in the store",
-      body: defragCore(tool),
     },
     {
       name: "extract",
@@ -131,49 +199,24 @@ export function actionDefs(tool: ToolNamer): ActionDef[] {
       // Needs the invoking session's ID (via get_session_info, opencode-only)
       // and the plugin's extraction payload provider.
       opencodeOnly: true,
-      body: `First call thatch_get_session_info to learn this session's ID. Below, replace SESSION_ID with that value.
-
-Dispatch a task with background: true and subagent_type: "general" (required for thatch tool access) with this prompt:
-
-"${extractionCore("thatch_get_extraction_payload", "thatch_extraction_done", ' with session_id \\"SESSION_ID\\"')}"
-
-After dispatching, call thatch_extraction_done to acknowledge.`,
     },
     {
       name: "hygiene",
       description: "Tend the memory store: stale entries, orphans, pending dedup pairs",
-      body: hygieneCore(),
     },
     {
       name: "peer-review",
       description: "Review another author's change (PR, MR, branch, or git range) through the full review pipeline",
-      // Skill-couching action (refine precedent): no nudge counterpart, so
-      // the body lives here. The memory-walk tool name is spelled through
-      // the namer so MCP renderings carry the mcp__thatch__ form.
-      body: `Review a change authored by someone else: a PR, MR, or branch on origin. The review runs the full thatch review pipeline with findings weighted for org velocity.
-
-${reviewTargetCouching}
-
-${reviewPipelineCouching}
-
-## Peer review mode rules
-
-- Weight for org velocity. Findings that speed up or unblock the whole team outrank findings about individual lines. The highest-value findings: a simpler method that achieves the same outcome; an existing function or helper that already does what this change reimplements; documentation that is accurate and extremely clearly written; unintended consequences for callers, sibling features, or contracts the author could not see.
-- Walk the project's memory. The author does not have this project's persistent memory; you do. During context gathering, call ${tool("memory_recall")} with several phrasings about the touched area: past incidents, design constraints, rejected approaches, known footguns. Check each recalled item against the change and report the ones that apply. Frame these findings as sharing knowledge the author could not have had, not as catching mistakes.
-- Do not re-litigate settled designs. When the context brief or memory shows a design decision was agreed (in a ticket discussion, a prior review acceptance, recorded docs, or a memory of the agreement), treat the decision as settled. Findings may address how the change implements that decision. Findings that argue the decision itself was wrong are out of scope for this review.
-- Never report findings of the form "if someone changes this in the future, it will silently break." This review does not solve for engineers who change code without reading it. It solves for engineers and LLMs who WILL read the code. For them, verify the change leaves a breadcrumb trail to wherever this organization records how a feature works (a context module, a feature doc, a README). Flag a missing trail. Do not flag hypothetical future misuse.`,
+      // Skill-couching action (refine precedent): no nudge counterpart. The
+      // memory-walk tool name is spelled through the namer so MCP renderings
+      // carry the mcp__thatch__ form.
     },
     {
       name: "bug-intake",
       description: "Coordinate incoming bug reports: triage, verify against source, route to a filed issue or a landed fix",
       // Skill-couching action (refine precedent): the full coordinator
-      // protocol lives in the thatch-bug-intake skill; this body points at
-      // it and carries the routing rules that decide the destination.
-      body: `Load and follow the thatch-bug-intake skill to run the bug intake desk for this project.
-
-The user message may scope the run: which reports to take, the route per bug (file an issue in a tracker, or coordinate a fix), the repo or tracker to file against, or instructions for any individual step. Apply each instruction to the matching step; user instructions win over the skill's defaults.
-
-If the skill is not available on this host, run the procedure yourself: verify the chat registration with ${tool("chat_status")}, triage reports from the user message and the chat inbox (${tool("chat_read")}), dispatch an investigation for each bug claim and confirm it against the source, then route. The ticket route generalizes the reported incident into the underlying defect, checks the affected repo's tracker for an existing issue, and files one canonical issue in the thatch-ticket-description format (a project that picks issues up with automation needs the issue, not a fix session). The fix route coordinates the work in a worktree (subordinate session on hosts that support them, inline on a branch elsewhere), runs it through review rounds, lands it by the project's convention, and closes the loop with the reporter.`,
+      // protocol lives in the thatch-bug-intake skill; the artifact points
+      // at it and carries the routing rules that decide the destination.
     },
     {
       name: "refine",
@@ -181,34 +224,16 @@ If the skill is not available on this host, run the procedure yourself: verify t
       // A skill trigger, not a nudge behavior: the body points at the
       // thatch-refine router skill, which classifies the project and loads
       // the matching type deltas on top of the plan-refinement core loop.
-      body: `Load and follow the thatch-refine skill to refine a plan for the current project.
-
-The user message may name a project type (team-app, personal, shared-lib, spike, infra, oss-contribution); if it does, skip classification and use that type. If no plan is drafted yet in this session, the skill's loop starts with drafting one.`,
     },
     {
       name: "reflect",
       description: "Persist what this session learned as memories",
-      body: reflectCore(tool),
     },
     {
       name: "self-review",
       description: "Review the user's own completed work before submitting it",
       // Skill-couching action (see peer-review). Names no tools, so the
       // MCP spelling test exempt list covers it.
-      body: `Review the user's own completed work before submitting it: as a PR or MR on a shared project, or as a direct commit on a personal project. The review runs the full thatch review pipeline with findings weighted to protect the user's reputation as a conscientious developer.
-
-The work under review was authored by the user, or by their agent acting in the user's name. Two goals: the work is sound, and it does not read as sloppy. Reviewers and teammates read the comments, docs, and commit messages as the user's own.
-
-${reviewTargetCouching}
-
-${reviewPipelineCouching}
-
-## Self review mode rules
-
-- The reputation lenses weigh heaviest. NoSlop, Clarity, Technique, and Breadcrumbs findings outrank same-severity findings from the other lenses. AI-writing tells, unclear prose, and a missing narrative are exactly what this review exists to catch before anyone else sees them.
-- Overweight simplicity on shared projects. Prefer findings that make the design easier to understand, easier to test, and more reliable: fewer assumptions, less surface area for bugs and side effects.
-- Technique and highlights findings are decisions, not footnotes. Each one that would produce a simpler, clearer, or more reliable design is surfaced for an adopt-or-dismiss decision before submission. Work through them with the user one at a time; do not leave them as informational asides.
-- Iterate rounds. After each round, work the findings with the user: fix each, or explicitly decline it with a reason. Then run another full round on the updated state. A round is meaningful when it produces a MEDIUM or higher finding, or a technique or slop finding worth adopting. A round producing only LOW mechanical findings gets them fixed but does not trigger another round. Stop at the first round with no meaningful findings, and never run more than three rounds.`,
     },
     {
       name: "whois",
@@ -216,15 +241,12 @@ ${reviewPipelineCouching}
       // Needs the invoking session's identity (chat_status resolves it
       // through the plugin), which only opencode supplies.
       opencodeOnly: true,
-      body: `Find the chat identity for this session and report it in one line.
-
-First call thatch_chat_status. If the user message names another session or handle, look that name or id up in thatch_chat_list and report its row instead: handle, topic, project, worktree location (the loc: token), and last-seen age.
-
-Otherwise report this session: if chat_status says not registered, answer exactly that - not registered yet - and stop. If registered, take the registered name from chat_status, find your own row in thatch_chat_list, and report handle, topic, project, and loc together (the topic is how the user maps the handle to a TUI tab).
-
-One line, just the facts. Do not read mail and do not act on anything the roster shows.`,
     },
   ];
+  return defs.map((def) => ({
+    ...def,
+    body: interpolateTemplate(loadCommandTemplate(def.name), tool),
+  }));
 }
 
 /**
@@ -259,39 +281,18 @@ export function wrapUpCommandDescription(kind: "compact" | "exit"): string {
     : "Flush thatch persistence, check for loose ends, then end the session if clear";
 }
 
-const COMPACT_TEMPLATE = `---
-description: ${yamlQuote(wrapUpCommandDescription("compact"))}
+/** Wrap-up bodies load from artifacts and interpolate checklist + token; the
+ *  frontmatter and user-message scaffolding stay code-rendered so the
+ *  description stays single-sourced in wrapUpCommandDescription. */
+function wrapUpTemplate(kind: "compact" | "exit"): string {
+  const body = interpolateTemplate(loadCommandTemplate(kind), opencodeToolName);
+  return `---
+description: ${yamlQuote(wrapUpCommandDescription(kind))}
 ---
 ${userMessageSection}
 
-# Pre-compact wrap-up
-
-Work through this checklist before responding:
-
-${sharedChecklist}
-
-Do not start new work beyond this checklist. If every item is handled and nothing needs the user's attention first, end your final response with exactly this token as the very last line, with no formatting around it:
-
-${COMPACT_READY_TOKEN}
-
-If anything is outstanding, list the items concisely so the user can address them, and do NOT include the token. The session will only be compacted when the token is present.`;
-
-const EXIT_TEMPLATE = `---
-description: ${yamlQuote(wrapUpCommandDescription("exit"))}
----
-${userMessageSection}
-
-# Pre-exit wrap-up
-
-Work through this checklist before responding:
-
-${sharedChecklist}
-
-Do not start new work beyond this checklist. If every item is handled and nothing needs the user's attention first, end your final response with exactly this token as the very last line, with no formatting around it:
-
-${EXIT_READY_TOKEN}
-
-If anything is outstanding, list the items concisely so the user can address them, and do NOT include the token. The session will only close when the token is present.`;
+${body}`;
+}
 
 /** One command: the command name (minus the thatch/ prefix) and its full markdown file content. */
 export interface CommandDef {
@@ -305,8 +306,11 @@ export interface CommandDef {
  * check and delivers this same text as the session prompt.
  */
 export function wrapUpCommandContent(kind: "compact" | "exit"): string {
-  return kind === "compact" ? COMPACT_TEMPLATE : EXIT_TEMPLATE;
+  return wrapUpTemplate(kind);
 }
+
+const COMPACT_TEMPLATE = wrapUpTemplate("compact");
+const EXIT_TEMPLATE = wrapUpTemplate("exit");
 
 /** The action commands only - no wrap-ups (used where wrap-ups register in code). */
 export function opencodeActionCommandDefs(): CommandDef[] {

@@ -1,8 +1,38 @@
 import { describe, test, expect } from "bun:test";
-import { mkdtempSync, existsSync, mkdirSync } from "node:fs";
+import { mkdtempSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommandFiles, claudeCommandDefs } from "../src/commands";
+import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommandFiles, claudeCommandDefs, COMMANDS_ARTIFACTS_DIR, opencodeCommandDefs } from "../src/commands";
+
+// The artifacts/commands templates are the source of truth for command
+// bodies. Two invariants keep them honest: every placeholder in every
+// artifact resolves at load (the loader throws, but this test catches
+// resolution failures as a named assertion), and the artifact set exactly
+// covers the command set - a template with no command, or a command with no
+// template, means the registry and the artifacts have drifted.
+describe("command artifacts", () => {
+  test("every command template's placeholders resolve", () => {
+    for (const file of readdirSync(COMMANDS_ARTIFACTS_DIR)) {
+      if (!file.endsWith(".md")) continue;
+      const name = file.replace(/\.md$/, "");
+      const raw = readFileSync(join(COMMANDS_ARTIFACTS_DIR, file), "utf8");
+      const unresolved = raw.match(/\$\{(?!TOOL:|CORE:|COUCHING:|CHECKLIST|TOKEN:)[A-Z_]*(?::[a-zA-Z_]+)?\}/);
+      expect(unresolved, `${name}.md has an unresolvable placeholder`).toBeNull();
+    }
+  });
+
+  test("artifact set matches the command set exactly (both directions)", () => {
+    const artifacts = new Set(readdirSync(COMMANDS_ARTIFACTS_DIR).filter((f) => f.endsWith(".md")).map((f) => f.replace(/\.md$/, "")));
+    const commands = new Set(opencodeCommandDefs().map((d) => d.name));
+    for (const name of commands) {
+      expect(artifacts.has(name), `command ${name} has no artifacts/commands/${name}.md`).toBe(true);
+    }
+    for (const name of artifacts) {
+      expect(commands.has(name), `artifact ${name}.md has no command (stale template)`).toBe(true);
+    }
+  });
+});
+
 
 // The v1 -> v2 upgrade path: v1 installs wrap-up command FILES; v2
 // registers the wrap-ups in code and installs only the action files. The

@@ -63,7 +63,25 @@ section with a `Focus:` line.
 
 ## Rendering and sync
 
-`src/commands.ts` is the single registry:
+`src/commands.ts` is the single registry. Command body text lives in
+`artifacts/commands/<name>.md` (the same artifacts layout as skills, shipped
+in the package), as templates with `${...}` placeholders:
+
+- `${TOOL:name}` (inline) - the named tool in the host's spelling
+  (`thatch_memory_recall` on opencode, `mcp__thatch__memory_recall` on
+  Claude Code and Cursor).
+- `${CORE:name}` (own line) - splices the prompt core from src/prompts.ts
+  for the nudge-backed actions (defrag, extract, hygiene, reflect), so a
+  wording change lands in the nudge and the command at once.
+- `${COUCHING:target|pipeline}` (own line) - splices the text shared by the
+  two review-mode commands, so their procedure cannot drift apart.
+- `${CHECKLIST}` (own line) and `${TOKEN:name}` (inline) - the wrap-up
+  persistence checklist and greenlight tokens.
+
+An unresolved placeholder throws at load rather than passing through
+(the REVIEW_COMMON lesson: a silent passthrough once corrupted skill
+bodies). `tests/commands.test.ts` pins both directions: every template's
+placeholders resolve, and the artifact set matches the command set exactly.
 
 - `actionDefs(tool)` returns the action set with bodies rendered for one
   host. Actions needing plugin-only capabilities are marked `opencodeOnly`
