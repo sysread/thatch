@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { compileTools, compilePrompts, createMcpTeardown } from "../src/mcp";
 import { TOOL_DEFS } from "../src/tool-defs";
-import { actionDefs, claudeCommandDefs, opencodeCommandDefs } from "../src/commands";
+import { actionDefs, claudeCommandDefs, mcpSpelling, opencodeCommandDefs } from "../src/commands";
 
 describe("MCP teardown", () => {
   const makeDeps = () => {
@@ -120,11 +120,11 @@ describe("MCP compileTools", () => {
 describe("MCP compilePrompts", () => {
   test("exposes the shared actions, spelled with MCP tool names", () => {
     const prompts = compilePrompts();
-    const expected = actionDefs((n) => `mcp__thatch__${n}`).filter((a) => !a.opencodeOnly);
+    const expected = actionDefs().filter((a) => !a.opencodeOnly);
     expect([...prompts.keys()].sort()).toEqual(expected.map((a) => a.name).sort());
     for (const action of expected) {
       const prompt = prompts.get(action.name)!;
-      expect(prompt.body).toBe(action.body);
+      expect(prompt.body).toBe(mcpSpelling(action.body));
     }
     // Tool-name spelling follows the host: the defrag prompt (which names
     // memory tools) must use the MCP spelling. The hygiene prompt drives

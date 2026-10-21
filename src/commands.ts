@@ -5,10 +5,8 @@ import {
   defragCore,
   extractionCore,
   hygieneCore,
-  mcpToolName,
-  opencodeToolName,
   reflectCore,
-  type ToolNamer,
+  opencodeToolName,
 } from "./prompts";
 
 /**
@@ -23,6 +21,24 @@ import {
  *   commands/thatch/) - synced by `thatch setup --claude`, which has no
  *   plugin to do it on load.
  *
+ * Every command's source of truth is a complete, formal command file at
+ * artifacts/commands/<name>.md (frontmatter description + user-message
+ * section + body), the same artifacts layout as skills and shipped in the
+ * package - a file anyone can lift into their own command directory. The
+ * artifacts carry tool names in the opencode spelling (thatch_x); host
+ * renderings that need the MCP spelling (mcp__thatch__x) get it from
+ * mcpSpelling().
+ *
+ * A few bodies carry ${...} placeholders that resolve at load, for text that
+ * must not be copied: ${CORE:name} (own line) splices the prompt core from
+ * src/prompts.ts so nudge and command wording cannot drift;
+ * ${COUCHING:target|pipeline} (own line) splices the text shared by the two
+ * review-mode commands; ${CHECKLIST} (own line) and ${TOKEN:name} (inline)
+ * carry the wrap-up persistence checklist and greenlight tokens. An
+ * unresolved placeholder throws at load rather than passing through
+ * silently (the REVIEW_COMMON lesson: a naive passthrough once corrupted
+ * skill bodies).
+ *
  * Two command families live here:
  *
  * - Actions (/thatch/bug-intake, defrag, extract, hygiene, peer-review,
@@ -30,20 +46,6 @@ import {
  * - Wrap-ups (/thatch/compact, exit): greenlight-token commands that need
  *   the opencode plugin's host action routes (the compact trigger and the
  *   session close-out), so they are opencode-only.
- *
- * Every body's source text lives in artifacts/commands/<name>.md (the same
- * artifacts layout as skills), NOT in this file. The artifacts are templates:
- * a ${...} placeholder resolves at load time, and an unknown placeholder
- * throws rather than passing through silently (the REVIEW_COMMON lesson -
- * a naive passthrough once spliced the wrong content into skill bodies):
- *
- * - ${TOOL:name} (inline) - the named tool in the host's spelling.
- * - ${CORE:name} (own line) - the prompt core from src/prompts.ts for the
- *   nudge-backed actions, so nudge and command wording cannot drift.
- * - ${COUCHING:name} (own line) - shared text shared by the review-mode
- *   commands (target | pipeline), so those two cannot drift apart.
- * - ${CHECKLIST} (own line) - the wrap-up persistence checklist.
- * - ${TOKEN:name} (inline) - a greenlight token constant.
  */
 export const COMMANDS_ARTIFACTS_DIR = join(import.meta.dir, "..", "artifacts", "commands");
 
@@ -63,14 +65,12 @@ export const EXIT_READY_TOKEN = "THATCH_EXIT_READY";
  * action runs (src/runtime.ts).
  */
 
+/**
+ * Shared wrap-up persistence checklist, spliced into both wrap-up artifacts
+ * so the two commands cannot drift apart.
+ */
 const sharedChecklist = `1. Flush pending persistence. Call thatch_get_extraction_payload; if it returns buffered tool interactions, process them now (write any memories worth keeping), then call thatch_extraction_done to mark them complete. Complete any memory writes you promised earlier but have not made.
 2. Check for loose ends. Review the conversation for todos, follow-ups, or open questions raised earlier that were never addressed, and surface anything the user should address before the wrap-up completes.`;
-
-const userMessageSection = `# User Message
-
-$ARGUMENTS
-
-(That section carries the text typed after the command. When it is empty, treat the user message as n/a - the command was run bare.)`;
 
 /**
  * How the review-mode commands (peer-review, self-review) run the code
@@ -116,18 +116,18 @@ const lineSplices: Record<string, string> = {
 
 /**
  * The prompt cores for the nudge-backed actions, resolved for ${CORE:name}.
- * The cores live in src/prompts.ts and take the host's tool namer; extract's
- * core is opencode-only (it names the opencode-spelled session tools inside
- * the dispatched sub-agent's prompt), so its tool names are literal.
+ * The cores live in src/prompts.ts; extract's core is opencode-only (it
+ * names the opencode-spelled session tools inside the dispatched sub-agent's
+ * prompt), so its tool names are literal.
  */
-function coreSplice(name: string, tool: ToolNamer): string {
+function coreSplice(name: string): string {
   switch (name) {
     case "defrag":
-      return defragCore(tool);
+      return defragCore(opencodeToolName);
     case "hygiene":
       return hygieneCore();
     case "reflect":
-      return reflectCore(tool);
+      return reflectCore(opencodeToolName);
     case "extract":
       return extractionCore("thatch_get_extraction_payload", "thatch_extraction_done", ' with session_id \\"SESSION_ID\\"');
     default:
@@ -142,19 +142,18 @@ function loadCommandTemplate(name: string): string {
 /**
  * Resolve a command artifact's ${...} placeholders. Line-form splices
  * (CORE, COUCHING, CHECKLIST) replace the whole line so multi-line text
- * lands cleanly; inline forms (TOOL, TOKEN) replace in place. Any
- * placeholder that survives resolution throws - a typo'd directive must
- * fail at load, not ship broken prompt text.
+ * lands cleanly; ${TOKEN:name} replaces inline. Any placeholder that
+ * survives resolution throws - a typo'd directive must fail at load, not
+ * ship broken prompt text.
  */
-function interpolateTemplate(raw: string, tool: ToolNamer): string {
+function interpolateTemplate(raw: string): string {
   const resolved = raw
-    .replace(/^[ \t]*\$\{CORE:([a-z]+)\}[ \t]*$/gm, (_m, name: string) => coreSplice(name, tool))
+    .replace(/^[ \t]*\$\{CORE:([a-z]+)\}[ \t]*$/gm, (_m, name: string) => coreSplice(name))
     .replace(/^[ \t]*\$\{(COUCHING:[a-z]+|CHECKLIST)\}[ \t]*$/gm, (_m, key: string) => {
       const text = lineSplices[key];
       if (text === undefined) throw new Error(`unknown command template splice: ${key}`);
       return text;
     })
-    .replace(/\$\{TOOL:([a-z_]+)\}/g, (_m, name: string) => tool(name))
     .replace(/\$\{TOKEN:([A-Z_]+)\}/g, (_m, name: string) => {
       const token = name === "COMPACT_READY_TOKEN" ? COMPACT_READY_TOKEN : name === "EXIT_READY_TOKEN" ? EXIT_READY_TOKEN : undefined;
       if (!token) throw new Error(`unknown command template token: ${name}`);
@@ -168,11 +167,24 @@ function interpolateTemplate(raw: string, tool: ToolNamer): string {
 }
 
 /**
+ * Rewrite opencode-spelled tool names for MCP hosts: `thatch_get_x` becomes
+ * `mcp__thatch__get_x`. The transform is mechanical on purpose - artifacts
+ * are written once in the opencode spelling and every host rendering derives
+ * from them. Word-boundary + lookahead keep skill names (thatch-bug-intake),
+ * prose ("thatch setup"), and hyphenated names untouched; only snake_case
+ * tool names match.
+ */
+export function mcpSpelling(text: string): string {
+  return text.replace(/\bthatch_(?=[a-z_])/g, "mcp__thatch__");
+}
+
+/**
  * One on-demand action: the command name (minus the thatch/ prefix), the
- * description shown in the command menu, and the instruction body loaded
- * from artifacts/commands/<name>.md. opencodeOnly marks actions that need a
- * session identity or other plugin-only capability; those are excluded from
- * Claude Code command files and MCP prompts.
+ * description (parsed from the artifact's frontmatter), and the instruction
+ * body - everything after the user-message section, in the opencode tool
+ * spelling. opencodeOnly marks actions that need a session identity or
+ * other plugin-only capability; those are excluded from Claude Code command
+ * files and MCP prompts.
  */
 export interface ActionDef {
   name: string;
@@ -181,160 +193,61 @@ export interface ActionDef {
   opencodeOnly?: boolean;
 }
 
-/**
- * The on-demand action set, shared by every host that renders actions.
- * Bodies load from artifacts/commands/; the nudge-backed ones splice their
- * prompt cores so a wording change lands in the nudge and the command at
- * once. `tool` renders tool names in the host's spelling.
- */
-export function actionDefs(tool: ToolNamer): ActionDef[] {
-  const defs: Array<Omit<ActionDef, "body"> & { opencodeOnly?: boolean }> = [
-    {
-      name: "defrag",
-      description: "Consolidate duplicate and near-duplicate memories in the store",
-    },
-    {
-      name: "extract",
-      description: "Drain the extraction queue now",
-      // Needs the invoking session's ID (via get_session_info, opencode-only)
-      // and the plugin's extraction payload provider.
-      opencodeOnly: true,
-    },
-    {
-      name: "hygiene",
-      description: "Tend the memory store: stale entries, orphans, pending dedup pairs",
-    },
-    {
-      name: "peer-review",
-      description: "Review another author's change (PR, MR, branch, or git range) through the full review pipeline",
-      // Skill-couching action (refine precedent): no nudge counterpart. The
-      // memory-walk tool name is spelled through the namer so MCP renderings
-      // carry the mcp__thatch__ form.
-    },
-    {
-      name: "bug-intake",
-      description: "Coordinate incoming bug reports: triage, verify against source, route to a filed issue or a landed fix",
-      // Skill-couching action (refine precedent): the full coordinator
-      // protocol lives in the thatch-bug-intake skill; the artifact points
-      // at it and carries the routing rules that decide the destination.
-    },
-    {
-      name: "refine",
-      description: "Refine a plan under the project type's requirements (classifies the project first)",
-      // A skill trigger, not a nudge behavior: the body points at the
-      // thatch-refine router skill, which classifies the project and loads
-      // the matching type deltas on top of the plan-refinement core loop.
-    },
-    {
-      name: "reflect",
-      description: "Persist what this session learned as memories",
-    },
-    {
-      name: "self-review",
-      description: "Review the user's own completed work before submitting it",
-      // Skill-couching action (see peer-review). Names no tools, so the
-      // MCP spelling test exempt list covers it.
-    },
-    {
-      name: "whois",
-      description: "Report this session's chat identity (handle, topic, project), or look up another session's",
-      // Needs the invoking session's identity (chat_status resolves it
-      // through the plugin), which only opencode supplies.
-      opencodeOnly: true,
-    },
-  ];
-  return defs.map((def) => ({
-    ...def,
-    body: interpolateTemplate(loadCommandTemplate(def.name), tool),
-  }));
-}
+/** Actions that need plugin-only capabilities (session identity): excluded
+ *  from Claude Code command files and MCP prompts. */
+const OPENCODE_ONLY_ACTIONS = new Set(["extract", "whois"]);
 
 /**
- * Renders a YAML double-quoted scalar. Plain scalars break on values
- * containing ": " (invalid YAML - the mapping key would be ambiguous), and
- * opencode's lenient fallback parser does not rescue every host path, so the
- * description must always be quoted.
+ * The on-demand action set. Bodies come from artifacts/commands/<name>.md
+ * with all placeholders resolved, in the opencode tool spelling. The body
+ * starts at the file's first "# " heading (the user-message section above it
+ * is scaffold shared by every artifact).
  */
-function yamlQuote(value: string): string {
-  return JSON.stringify(value);
-}
-
-/** Renders one action as a full command markdown file. */
-export function renderActionCommand(action: ActionDef): string {
-  return `---
-description: ${yamlQuote(action.description)}
----
-${userMessageSection}
-
-# ${action.name.charAt(0).toUpperCase() + action.name.slice(1)}
-
-${action.body}`;
-}
-
-/** The wrap-up command's menu/palette description. Host-neutral on purpose:
- *  what actually happens after the greenlight differs per host (v1 exits the
- *  app, v2 closes the session's tab), and the template text the MODEL reads
- *  is shared verbatim by both hosts. */
-export function wrapUpCommandDescription(kind: "compact" | "exit"): string {
-  return kind === "compact"
-    ? "Flush thatch persistence, check for loose ends, then compact if clear"
-    : "Flush thatch persistence, check for loose ends, then end the session if clear";
-}
-
-/** Wrap-up bodies load from artifacts and interpolate checklist + token; the
- *  frontmatter and user-message scaffolding stay code-rendered so the
- *  description stays single-sourced in wrapUpCommandDescription. */
-function wrapUpTemplate(kind: "compact" | "exit"): string {
-  const body = interpolateTemplate(loadCommandTemplate(kind), opencodeToolName);
-  return `---
-description: ${yamlQuote(wrapUpCommandDescription(kind))}
----
-${userMessageSection}
-
-${body}`;
-}
-
-/** One command: the command name (minus the thatch/ prefix) and its full markdown file content. */
-export interface CommandDef {
-  name: string;
-  content: string;
-}
-
-/**
- * The wrap-up command's prompt body, for hosts that register commands in
- * code (opencode v2 CommandEditor): the execute hook arms the greenlight
- * check and delivers this same text as the session prompt.
- */
-export function wrapUpCommandContent(kind: "compact" | "exit"): string {
-  return wrapUpTemplate(kind);
-}
-
-const COMPACT_TEMPLATE = wrapUpTemplate("compact");
-const EXIT_TEMPLATE = wrapUpTemplate("exit");
-
-/** The action commands only - no wrap-ups (used where wrap-ups register in code). */
-export function opencodeActionCommandDefs(): CommandDef[] {
-  return actionDefs(opencodeToolName).map((a) => ({ name: a.name, content: renderActionCommand(a) }));
+export function actionDefs(): ActionDef[] {
+  const defs: ActionDef[] = [];
+  for (const file of ["defrag", "extract", "hygiene", "peer-review", "bug-intake", "refine", "reflect", "self-review", "whois"]) {
+    const raw = loadCommandTemplate(file);
+    const descriptionMatch = raw.match(/^description: "(.*)"$/m);
+    if (!descriptionMatch) {
+      throw new Error(`command artifact ${file}.md has no quoted description`);
+    }
+    const bodyStart = raw.indexOf("\n# ", raw.indexOf("\n# ") + 1);
+    if (bodyStart === -1) {
+      throw new Error(`command artifact ${file}.md has no body heading`);
+    }
+    defs.push({
+      name: file,
+      description: JSON.parse(`"${descriptionMatch[1]}"`),
+      body: interpolateTemplate(raw.slice(bodyStart + 1)),
+      opencodeOnly: OPENCODE_ONLY_ACTIONS.has(file),
+    });
+  }
+  return defs;
 }
 
 /** The opencode command set: wrap-ups plus every action, as full file contents. */
-export function opencodeCommandDefs(): CommandDef[] {
-  return [
-    { name: "compact", content: COMPACT_TEMPLATE },
-    { name: "exit", content: EXIT_TEMPLATE },
-    ...opencodeActionCommandDefs(),
-  ];
+export function opencodeCommandDefs(): { name: string; content: string }[] {
+  return ["compact", "exit", "defrag", "extract", "hygiene", "peer-review", "bug-intake", "refine", "reflect", "self-review", "whois"].map((name) => ({
+    name,
+    content: interpolateTemplate(loadCommandTemplate(name)),
+  }));
+}
+
+/** The action commands only - no wrap-ups (used where wrap-ups register in code). */
+export function opencodeActionCommandDefs(): { name: string; content: string }[] {
+  return opencodeCommandDefs().filter((d) => d.name !== "compact" && d.name !== "exit");
 }
 
 /**
  * The Claude Code command set: the actions minus the opencode-only ones.
  * The wrap-up commands are excluded too - their greenlight check needs the
- * plugin's command.execute.before arming and host action routes.
+ * plugin's command.execute.before arming and host action routes. Tool names
+ * render in the MCP spelling.
  */
-export function claudeCommandDefs(): CommandDef[] {
-  return actionDefs(mcpToolName)
-    .filter((a) => !a.opencodeOnly)
-    .map((a) => ({ name: a.name, content: renderActionCommand(a) }));
+export function claudeCommandDefs(): { name: string; content: string }[] {
+  return opencodeCommandDefs()
+    .filter((d) => d.name !== "compact" && d.name !== "exit" && !OPENCODE_ONLY_ACTIONS.has(d.name))
+    .map((d) => ({ name: d.name, content: mcpSpelling(d.content) }));
 }
 
 /**
@@ -342,7 +255,7 @@ export function claudeCommandDefs(): CommandDef[] {
  * its on-disk content differs. Returns the paths that were written (empty
  * when everything was current).
  */
-function syncCommandFiles(dir: string, defs: CommandDef[]): string[] {
+function syncCommandFiles(dir: string, defs: { name: string; content: string }[]): string[] {
   const written: string[] = [];
   for (const def of defs) {
     const path = join(dir, `${def.name}.md`);
@@ -367,7 +280,7 @@ function syncCommandFiles(dir: string, defs: CommandDef[]): string[] {
  * in code pass the action-only set - a registered command and a file with
  * the same name would collide).
  */
-export function installOpencodeCommands(configHome: string, defs: CommandDef[] = opencodeCommandDefs()): string[] {
+export function installOpencodeCommands(configHome: string, defs: { name: string; content: string }[] = opencodeCommandDefs()): string[] {
   return syncCommandFiles(join(configHome, "opencode", "command", "thatch"), defs);
 }
 
@@ -394,4 +307,35 @@ export function removeWrapUpCommandFiles(configHome: string): void {
 /** Sync Claude Code's commands into <claudeDir>/commands/thatch/ (claudeDir is ~/.claude or <project>/.claude). */
 export function installClaudeCommands(claudeDir: string): string[] {
   return syncCommandFiles(join(claudeDir, "commands", "thatch"), claudeCommandDefs());
+}
+
+/**
+ * Install the command files into an explicit directory for any harness that
+ * reads a commands dir - the steal-them path: the files are complete,
+ * formal command documents (frontmatter + user-message section + body) in
+ * the opencode tool spelling. The thatch/ subdirectory preserves the
+ * /thatch/ invocation namespace. Used by `thatch setup --commands-only <dir>`.
+ */
+export function installCommandsToDir(dir: string): string[] {
+  return syncCommandFiles(join(dir, "thatch"), opencodeCommandDefs());
+}
+
+/** The wrap-up command's menu/palette description, as written in the
+ *  artifact frontmatter - exported for hosts that register the wrap-up
+ *  commands in code (opencode v2 CommandEditor) and need the description
+ *  without reading the file. */
+export function wrapUpCommandDescription(kind: "compact" | "exit"): string {
+  const raw = loadCommandTemplate(kind);
+  const match = raw.match(/^description: "(.*)"$/m);
+  if (!match) throw new Error(`wrap-up artifact ${kind}.md has no quoted description`);
+  return JSON.parse(`"${match[1]}"`);
+}
+
+/**
+ * The wrap-up command's prompt body, for hosts that register commands in
+ * code (opencode v2 CommandEditor): the execute hook arms the greenlight
+ * check and delivers this same text as the session prompt.
+ */
+export function wrapUpCommandContent(kind: "compact" | "exit"): string {
+  return interpolateTemplate(loadCommandTemplate(kind));
 }

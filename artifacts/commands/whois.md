@@ -1,3 +1,14 @@
+---
+description: "Report this session's chat identity (handle, topic, project), or look up another session's"
+---
+# User Message
+
+$ARGUMENTS
+
+(That section carries the text typed after the command. When it is empty, treat the user message as n/a - the command was run bare.)
+
+# Whois
+
 Find the chat identity for this session and report it in one line.
 
 First call thatch_chat_status. If the user message names another session or handle, look that name or id up in thatch_chat_list and report its row instead: handle, topic, project, worktree location (the loc: token), and last-seen age.

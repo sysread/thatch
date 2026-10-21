@@ -7,8 +7,7 @@ import { detectRepo } from "./git";
 import { checkSetup, setupClaudeCode, setupCursor } from "./setup";
 import { TOOL_DEFS, type CoreContext, type ToolDef } from "./tool-defs";
 import { chatOpenTabs as chatOpenTabsProvider } from "./tab-state";
-import { actionDefs, type ActionDef } from "./commands";
-import { mcpToolName } from "./prompts";
+import { actionDefs, mcpSpelling, type ActionDef } from "./commands";
 import { SidebandServer, sidebandSocketPath } from "./sideband";
 import { peekQueue, consumeQueue, resetMissedCount } from "./extract-queue";
 import { buildExtractionPayload } from "./extraction";
@@ -96,9 +95,9 @@ export function compileTools(): Map<string, CompiledTool> {
  */
 export function compilePrompts(): Map<string, ActionDef> {
   const map = new Map<string, ActionDef>();
-  for (const def of actionDefs(mcpToolName)) {
+  for (const def of actionDefs()) {
     if (def.opencodeOnly) continue;
-    map.set(def.name, def);
+    map.set(def.name, { ...def, body: mcpSpelling(def.body) });
   }
   return map;
 }

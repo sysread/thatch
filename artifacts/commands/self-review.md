@@ -1,3 +1,14 @@
+---
+description: "Review the user's own completed work before submitting it"
+---
+# User Message
+
+$ARGUMENTS
+
+(That section carries the text typed after the command. When it is empty, treat the user message as n/a - the command was run bare.)
+
+# Self-review
+
 Review the user's own completed work before submitting it: as a PR or MR on a shared project, or as a direct commit on a personal project. The review runs the full thatch review pipeline with findings weighted to protect the user's reputation as a conscientious developer.
 
 The work under review was authored by the user, or by their agent acting in the user's name. Two goals: the work is sound, and it does not read as sloppy. Reviewers and teammates read the comments, docs, and commit messages as the user's own.

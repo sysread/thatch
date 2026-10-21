@@ -211,7 +211,7 @@ describe("action commands", () => {
   test("each action file carries its core body and the user message section", async () => {
     const { opencodeCommandDefs, actionDefs } = await import("../src/commands");
     const defs = opencodeCommandDefs().filter((d) => !["compact", "exit"].includes(d.name));
-    const actions = actionDefs((n) => `thatch_${n}`);
+    const actions = actionDefs();
     expect(defs.map((d) => d.name)).toEqual(actions.map((a) => a.name));
     for (const def of defs) {
       expect(def.content).toContain("description:");

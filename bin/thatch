@@ -10,6 +10,7 @@ import { hygieneReport } from "../src/hygiene";
 import { claudeSessionStartReminder } from "../src/prompts";
 import { setupClaudeCode, setupCursor, setupSkillsOnly, registerClaudeMcpServer, thatchMcpServerEntry, type OtherScopeSkills } from "../src/setup";
 import { installSkills, type InstallReport } from "../src/skills";
+import { installCommandsToDir, opencodeCommandDefs } from "../src/commands";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
 import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, createChatTailPretty, markdownBodyLines, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailFilter, type ChatTailEvent } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
@@ -59,6 +60,10 @@ function usage(exitCode = 1): never {
                                    that directory (no host flag needed)
   thatch setup --skills-only <dir> Install the skills into <dir> for any harness
                                    (no host flag; --global is rejected)
+  thatch setup --commands-only <dir>
+                                   Install the command files into <dir>/thatch/
+                                   for any harness (complete formal command
+                                   files; no host flag; --global is rejected)
   thatch setup --mcp-json          Print the MCP server config as JSON on stdout
                                    (can be combined with other setup flags; writes
                                    nothing, stdout carries only the JSON when set)
@@ -991,12 +996,29 @@ switch (command) {
       console.error("A directory passed to --skills-only cannot be combined with --global.");
       process.exit(1);
     }
+    // --commands-only <dir>: install the command files into <dir>/thatch/ for
+    // any harness that reads a commands dir (the steal-them path: the files
+    // are complete, formal command documents). Directory form only - the
+    // host setup paths already sync commands in their full runs.
+    const commandsOnlyEq = args.find((a) => a.startsWith("--commands-only="));
+    const commandsOnlyIdx = args.indexOf("--commands-only");
+    const commandsTarget = commandsOnlyEq?.slice("--commands-only=".length) ?? (commandsOnlyIdx !== -1 && args[commandsOnlyIdx + 1] && !args[commandsOnlyIdx + 1].startsWith("--") ? args[commandsOnlyIdx + 1] : undefined);
+    const commandsOnly = commandsOnlyIdx !== -1 || commandsOnlyEq !== undefined;
+    if (commandsOnly && !commandsTarget) {
+      console.error("--commands-only needs a directory: thatch setup --commands-only <dir>");
+      process.exit(1);
+    }
+    if (commandsOnly && isGlobal) {
+      console.error("A directory passed to --commands-only cannot be combined with --global.");
+      process.exit(1);
+    }
+    const customCommandsDir = commandsTarget ? resolve(process.cwd(), commandsTarget) : null;
     if (skillsOnly && !customSkillsDir && !isClaude && !isCursor) {
       console.error("Specify at least one host: --claude and/or --cursor, or give --skills-only a directory.");
       console.error("Usage: thatch setup --claude [--cursor] [--local|--global] [--skills-only [dir]] [--mcp-json]");
       process.exit(1);
     }
-    if (!skillsOnly && !mcpJson && !isClaude && !isCursor) {
+    if (!skillsOnly && !mcpJson && !isClaude && !isCursor && !customCommandsDir) {
       console.error("Specify at least one host: --claude and/or --cursor.");
       console.error("Usage: thatch setup --claude [--cursor] [--local|--global] [--skills-only [dir]] [--mcp-json]");
       process.exit(1);
@@ -1061,6 +1083,25 @@ switch (command) {
       printSkills(result);
       say("");
       say(`Point your harness's skills directory at ${customSkillsDir} to pick up the skills.`);
+    }
+
+    if (customCommandsDir) {
+      // Host-agnostic command install: complete, formal command files into
+      // <dir>/thatch/ (the subdirectory preserves the /thatch/ invocation
+      // namespace). No other-scope probing and no host restart note - the
+      // harness picks the files up on its next command scan.
+      let written: string[];
+      try {
+        written = installCommandsToDir(customCommandsDir);
+      } catch (err) {
+        console.error(`Error: cannot install commands into ${customCommandsDir}: ${err instanceof Error ? err.message : err}`);
+        console.error("Fix the path or permissions and run again; some command files may already be written.");
+        process.exit(1);
+      }
+      say(`Thatch commands installed to ${join(customCommandsDir, "thatch")}.`);
+      say(`                 ${written.length} written (${written.length === opencodeCommandDefs().length ? "full set" : "partial"}, the rest were already current)`);
+      say("");
+      say(`Point your harness's commands directory at ${customCommandsDir} to pick up the commands.`);
     }
 
     if (isClaude && !customSkillsDir) {
