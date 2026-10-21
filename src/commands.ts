@@ -25,14 +25,15 @@ import {
  *
  * Two command families live here:
  *
- * - Actions (/thatch/defrag, extract, hygiene, peer-review, refine,
- *   reflect, self-review, whois): user-invoked commands. The nudge-backed
+ * - Actions (/thatch/bug-intake, defrag, extract, hygiene, peer-review,
+ *   refine, reflect, self-review, whois): user-invoked commands. The nudge-backed
  *   ones (defrag, extract, hygiene, reflect) render prompt cores from
  *   src/prompts.ts, so nudge and command wording cannot drift. The rest
- *   (peer-review, refine, self-review, whois) are self-contained here:
- *   they have no nudge counterpart. peer-review and self-review couch the
+ *   (bug-intake, peer-review, refine, self-review, whois) are self-contained
+ *   here: they have no nudge counterpart. peer-review and self-review couch the
  *   code review pipeline with a mode overlay: the same machinery, with
- *   findings weighted for whose work is under review.
+ *   findings weighted for whose work is under review. bug-intake couches
+ *   the thatch-bug-intake skill (the coordinator protocol).
  * - Wrap-ups (/thatch/compact, exit): greenlight-token commands that need
  *   the opencode plugin's host action routes (the compact trigger and the
  *   session close-out), so they are opencode-only.
@@ -161,6 +162,18 @@ ${reviewPipelineCouching}
 - Walk the project's memory. The author does not have this project's persistent memory; you do. During context gathering, call ${tool("memory_recall")} with several phrasings about the touched area: past incidents, design constraints, rejected approaches, known footguns. Check each recalled item against the change and report the ones that apply. Frame these findings as sharing knowledge the author could not have had, not as catching mistakes.
 - Do not re-litigate settled designs. When the context brief or memory shows a design decision was agreed (in a ticket discussion, a prior review acceptance, recorded docs, or a memory of the agreement), treat the decision as settled. Findings may address how the change implements that decision. Findings that argue the decision itself was wrong are out of scope for this review.
 - Never report findings of the form "if someone changes this in the future, it will silently break." This review does not solve for engineers who change code without reading it. It solves for engineers and LLMs who WILL read the code. For them, verify the change leaves a breadcrumb trail to wherever this organization records how a feature works (a context module, a feature doc, a README). Flag a missing trail. Do not flag hypothetical future misuse.`,
+    },
+    {
+      name: "bug-intake",
+      description: "Coordinate incoming bug reports: triage, verify against source, route to a filed issue or a landed fix",
+      // Skill-couching action (refine precedent): the full coordinator
+      // protocol lives in the thatch-bug-intake skill; this body points at
+      // it and carries the routing rules that decide the destination.
+      body: `Load and follow the thatch-bug-intake skill to run the bug intake desk for this project.
+
+The user message may scope the run: which reports to take, the route per bug (file an issue in a tracker, or coordinate a fix), the repo or tracker to file against, or instructions for any individual step. Apply each instruction to the matching step; user instructions win over the skill's defaults.
+
+If the skill is not available on this host, run the procedure yourself: verify the chat registration with ${tool("chat_status")}, triage reports from the user message and the chat inbox (${tool("chat_read")}), dispatch an investigation for each bug claim and confirm it against the source, then route. The ticket route generalizes the reported incident into the underlying defect, checks the affected repo's tracker for an existing issue, and files one canonical issue in the thatch-ticket-description format (a project that picks issues up with automation needs the issue, not a fix session). The fix route coordinates the work in a worktree (subordinate session on hosts that support them, inline on a branch elsewhere), runs it through review rounds, lands it by the project's convention, and closes the loop with the reporter.`,
     },
     {
       name: "refine",

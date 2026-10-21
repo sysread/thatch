@@ -66,6 +66,7 @@ description: Extract durable project facts ... Use when ...
 | `thatch-refine-oss-contribution` | Refinement deltas for PRs to repos you do not maintain: the maintainer's design authority governs, minimal diff, upstream discussion gates significant design work. |
 | `thatch-pr-description` | Draft PR descriptions with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, project-context research, clarity checks, and bold+italic emphasis for scanning. |
 | `thatch-ticket-description` | Draft ticket/issue descriptions with clear sections, project-context research, clarity checks, and bold+italic emphasis for scanning. |
+| `thatch-bug-intake` | Coordinate incoming bug reports: triage, verify each claim against the source, route to a filed issue or a coordinated fix, close the loop with the reporter. |
 | `thatch-split-overlarge-pr` | Split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main. |
 | `thatch-review-response` | Author-side review response: triage findings, fix bugs one by one, reply on each thread, post a top-level summary comment. |
 | `thatch-memory-verify` | Fact-check a single memory against the current codebase and correct stale claims. Uses git archaeology to preserve historical context when changes were intentional. |

@@ -352,6 +352,7 @@ response, walkthrough, and workflow skills that support the review pipeline:
 | `thatch-refine-spike` | Throwaway prototypes: skip the loop, verify only the premises the experiment's conclusion depends on. |
 | `thatch-refine-infra` | CI, Terraform, and k8s changes: blast radius, mandatory rollback plan and staged verification, pattern-following is near-absolute. |
 | `thatch-refine-oss-contribution` | PRs to repos you do not maintain: the maintainer's design authority governs, minimal diff, upstream discussion gates significant design work. |
+| `thatch-bug-intake` | Coordinates incoming bug reports: triage, verify each claim against the source, route to a filed issue or a coordinated fix, close the loop with the reporter. |
 
 ### Writing skills
 

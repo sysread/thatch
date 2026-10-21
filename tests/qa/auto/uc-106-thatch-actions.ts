@@ -90,8 +90,8 @@ const useCase: UseCase = {
       const claudeDir = join(ctx.dir, ".claude-fixture");
       const written = installClaudeCommands(claudeDir);
       const names = claudeCommandDefs().map((d) => d.name).sort();
-      if (names.join(",") !== "defrag,hygiene,peer-review,refine,reflect,self-review" || written.length !== 6) {
-        console.log(`  FAIL: claude command set should be defrag/hygiene/peer-review/refine/reflect/self-review, got ${names.join(",")}`);
+      if (names.join(",") !== "bug-intake,defrag,hygiene,peer-review,refine,reflect,self-review" || written.length !== 7) {
+        console.log(`  FAIL: claude command set should be bug-intake/defrag/hygiene/peer-review/refine/reflect/self-review, got ${names.join(",")}`);
         return "FAIL";
       }
       const claudeDefrag = readFileSync(join(claudeDir, "commands", "thatch", "defrag.md"), "utf8");

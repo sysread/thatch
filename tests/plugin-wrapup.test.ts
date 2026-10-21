@@ -155,7 +155,7 @@ describe("installOpencodeCommands", () => {
     try {
       const first = installOpencodeCommands(home);
       const names = first.map((p) => p.split("/").pop()!.replace(/\.md$/, "")).sort();
-      expect(names).toEqual(["compact", "defrag", "exit", "extract", "hygiene", "peer-review", "refine", "reflect", "self-review", "whois"]);
+      expect(names).toEqual(["bug-intake", "compact", "defrag", "exit", "extract", "hygiene", "peer-review", "refine", "reflect", "self-review", "whois"]);
       const compact = readFileSync(join(first[0]!), "utf8");
       expect(compact).toContain("description:");
       expect(compact).toContain("THATCH_COMPACT_READY");
@@ -246,7 +246,7 @@ describe("action commands", () => {
   test("Claude Code command set drops wrap-ups and the opencode-only actions (extract, whois)", async () => {
     const { claudeCommandDefs } = await import("../src/commands");
     const names = claudeCommandDefs().map((d) => d.name).sort();
-    expect(names).toEqual(["defrag", "hygiene", "peer-review", "refine", "reflect", "self-review"]);
+    expect(names).toEqual(["bug-intake", "defrag", "hygiene", "peer-review", "refine", "reflect", "self-review"]);
     for (const def of claudeCommandDefs()) {
       // Tool spelling follows the host. Hygiene drives the thatch CLI,
       // refine triggers a skill, and self-review names no tools; all three
@@ -264,7 +264,7 @@ describe("action commands", () => {
     const claudeDir = mkdtempSync(join(tmpdir(), "thatch-claude-cmds-"));
     try {
       const first = installClaudeCommands(claudeDir);
-      expect(first).toHaveLength(6);
+      expect(first).toHaveLength(7);
       expect(first[0]).toContain(join("commands", "thatch"));
       expect(installClaudeCommands(claudeDir)).toEqual([]);
     } finally {

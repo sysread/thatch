@@ -6,9 +6,9 @@ import { registerUseCase, type UseCase, type QaContext } from "../runner";
 /**
  * UC-014: Skill install and drift recovery.
  *
- * Automatable: yes — file presence, count (36 vs 38), content-diff-overwrite,
+ * Automatable: yes — file presence, count (37 vs 39), content-diff-overwrite,
  * and coordinator host-gating are all file assertions (`setup.test.ts` already
- * covers the unit contract). The opencode skill count (38) is verified against
+ * covers the unit contract). The opencode skill count (39) is verified against
  * the pre-populated config dir from ensureMaster.
  */
 
@@ -27,11 +27,11 @@ const useCase: UseCase = {
     "5. Check whether the `thatch-code-review` coordinator skill is present.",
   ].join("\n"),
   expected: [
-    "- Claude Code and Cursor install exactly **36 shared skills** to the scope's",
+    "- Claude Code and Cursor install exactly **37 shared skills** to the scope's",
     "  skills dir (repo `.claude/skills/` and `.cursor/skills/` for project-local",
     "  setup) — the coordinator (`thatch-code-review`) is **absent** (it needs",
     "  sub-agents, which those hosts lack).",
-    "- opencode installs **38** — the 36 shared plus the two opencode-only skills (coordinator, coordination).",
+    "- opencode installs **39** — the 37 shared plus the two opencode-only skills the two opencode-only skills (coordinator, coordination).",
     "- The locally edited `SKILL.md` is **overwritten** with the canonical content",
     "  on the next `setup`/init (drift detection: a file is only rewritten when its",
     "  content differs from the definition). Unrelated skill files are untouched.",
@@ -59,9 +59,9 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // --- Step 2: Skill counts (36 for Claude/Cursor, 38 for opencode) ---
+    // --- Step 2: Skill counts (37 for Claude/Cursor, 39 for opencode) ---
 
-    // Claude: 36 shared, no coordinator, in the repo's .claude/skills/
+    // Claude: 37 shared, no coordinator, in the repo's .claude/skills/
     const claudeSkillsDir = join(dir, ".claude", "skills");
     if (!existsSync(claudeSkillsDir)) {
       console.log("  FAIL: Claude skills dir not created in the repo");
@@ -71,8 +71,8 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (claudeSkills.length !== 36) {
-      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 36`);
+    if (claudeSkills.length !== 37) {
+      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 37`);
       return "FAIL";
     }
     if (claudeSkills.includes("thatch-code-review")) {
@@ -80,7 +80,7 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // Cursor: 36 shared, no coordinator, in the repo's .cursor/skills/
+    // Cursor: 37 shared, no coordinator, in the repo's .cursor/skills/
     const cursorSkillsDir = join(dir, ".cursor", "skills");
     if (!existsSync(cursorSkillsDir)) {
       console.log("  FAIL: Cursor skills dir not created in the repo");
@@ -90,8 +90,8 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (cursorSkills.length !== 36) {
-      console.log(`  FAIL: Cursor skills count is ${cursorSkills.length}, expected 36`);
+    if (cursorSkills.length !== 37) {
+      console.log(`  FAIL: Cursor skills count is ${cursorSkills.length}, expected 37`);
       return "FAIL";
     }
     if (cursorSkills.includes("thatch-code-review")) {

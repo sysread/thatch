@@ -240,6 +240,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-dedup-classifier\` - resolve duplicate memory pairs from \`thatch_find_duplicates\`.
 - \`thatch-pr-description\` - draft a PR description with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis on the phrases that carry the meaning.
 - \`thatch-ticket-description\` - draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
+- \`thatch-bug-intake\` - coordinate incoming bug reports: triage, verify each claim against the source, route to a filed issue or a coordinated fix, close the loop with the reporter.
 - \`thatch-split-overlarge-pr\` - split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
 - \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 - \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory looks stale or when preparing a knowledge export.
@@ -597,6 +598,7 @@ workflows. The host auto-discovers them, but reach for them proactively:
 - \`thatch-dedup-classifier\` - resolve duplicate memory pairs from \`find_duplicates\`.
 - \`thatch-pr-description\` - draft a PR description with SYNOPSIS / PURPOSE / DESCRIPTION / WALK-THROUGH / NOTES, using bold and italic emphasis on the phrases that carry the meaning.
 - \`thatch-ticket-description\` - draft a ticket, issue, or work item (Linear or Jira) with clear sections and bold/italic emphasis for scanning.
+- \`thatch-bug-intake\` - coordinate incoming bug reports: triage, verify each claim against the source, route to a filed issue or a coordinated fix, close the loop with the reporter.
 - \`thatch-split-overlarge-pr\` - split already-completed work from an overlarge PR into human-reviewable, release-safe PRs targeting main.
 - \`thatch-review-response\` - respond to code review on the user's own PR. Triage findings, fix bugs one by one, reply on each thread, then post a top-level summary comment.
 - \`thatch-memory-verify\` - fact-check a single memory against the current codebase and correct stale claims. Use when a memory looks stale or when preparing a knowledge export.

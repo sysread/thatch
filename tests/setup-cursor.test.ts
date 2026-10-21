@@ -136,7 +136,7 @@ describe("setupCursor (project-local)", () => {
     const result = setupCursor("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
     expect(result.skills.dir).toBe(join(projectDir, ".cursor", "skills"));
-    expect(result.skills.added.length).toBe(36);
+    expect(result.skills.added.length).toBe(37);
     expect(result.skills.updated).toEqual([]);
     expect(result.skills.unchanged).toEqual([]);
     expect(result.skills.removed).toEqual([]);
@@ -208,7 +208,7 @@ describe("setupCursor (global)", () => {
     const result = setupCursor("/usr/local/bin/thatch", true, projectDir, fakeHome);
 
     expect(result.skills.dir).toBe(join(fakeHome, ".cursor", "skills"));
-    expect(result.skills.added.length).toBe(36);
+    expect(result.skills.added.length).toBe(37);
     for (const skill of result.skills.added) {
       expect(skill.path.startsWith(join(fakeHome, ".cursor", "skills"))).toBe(true);
     }

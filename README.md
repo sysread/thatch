@@ -248,9 +248,9 @@ Thatch gives your agent:
   quiet notifications entirely, or tune which alerts fire.
 
 Plus **skills** for memory workflows, structured multi-specialist code
-review, review response, plan refinement, change and feature walkthroughs,
-memory verification, knowledge export, and writing tasks
-(PR descriptions, tickets, PR splitting).
+review, review response, plan refinement, bug-report intake, change and
+feature walkthroughs, memory verification, knowledge export, and writing
+tasks (PR descriptions, tickets, PR splitting).
 
 See the [user guide](https://github.com/sysread/thatch/wiki/Guide%3A-Overview) for the full tool list, CLI
 commands, configuration, environment variables, and detailed setup for each
@@ -260,9 +260,10 @@ host.
 
 The memory tools, prediction and behavior engines, conversation search via
 the `thatch session` CLI, cross-session chat (with stop-hook wake), skills,
-and the on-demand actions `/thatch/defrag`, `/thatch/hygiene`,
-`/thatch/reflect`, `/thatch/refine`, `/thatch/self-review`, and
-`/thatch/peer-review` (synced by `thatch setup --claude`; the review-mode
+and the on-demand actions `/thatch/bug-intake`, `/thatch/defrag`,
+`/thatch/hygiene`, `/thatch/reflect`, `/thatch/refine`,
+`/thatch/self-review`, and `/thatch/peer-review` (synced by
+`thatch setup --claude`; the review-mode
 commands run the specialist sequence inline, since the coordinator skill is
 opencode-only). Not available: the
 wrap-up commands (they need the plugin's host action routes),
@@ -273,8 +274,8 @@ beyond the hook-based flow, and toast notifications.
 ## What works in Cursor
 
 The same core set as Claude Code (memory, predictions, behaviors, chat with
-stop-hook wake, skills, and the `defrag`/`hygiene`/`reflect`/`refine`/
-`self-review`/`peer-review` actions). Cursor
+stop-hook wake, skills, and the `bug-intake`/`defrag`/`hygiene`/`reflect`/
+`refine`/`self-review`/`peer-review` actions). Cursor
 has no file-based slash commands, so the actions surface through MCP prompts
 instead. Not available: the wrap-up commands, `/thatch/extract`,
 `/thatch/whois`, and toast notifications.

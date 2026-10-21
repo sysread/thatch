@@ -76,6 +76,7 @@ function loadSharedSkills(): SkillDef[] {
     "thatch-refine-oss-contribution",
     "thatch-pr-description",
     "thatch-ticket-description",
+    "thatch-bug-intake",
     "thatch-split-overlarge-pr",
     "thatch-review-response",
     "thatch-memory-verify",
