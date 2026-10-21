@@ -41,7 +41,7 @@ test("departed participants render with the shared unknown convention", () => {
 });
 
 describe("ChatPoller", () => {
-  let deliveries: Array<{ sessionID: string; senders: string[]; count: number }>;
+  let deliveries: Array<{ sessionID: string; senders: string[]; count: number; batch: { fromUser: boolean; mixed: boolean } }>;
   let gateOpen: boolean;
   let hosted: string[];
   let poller: ChatPoller;
@@ -55,8 +55,8 @@ describe("ChatPoller", () => {
     poller = new ChatPoller({
       store: db,
       hostedSessions: () => [...hosted],
-      deliver: async (sessionID, senders, count) => {
-        deliveries.push({ sessionID, senders, count });
+      deliver: async (sessionID, senders, count, batch) => {
+        deliveries.push({ sessionID, senders, count, batch });
       },
       canDeliver: (sessionID) => gateOpen && hosted.includes(sessionID),
       pollIntervalMs: 60_000,
@@ -104,6 +104,27 @@ describe("ChatPoller", () => {
     expect(deliveries[0].count).toBe(3);
   });
 
+  test("a CLI-sent row classifies the nudge batch as user-voiced", async () => {
+    // Agent mail first, then the user's broadcast: the batch is mixed.
+    db.sendChatMessage("ses_a", "bob-00001", "agent mail");
+    raw.run(
+      `INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast, from_name, to_name)
+       VALUES ('cli', 'ses_b', 'user words', '${nowIso()}', 1, 'Jeff Ober', 'bob-00001')`,
+    );
+    gateOpen = true;
+    await poller.poll();
+    expect(deliveries.length).toBe(1);
+    expect(deliveries[0].batch).toEqual({ fromUser: true, mixed: true });
+  });
+
+  test("an all-agent batch keeps the standard (non-user) nudge classification", async () => {
+    db.sendChatMessage("ses_a", "bob-00001", "just agent mail");
+    gateOpen = true;
+    await poller.poll();
+    expect(deliveries.length).toBe(1);
+    expect(deliveries[0].batch).toEqual({ fromUser: false, mixed: false });
+  });
+
   test("delivery failure leaves messages pending", async () => {
     // The production delivery path logs each failed delivery; the scope
     // swallows it so the expected failure does not leak into the output.
@@ -137,8 +158,8 @@ describe("ChatPoller", () => {
     const capped = new ChatPoller({
       store: db,
       hostedSessions: () => hosted,
-      deliver: async (sessionID, senders, count) => {
-        deliveries.push({ sessionID, senders, count });
+      deliver: async (sessionID, senders, count, batch) => {
+        deliveries.push({ sessionID, senders, count, batch });
       },
       canDeliver: () => true,
       pollIntervalMs: 60_000,
@@ -172,8 +193,8 @@ describe("ChatPoller", () => {
         chatWakeCount: (to, cutoff) => db.chatWakeCount(to, cutoff),
       },
       hostedSessions: () => hosted,
-      deliver: async (sessionID, senders, count) => {
-        deliveries.push({ sessionID, senders, count });
+      deliver: async (sessionID, senders, count, batch) => {
+        deliveries.push({ sessionID, senders, count, batch });
       },
       canDeliver: () => true,
       pollIntervalMs: 60_000,
@@ -203,8 +224,8 @@ describe("ChatPoller", () => {
     const capped = new ChatPoller({
       store: db,
       hostedSessions: () => hosted,
-      deliver: async (sessionID, senders, count) => {
-        deliveries.push({ sessionID, senders, count });
+      deliver: async (sessionID, senders, count, batch) => {
+        deliveries.push({ sessionID, senders, count, batch });
       },
       canDeliver: () => true,
       pollIntervalMs: 60_000,
@@ -235,8 +256,8 @@ describe("ChatPoller", () => {
     const capped = new ChatPoller({
       store: db,
       hostedSessions: () => hosted,
-      deliver: async (sessionID, senders, count) => {
-        deliveries.push({ sessionID, senders, count });
+      deliver: async (sessionID, senders, count, batch) => {
+        deliveries.push({ sessionID, senders, count, batch });
       },
       canDeliver: () => true,
       pollIntervalMs: 60_000,
@@ -268,8 +289,8 @@ describe("ChatPoller", () => {
     const first = new ChatPoller({
       store: db,
       hostedSessions: () => hosted,
-      deliver: async (sessionID, senders, count) => {
-        deliveries.push({ sessionID, senders, count });
+      deliver: async (sessionID, senders, count, batch) => {
+        deliveries.push({ sessionID, senders, count, batch });
       },
       canDeliver: () => true,
       pollIntervalMs: 60_000,
@@ -284,8 +305,8 @@ describe("ChatPoller", () => {
       const second = new ChatPoller({
         store: db,
         hostedSessions: () => hosted,
-        deliver: async (sessionID, senders, count) => {
-          deliveries.push({ sessionID, senders, count });
+        deliver: async (sessionID, senders, count, batch) => {
+          deliveries.push({ sessionID, senders, count, batch });
         },
         canDeliver: () => true,
         pollIntervalMs: 60_000,
@@ -304,8 +325,8 @@ describe("ChatPoller", () => {
     const capped = new ChatPoller({
       store: db,
       hostedSessions: () => hosted,
-      deliver: async (sessionID, senders, count) => {
-        deliveries.push({ sessionID, senders, count });
+      deliver: async (sessionID, senders, count, batch) => {
+        deliveries.push({ sessionID, senders, count, batch });
       },
       canDeliver: () => true,
       pollIntervalMs: 60_000,

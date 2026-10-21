@@ -13,6 +13,7 @@ import {
   claudeWriteNudge,
   extractionNudge,
   extractionDirectPrompt,
+  chatNotificationNudge,
   type NudgeMatch,
 } from "../src/prompts";
 
@@ -157,8 +158,33 @@ describe("claudeWriteNudge", () => {
   });
 });
 
-describe("extractionNudge escalation (MCP hosts only)", () => {
-  const sessionID = "sess-abc";
+describe("chatNotificationNudge sender-kind framing", () => {
+  test("agent mail keeps the anti-loop framing", () => {
+    const nudge = chatNotificationNudge(["alice-00001"], 1);
+    expect(nudge).toContain("not user input");
+    expect(nudge).toContain("another agent session");
+    expect(nudge).not.toContain("IS user input");
+  });
+
+  test("a user-voiced batch says the user is speaking and answers go to their own session", () => {
+    const nudge = chatNotificationNudge(["Jeff Ober"], 2, { fromUser: true });
+    expect(nudge).not.toContain("not user input");
+    expect(nudge).toContain("IS user input");
+    expect(nudge).toContain("thatch chat broadcast");
+    expect(nudge).toContain("do NOT reply into thatch chat");
+    // A pure user batch carries no agent-mail mixed line.
+    expect(nudge).not.toContain("other agent sessions");
+  });
+
+  test("a mixed batch keeps both framings honest", () => {
+    const nudge = chatNotificationNudge(["Jeff Ober", "alice-00001"], 3, { fromUser: true, mixed: true });
+    expect(nudge).toContain("IS user input");
+    expect(nudge).toContain("other agent sessions");
+    expect(nudge).toContain("not approval to act");
+  });
+});
+
+describe("extractionNudge escalation (MCP hosts only)", () => {  const sessionID = "sess-abc";
 
   test("tier 0 (missedCount 0-1): leads with sub-agent dispatch wording", () => {
     const nudge = extractionNudge(3, 0, sessionID);

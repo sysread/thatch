@@ -595,11 +595,11 @@ export async function createRuntime(input: {
       db.runtimeStatePut("hosted", directory, merged, directory);
       return hosted;
     },
-    deliver: async (sessionID, senders, count) => {
+    deliver: async (sessionID, senders, count, batch) => {
       await caps.promptSession(
         sessionID,
         {
-          parts: [{ type: "text", text: chatNotificationNudge(senders, count), synthetic: true }],
+          parts: [{ type: "text", text: chatNotificationNudge(senders, count, batch), synthetic: true }],
         },
         "async",
       );

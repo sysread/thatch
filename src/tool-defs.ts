@@ -2573,10 +2573,10 @@ const chatBroadcastDef: ToolDef = {
     if (!result.ok) return `Not sent: ${result.error}`;
     const lines = [
       `[broadcast] to ${result.recipients.length} session${result.recipients.length === 1 ? "" : "s"}`,
-      `recipients: ${result.recipients.length > 0 ? result.recipients.join(", ") : "(none)"}`,
+      `recipients: ${result.recipients.length > 0 ? result.recipients.map((r) => r.name).join(", ") : "(none)"}`,
     ];
     if (result.parts > 1) lines.push(`sent as ${result.parts} parts per recipient (the body exceeded ${CHAT_SPLIT_PART_LEN} characters and was auto-split)`);
-    if (result.skipped.length > 0) lines.push(`skipped (stale or no open tab): ${result.skipped.join(", ")}`);
+    if (result.skipped.length > 0) lines.push(`skipped (stale or no open tab): ${result.skipped.map((s) => s.name).join(", ")}`);
     if (result.deduped > 0) lines.push(`duplicate suppressed: an identical broadcast sent moments ago is still UNREAD at ${result.deduped} recipient${result.deduped === 1 ? "" : "s"} - the original delivery stands; the same body delivers again to a recipient once they have read it`);
     return (
       lines.join("\n") +

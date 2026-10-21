@@ -478,10 +478,58 @@ newly-read messages per poll, with the diff state seeded from the full
 feed so neither the limit nor a mid-follow rename/unregister can
 resurface old rows as sent events. `chat_messages.via_broadcast` marks
 fan-out rows so each copy's `sent` event carries `broadcast: true`
-alongside its real recipient. The
-CLI takes no chat write actions (the wake machinery owns those paths);
-the only writes it can trigger are the schema migrations that run
-whenever any thatch process opens the database.
+alongside its real recipient.
+
+Historically the CLI took no chat write actions at all (the wake
+machinery owns those paths); that invariant was deliberately reversed
+for one subcommand when `thatch chat broadcast` landed (Jeff's ask):
+the CLI may now write user-voiced broadcast rows, and nothing else.
+The exclusion still holds for every other surface, and the write
+performs no wake and stamps no delivered_at itself - the ordinary
+poller delivers exactly as for tool rows (below) - so the only other
+writes the CLI can trigger are the schema migrations that run whenever
+any thatch process opens the database.
+
+### The CLI broadcast: the user over the fence
+
+`thatch chat broadcast <msg> [--project P]...` voices the HUMAN USER in
+every chat session, from a terminal. The sender is not a session: rows
+carry the sentinel `from_session` "cli" (`CHAT_CLI_SENDER` - no
+underscore, so it can never shadow a session ID; no counter suffix, so
+the name pool can never issue it) and an explicit `from_name` derived
+from `git config user.name` (falling back to `$USER`), stripped to
+`NAME_CHARSET` by `sanitizeCliSenderName()` with a "cli user" fallback.
+The sanitized name is refused if it case-insensitively matches a
+registered session's name - a CLI broadcast must never be mistaken for
+a directory member.
+
+Every delivered body begins with `cliBroadcastFrame()`'s fence note:
+the message is from the human user, who is not a chat session and will
+not read replies here; receiving sessions must act in their own session
+and report to their own user, and must NOT reply into thatch chat.
+The note is part of the persisted row (unlike the read-time untrusted
+frame), so it survives every render path; on an auto-split body it
+rides in part 1 only, with each row still naming the sender through the
+`from_name` snapshot.
+
+Delivery is the store's `broadcastFromUser()` (both entry points share
+the `#fanOut` core): the cap check, split, single transaction,
+per-recipient dedupe, and name snapshots are byte-identical to the tool
+path, but `requireOpen` is false - the CLI has no tab signal to read,
+and the tab skip exists because a WAKE to a tab-less session is
+swallowed. A CLI row is delivered by the ordinary poller like any tool
+row: open opencode sessions are woken, RECENT opencode rows and MCP
+rows read their mail at the next prompt, and the wake nudge is
+user-voiced (`chatNotificationNudge`'s `fromUser` framing - the
+agent-mail "not user input" rule would be a lie here). STALE opencode
+rows are still skipped and reported; a stale MCP row still receives.
+A repeatable `--project` flag narrows the audience by exact
+whole-value match against the registered project (the comparison
+`pendingByProject` uses); non-matching rows, including NULL-project
+rows, land in the report's out-of-scope bucket so the omission is
+visible. `delivered_at` is never stamped by the CLI write: the
+wake/poll machinery owns delivery stamping. The tool's
+`chat_broadcast` surface is unchanged and cannot name its sender.
 
 ## Interactions with other features
 
@@ -644,6 +692,9 @@ within their clamps - invalid values silently fall back to the default.
 - `tests/qa/auto/uc-097-chat.ts` - full lifecycle against a mocked poller
 - `tests/qa/auto/uc-099-chat-cli.ts` - `chat list` roster and `chat tail`
   JSONL and `--pretty` contracts over a seeded DB
+- `tests/qa/auto/uc-128-chat-cli-broadcast.ts` - the CLI broadcast: report
+  buckets, fence note, sentinel rows, dedupe, and failure paths over a
+  seeded DB
 - `tests/qa/auto/uc-116-chat-send-dedupe.ts` - a retried send is suppressed
 - `tests/qa/auto/uc-119-chat-split-long-messages.ts` - an oversized body is
   auto-split into marker-decorated parts

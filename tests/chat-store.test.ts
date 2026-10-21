@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { nowIso, isoMinutesAgo as cutoffAgo, NAME_CHARSET, slugifyTitle, isDefaultSessionTitle, humanAge, renderChatParticipant } from "../src/chat";
+import { nowIso, isoMinutesAgo as cutoffAgo, NAME_CHARSET, slugifyTitle, isDefaultSessionTitle, humanAge, renderChatParticipant, CHAT_CLI_SENDER, cliBroadcastFrame, sanitizeCliSenderName } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { TOOL_DEFS } from "../src/tool-defs";
 import { makeChatDbFixture, disposeChatDbFixture, makeReg } from "./mocks/chat-harness";
@@ -342,7 +342,7 @@ describe("ChatStore via ThatchDB", () => {
       expect(retry.deduped).toBe(2);
       // The recipient list stays complete - each recipient DID receive the
       // original delivery.
-      expect(retry.recipients.sort()).toEqual(["bob-00001", "carol-00001"]);
+      expect(retry.recipients.map((r) => r.name).sort()).toEqual(["bob-00001", "carol-00001"]);
     }
     expect((raw.query("SELECT COUNT(*) AS n FROM chat_messages").get() as any).n).toBe(2);
     // A different body broadcasts fresh.
@@ -361,8 +361,10 @@ describe("ChatStore via ThatchDB", () => {
     const result = db.broadcastChatMessage("ses_a", "the time of the biologicals has come to an end");
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.recipients.sort()).toEqual(["bob-00001", "carol-00001"]);
-    expect(result.skipped).toEqual(["ghost-00001"]);
+    expect(result.recipients.map((r) => r.name).sort()).toEqual(["bob-00001", "carol-00001"]);
+    expect(result.skipped.map((s) => s.name)).toEqual(["ghost-00001"]);
+    expect(result.skipped[0].reason).toBe("stale");
+    expect(result.skipped[0].project).toBe("p");
     // Every recipient got its own inbox row.
     expect(db.unreadChatCount("ses_b")).toBe(1);
     expect(db.unreadChatCount("ses_c")).toBe(1);
@@ -397,8 +399,9 @@ describe("ChatStore via ThatchDB", () => {
     const result = db.broadcastChatMessage("ses_a", "rebase if you are based on main");
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.recipients.sort()).toEqual(["bob-00001", "mickey-00001"]);
-    expect(result.skipped).toEqual(["carol-00001"]);
+    expect(result.recipients.map((r) => r.name).sort()).toEqual(["bob-00001", "mickey-00001"]);
+    expect(result.skipped.map((s) => s.name)).toEqual(["carol-00001"]);
+    expect(result.skipped[0].reason).toBe("no open tab");
     expect(db.unreadChatCount("ses_b")).toBe(1);
     expect(db.unreadChatCount("ses_m")).toBe(1);
     expect(db.unreadChatCount("ses_c")).toBe(0);
@@ -417,11 +420,100 @@ describe("ChatStore via ThatchDB", () => {
       const result = noSignal.broadcastChatMessage("ses_a", "anyone mounted?");
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.recipients).toEqual(["mickey-00001"]);
-      expect(result.skipped.sort()).toEqual(["bob-00001"]);
+      expect(result.recipients.map((r) => r.name)).toEqual(["mickey-00001"]);
+      expect(result.skipped.map((s) => s.name).sort()).toEqual(["bob-00001"]);
     } finally {
       noSignal.close();
     }
+  });
+
+  test("broadcastFromUser delivers from the sentinel sender without registration", () => {
+    reg("ses_b", "bob");
+    reg("ses_m", "mickey");
+    raw.run("UPDATE chat_sessions SET host_kind = 'mcp' WHERE session_id = 'ses_m'");
+    const result = db.broadcastChatMessageFromUser("lunch run", { senderName: "Jeff Ober" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.recipients.map((r) => r.name).sort()).toEqual(["bob-00001", "mickey-00001"]);
+    // Rows carry the sentinel sender and the explicit name snapshot, and
+    // the CLI write path never stamps delivery: read_at/delivered_at
+    // belong to the wake/poll machinery.
+    const rows = raw.query("SELECT from_session, from_name, via_broadcast, read_at, delivered_at FROM chat_messages").all() as any[];
+    expect(rows.length).toBe(2);
+    for (const row of rows) {
+      expect(row.from_session).toBe(CHAT_CLI_SENDER);
+      expect(row.from_name).toBe("Jeff Ober");
+      expect(row.via_broadcast).toBe(1);
+      expect(row.read_at).toBeNull();
+      expect(row.delivered_at).toBeNull();
+    }
+  });
+
+  test("broadcastFromUser requires no open tab: RECENT rows receive, STALE still skipped", () => {
+    reg("ses_a", "alice");
+    reg("ses_b", "bob");
+    reg("ses_g", "ghost");
+    raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_g'");
+    // No tab provider (the CLI's situation): every fresh opencode row is
+    // RECENT, and the mail-check delivery still reaches it - but a stale
+    // row's host is gone and stays skipped, with its project reported.
+    const noTabs = new ThatchDB(dbPath);
+    try {
+      const result = noTabs.broadcastChatMessageFromUser("anyone there?", { senderName: "cli user" });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.recipients.map((r) => r.name).sort()).toEqual(["alice-00001", "bob-00001"]);
+      expect(result.skipped).toEqual([{ name: "ghost-00001", project: "p", reason: "stale" }]);
+    } finally {
+      noTabs.close();
+    }
+  });
+
+  test("broadcastFromUser filters projects exactly, reporting out-of-scope rows first", () => {
+    reg("ses_a", "alice", "acme/one");
+    reg("ses_b", "bob", "acme/two");
+    // A session registered with no project at all: reg() types project as
+    // string, so this one goes through the raw register call.
+    const np = db.registerChatSession("ses_np", null, null, "opencode", "noproj");
+    if (!np.ok) throw new Error("reg(ses_np) failed");
+    const result = db.broadcastChatMessageFromUser("heads up", { projects: ["acme/one"], senderName: "cli user" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Filter-first: only the matching project receives; the NULL-project
+    // row is out of scope, never silently skipped or delivered.
+    expect(result.recipients.map((r) => r.name)).toEqual(["alice-00001"]);
+    expect(result.outOfScope.map((r) => r.name).sort()).toEqual(["bob-00001", "noproj-00001"]);
+    expect(result.skipped).toEqual([]);
+    expect(db.unreadChatCount("ses_b")).toBe(0);
+  });
+
+  test("broadcastFromUser with no project filter reaches every project", () => {
+    reg("ses_a", "alice", "acme/one");
+    reg("ses_b", "bob", "acme/two");
+    const result = db.broadcastChatMessageFromUser("all hands", { senderName: "cli user" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.recipients.map((r) => r.name).sort()).toEqual(["alice-00001", "bob-00001"]);
+    expect(result.outOfScope).toEqual([]);
+  });
+
+  test("broadcastFromUser refuses a sender name that matches a registered session (NOCASE)", () => {
+    reg("ses_a", "alice");
+    const result = db.broadcastChatMessageFromUser("impersonation test", { senderName: "ALICE-00001" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("already a registered chat session");
+  });
+
+  test("the CLI sentinel cannot collide with session IDs or assigned names", () => {
+    // No underscore: can never shadow a session ID in find()'s
+    // name-first resolution (session IDs contain underscores).
+    expect(CHAT_CLI_SENDER).not.toContain("_");
+    // mcp synthetic IDs are mcp_<hex>; the sentinel is not one.
+    expect(CHAT_CLI_SENDER.startsWith("mcp_")).toBe(false);
+    // Assigned names always carry a numeric counter suffix, so the bare
+    // sentinel shape can never be issued by the pool either.
+    expect(CHAT_CLI_SENDER).not.toMatch(/-\d{5}$/);
   });
 
   test("read drains the inbox oldest-first and stamps messages read", () => {
@@ -711,5 +803,31 @@ describe("name pool invariants", () => {
       expect(seen.has(key), `pool name "${name}" collides case-insensitively`).toBe(false);
       seen.add(key);
     }
+  });
+});
+
+describe("CLI broadcast helpers", () => {
+  test("sanitizeCliSenderName keeps charset-legal names and strips the rest", () => {
+    expect(sanitizeCliSenderName("Jeff Ober")).toBe("Jeff Ober");
+    // Dots are legal in NAME_CHARSET.
+    expect(sanitizeCliSenderName("jeff.ober")).toBe("jeff.ober");
+    // Underscores are stripped - they would shadow session IDs in
+    // find()'s name-first resolution.
+    expect(sanitizeCliSenderName("jeff_ober")).toBe("jeff ober");
+    expect(sanitizeCliSenderName("  Jeff\tOber ")).toBe("Jeff Ober");
+    // Overlong input is capped; unusable input falls back to the label.
+    expect(sanitizeCliSenderName("x".repeat(60)).length).toBe(40);
+    expect(sanitizeCliSenderName("")).toBe("cli user");
+    expect(sanitizeCliSenderName("///")).toBe("cli user");
+  });
+
+  test("cliBroadcastFrame carries the fence protocol", () => {
+    const framed = cliBroadcastFrame("the actual message");
+    expect(framed).toContain("human user");
+    expect(framed).toContain("not a chat session");
+    expect(framed).toContain("your own session");
+    expect(framed).toContain("Do NOT reply into thatch chat");
+    // The user's body rides after the note, unmodified.
+    expect(framed.endsWith("the actual message")).toBe(true);
   });
 });

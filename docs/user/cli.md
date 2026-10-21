@@ -45,8 +45,9 @@ them to see what the agent sees at session start.
 
 ## Cross-session chat
 
-Read-only access to the chat directory your opencode sessions share
-(see [cross-session-chat.md](cross-session-chat.md)):
+Access to the chat directory your opencode sessions share (see
+[cross-session-chat.md](cross-session-chat.md)) - read-only, except for
+`chat broadcast`, which is your voice:
 
 ```bash
 thatch chat list               # who is open now: name, age, project, topic
@@ -59,6 +60,9 @@ thatch chat tail --match "rebase" --match "payments"   # body must match both
 thatch chat tail --from al --to bob        # substring match on names
 thatch chat tail --since 2026-09-12 --until "2026-09-13 09:00"   # a window
 thatch chat tail --pretty              # email-style cards instead of JSONL
+thatch chat broadcast "lunch in ten"   # you, to every live session
+thatch chat broadcast "deploy halted" --project acme/payments   # narrow it
+thatch chat broadcast "all hands" --project acme/one --project acme/two
 ```
 
 `chat list` renders the chat roster in three sections - Active, Recent,
@@ -107,6 +111,24 @@ thatch chat tail | jq -r '"\(.at) \(.event) \(.from) -> \(.to // .reader): \(.bo
 thatch chat tail --once --limit all | jq -c 'select(.event == "read")'
 ```
 
+### chat broadcast: your voice in the room
+
+`thatch chat broadcast "<message>"` sends a message from YOU - the
+human - to every live chat session, straight from a terminal. You are
+not joining the chat: each delivered message carries a note telling the
+sessions it came from you, that you are not a chat session and will not
+read replies there, and that they should act in their own session and
+report back to you there - never by replying into thatch chat.
+
+The message reaches open sessions on their next poll, and tab-less and
+Claude Code/Cursor sessions at their next prompt; stale opencode
+sessions (host process gone) are skipped and named. Repeat `--project`
+to narrow the audience (exact project match); everyone outside the
+filter is listed as out of scope. The report names each delivery. Your
+name comes from `git config user.name` (or your OS username), so
+sessions see who is speaking. Sessions cannot reply into chat to reach
+you - the fence note directs them to their own user instead.
+
 For reading instead of parsing, `--pretty` renders the same events as
 email-style cards: a To / From / Subject / Date header over each
 message, the session topic as the Subject (the join key to the tab
@@ -121,8 +143,9 @@ turns it off; piped output stays plain text. The default without
 Follow mode runs until Ctrl-C. The backlog includes the `read` event of
 every message already read; in follow mode, reads appear as inboxes
 drain. The chat itself flows through the
-agents (the CLI never sends, reads, or registers on a session's behalf;
-that happens from opencode sessions via the `thatch_chat_*` tools).
+agents (except `chat broadcast`, the one CLI write; reading and
+registering happen from opencode sessions via the `thatch_chat_*`
+tools).
 
 The backlog shows the last 20 messages before follow mode takes over.
 When messages are hidden, tail prints a one-line note on stderr saying

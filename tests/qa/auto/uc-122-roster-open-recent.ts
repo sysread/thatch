@@ -92,11 +92,11 @@ const useCase: UseCase = {
         console.log(`  FAIL: broadcast refused: ${result.error}`);
         return "FAIL";
       }
-      if (JSON.stringify(result.recipients) !== JSON.stringify(["tabbed-00001"])) {
+      if (JSON.stringify(result.recipients.map((r) => r.name)) !== JSON.stringify(["tabbed-00001"])) {
         console.log(`  FAIL: expected recipients [tabbed], got: ${JSON.stringify(result.recipients)}`);
         return "FAIL";
       }
-      if (JSON.stringify(result.skipped.slice().sort()) !== JSON.stringify(["stale-00001", "tabless-00001"])) {
+      if (JSON.stringify(result.skipped.map((s) => s.name).sort()) !== JSON.stringify(["stale-00001", "tabless-00001"])) {
         console.log(`  FAIL: expected skipped [stale, tabless], got: ${JSON.stringify(result.skipped)}`);
         return "FAIL";
       }

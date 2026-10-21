@@ -12,7 +12,7 @@ import { setupClaudeCode, setupCursor, setupSkillsOnly, registerClaudeMcpServer,
 import { installSkills, type InstallReport } from "../src/skills";
 import { installCommandsToDir, opencodeCommandDefs } from "../src/commands";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
-import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, createChatTailPretty, markdownBodyLines, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, resolveRegisteredPredecessor, type ChatSessionRow, type ChatTailFilter, type ChatTailEvent } from "../src/chat";
+import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, createChatTailPretty, markdownBodyLines, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, CHAT_MAX_BODY_CHARS, CHAT_CLI_SENDER, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, resolveRegisteredPredecessor, cliBroadcastFrame, sanitizeCliSenderName, type ChatSessionRow, type ChatTailFilter, type ChatTailEvent } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
 import { chatNotificationNudge } from "../src/prompts";
 import { chatOpenTabs as chatOpenTabsProvider } from "../src/tab-state";
@@ -104,6 +104,20 @@ function usage(exitCode = 1): never {
                                    (markdown bodies through glow when
                                    installed; color only on a terminal,
                                    NO_COLOR disables it).
+  thatch chat broadcast <msg> [--project P]...
+                                    Send a message from you (the human
+                                    user, at a terminal) to every live
+                                    chat session. You are not in the
+                                    chat: delivered bodies carry a note
+                                    saying so, and recipients answer you
+                                    in their own session, not in chat.
+                                    Repeat --project to narrow the
+                                    audience to those projects (exact
+                                    match). Delivery is the ordinary
+                                    poll: open sessions are woken,
+                                    tab-less and MCP sessions read at
+                                    their next prompt; stale opencode
+                                    sessions are skipped and named.
 
 Stores default to the repo detected from git remote. Use "global" for the
 global store. Use "all" with search to search project + global together.`);
@@ -467,7 +481,10 @@ async function sessionCommand(rest: string[]): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// chat subcommand group - read-only window on the cross-session chat
+// chat subcommand group - a window on the cross-session chat. Read-only
+// everywhere except `chat broadcast`, the one deliberate write path: it
+// voices the human user (sentinel sender) and delivers through the
+// ordinary poller, with no open-tab requirement at write time.
 // ---------------------------------------------------------------------------
 
 /** Column headers for the `chat list` roster, in display order. */
@@ -760,6 +777,117 @@ async function chatCommand(rest: string[]): Promise<void> {
         // The script tail also closes; closing twice is harmless and the
         // early-return paths need this one.
       }
+      break;
+    }
+
+    case "broadcast": {
+      // The one chat write path: the user speaking from a terminal. The
+      // sender is a sentinel (never a registered session), delivery rides
+      // the ordinary poller (waking open sessions; no tab requirement at
+      // write time), and the fence note in the body tells recipients the
+      // protocol. A typo'd flag must not go out to every session as
+      // message text, so unknown `--` tokens die loudly instead of
+      // joining the message.
+      if (!chatEnabled(loadConfig(dbPath).config)) {
+        console.error("error: cross-session chat is off (chat.enabled: false in the thatch config); nothing was sent.");
+        process.exit(1);
+      }
+      const projects: string[] = [];
+      const message: string[] = [];
+      // End-of-flags: a bare `--` puts every later token in the message,
+      // so a body that starts with `--` can still be sent.
+      let afterDashDash = false;
+      for (let i = 0; i < restArgs.length; i++) {
+        const arg = restArgs[i]!;
+        if (afterDashDash) {
+          message.push(arg);
+          continue;
+        }
+        if (arg === "--") {
+          afterDashDash = true;
+        } else if (arg === "--project") {
+          const value = restArgs[++i];
+          // The sibling-flag rule (the --stale precedent): a token
+          // starting with `--` is a flag, not this flag's value.
+          if (value === undefined || value.startsWith("--")) {
+            console.error("error: --project expects a value");
+            process.exit(1);
+          }
+          if (!value.trim()) {
+            console.error(`error: --project expects a project name, got "${value}"`);
+            process.exit(1);
+          }
+          projects.push(value.trim());
+        } else if (arg.startsWith("--project=")) {
+          const value = arg.slice("--project=".length);
+          if (!value.trim()) {
+            console.error(`error: --project expects a project name, got "${value}"`);
+            process.exit(1);
+          }
+          projects.push(value.trim());
+        } else if (arg.startsWith("--")) {
+          console.error(`error: unknown flag "${arg}" (only --project is supported; put -- before the message to send text that starts with --)`);
+          process.exit(1);
+        } else {
+          message.push(arg);
+        }
+      }
+      const body = message.join(" ").trim();
+      if (!body) {
+        console.error("usage: thatch chat broadcast <message> [--project P]...");
+        process.exit(1);
+      }
+      // The cap check runs on the FRAMED body (the fence note rides in
+      // every row), and the refusal reports the user's body count, not
+      // the note's.
+      if (cliBroadcastFrame(body).length > CHAT_MAX_BODY_CHARS) {
+        console.error(`error: message too long: attempted ${body.length} characters (max ${CHAT_MAX_BODY_CHARS} including the broadcast note). Split it into several broadcasts.`);
+        process.exit(1);
+      }
+      // Sender identity: git config first (human-friendly), then the OS
+      // user; sanitizeCliSenderName strips anything NAME_CHARSET forbids.
+      let rawName = process.env.USER ?? "";
+      try {
+        const gitName = Bun.spawnSync(["git", "config", "user.name"], { stdout: "pipe" }).stdout.toString().trim();
+        if (gitName) rawName = gitName;
+      } catch {
+        // No git available or not a repo: the env fallback stands.
+      }
+      let result;
+      try {
+        result = db.broadcastChatMessageFromUser(cliBroadcastFrame(body), {
+          projects: projects.length > 0 ? projects : undefined,
+          senderName: sanitizeCliSenderName(rawName),
+        });
+      } catch (err) {
+        console.error(`[thatch chat broadcast] failed: ${err}`);
+        console.error("The database may be locked or missing; nothing was sent.");
+        process.exit(1);
+      }
+      if (!result.ok) {
+        console.error(`error: broadcast refused: ${result.error}`);
+        process.exit(1);
+      }
+      // Per-recipient report. Liveness labels come from the post-write
+      // roster (names are never reused, so the join by name is stable);
+      // a concurrently vanished row just gets no label.
+      const rowsByName = new Map(db.listChatSessions().map((r) => [r.name, r]));
+      const openTabs = chatOpenTabsProvider(() => db.chatTabClosures())();
+      const now = Date.now();
+      const label = (r: { name: string }): string => {
+        const row = rowsByName.get(r.name);
+        if (!row) return "";
+        if (row.host_kind === "mcp") return "mcp, reads at next prompt";
+        return chatLiveness(row, now, openTabs) === "open" ? "open" : "no tab, reads at next prompt";
+      };
+      const audience = result.recipients.length + result.skipped.length + result.outOfScope.length;
+      const scope = projects.length > 0 ? ` (projects: ${projects.join(", ")})` : "";
+      console.log(`Broadcast from ${result.senderName} to ${result.recipients.length} of ${audience} registered sessions${scope}:`);
+      for (const r of result.recipients) console.log(`  delivered: ${r.name} (${r.project ?? "no project"}) [${label(r)}]`);
+      for (const s of result.skipped) console.log(`  skipped (${s.reason}): ${s.name} (${s.project ?? "no project"})`);
+      for (const o of result.outOfScope) console.log(`  out of scope (project filter): ${o.name} (${o.project ?? "no project"})`);
+      if (result.deduped > 0) console.log(`  duplicate suppressed for ${result.deduped} recipient${result.deduped === 1 ? "" : "s"} (an identical unread broadcast stands)`);
+      if (result.parts > 1) console.log(`  sent as ${result.parts} parts per recipient (body exceeded the split length)`);
       break;
     }
 
@@ -1480,10 +1608,16 @@ switch (command) {
       const senders = [
         ...new Set(pending.map((m) => renderChatParticipant(m.from_name, m.from_session))),
       ];
+      // Same sender-kind rule as the poller's nudge: CLI-sent rows are the
+      // user's own words, not agent mail.
+      const userRows = pending.filter((m) => m.from_session === CHAT_CLI_SENDER);
       // Stamp before emitting: the re-nudge window (not the model's
       // obedience) bounds repeats when the mail goes ignored.
       db.markChatDelivered(pending.map((m) => m.id));
-      const nudge = chatNotificationNudge(senders, pending.length);
+      const nudge = chatNotificationNudge(senders, pending.length, {
+        fromUser: userRows.length > 0,
+        mixed: userRows.length > 0 && userRows.length < pending.length,
+      });
       console.log(
         JSON.stringify(
           claudeID

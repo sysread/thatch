@@ -1,6 +1,6 @@
 # CLI (bin/thatch)
 
-The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection, MCP server startup, hook commands for MCP hosts, the setup installer, session archaeology over the opencode database, and a read-only window on the cross-session chat directory.
+The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection, MCP server startup, hook commands for MCP hosts, the setup installer, session archaeology over the opencode database, and a window on the cross-session chat directory (read-only except `chat broadcast`).
 
 ## Subcommands
 
@@ -50,7 +50,7 @@ Inherits stdio, exits with the child's exit code. Errors and exits 1 if none fou
 
 ## chat
 
-Read-only window on the cross-session chat directory ([cross-session-chat.md](cross-session-chat.md)):
+A window on the cross-session chat directory ([cross-session-chat.md](cross-session-chat.md)), read-only everywhere except `chat broadcast`, the one write path: it writes user-voiced broadcast rows through a sentinel sender (details in cross-session-chat.md's CLI access section):
 
 - `chat list` renders the roster as aligned columns under a header row
   (NAME/SESSION ID/AGE/STATUS/PROJECT/TOPIC), colorized only when stdout
@@ -103,6 +103,22 @@ Read-only window on the cross-session chat directory ([cross-session-chat.md](cr
   messages stay invisible (their read events too). A `--until` in the past
   exits after the backlog; one in the future follows until the window
   closes. `parseChatTimeBound()` accepts `YYYY-MM-DD [HH:MM]` local time.
+- `chat broadcast <msg> [--project P]...` is the CLI's one write path:
+  it voices the human user (sentinel from_session "cli", explicit
+  `from_name` from `git config user.name` or `$USER`, sanitized by
+  `sanitizeCliSenderName()` and refused on a NOCASE match with a
+  registered session), stores the message through
+  `broadcastFromUser()` with `cliBroadcastFrame()`'s fence note
+  prepended (the note tells each recipient that the message is the
+  human user speaking, and that the recipient answers in its own
+  session instead of replying into chat), and prints a per-recipient
+  report (delivered with a `chatLiveness()` label, skipped by reason,
+  out-of-scope by the repeatable exact-match `--project` filter).
+  Delivery is the ordinary poll - open sessions wake, no tab
+  requirement at write time, `delivered_at` left to the wake
+  machinery; failures print plainly (`[thatch chat broadcast] failed:
+  ...`), matching the tail's friendly-failure treatment. Unknown flags
+  die loudly rather than going out to every session as message text.
 
 ## Environment variables
 
@@ -145,7 +161,7 @@ process; the registry itself is `src/env-knobs.ts`.
 - Hygiene ([hygiene.md](hygiene.md)): `hygiene`, `reminder` subcommands
 - Multi-host ([multi-host.md](multi-host.md)): `mcp` subcommand starts the MCP server for Claude Code and Cursor
 - Session archaeology: the `session` subcommand group (see the table above) reads the opencode session database via `src/session-db.ts`
-- Cross-session chat ([cross-session-chat.md](cross-session-chat.md)): the `chat` subcommand group reads the shared chat directory and inbox
+- Cross-session chat ([cross-session-chat.md](cross-session-chat.md)): the `chat` subcommand group reads the shared chat directory and inbox; `chat broadcast` also writes user-voiced broadcast rows (the group's one write path)
 
 ## Key invariants
 

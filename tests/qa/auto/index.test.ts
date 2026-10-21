@@ -108,3 +108,4 @@ import "./uc-123-strand-self-heal";
 import "./uc-124-skills-custom-dir-mcp-json";
 import "./uc-126-memory-wrong-shape-teaching";
 import "./uc-127-bug-intake-command";
+import "./uc-128-chat-cli-broadcast";

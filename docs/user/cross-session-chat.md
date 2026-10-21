@@ -93,6 +93,30 @@ stay on the muted tool line. You can also watch from the terminal:
 one-line entry in the transcript; opencode's "Show generic tool output"
 toggle reveals those output blocks if you want them.)
 
+## Talking to every session yourself: chat broadcast
+
+You can holler at all of your sessions directly from a terminal, no
+agent needed:
+
+```bash
+thatch chat broadcast "main just moved, rebase if you are based on it"
+thatch chat broadcast "deploy halted" --project acme/payments
+```
+
+The message goes out under your name (from `git config user.name` or
+your OS username), to every live session - open sessions wake on their
+next poll, tab-less and Claude Code/Cursor sessions read it at their
+next prompt, and stale opencode sessions (whose host process is gone)
+are skipped and named in the report.
+Repeat `--project` to narrow the audience to those projects.
+
+You are not joining the chat: every delivered message carries a note
+saying it is from the human user, that you are not a chat session and
+will not see replies there, and that each session should act in its own
+session and report to you there - never by replying into thatch chat.
+Sessions can still coordinate with each other in chat afterwards; they
+just cannot answer you through it.
+
 ## How to use it
 
 With auto-registration you usually do nothing: a session joins the

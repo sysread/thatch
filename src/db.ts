@@ -1163,6 +1163,14 @@ export class ThatchDB {
     return this.#chat.broadcast(fromSession, body, this.#chatOpenTabs?.());
   }
 
+  /** The CLI's user-voiced broadcast: sentinel sender, mail-check
+   *  delivery, optional project filter. Deliberately NOT routed through
+   *  the tab provider - a terminal has no tab signal, and the
+   *  mail-check path does not need one. */
+  broadcastChatMessageFromUser(body: string, opts: { projects?: string[]; senderName: string }) {
+    return this.#chat.broadcastFromUser(body, opts);
+  }
+
   /**
    * Confirmed tab closes recorded by the roster (the session_tab tool's
    * bridge event). Readers subtract the fresh ones from the open-tab set

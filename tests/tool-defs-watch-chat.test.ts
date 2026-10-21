@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { TOOL_DEFS } from "../src/tool-defs";
+import { ThatchDB } from "../src/db";
 import { saveConfig } from "../src/config";
 import { WatcherRegistry, type GhRunner } from "../src/watchers";
 import { setupToolDefsHarness, ctx, dbPath, setOpenTabsFixture } from "./mocks/tool-defs-harness";
@@ -406,6 +407,32 @@ describe("chat delivery model in tool output", () => {
     setOpenTabsFixture(new Set());
     const degraded = await findChatTool("chat_list").execute({}, ctx, { sessionID: "ses_roster_open", agent: "build" });
     expect(degraded).not.toMatch(/ago open/);
+  });
+
+  test("chat_broadcast reports the fan-out with recipients and skips", async () => {
+    ctx.db.registerChatSession("ses_bc_a", ctx.defaultStore, null, "opencode", "ann");
+    ctx.db.registerChatSession("ses_bc_b", ctx.defaultStore, null, "opencode", "bill");
+    ctx.db.registerChatSession("ses_bc_ghost", ctx.defaultStore, null, "opencode", "ghost");
+    new Database(dbPath).run(
+      "UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_bc_ghost'",
+    );
+    // The shared harness db has no tab provider (every opencode row
+    // degrades to RECENT), so this test wires its own: bill open, ann is
+    // the sender, ghost stale.
+    const tabDb = new ThatchDB(dbPath, { chatOpenTabs: () => new Set(["ses_bc_b"]) });
+    try {
+      const result = await findChatTool("chat_broadcast").execute(
+        { body: "main moved, rebase if you are based on it" },
+        { ...ctx, db: tabDb },
+        { sessionID: "ses_bc_a", agent: "build" },
+      );
+      expect(result).toContain("[broadcast] to 1 session");
+      expect(result).toContain("recipients: bill-00001");
+      expect(result).toContain("skipped (stale or no open tab): ghost-00001");
+      expect(result).toContain("Each recipient's session is nudged when idle");
+    } finally {
+      tabDb.close();
+    }
   });
 
   test("chat_send states the recipient's liveness at send time", async () => {

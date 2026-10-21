@@ -33,6 +33,11 @@ import { CHAT_NAME_POOL } from "./chat-names";
  * not to auto-reply reflexively (two polite agents acknowledging each other
  * forever is an infinite wake cycle); the poller's per-recipient nudge cap
  * stops it mechanically regardless of what the models decide to do.
+ *
+ * A third writer writes without being a session: the CLI's
+ * `thatch chat broadcast` voices the human user through a sentinel sender
+ * (CHAT_CLI_SENDER) with an explicit from_name, and its fence note tells
+ * receiving agents the message is the user speaking.
  */
 
 /** ISO-8601 UTC timestamp with second resolution, matching the house
@@ -275,6 +280,54 @@ export const CHAT_MAX_BODY_CHARS = envChatInt("THATCH_CHAT_MAX_BODY_CHARS", 20_0
 // underscores, so the name-cannot-shadow-an-ID invariant in find() still
 // holds.
 export const NAME_CHARSET = /^[\p{L}\p{N} '.\-]+$/u;
+
+// Sentinel from_session for messages written outside any chat session -
+// currently the CLI's `thatch chat broadcast`. It is deliberately not a
+// legal display name shape: pool names always carry a numeric counter
+// suffix, so a bare "cli" can never collide with an assigned name, and it
+// has no underscore, so it can never shadow a session ID either (the
+// name-cannot-shadow-an-ID invariant in find()).
+export const CHAT_CLI_SENDER = "cli";
+
+/** Fallback sender name when neither git config nor the environment
+ *  yields a usable name. Dots, spaces, apostrophes, and hyphens are legal
+ *  (NAME_CHARSET); underscores and everything else outside the charset
+ *  are stripped. */
+const FALLBACK_CLI_SENDER_NAME = "cli user";
+
+/**
+ * Sanitizes a raw sender identity (git config user.name, OS user) into a
+ * from_name for CLI-written chat rows. NAME_CHARSET is an anchored
+ * validation regex, so the strip pattern is derived by inverting its
+ * class: characters outside letters, numbers, space, apostrophe, period,
+ * and hyphen are removed, whitespace runs collapse, and the result is
+ * capped to leave room for the body in wake prompts. An input with no
+ * usable characters falls back to a generic label rather than failing -
+ * a broadcast must not die on an odd username.
+ */
+export function sanitizeCliSenderName(raw: string): string {
+  const stripped = raw
+    .replace(/[^\p{L}\p{N} '.\-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!stripped) return FALLBACK_CLI_SENDER_NAME;
+  return stripped.slice(0, 40);
+}
+
+/** The fence note prepended to CLI broadcast bodies: the delivered
+ *  message is from THE USER, not a chat member, so receiving sessions
+ *  must act in their own session and never reply into thatch chat. This
+ *  text ships inside the persisted row (unlike chat_read's output-time
+ *  untrusted frame), so it must read as protocol, not decoration. */
+export function cliBroadcastFrame(body: string): string {
+  return (
+    "[Broadcast from the human user via `thatch chat broadcast`. The user " +
+    "is not a chat session and will not read replies here. Act on this in " +
+    "your own session and report to your own user. Do NOT reply into " +
+    "thatch chat.]\n\n" +
+    body
+  );
+}
 
 // Topics are free text (unlike names) but must stay one line for the
 // chat_list roster, so whitespace runs collapse and the value is capped.
@@ -573,6 +626,35 @@ function nextSplitPoint(text: string, partLen: number): number {
  * SQLite CRUD for the chat tables. Constructed by ThatchDB with the shared
  * Database handle; the tables are created by ThatchDB's schema init.
  */
+export interface BroadcastRecipient {
+  name: string;
+  project: string | null;
+}
+
+/** A row the fan-out did NOT deliver to, with the reason it was left
+ *  out: "stale" (host process gone) or "no open tab" (wake not
+ *  reliably deliverable; only possible when the caller requires an
+ *  open tab). */
+export interface BroadcastSkip extends BroadcastRecipient {
+  reason: "stale" | "no open tab";
+}
+
+export interface BroadcastResult {
+  ok: true;
+  /** The sender name snapshotted into every row (for the CLI sender, the
+   *  sanitized user label) - so the CLI can echo it without re-running
+   *  the sanitizer. */
+  senderName: string;
+  recipients: BroadcastRecipient[];
+  skipped: BroadcastSkip[];
+  /** Registered rows outside the caller's project filter, including rows
+   *  with no project. Populated only when a filter was given; the tool
+   *  path never filters, so its bucket is always empty. */
+  outOfScope: BroadcastRecipient[];
+  deduped: number;
+  parts: number;
+}
+
 export class ChatStore {
   #db: Database;
 
@@ -954,11 +1036,72 @@ export class ChatStore {
     fromSession: string,
     body: string,
     openTabs?: ReadonlySet<string>,
-  ): { ok: true; recipients: string[]; skipped: string[]; deduped: number; parts: number } | { ok: false; error: string } {
-    const trimmed = body.trim();
-    if (!trimmed) return { ok: false, error: `Message body cannot be empty (attempted ${body.length} characters).` };
+  ): BroadcastResult | { ok: false; error: string } {
     const sender = this.#find(fromSession);
     if (!sender) return { ok: false, error: "You are not registered - call chat_register first." };
+    return this.#fanOut(
+      { sessionID: fromSession, name: sender.name },
+      body,
+      { openTabs, requireOpen: true },
+    );
+  }
+
+  /**
+   * Posts a message from OUTSIDE any chat session - the human user
+   * speaking from a terminal (`thatch chat broadcast`). The sender is a
+   * sentinel (CHAT_CLI_SENDER, never a registered row) carrying an
+   * explicit from_name, so no registration exists to look up or spoof.
+   * The write itself performs no wake and stamps no delivered_at: the
+   * ordinary poller then delivers the rows exactly as it delivers tool
+   * rows (waking open sessions), and RECENT opencode rows (fresh
+   * heartbeat, tab closed) and MCP rows read their mail at the next
+   * prompt. requireOpen is false - the CLI has no tab signal, and a
+   * delivery that waits for the next prompt needs none. STALE rows are
+   * still skipped and reported: a dead host never reads the mail.
+   * `projects` (exact whole-value matches against the registered
+   * project) narrows the fan-out; rows outside the filter - including
+   * rows with no project at all - land in the `outOfScope` bucket so
+   * the caller's report shows the omission instead of hiding it.
+   * `senderName` is sanitized (sanitizeCliSenderName) and then refused
+   * if it case-insensitively matches a registered session's name: a CLI
+   * message must never be mistaken for a member of the directory.
+   */
+  broadcastFromUser(
+    body: string,
+    opts: { projects?: string[]; senderName: string },
+  ): BroadcastResult | { ok: false; error: string } {
+    const senderName = sanitizeCliSenderName(opts.senderName);
+    const clash = this.#findByName(senderName);
+    if (clash) {
+      return {
+        ok: false,
+        error: `Sender name "${senderName}" is already a registered chat session's name - refusing to broadcast as a directory member.`,
+      };
+    }
+    return this.#fanOut(
+      { sessionID: CHAT_CLI_SENDER, name: senderName },
+      body,
+      { projects: opts.projects, requireOpen: false },
+    );
+  }
+
+  /**
+   * The shared fan-out core behind broadcast() (registered senders,
+   * open-tab requirement on) and broadcastFromUser() (sentinel sender,
+   * open-tab requirement off): one acceptance ceiling, one split, ONE
+   * transaction, per-recipient dedupe, and the skip classes. The
+   * project filter runs FIRST so out-of-scope rows never appear in
+   * `skipped` - the caller asked to narrow the audience, not to hear
+   * about everyone it excluded. Recipients/skips carry the row's
+   * project so a caller can render per-project delivery lines.
+   */
+  #fanOut(
+    sender: { sessionID: string; name: string },
+    body: string,
+    opts: { openTabs?: ReadonlySet<string>; requireOpen: boolean; projects?: string[] },
+  ): BroadcastResult | { ok: false; error: string } {
+    const trimmed = body.trim();
+    if (!trimmed) return { ok: false, error: `Message body cannot be empty (attempted ${body.length} characters).` };
     // Same acceptance ceiling as send() - a broadcast fans out to every
     // live session, so the cap matters even more here.
     if (trimmed.length > CHAT_MAX_BODY_CHARS) {
@@ -970,48 +1113,68 @@ export class ChatStore {
     const parts = splitChatBody(trimmed);
     // No provider = no tab signal: every fresh opencode row degrades to
     // RECENT (honest - an unknown tab state never reads as open).
-    const open = openTabs ?? new Set<string>();
-    const recipients: string[] = [];
-    const skipped: string[] = [];
+    const open = opts.openTabs ?? new Set<string>();
+    const requireOpen = opts.requireOpen;
+    const projects = opts.projects;
+    const recipients: BroadcastRecipient[] = [];
+    const skipped: BroadcastSkip[] = [];
+    const outOfScope: BroadcastRecipient[] = [];
     let deduped = 0;
     // One transaction: a crash mid-loop rolls the whole fan-out back
     // instead of leaving a partial broadcast where some recipients got the
     // message and others silently did not.
     this.#db.transaction(() => {
       for (const row of this.list()) {
-        if (row.session_id === fromSession) continue;
-        // Two honest skip classes for opencode rows: STALE (host process
-        // gone - never reads the mail) and RECENT (fresh heartbeat, no
-        // open tab - the wake is not guaranteed to run a turn). An mcp
-        // row between turns reads its mail at the next prompt, so it
-        // always receives.
-        if (row.host_kind === "opencode" && (isStale(row) || !open.has(row.session_id))) {
-          skipped.push(row.name);
+        if (row.session_id === sender.sessionID) continue;
+        // Project filter before any skip classification: an
+        // out-of-scope row (no project at all included) is an audience
+        // narrowing, not a delivery failure, and must not be reported
+        // as skipped.
+        if (projects && !(row.project !== null && projects.includes(row.project))) {
+          outOfScope.push({ name: row.name, project: row.project });
           continue;
+        }
+        // Two honest skip classes for opencode rows: STALE (host process
+        // gone - never reads the mail) and, when the caller requires an
+        // open tab, RECENT (fresh heartbeat, no open tab - the wake is
+        // not guaranteed to run a turn). An mcp row between turns reads
+        // its mail at the next prompt, so it always receives - even a
+        // stale one, whose mail-check still fires at its next prompt.
+        if (row.host_kind === "opencode") {
+          if (isStale(row)) {
+            skipped.push({ name: row.name, project: row.project, reason: "stale" });
+            continue;
+          }
+          if (requireOpen && !open.has(row.session_id)) {
+            skipped.push({ name: row.name, project: row.project, reason: "no open tab" });
+            continue;
+          }
         }
         // A retried broadcast counts as delivered (the original batch
         // stands) - the recipient list stays complete either way. Same
         // read-state rule as send(): any unread part from the prior batch
         // suppresses the retry for THIS recipient; a fully read batch
         // delivers again.
-        if (this.#isRecentDuplicate(fromSession, row.session_id, parts, 1)) {
+        if (this.#isRecentDuplicate(sender.sessionID, row.session_id, parts, 1)) {
           deduped++;
-          recipients.push(row.name);
+          recipients.push({ name: row.name, project: row.project });
           continue;
         }
         for (const part of parts) {
           // Same name-snapshot contract as send() above: every
           // message-insert path populates from_name/to_name - the row's
-          // permanent record of its participants.
+          // permanent record of its participants. For the sentinel
+          // sender the from_name is the CLI-derived user label, the
+          // only identity a CLI row will ever have.
           this.#db.run(
             "INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast, from_name, to_name) VALUES (?, ?, ?, ?, 1, ?, ?)",
-            [fromSession, row.session_id, part, nowIso(), sender.name, row.name],
+            [sender.sessionID, row.session_id, part, nowIso(), sender.name, row.name],
           );
         }
-        recipients.push(row.name);
+        recipients.push({ name: row.name, project: row.project });
       }
     })();
-    return { ok: true, recipients, skipped, deduped, parts: parts.length };
+    return { ok: true, senderName: sender.name, recipients, skipped, outOfScope, deduped, parts: parts.length };
   }
 
   /**
@@ -2141,8 +2304,16 @@ export interface ChatPollerOptions {
    *  delivered to - the recipient's host is the single deliverer, by
    *  design. */
   hostedSessions: () => string[];
-  /** Delivers a wake prompt for a recipient. Injected so tests never spawn. */
-  deliver: (sessionID: string, senders: string[], count: number) => Promise<void>;
+  /** Delivers a wake prompt for a recipient. Injected so tests never spawn.
+   *  `fromUser`/`mixed` classify the batch's senders: rows from the CLI
+   *  sentinel (CHAT_CLI_SENDER) are the human user's own words and get the
+   *  user-voiced nudge, not the anti-loop agent-mail framing. */
+  deliver: (
+    sessionID: string,
+    senders: string[],
+    count: number,
+    batch: { fromUser: boolean; mixed: boolean },
+  ) => Promise<void>;
   /** Gate for delivery: true only when the session can accept a proactive
    *  prompt right now (idle, not compacting). May be async - the plugin's
    *  gate verifies against the server's live status, because the event-fed
@@ -2370,7 +2541,12 @@ export class ChatPoller {
           // sender's directory row is gone. The nudge reflects only the
           // rows actually delivered this cycle.
           const senders = [...new Set(deliverRows.map((m) => renderChatParticipant(m.from_name, m.from_session)))];
-          await this.#opts.deliver(recipient, senders, deliverRows.length);
+          // Sender-kind classification for the nudge: the CLI sentinel is
+          // the user speaking - the agent-mail anti-loop framing would
+          // contradict the fence note on exactly the rows that matter.
+          const userRows = deliverRows.filter((m) => m.from_session === CHAT_CLI_SENDER);
+          const batch = { fromUser: userRows.length > 0, mixed: userRows.length > 0 && userRows.length < deliverRows.length };
+          await this.#opts.deliver(recipient, senders, deliverRows.length, batch);
           prompted = true;
           // Every prompt counts, fresh or re-nudge: the cap bounds prompts
           // actually sent, not stamp writes, so a failing stamp cannot turn
