@@ -249,10 +249,25 @@ describe("watch_command_create", () => {
     const result = await findTool().execute({ command: "test -f /tmp/marker" }, watchCtx, host);
     expect(result).toContain("[watching] cmd: test -f /tmp/marker");
     expect(result).toContain("id: watch_");
-    expect(result).toContain("one-shot - fires on the first exit 0");
+    expect(result).toContain("one-shot - fires on the first watched exit (0)");
     expect(result).toContain("lastExit: 1");
     expect(result).toContain("carries the exit code and duration only");
+    // Default watched set: the will-never-fire warning names the terminal-
+    // failure footgun and the exit_codes escape hatch.
+    expect(result).toContain("never notify");
+    expect(result).toContain("exit_codes");
     expect(registry.listForSession(host.sessionID)).toHaveLength(1);
+  });
+
+  test("exit_codes is plumbed through and the warning states the watched set", async () => {
+    const registry = registryWith();
+    const watchCtx = { ...ctx, watchers: registry, projectDir: "/tmp/project" };
+    const result = await findTool().execute({ command: "ci status", exit_codes: [0, 2] }, watchCtx, host);
+    expect(result).toContain("one-shot - fires on the first watched exit (0, 2)");
+    expect(result).toContain("Exit codes 0, 2 fire");
+    const watcher = registry.listForSession(host.sessionID)[0];
+    if (watcher.source !== "command") throw new Error("expected a command watcher");
+    expect(watcher.exitCodes).toEqual([0, 2]);
   });
 
   test("refuses when the command already exits 0", async () => {

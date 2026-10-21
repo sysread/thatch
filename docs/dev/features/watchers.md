@@ -204,16 +204,40 @@ override for conditions that must be checked somewhere other than the
 project directory; it is validated by the registration-time baseline run.
 
 `createCommand()` runs the command once at registration as baseline
-validation, like `createPr()`'s baseline fetch: exit 0 at baseline
-means the condition is already met (refused, so the caller proceeds
-now), exit 127 means the command does not exist (refused with the
-stderr tail), and a spawn failure fails registration with a real
-error. A baseline run that times out records the 124 sentinel as the
-last-seen exit - the killed process may have exited 0 while dying, and
-the watcher's first real exit 0 must fire. Registered command
-watchers carry `once: true` inherently - "run until it returns 0,
-then notify, then stop" is the whole concept. The `CommandRunner` is
-injectable like `GhRunner`, so tests never spawn processes.
+validation, like `createPr()`'s baseline fetch: an exit that is already
+in the watched set means the condition is already met (refused, so the
+caller proceeds now), exit 127 means the command does not exist
+(refused with the stderr tail, even when 127 itself is watched - the
+more specific error teaches more), and a spawn failure fails
+registration with a real error. A baseline run that times out records
+the 124 sentinel as the last-seen exit - the killed process may have
+exited 0 while dying, and the watcher's first real watched exit must
+fire, so a timed-out baseline is never treated as already-met.
+Registered command watchers carry `once: true` inherently - "run until
+the command returns a watched exit code, then notify, then stop" is
+the whole concept. The `CommandRunner` is injectable like `GhRunner`,
+so tests never spawn processes.
+
+### Watched exit codes
+
+The watched set defaults to `[0]`: the command is a condition variable,
+and a non-zero exit means "not done yet". `watch_command_create`
+accepts `exit_codes` (registry: `createCommand`'s `opts.exitCodes`) to
+widen the set, which is the only way a terminal failure (a
+finished-but-red CI run, a failed test suite) can ever notify - without
+it such a watcher sits silent until its TTL. `#pollOne` fires
+`command_exit` on the first observed exit in the set; the summary
+carries the actual exit code, so the notification distinguishes the
+outcomes the caller mapped to distinct codes. Watched codes must be
+integers 0-255 (a code outside a process's exit range can never be
+observed, and registration refuses it rather than arming a
+silently-unwatchable watch). Hydrated definitions
+from before the field existed (journal rehydration is verbatim) are
+treated as `DEFAULT_COMMAND_EXIT_CODES` (`[0]`) inside `#pollOne`. The
+command branch also never
+filters on the `events` array: command watchers carry one fixed event
+type, and a stale journaled `events` value must not silently kill a
+re-armed watch.
 
 ### Delivery
 
@@ -253,7 +277,9 @@ cycle or when the session next goes idle (the event hook calls
 `pr_ci`. The tool's `events` argument selects a subset; the default is
 all eight. Branch watchers add `branch_commit`, `branch_ci`, and
 `branch_workflow`; command watchers register the single
-`command_success` type. The registry itself emits one lifecycle type
+`command_exit` type (fired on the first exit in the watched exit-code
+set; see "Watched exit codes" above). The registry itself emits one
+lifecycle type
 across all sources, `watch_expired`, which is not selectable via the
 `events` argument (the full vocabulary is `WATCHER_EVENT_TYPES` in
 src/watchers.ts, test-enforced).

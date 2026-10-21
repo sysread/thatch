@@ -317,10 +317,13 @@ happens. For CI waits: a short bounded wait (about 2-3 minutes) is fine as
 a single in-turn poll (sleep under the bash timeout, then gh); for longer
 or unknown waits, register a watcher instead of sleep-polling.
 thatch_watch_command_create treats its command as a condition variable,
-not a data pipe: the command must be a fast, idempotent status check that
-exits 0 when the wait is over - its output is discarded and the
-notification carries only the exit code and duration, so re-run the
-command or read logs yourself when notified. A blocking command is not
+not a data pipe: the command must be a fast, idempotent status check
+that exits a watched exit code when the wait is over (exit 0 by
+default; exit_codes widens the set - a watcher on exit 0 alone never
+fires when the condition fails terminally, e.g. a red CI run). Its
+output is discarded; the notification carries only the exit code and
+duration, so re-run the command or read logs yourself when notified.
+A blocking command is not
 refused: the per-run timeout kills it each cycle, wasting up to 30s of
 the shared poll cycle, so never register "gh run watch", "tail -f", or
 "sleep" as a watched command.
@@ -1094,7 +1097,10 @@ ${lines.join("\n")}
 
 This is a system notification, not user input. The watch's time-to-live lapsed before the watched condition occurred - this is not a completion signal, and any work this watch was gating has not finished. Re-register the watch if notifications are still wanted, or move on. If you act, tell the user what you did and why; if not, stop and wait.${cadence}`;
   }
-  const detailHint = events.some((e) => e.type === "command_success")
+  // Dual-accept: pending events queued before the command_success ->
+  // command_exit rename are journaled and delivered verbatim; both spellings
+  // get the command hint, not the gh-CLI one.
+  const detailHint = events.some((e) => e.type === "command_exit" || e.type === "command_success")
     ? "A watched command's output is never delivered; re-run it or read logs yourself if you need details."
     : "Check-run and workflow conclusions are in the summaries above; fetch details with the gh CLI only if you need them.";
   return `[thatch] Watcher notification for ${target}

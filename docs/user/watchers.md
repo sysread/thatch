@@ -43,20 +43,45 @@ Branch watched events:
 
 Command watched events:
 
-- `command_success` - the watched command exited 0. The agent calls
-  `thatch_watch_command_create` with a shell command that works as a
-  **condition variable, not a data pipe**: the watcher re-runs it every
-  poll and reads only the exit code - the command's output is
+- `command_exit` - the watched command reached a watched exit code. The
+  agent calls `thatch_watch_command_create` with a shell command that
+  works as a **condition variable, not a data pipe**: the watcher re-runs
+  it every poll and reads only the exit code - the command's output is
   discarded, never delivered. A command watch is one-shot by design:
-  the first exit 0 fires one notification, then the watcher cancels
-  itself. The command must be a fast, idempotent status check (a
+  the first watched exit fires one notification, then the watcher
+  cancels itself. The command must be a fast, idempotent status check (a
   marker-file test, a health endpoint curl, a `gh run list` query).
   Blocking waits like `gh run watch` or `tail -f` are not refused -
   the tool guidance tells the agent not to use them, and a blocking
   command is killed at the per-run timeout each cycle and
   treated as not-done-yet. The command runs once at registration as
-  validation: a command that already exits 0 is refused (the condition
-  is already met), as is a command-not-found.
+  validation: a command that already exits a watched code is refused
+  (the condition is already met), as is a command-not-found.
+
+By default the only watched exit code is 0, so a non-zero exit means
+"not done yet" and never notifies. That is wrong for conditions with a
+terminal failure: a watcher watching only exit 0 on a CI run never
+fires when the run finishes red, and sits silent until its TTL. The
+`exit_codes` argument widens the watched set: map each terminal outcome
+to a distinct exit code and watch them all, for example green -> 0,
+red -> 2, still running -> 1, query failure -> 3:
+
+    c=$(gh run list -R <owner/repo> --commit <sha> --limit 1 \
+      -q '.[0] | if .status == "completed" then .conclusion else "RUNNING" end' \
+      2>/dev/null) || exit 3
+    case "$c" in success) exit 0 ;; RUNNING|"") exit 1 ;; *) exit 2 ;; esac
+
+Register that command with `exit_codes: [0, 2]`. The notification
+carries the exit code, so `command exited 2` means the run finished in
+the failure state mapped to 2. Three details make the recipe work:
+
+- Resolve the run with `gh run list --commit <sha>`; `gh run view`
+  takes a run id, not a commit SHA.
+- Status and conclusion are lowercase GitHub API values
+  (`completed`, `success`) - compare accordingly.
+- The query failure code (3, from the `||` when gh itself errors on a
+  rate limit or network blip) is deliberately unwatched: a transient
+  query failure retries next poll instead of reading as a red run.
 
 Notifications are delivered as synthetic parts: the model sees them,
 the transcript does not. A notification triggers a model turn, so the
@@ -111,7 +136,9 @@ Other tools:
 - `thatch_watch_branch_create` - watch a branch (typically main) for
   commits, CI check runs, and workflow runs
 - `thatch_watch_command_create` - wait on any local condition via a
-  shell command that exits 0 when the wait is over
+  shell command that exits a watched exit code when the wait is over
+  (exit 0 by default; `exit_codes` widens the set so terminal failures
+  notify too)
 - `thatch_watch_list` - shows the session's active watchers, plus any
   detected events waiting for the session to go idle before delivery
 - `thatch_watch_cancel` - cancels one by id

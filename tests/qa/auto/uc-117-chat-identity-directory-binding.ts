@@ -2,9 +2,24 @@ import { registerUseCase, type UseCase, type QaContext } from "../runner";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { ThatchDB } from "../../../src/db";
 import { MockEmbeddingModel } from "../../../tests/mocks/embeddings";
 import { TOOL_DEFS, type CoreContext } from "../../../src/tool-defs";
+
+/** Seeds one inbox row for the given recipient through a second connection. */
+function seedMail(dbDir: string, toSession: string, body: string): void {
+  const raw = new Database(join(dbDir, "uc117.db"));
+  try {
+    raw.run("INSERT INTO chat_messages (from_session, to_session, body) VALUES (?, ?, ?)", [
+      "ses_seeder",
+      toSession,
+      body,
+    ]);
+  } finally {
+    raw.close();
+  }
+}
 
 /**
  * UC-117: the chat `as` identity fallback is directory-bound.
@@ -28,11 +43,13 @@ const useCase: UseCase = {
     "2. From a project-beta context, pass `as` with the alpha identity's name: confirm refusal naming both projects.",
     "3. From a project-alpha context, pass `as` with the same name: confirm it resolves.",
     "4. chat_register with the cross-project `as`: confirm a fresh identity is registered instead of an 'already registered' confirmation.",
+    "5. Before any mail is read, chat_status names no last-read message; after chat_read drains, chat_status reports the newest read message (id, sender, read time).",
   ].join("\n"),
   expected: [
     "- Cross-project `as` claims are refused with an error naming both projects and teaching re-registration.",
     "- Same-project `as` claims resolve as before.",
     "- A cross-project chat_register claim registers a fresh identity instead of confirming the existing one (no row leak).",
+    "- chat_status's last-read line appears only after mail was read, and names the newest read message's id, sender, and read time.",
   ].join("\n"),
 
   async run(_ctx: QaContext) {
@@ -85,6 +102,23 @@ const useCase: UseCase = {
       }
       if (fresh.includes("You were already registered")) {
         console.log("  FAIL: cross-project register confirmed the claimed row (leak)");
+        return "FAIL";
+      }
+
+      // Step 5: chat_status read-state. Mail is seeded directly in the DB
+      // (the feature under probe is the status read-out, not the send
+      // path); the alpha identity is bound to the ses_uc117 host session.
+      const statusTool = findTool("chat_status");
+      const beforeRead = (await statusTool.execute({}, alpha, host)) as string;
+      if (beforeRead.includes("Last message read")) {
+        console.log(`  FAIL: last-read line present with no read mail: ${beforeRead}`);
+        return "FAIL";
+      }
+      seedMail(dbDir, host.sessionID, "read-state probe");
+      await findTool("chat_read").execute({}, alpha, host);
+      const afterRead = (await statusTool.execute({}, alpha, host)) as string;
+      if (!afterRead.includes("Last message read: #") || !afterRead.includes("at ")) {
+        console.log(`  FAIL: last-read line missing after a drain: ${afterRead}`);
         return "FAIL";
       }
     } finally {

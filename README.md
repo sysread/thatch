@@ -198,7 +198,9 @@ Thatch gives your agent:
   only). The agent registers a watch on a GitHub PR, a branch (main), or a
   local shell command; thatch polls it in the
   background and prompts the session when comments, commits, CI results, status changes, or a
-  watched command's exit-0 condition arrive. Notifications carry pointer
+  watched command's exit condition arrive (exit 0 by default;
+  `exit_codes` widens the set so terminal failures notify too).
+  Notifications carry pointer
   data plus machine status (check conclusions, exit codes), never external
   content.
 - **Cross-session chat** -- your agent sessions can message each other

@@ -730,10 +730,129 @@ describe("command watchers in the registry", () => {
     expect(delivered).toHaveLength(1);
     expect(delivered[0].events).toHaveLength(1);
     const event = delivered[0].events[0];
-    expect(event.type).toBe("command_success");
+    expect(event.type).toBe("command_exit");
     expect(event.summary).toContain("exited 0");
     expect(event.summary).toContain("1.2s");
     expect(event.url).toBe("");
+    reg.dispose();
+  });
+
+  test("fires on the first exit within exit_codes, including a watched non-zero exit", async () => {
+    // Baseline exits 1 (unwatched: registration passes); the first poll exits
+    // 1 (no event); the second exits 2, which is watched, so it fires.
+    const reg = makeRegistry([1, 1, 2]);
+    const result = await reg.createCommand("s1", "ci status check", "/tmp", { exitCodes: [0, 2] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.watcher.exitCodes).toEqual([0, 2]);
+
+    await reg.poll();
+    expect(delivered).toHaveLength(0);
+    expect(reg.listForSession("s1")).toHaveLength(1);
+
+    await reg.poll();
+    expect(reg.listForSession("s1")).toHaveLength(0);
+    expect(delivered).toHaveLength(1);
+    const event = delivered[0].events[0];
+    expect(event.type).toBe("command_exit");
+    expect(event.summary).toContain("exited 2");
+    expect(event.summary).toContain("1.2s");
+    reg.dispose();
+  });
+
+  test("an unwatched non-zero exit keeps polling without events", async () => {
+    // Exit 2 is a terminal outcome for the command, but the watcher only
+    // watches [0] by default: this is the never-fires footgun, pinned as
+    // intended behavior for the default.
+    const reg = makeRegistry([1, 2, 2]);
+    await reg.createCommand("s1", "ci status check", "/tmp");
+    for (let i = 0; i < 3; i++) await reg.poll();
+    expect(delivered).toHaveLength(0);
+    expect(reg.listForSession("s1")).toHaveLength(1);
+    reg.dispose();
+  });
+
+  test("a baseline exit within exit_codes is refused - the condition is already met", async () => {
+    const reg = makeRegistry([2]);
+    const result = await reg.createCommand("s1", "ci status check", "/tmp", { exitCodes: [0, 2] });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("already met");
+    expect(result.error).toContain("2");
+    expect(reg.listForSession("s1")).toHaveLength(0);
+  });
+
+  test("exit codes outside 0-255 are refused - they can never be observed", async () => {
+    const reg = makeRegistry([1]);
+    const result = await reg.createCommand("s1", "ci status check", "/tmp", { exitCodes: [0, 300] });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("300");
+    expect(result.error).toContain("0 and 255");
+    expect(reg.listForSession("s1")).toHaveLength(0);
+    reg.dispose();
+  });
+
+  test("the 127 refusal wins even when 127 is a watched exit code", async () => {
+    const reg = makeRegistry([127]);
+    const result = await reg.createCommand("s1", "nope", "/tmp", { exitCodes: [0, 127] });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("127");
+    expect(result.error).toContain("command not found");
+    expect(reg.listForSession("s1")).toHaveLength(0);
+  });
+
+  test("a timed-out baseline is not a watched-exit refusal", async () => {
+    let run = 0;
+    const reg = new WatcherRegistry({
+      deliver: async (s, e) => {
+        delivered.push({ sessionID: s, events: e });
+      },
+      canDeliver: () => canDeliver,
+      ghRunner: quietGh(),
+      commandRunner: async () => {
+        run++;
+        // The baseline run times out; the exit code of a killed process is
+        // garbage and must not be compared against the watched set.
+        return run === 1
+          ? { exitCode: 0, timedOut: true, stderr: "", durationMs: 30_000 }
+          : { exitCode: 0, timedOut: false, stderr: "", durationMs: 100 };
+      },
+      pollIntervalMs: 60_000,
+    });
+    const result = await reg.createCommand("s1", "slow thing", "/tmp", { exitCodes: [0] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The sentinel, not the garbage exit code, is what watch_list shows.
+    expect(result.watcher.state.lastExit).toBe(124);
+    await reg.poll();
+    expect(delivered).toHaveLength(1);
+    reg.dispose();
+  });
+
+  test("a hydrated definition without exitCodes behaves as exit-0-only", async () => {
+    // Watcher definitions journaled before exit_codes existed are hydrated
+    // verbatim with no field; the poller must treat that as [0], not crash.
+    const reg = makeRegistry([0]);
+    reg.hydrate([
+      {
+        id: "watch_legacy",
+        source: "command",
+        sessionID: "s1",
+        command: "ci status check",
+        cwd: "/tmp",
+        timeoutMs: 30_000,
+        events: ["command_exit"],
+        once: true,
+        expiresAt: Date.now() + 60_000,
+        createdAt: Date.now(),
+        state: { lastExit: 1 },
+      } as any,
+    ]);
+    await reg.poll();
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].events[0].type).toBe("command_exit");
     reg.dispose();
   });
 
@@ -742,7 +861,7 @@ describe("command watchers in the registry", () => {
     const result = await reg.createCommand("s1", "true", "/tmp");
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error).toContain("already exits 0");
+    expect(result.error).toContain("already met");
     expect(reg.listForSession("s1")).toHaveLength(0);
   });
 

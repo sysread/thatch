@@ -8,9 +8,10 @@ import { TOOL_DEFS } from "../../../src/tool-defs";
  * Automatable: yes - the registry is in-memory with an injectable
  * CommandRunner, so the full command-watch lifecycle (registration
  * validation, baseline exit code, poll-detect-fire-auto-cancel, timeout
- * semantics, per-session limit sharing) runs against a mocked runner with
- * no process spawning. The live path (real bash -c runs plus promptAsync
- * delivery) is covered by the user doc workflow.
+ * semantics, per-session limit sharing, exit_codes terminal-failure
+ * firing) runs against a mocked runner with no process spawning. The live
+ * path (real bash -c runs plus promptAsync delivery) is covered by the
+ * user doc workflow.
  */
 
 const useCase: UseCase = {
@@ -19,17 +20,19 @@ const useCase: UseCase = {
     "- No prerequisites beyond the source tree; the mocked command runner never spawns a process.",
   ].join("\n"),
   steps: [
-    "1. Verify watch_command_create exists, is opencode-only, and the command_success event type is in the vocabulary.",
+    "1. Verify watch_command_create exists, is opencode-only, and the command_exit event type is in the vocabulary.",
     "2. Register a command watch whose baseline exits non-zero; confirm the baseline is captured.",
     "3. Poll while the condition is unmet; confirm no events and the watcher survives.",
-    "4. Let the condition become met (exit 0); poll and confirm one command_success event, delivery, and auto-cancel.",
-    "5. Confirm the already-exit-0 and exit-127 refusals, the timeout semantics, and the shared session limit.",
+    "4. Let the condition become met (exit 0); poll and confirm one command_exit event, delivery, and auto-cancel.",
+    "5. Confirm the already-met and exit-127 refusals, the timeout semantics, and the shared session limit.",
+    "6. Register with exit_codes including a watched non-zero code; confirm a terminal non-zero exit fires and an unwatched one never does.",
   ].join("\n"),
   expected: [
-    "- watch_command_create is opencodeOnly; command_success is one of the 12 event types.",
-    "- createCommand captures the baseline exit code; a baseline exit 0 is refused (condition already met) and exit 127 is refused.",
-    "- Unmet conditions poll silently; the first exit 0 fires exactly one event and the watcher self-cancels at detection.",
+    "- watch_command_create is opencodeOnly; command_exit is one of the 13 event types in WATCHER_EVENT_TYPES.",
+    "- createCommand captures the baseline exit code; a baseline exit that is already watched is refused (condition already met) and exit 127 is refused.",
+    "- Unmet conditions poll silently; the first watched exit fires exactly one event and the watcher self-cancels at detection.",
     "- A timed-out run leaves the last-seen exit untouched and keeps the watch alive (the unit suite in tests/watchers-commands.test.ts also covers the shared per-session limit).",
+    "- With exit_codes [0, 2], a red (exit 2) terminal outcome fires; with the default [0], a non-zero exit never fires.",
   ].join("\n"),
 
   async run(_ctx: QaContext) {
@@ -43,8 +46,8 @@ const useCase: UseCase = {
       console.log("  FAIL: watch_command_create must be opencodeOnly");
       return "FAIL";
     }
-    if (!WATCHER_EVENT_TYPES.includes("command_success")) {
-      console.log("  FAIL: command_success missing from WATCHER_EVENT_TYPES");
+    if (!WATCHER_EVENT_TYPES.includes("command_exit")) {
+      console.log("  FAIL: command_exit missing from WATCHER_EVENT_TYPES");
       return "FAIL";
     }
 
@@ -96,18 +99,18 @@ const useCase: UseCase = {
     canDeliver = true;
     await registry.deliverPending();
     if (delivered.length !== 1) {
-      console.log("  FAIL: the command_success event was not delivered");
+      console.log("  FAIL: the command_exit event was not delivered");
       return "FAIL";
     }
     const event = delivered[0].events[0];
-    if (event.type !== "command_success" || !event.summary.includes("exited 0") || event.url !== "") {
+    if (event.type !== "command_exit" || !event.summary.includes("exited 0") || event.url !== "") {
       console.log(`  FAIL: unexpected command event: ${JSON.stringify(event)}`);
       return "FAIL";
     }
 
     // Step 5: registration refusals and shared limit.
     const alreadyMet = await registry.createCommand("ses_uc101", "true", "/tmp");
-    if (alreadyMet.ok || !alreadyMet.error.includes("already exits 0")) {
+    if (alreadyMet.ok || !alreadyMet.error.includes("already met")) {
       console.log("  FAIL: an already-succeeding command was not refused");
       return "FAIL";
     }
@@ -151,6 +154,51 @@ const useCase: UseCase = {
       console.log(`  FAIL: commandTargetLabel did not collapse whitespace: ${label}`);
       return "FAIL";
     }
+
+    // Step 6: exit_codes - a terminal non-zero outcome fires; an unwatched
+    // one never does. This is the CI-red footgun the default [0] watcher
+    // has: a finished-but-failed condition must not sit silent until TTL.
+    const redExits = [1, 1, 2];
+    let redRun = 0;
+    const redRegistry = new WatcherRegistry({
+      deliver: async (sessionID, events) => {
+        delivered.push({ sessionID, events });
+      },
+      canDeliver: () => canDeliver,
+      ghRunner: async () => {
+        throw new Error("command watches must not use gh");
+      },
+      commandRunner: async () => {
+        const exitCode = redExits[Math.min(redRun, redExits.length - 1)];
+        redRun++;
+        return { exitCode, timedOut: false, stderr: "", durationMs: 900 };
+      },
+      pollIntervalMs: 60_000,
+    });
+    const red = await redRegistry.createCommand("ses_uc101", "ci status check", "/tmp", { exitCodes: [0, 2] });
+    if (!red.ok || red.watcher.exitCodes.join(",") !== "0,2") {
+      console.log(`  FAIL: exit_codes were not captured: ${red.ok ? red.watcher.exitCodes : red.error}`);
+      return "FAIL";
+    }
+    // `delivered` already holds the step-4 event; the unwatched exit 1 adds
+    // nothing, the watched exit 2 adds exactly one more.
+    const beforeRed = delivered.length;
+    await redRegistry.poll();
+    if (delivered.length !== beforeRed) {
+      console.log("  FAIL: the unwatched exit 1 must not fire");
+      return "FAIL";
+    }
+    await redRegistry.poll();
+    const redEvent = delivered[delivered.length - 1]?.events[0];
+    if (delivered.length !== beforeRed + 1 || redEvent?.type !== "command_exit" || !redEvent.summary.includes("exited 2")) {
+      console.log(`  FAIL: the watched non-zero exit 2 did not fire with its exit code: ${JSON.stringify(redEvent)}`);
+      return "FAIL";
+    }
+    if (redRegistry.listForSession("ses_uc101").length !== 0) {
+      console.log("  FAIL: the terminal-failure watcher did not auto-cancel");
+      return "FAIL";
+    }
+    redRegistry.dispose();
 
     registry.dispose();
     return "PASS";

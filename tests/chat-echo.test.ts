@@ -333,6 +333,52 @@ describe("chat read clip and paging", () => {
   });
 });
 
+describe("chat_status last-read metadata", () => {
+  test("lastRead reports the newest read inbox message and stays null before any read", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-lastread-"));
+    const db = new ThatchDB(join(dir, "lastread.db"));
+    try {
+      const ctx = { db, model: new MockEmbeddingModel(), defaultStore: "echo/rt" };
+      const call = (name: string, args: Record<string, unknown>, host = { sessionID: "ses_rt", agent: "test" }) =>
+        TOOL_DEFS.find((t) => t.name === name)!.execute(args, ctx as any, host as any);
+
+      const me = await call("chat_register", {});
+      const myName = (me.match(/\[registered\] (.+)/) ?? [])[1]!;
+      const otherHost = { sessionID: "ses_other", agent: "test" };
+      const other = await call("chat_register", {}, otherHost);
+      const otherName = (other.match(/\[registered\] (.+)/) ?? [])[1]!;
+
+      // No read messages yet: lastRead is null on the registered branch.
+      const before = db.chatMessageStatus("ses_rt");
+      expect(before.registered).toBe(true);
+      if (before.registered) expect(before.lastRead).toBeNull();
+
+      // Two inbox messages; draining reads both, oldest first.
+      await call("chat_send", { to: myName, body: "first" }, otherHost);
+      await call("chat_send", { to: myName, body: "second" }, otherHost);
+      const drained = await call("chat_read", {});
+      const ids = String(drained).match(/, id (\d+)/g)!.map((s) => Number(s.match(/\d+/)![0]));
+      expect(ids.length).toBe(2);
+      const status = db.chatMessageStatus("ses_rt");
+      expect(status.registered).toBe(true);
+      if (!status.registered) return;
+      // The NEWEST read inbox message is the one reported.
+      expect(status.lastRead).not.toBeNull();
+      expect(status.lastRead!.id).toBe(Math.max(...ids));
+      expect(status.lastRead!.from_name).toBe(otherName);
+      expect(status.lastRead!.read_at).toBeTruthy();
+
+      // A session that only SENT mail (nothing in its inbox) has no lastRead.
+      const sender = db.chatMessageStatus("ses_other");
+      expect(sender.registered).toBe(true);
+      if (sender.registered) expect(sender.lastRead).toBeNull();
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("chat transcript echo text", () => {
   test("register echoes the claimed name; failures stay silent", () => {
     expect(chatEchoText("thatch_chat_register", {}, "[registered] Kurn the Typechecker\nsession_id: ses_x"))

@@ -574,10 +574,12 @@ new id (the chain walk adopts the nearest registered ancestor, bounded at
 the new session id - name, mail (sender and recipient columns),
 host-pid anchors, and leave tombstones all follow.
 
-`chat_status` is the quiet check
-(registered flag + pending/total); the flush-tools hook line names the
-caller's identity and mailbox, and is absent entirely when chat is
-disabled - absence is silent by construction.
+`chat_status` is the quiet check: a registered flag plus pending/total
+counts, plus the newest read inbox message as `lastRead` (id, sender
+name, read time). The read line lets a session reconcile a "pending
+message" nudge against an inbox that reads empty. The flush-tools hook
+line names the caller's identity and mailbox, and is absent entirely
+when chat is disabled - absence is silent by construction.
 Staleness semantics differ by kind: an opencode row's stale age means its
 harness stopped beating (broadcast skips it), while an mcp row's age only means
 "between turns" (broadcast always delivers). Broadcast also skips fresh

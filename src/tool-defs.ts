@@ -25,7 +25,7 @@ import { renderEnvKnobs } from "./env-knobs";
 import { sendNotification, defaultSpawner, DEFAULT_VOICE, SPOKEN_LINE_MAX, TONE_PREFIXES, type NotifyChannel, type NotifyTone, type Spawner } from "./notify";
 import { predictionVerb, formatWhenLine, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
-import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, commandTargetLabel, describeBaselineCheckRuns, type WatcherRegistry, type Watcher, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
+import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, DEFAULT_COMMAND_EXIT_CODES, commandTargetLabel, describeBaselineCheckRuns, type WatcherRegistry, type Watcher, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
 import { CHAT_STALE_MS, CHAT_SPLIT_PART_LEN, CHAT_MAX_BODY_CHARS, CHAT_MAX_NUDGES_PER_HOUR, chatLiveness, humanAge, renderChatParticipant, sortChatRoster, splitChatRoster, chatReadClip, chatReadPage, type ChatHostKind, isoMinutesAgo } from "./chat";
 import { detectWorktreeKind, pathExists } from "./git";
 import { isSameMainCheckout, validateLocationArgs, validateTitle } from "./session-tab-shared";
@@ -1769,7 +1769,12 @@ const watchListDef: ToolDef = {
     const minutesLeft = (w: { expiresAt: number }) => Math.max(0, Math.round((w.expiresAt - Date.now()) / 60_000));
     const lines = watchers.map((w) => {
       if (w.source === "command") {
-        return `${w.id}: cmd: ${commandTargetLabel(w.command)} [${w.source}]${w.once ? " [once]" : ""} events=[${w.events.join(",")}] expires in ${minutesLeft(w)}m lastExit=${w.state.lastExit}`;
+        // Watched codes shown explicitly: an agent that lost context must be
+        // able to re-derive what it told the watcher to wait for. Legacy
+        // hydrated defs render the retired events=[command_success] literal
+        // (display-only - the poller never filters command events) and the
+        // default watched set is filled in the same way #pollOne does.
+        return `${w.id}: cmd: ${commandTargetLabel(w.command)} [${w.source}]${w.once ? " [once]" : ""} watched=[${(w.exitCodes ?? DEFAULT_COMMAND_EXIT_CODES).join(",")}] events=[${w.events.join(",")}] expires in ${minutesLeft(w)}m lastExit=${w.state.lastExit}`;
       }
       const target = w.source === "pr" ? `${w.repo}#${w.pr}` : `${w.repo}@${w.branch}`;
       return `${w.id}: ${target} [${w.source}]${w.once ? " [once]" : ""} events=[${w.events.join(",")}] expires in ${minutesLeft(w)}m head=${w.state.headSha.slice(0, 7)}`;
@@ -1876,7 +1881,9 @@ const watchBranchCreateDef: ToolDef = {
  * CONDITION VARIABLE, not a data pipe: the poller re-runs it every cycle and
  * reads only its exit code - stdout and stderr are discarded, never delivered.
  * The session gets one synthetic notification the first time the command
- * exits 0, and the watcher cancels itself. This is the generic "wait for an
+ * exits a watched exit code (exit 0 by default; the exit_codes argument
+ * widens the set so terminal failures can notify), and the watcher cancels
+ * itself. This is the generic "wait for an
  * arbitrary condition" escape hatch: wait for a marker file, an endpoint to
  * come up, a lock to clear. opencode-only, like the other watch tools.
  * Requires bash, not the gh CLI.
@@ -1885,13 +1892,15 @@ const watchCommandCreateDef: ToolDef = {
   name: "watch_command_create",
   description:
     "Register a local shell command as a background condition and get " +
-    "notified in this session when it first exits 0. THE COMMAND IS A " +
+    "notified in this session when it first exits a watched exit code " +
+    "(exit 0 by default; pass exit_codes to widen the set). THE COMMAND IS A " +
     "CONDITION VARIABLE, NOT A DATA PIPE: the watcher only reads its exit " +
     "code - stdout and stderr are discarded, never returned to you. Write " +
-    "the command as a fast, idempotent status check (exit 0 = the wait is " +
-    "over) such as 'test -f marker', 'curl -sf endpoint >/dev/null', or a " +
-    "'gh run list --json' query - NOT a command whose output you want, and " +
-    "NOT a blocking wait (no 'gh run watch', 'tail -f', or 'sleep': the " +
+    "the command as a fast, idempotent status check (a watched exit code " +
+    "means the wait is over) such as 'test -f marker', 'curl -sf endpoint " +
+    ">/dev/null', or a 'gh run list --json' query - NOT a command whose " +
+    "output you want, and NOT a blocking wait (no 'gh run watch', " +
+    "'tail -f', or 'sleep': the " +
     "per-run timeout kills a blocking command each cycle, wasting up to " +
     "30s of the shared poll cycle on a check that can never succeed). " +
     "Use this for long or unknown-duration waits on any local condition " +
@@ -1900,17 +1909,28 @@ const watchCommandCreateDef: ToolDef = {
     "per-run timeout " +
     "(THATCH_WATCH_COMMAND_TIMEOUT_SECONDS overrides; a timed-out run " +
     "means not-done-yet). One-shot by design: it fires once on the first " +
-    "exit 0, auto-cancels, and the notification carries only the exit code " +
-    "and duration - re-run the command or read logs yourself if you need " +
-    "details. The command runs once at registration as validation: if it " +
-    "already exits 0 the watcher is refused (the condition is already met - " +
-    "proceed instead), and a command-not-found (exit 127) is refused too. " +
-    "Counts against the per-session watcher limit; expires with the " +
-    "session's other watchers.",
+    "watched exit, auto-cancels, and the notification carries only the exit " +
+    "code and duration - re-run the command or read logs yourself if you " +
+    "need details. CONDITIONS WITH A TERMINAL FAILURE (CI runs, test " +
+    "suites): a watcher on exit 0 alone NEVER fires when the condition " +
+    "fails terminally - map each outcome to a distinct exit code and watch " +
+    "them all (green -> 0, red -> 2, still running -> anything else). " +
+    "The command runs once at registration as validation: if it " +
+    "already exits a watched code the watcher is refused (the condition is " +
+    "already met - proceed instead), and a command-not-found (exit 127) is " +
+    "refused too. Counts against the per-session watcher limit; expires " +
+    "with the session's other watchers.",
   args: {
     command: z.string().min(1).describe(
       "The shell command to run as a condition: a fast, idempotent status " +
-      "check that exits 0 when the wait is over. Its output is discarded.",
+      "check that exits a watched code when the wait is over. Its output " +
+      "is discarded.",
+    ),
+    exit_codes: z.array(z.number().int()).optional().describe(
+      "Exit codes that mean the wait is over and fire the notification. " +
+      "Default [0]. Include the code your command exits on terminal " +
+      "failure (e.g. a red CI run), or the watcher never fires when the " +
+      "condition fails.",
     ),
     cd: z.string().optional().describe(
       "Directory the command runs in (the bash cwd). Defaults to the " +
@@ -1932,17 +1952,27 @@ const watchCommandCreateDef: ToolDef = {
       return "Watching is unavailable: no project directory was wired by this host.";
     }
     const command = args.command as string;
-    const result = await ctx.watchers.createCommand(host.sessionID, command, dir);
+    const exitCodes = args.exit_codes as number[] | undefined;
+    const result = await ctx.watchers.createCommand(host.sessionID, command, dir, { exitCodes });
     if (!result.ok) return `Watcher not created: ${result.error}`;
     const w = result.watcher;
+    const watchedList = w.exitCodes.join(", ");
+    // The will-never-fire warning: exits outside the watched set are
+    // not-done-yet by default, so a watcher whose condition can fail
+    // terminally (a red CI run) sits silent until TTL unless the caller
+    // widened the set.
+    const exitWarning = w.exitCodes.every((c) => c === 0)
+      ? "Non-zero exits are treated as not-done-yet and never notify. If your condition can FAIL TERMINALLY (a finished-but-red CI run, a failed test suite), this watcher will never fire - cancel it and re-register with exit_codes covering the failure code."
+      : `Exit codes ${watchedList} fire; any other exit, even 0 when it is not watched, means not-done-yet and never notifies.`;
     return (
       `[watching] cmd: ${commandTargetLabel(w.command)}\n` +
       `id: ${w.id}\n` +
-      `mode: one-shot - fires on the first exit 0, then auto-cancels\n` +
+      `mode: one-shot - fires on the first watched exit (${watchedList}), then auto-cancels\n` +
       `lastExit: ${w.state.lastExit} (baseline exit code; 124 = the baseline run was killed at the timeout)\n\n` +
+      `${exitWarning}\n\n` +
       `The command re-runs about every ${ctx.watchers.pollSeconds}s and the first check already happened at registration - ` +
       `the next run lands within ~${ctx.watchers.pollSeconds}s. ` +
-      `You will receive a system notification when the command exits 0; it carries the exit code and duration only. ` +
+      `You will receive a system notification when the command exits one of the watched codes (${watchedList}); it carries the exit code and duration only. ` +
       `State any handling policy for that notification now (e.g. what to do once the condition is met) - ` +
       `the notification is the signal, not the data: re-run the command or read logs yourself when it arrives.`
     );
@@ -2523,10 +2553,12 @@ const chatStatusDef: ToolDef = {
   name: "chat_status",
   description:
     "Check your cross-session chat mailbox: whether you are registered, " +
-    "and how many unread and total messages are waiting. Read-heavy trips " +
-    "start here - the flush-tools hook line and chat_list's unread counts " +
-    "reference this tool. Safe to call when unregistered: the answer is " +
-    "simply registered: false, with no counts.",
+    "how many unread and total messages are waiting, and the last message " +
+    "you already read (id, sender, read time) - the cheap way to reconcile " +
+    "a pending-message nudge against an inbox that reads empty. Read-heavy " +
+    "trips start here - the flush-tools hook line and chat_list's unread " +
+    "counts reference this tool. Safe to call when unregistered: the answer " +
+    "is simply registered: false, with no counts.",
   args: {
     as: mcpIdentityArg(),
   },
@@ -2544,9 +2576,13 @@ const chatStatusDef: ToolDef = {
       }
       return "Not registered - call chat_register to join the cross-session chat directory.";
     }
+    const lastRead = status.lastRead
+      ? `\nLast message read: #${status.lastRead.id} from ${renderChatParticipant(status.lastRead.from_name, status.lastRead.from_session)} at ${status.lastRead.read_at}.`
+      : "";
     return (
       `[chat] registered as ${status.name}: ${status.pending} unread of ${status.total} total` +
       (status.pending > 0 ? " - call chat_read to read them." : ".") +
+      lastRead +
       (host
         ? " You are woken automatically when a message arrives - no need to poll."
         : " Pending mail is reported at your next prompt; chat_read drains it.")

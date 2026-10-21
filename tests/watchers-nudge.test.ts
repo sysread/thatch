@@ -28,10 +28,20 @@ describe("watcherNotificationNudge", () => {
 
   test("command events render without a dangling URL and with the command detail hint", () => {
     const text = watcherNotificationNudge("test -f /tmp/marker", [
+      { type: "command_exit", summary: "command exited 0 (took 1.2s)", url: "" },
+    ]);
+    expect(text).toContain("- command_exit: command exited 0 (took 1.2s)");
+    expect(text).not.toMatch(/1\.2s\s+$/m);
+    expect(text).toContain("re-run it or read logs yourself");
+    expect(text).not.toContain("conclusions are in the summaries above");
+  });
+
+  test("a pre-rename command_success event still gets the command detail hint", () => {
+    // Pending events queued before the command_exit rename are journaled and
+    // delivered verbatim; the hint must not misroute them to the gh-CLI text.
+    const text = watcherNotificationNudge("test -f /tmp/marker", [
       { type: "command_success", summary: "command exited 0 (took 1.2s)", url: "" },
     ]);
-    expect(text).toContain("- command_success: command exited 0 (took 1.2s)");
-    expect(text).not.toMatch(/1\.2s\s+$/m);
     expect(text).toContain("re-run it or read logs yourself");
     expect(text).not.toContain("conclusions are in the summaries above");
   });

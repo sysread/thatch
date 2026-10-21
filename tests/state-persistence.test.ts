@@ -606,7 +606,7 @@ describe("dormant watcher recovery through server()", () => {
       [{
         id: "watch_w", source: "command", sessionID: "ses_w",
         command: "mise run ci-green", cwd: WORK_DIR, timeoutMs: 30_000,
-        events: ["command_success"], once: true,
+        events: ["command_exit"], once: true,
         expiresAt: Date.now() + 600_000, createdAt: Date.now(),
         state: { lastExit: 124 },
       }],

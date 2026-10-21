@@ -1173,12 +1173,13 @@ export class ChatStore {
 
   /**
    * The caller's mailbox summary for chat_status: whether a directory row
-   * exists, and pending/total counts. Touches last_seen on use, which is
-   * what keeps an active MCP session's roster row fresh between prompt-time
-   * checks. An unregistered caller gets registered: false - the explicit,
-   * quiet answer that replaces any nudge.
+   * exists, pending/total counts, and the newest message the caller has
+   * already read. Touches last_seen on use. An unregistered caller gets
+   * registered: false - the explicit, quiet answer that replaces any nudge.
    */
-  status(sessionID: string): { registered: true; name: string; pending: number; total: number } | { registered: false } {
+  status(
+    sessionID: string,
+  ): { registered: true; name: string; pending: number; total: number; lastRead: { id: number; from_session: string; from_name: string | null; read_at: string } | null } | { registered: false } {
     const row = this.#find(sessionID);
     if (!row) return { registered: false };
     this.#touch(sessionID);
@@ -1188,11 +1189,26 @@ export class ChatStore {
          FROM chat_messages WHERE to_session = ?`,
       )
       .get(sessionID) as any;
+    // Same name resolution as read(): the sender's send-time name snapshot,
+    // falling back to the live roster row. from_session rides along so the
+    // tool text can render the departed-sender fallback for a null name.
+    const lastRead = this.#db
+      .query(
+        `SELECT m.id, m.from_session, COALESCE(m.from_name, s.name) AS from_name, m.read_at
+         FROM chat_messages m
+         LEFT JOIN chat_sessions s ON s.session_id = m.from_session
+         WHERE m.to_session = ? AND m.read_at IS NOT NULL
+         ORDER BY m.id DESC LIMIT 1`,
+      )
+      .get(sessionID) as any;
     return {
       registered: true,
       name: row.name,
       pending: counts.pending ?? 0,
       total: counts.total ?? 0,
+      lastRead: lastRead
+        ? { id: lastRead.id, from_session: lastRead.from_session, from_name: lastRead.from_name ?? null, read_at: lastRead.read_at }
+        : null,
     };
   }
 

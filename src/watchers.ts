@@ -44,8 +44,8 @@ export type PrWatcherEventType =
 /** Event types for source "branch" (typically main): commits land, CI and workflow runs execute. */
 export type BranchWatcherEventType = "branch_commit" | "branch_ci" | "branch_workflow";
 
-/** Event type for source "command": the watched shell command exited 0. */
-export type CommandWatcherEventType = "command_success";
+/** Event types for source "command": the watched command reached a watched exit code. */
+export type CommandWatcherEventType = "command_exit";
 
 /**
  * Lifecycle event the registry itself emits, not tied to a source: a watch
@@ -77,7 +77,17 @@ export const BRANCH_EVENT_TYPES: BranchWatcherEventType[] = [
   "branch_workflow",
 ];
 
-export const COMMAND_EVENT_TYPES: CommandWatcherEventType[] = ["command_success"];
+export const COMMAND_EVENT_TYPES: CommandWatcherEventType[] = ["command_exit"];
+
+/**
+ * The watched exit-code set when the caller does not widen it: the command
+ * is a condition variable, and exit 0 is the historical "wait is over"
+ * signal. Two live consumers plus tests must agree, so the default lives
+ * here and not inline: #pollOne (definitions journaled before the
+ * exitCodes field existed hydrate verbatim WITHOUT the field, so the
+ * poller defaults them) and createCommand.
+ */
+export const DEFAULT_COMMAND_EXIT_CODES: number[] = [0];
 
 /** Every event type across all sources plus registry lifecycle events - for diagnostics and tests. */
 export const WATCHER_EVENT_TYPES: WatcherEventType[] = [
@@ -213,7 +223,15 @@ export interface CommandWatcher {
   /** Per-run kill timeout in ms - a hanging command must not stall the shared poll cycle. */
   timeoutMs: number;
   events: CommandWatcherEventType[];
-  /** Command watchers are inherently one-shot: they fire on the first exit 0 and cancel. */
+  /**
+   * Exit codes that mean "the wait is over" and fire the one-shot
+   * notification; DEFAULT_COMMAND_EXIT_CODES when the caller does not
+   * widen it. Required here because createCommand always assigns it -
+   * but definitions journaled before the field existed hydrate verbatim
+   * without it, so #pollOne must still default.
+   */
+  exitCodes: number[];
+  /** Command watchers are inherently one-shot: they fire on the first watched exit and cancel. */
   once: true;
   /** Epoch ms. When now > expiresAt the watcher is silently dropped. */
   expiresAt: number;
@@ -1193,21 +1211,36 @@ export class WatcherRegistry {
 
   /**
    * Registers a command watcher: the poller runs the command (as a condition
-   * variable - exit code only) every cycle until it first exits 0, notifies,
-   * and cancels. The baseline run doubles as validation, like createPr: a
-   * command that already exits 0 means the condition is already met (refuse,
-   * so the caller proceeds now), exit 127 means the command does not exist,
-   * and a spawn failure fails with a real error instead of a watcher that
-   * can never fire.
+   * variable - exit code only) every cycle until it first exits a watched
+   * code, notifies, and cancels. Watched codes default to [0]; exitCodes
+   * widens the set so a terminal failure (a finished-but-red CI run) can
+   * fire too. The baseline run doubles as validation, like createPr: a
+   * command that already exits a watched code means the condition is already
+   * met (refuse, so the caller proceeds now), exit 127 means the command
+   * does not exist (refused even when 127 is watched - the more specific
+   * error teaches more), and a spawn failure fails with a real error
+   * instead of a watcher that can never fire.
    */
   async createCommand(
     sessionID: string,
     command: string,
     cwd: string,
+    opts: { exitCodes?: number[] } = {},
   ): Promise<{ ok: true; watcher: CommandWatcher } | { ok: false; error: string }> {
     const limit = this.#checkLimit(sessionID);
     if (limit) return { ok: false, error: limit };
     if (!command.trim()) return { ok: false, error: "No command to watch - pass a shell command." };
+    const exitCodes = opts.exitCodes ?? DEFAULT_COMMAND_EXIT_CODES;
+    if (exitCodes.length === 0) {
+      return { ok: false, error: "No watched exit codes - an empty exit_codes list can never fire. Pass at least one exit code." };
+    }
+    // Process exit codes are 0-255; anything else is a typo that can never
+    // be observed, and a silently unwatchable code is exactly the
+    // never-fires mode this arg exists to fix.
+    const invalid = exitCodes.find((c) => !Number.isInteger(c) || c < 0 || c > 255);
+    if (invalid !== undefined) {
+      return { ok: false, error: `Invalid exit_codes: ${invalid}. Watched exit codes must be integers between 0 and 255.` };
+    }
 
     let baseline: CommandRunResult;
     try {
@@ -1215,14 +1248,14 @@ export class WatcherRegistry {
     } catch (err) {
       return { ok: false, error: `Failed to run the command: ${err instanceof Error ? err.message : String(err)}` };
     }
-    if (!baseline.timedOut && baseline.exitCode === 0) {
-      return { ok: false, error: "The command already exits 0 - the condition is already met, so no watcher was registered. Proceed now, or re-run the command yourself if you need its output." };
-    }
-    if (baseline.exitCode === 127) {
+    if (!baseline.timedOut && baseline.exitCode === 127) {
       return {
         ok: false,
         error: `The command exited 127 (command not found) - nothing to wait for until it exists. stderr: ${baseline.stderr.trim() || "(none)"}`,
       };
+    }
+    if (!baseline.timedOut && exitCodes.includes(baseline.exitCode)) {
+      return { ok: false, error: `The command already exits ${baseline.exitCode} - a watched exit code - so the condition is already met and no watcher was registered. Proceed now, or re-run the command yourself if you need its output.` };
     }
 
     const watcher: CommandWatcher = {
@@ -1233,6 +1266,7 @@ export class WatcherRegistry {
       cwd,
       timeoutMs: this.#opts.commandTimeoutMs,
       events: [...COMMAND_EVENT_TYPES],
+      exitCodes,
       once: true,
       expiresAt: Date.now() + this.#opts.ttlMinutes * 60_000,
       createdAt: Date.now(),
@@ -1369,19 +1403,29 @@ export class WatcherRegistry {
     }
     if (watcher.source === "command") {
       const result = await this.#opts.commandRunner(watcher.command, watcher.cwd, watcher.timeoutMs);
+      // The events array is deliberately not filtered here: command watchers
+      // carry a single fixed event type, and definitions hydrated from old
+      // journals may carry a stale events value - filtering would silently
+      // kill them.
       // A timed-out run produced no meaningful exit code, so the last-seen
-      // exit stays as-is and the watch keeps waiting. Exit 0 needs no
-      // transition guard: the baseline refusal keeps lastExit non-zero at
-      // registration, and the one-shot cancel in poll() removes the watcher
-      // the moment this event fires.
+      // exit stays as-is and the watch keeps waiting.
+      // Definitions journaled before exit_codes existed hydrate verbatim
+      // without the field; absent means the historical exit-0-only behavior.
+      const exitCodes = watcher.exitCodes ?? DEFAULT_COMMAND_EXIT_CODES;
+      const watched = exitCodes.includes(result.exitCode);
+      // No transition guard on the watched-exit side: the baseline refusal
+      // keeps lastExit outside the watched set at registration, and the
+      // one-shot cancel in poll() removes the watcher the moment this event
+      // fires. The 124-sentinel baseline is the one exception - harmless,
+      // since firing is what the caller asked for anyway.
       const stateChanged = !result.timedOut && watcher.state.lastExit !== result.exitCode;
       if (!result.timedOut) watcher.state = { lastExit: result.exitCode };
-      if (result.timedOut || result.exitCode !== 0) return { events: [], stateChanged };
+      if (result.timedOut || !watched) return { events: [], stateChanged };
       return {
         events: [{
-          type: "command_success",
+          type: "command_exit",
           target: watcherTarget(watcher),
-          summary: `command exited 0 (took ${(result.durationMs / 1000).toFixed(1)}s)`,
+          summary: `command exited ${result.exitCode} (took ${(result.durationMs / 1000).toFixed(1)}s)`,
           url: "",
         }],
         stateChanged,
