@@ -357,6 +357,9 @@ describe("skill artifact registry parity", () => {
       "Basics before advanced",
       "still gets the story",
       "Presentation, not specificity",
+      "subject and verb included",
+      "Cover the rest of the document",
+      "name the columns and what happened to them",
     ];
     for (const phrase of PINNED_PHRASES) {
       expect(lens.content).toContain(phrase);
