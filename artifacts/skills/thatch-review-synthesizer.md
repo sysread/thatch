@@ -103,6 +103,8 @@ If your input includes a **sibling register** (built via `thatch-review-context`
 - A finding that this change **consumes a contract a sibling does not actually provide** (shape mismatch, renamed symbol, different semantics at the sibling's head) is CONFIRMED, with the `Provenance` field citing the sibling PR.
 - A problem discovered **in the sibling itself** is not a finding of this review by default. Record it in the Cross-PR notes appendix so it can be raised in the sibling's own review. Escalate it to a finding of THIS review only when the inconsistency affects this change's safety or correctness, or when flagging it now heads off a bug the author will hit in imminent follow-up work in the same project.
 
+If your input carries the **`Standalone change — no sibling register`** statement instead, missing-piece findings get one extra check before they can be CONFIRMED: the change's ticket set, base branch, and referenced work must show no coordinated set. When they DO suggest one (a stack base branch, sibling tickets under one epic, references to work this diff does not contain), the register should have existed - the finding is a **briefing gap**: re-verify against the referenced PRs if reachable, otherwise downgrade it to the Cross-PR notes appendix with the gap named. Only when the evidence really shows no coordinated set may the finding be CONFIRMED as a defect.
+
 ## Severity calibration
 
 Assign final severity based on YOUR verification:

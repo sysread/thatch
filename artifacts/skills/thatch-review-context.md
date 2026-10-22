@@ -56,6 +56,7 @@ If ticket IDs were found:
 - `gh issue list --search "TICKET-ID"` or `gh issue view N`
 - Look for milestone assignments, dependencies, and blocking relationships
 - Check for epic or parent issues that describe the overall feature
+- When the ticket has a parent epic or parent ticket, enumerate the parent's OTHER child tickets and map each to its PR/MR: siblings of the same epic are the coordinated set for source 11, even when no blockedBy/blocks relations exist. Record the parent link and the child set in the brief - the change is part of a larger project, and "what did the other parts deliver" is reviewer context.
 
 ### 8. Links in the change (follow the references)
 
@@ -216,9 +217,9 @@ If context gathering found a connected PR/MR but no prior reviews by other users
 
 If context gathering found no connected PR/MR (local-branch review), state `Local-branch review — no prior-comment fetch`. This is not a gap; the existing review procedure applies.
 
-### Sibling PR context (only when related PRs were detected)
+### Sibling PR context (always present)
 
-List the sibling register as built above (one entry per sibling):
+This section is ALWAYS in the brief - it is how specialists know the stack was actually considered. List the sibling register as built above (one entry per sibling):
 - PR/MR number, title, state, base branch, and for stacks the chain position
 - What it implements (one line)
 - Consistency verdicts from the targeted checks (`consistent` / `inconsistent` with evidence / `unclear`), only for the checks that applied
@@ -226,7 +227,7 @@ List the sibling register as built above (one entry per sibling):
 
 Whether base branches have landed is recorded under Dependencies above, not here.
 
-If discovery found no related PRs and no coordinated ticket set, state `Standalone change — no sibling register`. This is not a gap; the change is not part of a coordinated set. A coordinated ticket set with no open PRs is not standalone: its claimed order is recorded under Dependencies.
+If discovery found no related PRs and no coordinated ticket set, the section states `Standalone change — no sibling register`. That is a verified result (the one look ran), not a gap - but it is the reviewers' only evidence the look happened. A coordinated ticket set with no open PRs is not standalone: its claimed order is recorded under Dependencies.
 
 ## If context is sparse
 

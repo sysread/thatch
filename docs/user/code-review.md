@@ -36,7 +36,11 @@ the review:
    When related PRs were detected, it cross-references findings
    against the sibling register: a missing piece delivered by a
    sibling is not a defect, and inconsistencies between connected
-   PRs surface as cross-PR notes.
+   PRs surface as cross-PR notes. The brief always names the stack
+   (the register, or a verified standalone statement): a
+   missing-piece finding on a change that is actually part of a
+   stack is reported as a briefing gap for the reviewer, not a
+   defect in the PR.
 
 ## The specialists
 
