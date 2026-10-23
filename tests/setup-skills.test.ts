@@ -367,6 +367,34 @@ describe("skill artifact registry parity", () => {
     }
   });
 
+  test("the plan-refinement skill carries the introspection audit contract", () => {
+    // Every round reviewer in thatch-plan-refinement's loop runs two audits
+    // (evidence, consistency) whose verdicts gate consensus. The audit
+    // names, verdict tokens, finding classes, and the current-plan
+    // guarantee appear across the loop steps, the lens sections, and the
+    // consensus definition; an edit that drops or renames one would silence
+    // the gate without any other test noticing. Pins are exact statements,
+    // not the full checklists.
+    const skill = SHARED_SKILLS.find((s) => s.name === "thatch-plan-refinement")!;
+    const PINNED_PHRASES = [
+      "Evidence audit",
+      "Consistency audit",
+      "AUDIT PASS",
+      "AUDIT FAIL",
+      "BROKEN - the citation target does not exist",
+      "MISQUOTE - the target exists but does not say what the plan claims",
+      "UNVERIFIED-CLAIM - the plan asserts the citation as verified but the auditor cannot check it",
+      "CONTRADICTION - sections conflict",
+      "TERM-DRIFT - the same concept under different names, or one name carrying two meanings",
+      "on the plan as revised through the previous round",
+      "On AUDIT FAIL: reroot, do not patch",
+      "evidence audit PASS and consistency audit PASS",
+    ];
+    for (const phrase of PINNED_PHRASES) {
+      expect(skill.content).toContain(phrase);
+    }
+  });
+
   test("every skill frontmatter parses as strict YAML with name and description", () => {
     // opencode discovers skills by parsing the YAML frontmatter of each
     // SKILL.md. If the parse fails (or yields a mapping without `name`
