@@ -31,8 +31,8 @@ const useCase: UseCase = {
   ].join("\n"),
   expected: [
     "- `--skills-only` installs **only** the skill files: the repo's `.claude/skills/`",
-    "  (Claude) or `.cursor/skills/` (Cursor) gets the 37 shared skills, reported via",
-    "  the skills dir plus `37 added` on a fresh install and `37 unchanged` on re-run.",
+    "  (Claude) or `.cursor/skills/` (Cursor) gets the 39 shared skills, reported via",
+    "  the skills dir plus `39 added` on a fresh install and `39 unchanged` on re-run.",
     "- No MCP config (`.mcp.json` / `.cursor/mcp.json`), no instructions",
     "  (`CLAUDE.md` written; the repo's own tracked `AGENTS.md` left",
     "  byte-for-byte unchanged), no hooks (`.claude/settings.json` /",
@@ -72,15 +72,15 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // Skills installed to the repo, exactly 37, none else.
+    // Skills installed to the repo, exactly 39, none else.
     const claudeSkillsDir = join(dir, ".claude", "skills");
     if (!existsSync(claudeSkillsDir)) {
       console.log("  FAIL: --skills-only did not create the repo .claude/skills dir");
       return "FAIL";
     }
     const claudeSkillCount = countThatchSkills(claudeSkillsDir);
-    if (claudeSkillCount !== 37) {
-      console.log(`  FAIL: --skills-only Claude skills count is ${claudeSkillCount}, expected 37`);
+    if (claudeSkillCount !== 39) {
+      console.log(`  FAIL: --skills-only Claude skills count is ${claudeSkillCount}, expected 39`);
       return "FAIL";
     }
     if (!existsSync(join(claudeSkillsDir, "thatch-review-pedantic", "SKILL.md"))) {
@@ -103,8 +103,8 @@ const useCase: UseCase = {
 
     // Reporting: skills dir named, fresh-install counts, other-scope note.
     const out1 = r1.stdout.toString();
-    if (!out1.includes(claudeSkillsDir) || !out1.includes("37 added")) {
-      console.log("  FAIL: --skills-only stdout does not report the skills dir + '37 added'");
+    if (!out1.includes(claudeSkillsDir) || !out1.includes("39 added")) {
+      console.log("  FAIL: --skills-only stdout does not report the skills dir + '39 added'");
       return "FAIL";
     }
     if (!out1.includes(userSkills)) {
@@ -132,8 +132,8 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const cursorSkillsDir = join(dir, ".cursor", "skills");
-    if (countThatchSkills(cursorSkillsDir) !== 37) {
-      console.log("  FAIL: --skills-only Cursor skills count is not 37");
+    if (countThatchSkills(cursorSkillsDir) !== 39) {
+      console.log("  FAIL: --skills-only Cursor skills count is not 39");
       return "FAIL";
     }
     for (const [label, path] of [
@@ -153,8 +153,8 @@ const useCase: UseCase = {
 
     // Idempotence: a re-run reports unchanged, not re-added.
     const r2b = await run(["setup", "--cursor", "--skills-only"]);
-    if (!r2b.stdout.toString().includes("37 unchanged")) {
-      console.log("  FAIL: --skills-only re-run does not report '37 unchanged'");
+    if (!r2b.stdout.toString().includes("39 unchanged")) {
+      console.log("  FAIL: --skills-only re-run does not report '39 unchanged'");
       return "FAIL";
     }
 
@@ -178,8 +178,8 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const cursorGlobalSkills = join(env.HOME, ".cursor", "skills");
-    if (countThatchSkills(cursorGlobalSkills) !== 37) {
-      console.log("  FAIL: global --skills-only did not install 37 skills to ~/.cursor/skills");
+    if (countThatchSkills(cursorGlobalSkills) !== 39) {
+      console.log("  FAIL: global --skills-only did not install 39 skills to ~/.cursor/skills");
       return "FAIL";
     }
     for (const [label, path] of [
@@ -199,8 +199,8 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const claudeGlobalSkills = join(env.CLAUDE_CONFIG_DIR, "skills");
-    if (countThatchSkills(claudeGlobalSkills) !== 37) {
-      console.log("  FAIL: global --skills-only did not install 37 skills to $CLAUDE_CONFIG_DIR/skills");
+    if (countThatchSkills(claudeGlobalSkills) !== 39) {
+      console.log("  FAIL: global --skills-only did not install 39 skills to $CLAUDE_CONFIG_DIR/skills");
       return "FAIL";
     }
     for (const [label, path] of [
@@ -230,8 +230,8 @@ const useCase: UseCase = {
         return "FAIL";
       }
     }
-    if (!r5.stdout.toString().includes("37 unchanged")) {
-      console.log("  FAIL: full setup does not report skills '37 unchanged' after --skills-only");
+    if (!r5.stdout.toString().includes("39 unchanged")) {
+      console.log("  FAIL: full setup does not report skills '39 unchanged' after --skills-only");
       return "FAIL";
     }
 

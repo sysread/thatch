@@ -67,6 +67,8 @@ function loadSharedSkills(): SkillDef[] {
     "thatch-session-reflection",
     "thatch-coding-workflow",
     "thatch-plan-refinement",
+    "thatch-plan-evidence",
+    "thatch-plan-consistency",
     "thatch-refine",
     "thatch-refine-team-app",
     "thatch-refine-personal",

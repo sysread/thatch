@@ -9,7 +9,7 @@ import { registerUseCase, type UseCase, type QaContext } from "../runner";
  * Automatable: yes — skill dir inspection after setup. The code-review
  * coordinator skill (thatch-code-review) is only installed for opencode
  * (which has sub-agent support). MCP hosts (Claude Code, Cursor) get
- * SHARED_SKILLS only (37 skills, no coordinator).
+ * SHARED_SKILLS only (39 skills, no coordinator).
  */
 
 const useCase: UseCase = {
@@ -24,9 +24,9 @@ const useCase: UseCase = {
     "3. Check whether thatch-code-review appears in each directory.",
   ].join("\n"),
   expected: [
-    "- Claude Code: 37 thatch-* skill directories present. thatch-code-review is absent.",
-    "- Cursor: 37 thatch-* skill directories present. thatch-code-review is absent.",
-    "- opencode: 39 thatch-* skill directories present. thatch-code-review and thatch-coordination are present (verified by uc-014).",
+    "- Claude Code: 39 thatch-* skill directories present. thatch-code-review is absent.",
+    "- Cursor: 39 thatch-* skill directories present. thatch-code-review is absent.",
+    "- opencode: 41 thatch-* skill directories present. thatch-code-review and thatch-coordination are present (fixture fidelity is what uc-014 checks).",
   ].join("\n"),
 
   async run(ctx: QaContext) {
@@ -53,8 +53,8 @@ const useCase: UseCase = {
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
 
-    if (claudeSkills.length !== 37) {
-      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 37`);
+    if (claudeSkills.length !== 39) {
+      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 39`);
       return "FAIL";
     }
     if (claudeSkills.includes("thatch-code-review")) {
@@ -80,8 +80,8 @@ const useCase: UseCase = {
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
 
-    if (cursorSkills.length !== 37) {
-      console.log(`  FAIL: Cursor skills count is ${cursorSkills.length}, expected 37`);
+    if (cursorSkills.length !== 39) {
+      console.log(`  FAIL: Cursor skills count is ${cursorSkills.length}, expected 39`);
       return "FAIL";
     }
     if (cursorSkills.includes("thatch-code-review")) {

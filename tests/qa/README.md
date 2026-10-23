@@ -74,10 +74,11 @@ data dir - spurious re-auth prompts). The docker sandbox
 it is given.
 
 Known coupling: the fixture PRE-COPIES skills from the real
-`~/.config/opencode/skills`, so count assertions there can lag the checkout
-until the real config installs the newest skill (uc-014 asserts a floor
-while the real config is behind, strict once it catches up). Clear a stale
-master cache with `rm -rf "$TMPDIR/thatch-qa-master"`.
+`~/.config/opencode/skills`, and uc-014's opencode leg asserts COPY
+FIDELITY - the fixture's skill set must equal the live mirror's at run time
+(no floor, no count literal). A stale mirror therefore passes silently while
+exercising nothing new; refresh it after committing skill changes. Clear a
+stale master cache with `rm -rf "$TMPDIR/thatch-qa-master"`.
 
 ## Docker mode (the default `qa-auto`/`qa-live` targets)
 

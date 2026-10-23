@@ -3,9 +3,41 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { checkSetup, setupClaudeCode, setupCursor } from "../src/setup";
 import { claudeInstructions, cursorInstructions, memoryPointersSection, opencodeToolName, systemPrompt } from "../src/prompts";
+import { OPENCODE_ONLY_SKILLS, SHARED_SKILLS } from "../src/skills";
 import { installSetupHarness, projectDir, fakeHome } from "./mocks/setup-harness";
 
 installSetupHarness();
+
+describe("skill-list bullets", () => {
+  test("every backticked thatch-* bullet name is a registered skill", () => {
+    // The skill-list bullets in the host prompts are hand-maintained prose
+    // at two sites (systemPrompt for opencode; mcpInstructions shared by
+    // Claude Code and Cursor). A typo'd or renamed skill would advertise a
+    // skill that does not exist, silently - this is the registry
+    // cross-check. Extract bullet-LEADING backticks only: bullet text also
+    // backticks tool names (thatch_find_duplicates) and command paths
+    // (/thatch/refine) mid-sentence, which are not skills.
+    const registered = new Set([...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS].map((s) => s.name));
+    for (const text of [systemPrompt("test/repo"), claudeInstructions(), cursorInstructions()]) {
+      const bullets = text.split("\n").filter((line) => line.startsWith("- `"));
+      expect(bullets.length).toBeGreaterThan(0);
+      for (const bullet of bullets) {
+        const match = bullet.match(/^- `([^`]+)`/);
+        expect(match).not.toBeNull();
+        const name = match![1];
+        if (name.startsWith("thatch-")) {
+          expect(registered.has(name)).toBe(true);
+        }
+      }
+    }
+    // The plan-audit skills must stay listed; pin them by name
+    // so the bullets cannot silently drop them.
+    for (const text of [systemPrompt("test/repo"), claudeInstructions(), cursorInstructions()]) {
+      expect(text).toContain("`thatch-plan-evidence`");
+      expect(text).toContain("`thatch-plan-consistency`");
+    }
+  });
+});
 
 describe("systemPrompt content", () => {
   test("startup recall examples use object-argument shape", () => {

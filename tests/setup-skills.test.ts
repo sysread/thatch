@@ -367,31 +367,94 @@ describe("skill artifact registry parity", () => {
     }
   });
 
+  // Phrases every introspection-audit surface carries: the verdict tokens,
+  // the current-plan guarantee, and the reroot rule's heading. Shared
+  // protocol wording is enforced byte-identical across all three files by
+  // looping this array over each skill's content.
+  const SHARED_AUDIT_PINS = [
+    "AUDIT PASS",
+    "AUDIT FAIL",
+    "on the plan as revised through the previous round",
+    "On AUDIT FAIL: reroot, do not patch",
+  ];
+
   test("the plan-refinement skill carries the introspection audit contract", () => {
     // Every round reviewer in thatch-plan-refinement's loop runs two audits
     // (evidence, consistency) whose verdicts gate consensus. The audit
-    // names, verdict tokens, finding classes, and the current-plan
-    // guarantee appear across the loop steps, the lens sections, and the
-    // consensus definition; an edit that drops or renames one would silence
-    // the gate without any other test noticing. Pins are exact statements,
-    // not the full checklists.
+    // METHODS live in the standalone thatch-plan-evidence and
+    // thatch-plan-consistency skills; plan-refinement keeps the loop-side
+    // machinery: the audit names, the current-plan guarantee, the consensus
+    // gate, the reroot RULE (the skills own the protocol), the
+    // host-conditional fan-out statement, and cross-references to both
+    // skills. Pins are exact statements, not the full checklists; an edit
+    // that drops or renames one would silence the gate without any other
+    // test noticing.
     const skill = SHARED_SKILLS.find((s) => s.name === "thatch-plan-refinement")!;
-    const PINNED_PHRASES = [
+    for (const phrase of SHARED_AUDIT_PINS) {
+      expect(skill.content).toContain(phrase);
+    }
+    const PLAN_REFINEMENT_PINS = [
       "Evidence audit",
       "Consistency audit",
-      "AUDIT PASS",
-      "AUDIT FAIL",
+      "evidence audit PASS and consistency audit PASS",
+      "thatch-plan-evidence",
+      "thatch-plan-consistency",
+      "The lens fan-out is opencode-only",
+    ];
+    for (const phrase of PLAN_REFINEMENT_PINS) {
+      expect(skill.content).toContain(phrase);
+    }
+  });
+
+  test("the thatch-plan-evidence skill carries the evidence audit contract", () => {
+    // thatch-plan-evidence owns the Evidence audit method: finding classes,
+    // verdicts, and the reroot protocol, self-contained so the file lifts
+    // cleanly. The shared pins keep the protocol wording byte-identical
+    // with its sibling and with plan-refinement's loop-side rule.
+    const skill = SHARED_SKILLS.find((s) => s.name === "thatch-plan-evidence")!;
+    for (const phrase of SHARED_AUDIT_PINS) {
+      expect(skill.content).toContain(phrase);
+    }
+    const EVIDENCE_PINS = [
       "BROKEN - the citation target does not exist",
       "MISQUOTE - the target exists but does not say what the plan claims",
       "UNVERIFIED-CLAIM - the plan asserts the citation as verified but the auditor cannot check it",
+      "thatch-plan-refinement",
+      "thatch-plan-consistency",
+    ];
+    for (const phrase of EVIDENCE_PINS) {
+      expect(skill.content).toContain(phrase);
+    }
+  });
+
+  test("the thatch-plan-consistency skill carries the consistency audit contract", () => {
+    // thatch-plan-consistency owns the Consistency audit method, same shape
+    // as its sibling: shared protocol pins plus this audit's own vocabulary
+    // and cross-references.
+    const skill = SHARED_SKILLS.find((s) => s.name === "thatch-plan-consistency")!;
+    for (const phrase of SHARED_AUDIT_PINS) {
+      expect(skill.content).toContain(phrase);
+    }
+    const CONSISTENCY_PINS = [
       "CONTRADICTION - sections conflict",
       "TERM-DRIFT - the same concept under different names, or one name carrying two meanings",
-      "on the plan as revised through the previous round",
-      "On AUDIT FAIL: reroot, do not patch",
-      "evidence audit PASS and consistency audit PASS",
+      "thatch-plan-refinement",
+      "thatch-plan-evidence",
     ];
-    for (const phrase of PINNED_PHRASES) {
+    for (const phrase of CONSISTENCY_PINS) {
       expect(skill.content).toContain(phrase);
+    }
+  });
+
+  test("the two standalone audit skills share the current-plan-guarantee wording", () => {
+    // The guarantee's closing sentence is a contract both standalone skills
+    // restate; the shared array pins it byte-identical in both, so an edit
+    // to one cannot quietly fork the guarantee.
+    const SENTENCE =
+      "If you cannot tell which revision you are reading, the dispatch failed - say so and stop rather than audit a guess.";
+    for (const name of ["thatch-plan-evidence", "thatch-plan-consistency"]) {
+      const skill = SHARED_SKILLS.find((s) => s.name === name)!;
+      expect(skill.content).toContain(SENTENCE);
     }
   });
 
