@@ -195,6 +195,7 @@ Run once per host (or per harness) to install thatch:
 thatch setup --claude [--cursor] [--local|--global]  # install config + instructions + hooks + skills
 thatch setup --claude --skills-only             # refresh just the skill files
 thatch setup --skills-only <dir>                # install skills to any directory
+thatch setup --commands-only <dir>              # install command files to any directory
 thatch setup --mcp-json                         # print the MCP server config as JSON
 ```
 

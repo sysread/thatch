@@ -86,6 +86,18 @@ thatch setup --claude --skills-only
 This skips the MCP config, instructions, hooks, and commands, and
 reports the same skills directory and install counts as a full run.
 
+Commands install the same way for any harness that reads a commands
+directory - complete command files (frontmatter description,
+user-message section, body) that work without thatch managing them:
+
+```bash
+thatch setup --commands-only <dir>   # writes <dir>/thatch/<name>.md
+```
+
+The `thatch/` subdirectory preserves the `/thatch/` invocation
+namespace. On Claude Code and Cursor, run a full `--claude`/`--cursor`
+setup instead - it installs commands with the host's tool spelling.
+
 `bun` must be on PATH (the thatch binary runs under bun). Setup is
 idempotent. Re-running it updates drifted content without clobbering
 unrelated config, and reports what it did: the skills directory plus
