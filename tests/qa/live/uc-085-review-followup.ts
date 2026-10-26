@@ -25,6 +25,7 @@ const useCase: UseCase = {
   ].join("\n"),
   expected: [
     "- Each prior finding is classified as addressed, not-addressed, or partially-addressed.",
+    "- Prose the author-only fix delta introduces or modifies (comments, docstrings, error strings, docs) is checked against the clarity and no-slop standards, and problems are reported as new prose findings with fix-introduced provenance.",
     "- Resolved findings get a reply drafted on the thread.",
     "- Unresolved findings are surfaced for re-attention.",
     "- The optional handoff to the coordinator is offered only when the new changes are substantial enough.",

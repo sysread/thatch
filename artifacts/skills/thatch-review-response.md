@@ -190,6 +190,16 @@ For each bug:
 As you fix one bug, you may find others. Add them to the task list. The
 user decides whether to fix them in this PR or defer.
 
+### Prose check on the fix
+
+A fix can add text the review never saw: comments, docstrings, error
+strings, docs. Before moving to the next bug, check any text the fix
+introduced against the standards in `thatch-review-clarity` and
+`thatch-review-no-slop` (load both skills; only their rule categories
+apply, not scope gathering or specialist output format). Fix problems
+before drafting the thread response, so the response and the diff
+agree.
+
 ## Step 5: Per-thread responses
 
 After each fix or decision, offer to respond on the thread. The response:
@@ -255,6 +265,9 @@ re-reading the full diff.
 ## Verification
 
 - How it was confirmed.
+- Prose check: text the fixes introduced (comments, docstrings, error
+  strings, docs) passed the clarity and slop check, or the check found
+  nothing to flag.
 ```
 
 ### Prose rules

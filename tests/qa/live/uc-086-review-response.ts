@@ -30,6 +30,7 @@ const useCase: UseCase = {
     "- Fixes are committed individually so the author can review each change.",
     "- Per-thread replies are drafted and posted.",
     "- The top-level summary gives the reviewer a clear picture of what was addressed and how.",
+    "- Text each fix introduces (comments, docstrings, error strings, docs) gets a clarity and slop check before the summary comment is drafted, and the summary's Verification section reports the prose check.",
     "- Responses on behalf of the user are prefixed with 'Landru is thinking on behalf of Jeff:'.",
   ].join("\n"),
 };

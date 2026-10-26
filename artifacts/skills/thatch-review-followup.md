@@ -144,6 +144,36 @@ For each finding:
 5. If the author responded, read the response. Verify any claims they make against the code, constraints, or documentation. Do not accept claims at face value. Check them.
 6. Classify per the criteria above.
 
+### Prose check on the fix delta
+
+The verification above checks whether the fix resolves the finding. The
+fix can also introduce new text: comments, docstrings, error strings,
+and documentation. No lens ever saw that text, because the review
+range's prose predates the fix.
+
+When the author-only changes from Step 2 introduce or modify comments,
+docstrings, error strings, or documentation, check that text before
+classifying any code-change fix as adequate:
+
+1. Collect the new or modified prose from the author-only commit set
+   (the merge-filtered set from Step 2). Do not use the plain two-SHA
+   diff when a merge-from-base or stacked rebase happened; it pulls in
+   base-branch prose the author never wrote.
+2. Load `thatch-review-clarity` and `thatch-review-no-slop` and apply
+   their rule categories to that text. Run the check inline; no
+   specialist dispatch. Only the two skills' standards apply: their
+   scope-gathering sections and specialist output format do not (both
+   ship with the review specialists' common framework interpolated,
+   which computes its own review range and emits severity-labeled
+   findings; neither fits here).
+3. The check is mandatory whenever the delta touches prose. It is
+   independent of the Step 7 re-run offer, which stays the full-depth
+   option. If the delta introduces no prose, the check is a no-op.
+
+Record problems in the round report as new prose findings (Step 4).
+They are ordinary findings: the author's fix introduced them, the same
+as new code.
+
 ## Step 4: Present the verification report
 
 Produce a structured report for the user:
@@ -183,8 +213,17 @@ Group findings by status. For each finding:
 1. **Finding** — one-line paraphrase
 2. **Status** — no response, no code change. Finding stands.
 
+#### New prose findings
+
+Text the fix delta introduced or modified, checked per Step 3's prose
+gate. Provenance for these findings is `fix-introduced`, not
+`branch-introduced`: the text postdates the last review, so the review
+range's branch-introduced/pre-existing split would mislabel it. List
+each with the violated rule and file:line @ CURRENT_SHA.
+
 ### Round assessment
 - Count of findings in each status
+- Count of new prose findings in the fix delta (zero is a valid and common result)
 - Whether the unaddressed, partially addressed, disputed, or no-response findings warrant further action
 - Whether the author's changes introduced new code that should be reviewed
 

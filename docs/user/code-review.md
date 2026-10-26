@@ -98,7 +98,10 @@ argument, or file a follow-up ticket with a risk explanation.
 Between rounds the author may merge the default branch — or, on a
 stacked PR, merge or rebase onto the base branch — into the branch;
 the followup excludes those commits so only the author's own changes
-are verified.
+are verified. When the author's own fixes introduce or modify
+comments, docstrings, error strings, or docs, the followup checks
+that new text against the clarity and no-slop standards and reports
+problems as fix-introduced findings.
 
 ## Author-side response
 
@@ -106,6 +109,8 @@ When you receive review comments on your own PR,
 `thatch-review-response` helps you triage findings (legitimate,
 intentional, false positive, unlikely edge case), fix bugs one by
 one, reply on each thread, and post a top-level summary comment.
+Fixes that add comments, docstrings, error strings, or docs get a
+clarity and slop check before the summary comment is posted.
 
 ## Limitations
 

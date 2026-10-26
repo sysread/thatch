@@ -367,6 +367,34 @@ describe("skill artifact registry parity", () => {
     }
   });
 
+  test("the followup and review-response skills gate prose the fixes introduce", () => {
+    // The followup and review-response skills gate prose the fixes
+    // introduce (comments, docstrings, error strings, docs), which no
+    // review lens ever sees: the review range's prose predates the fix.
+    // These pins are exact statements, not the full rule; an edit that
+    // drops or renames the gate would silence it without any other test
+    // noticing. The provenance pin keeps fix-introduced prose from being
+    // mislabeled with the review range's branch-introduced term.
+    const followup = SHARED_SKILLS.find((s) => s.name === "thatch-review-followup")!;
+    const FOLLOWUP_PINS = [
+      "### Prose check on the fix delta",
+      "The check is mandatory whenever the delta touches prose",
+      "#### New prose findings",
+      "fix-introduced",
+    ];
+    for (const phrase of FOLLOWUP_PINS) {
+      expect(followup.content).toContain(phrase);
+    }
+    const response = SHARED_SKILLS.find((s) => s.name === "thatch-review-response")!;
+    const RESPONSE_PINS = [
+      "### Prose check on the fix",
+      "Prose check:",
+    ];
+    for (const phrase of RESPONSE_PINS) {
+      expect(response.content).toContain(phrase);
+    }
+  });
+
   // Phrases every introspection-audit surface carries: the verdict tokens,
   // the current-plan guarantee, and the reroot rule's heading. Shared
   // protocol wording is enforced byte-identical across all three files by

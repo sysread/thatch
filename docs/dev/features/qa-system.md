@@ -96,8 +96,8 @@ them locally with `mise run qa-live`.
 | UC-080 | parent-session-deletion | parent deleted mid-extraction, cleanup completes |
 | UC-083 | review-coordinator | the multi-agent review coordinator pipeline |
 | UC-084 | review-walkthrough | the change-walkthrough skill on a real diff |
-| UC-085 | review-followup | follow-up round verification against prior review comments |
-| UC-086 | review-response | author-side response to incoming review comments |
+| UC-085 | review-followup | follow-up round verification against prior review comments, plus a clarity and slop check on prose the fixes introduce |
+| UC-086 | review-response | author-side response to incoming review comments, with a per-fix prose check |
 | UC-087 | review-no-subagents | the solo review path on hosts without sub-agents |
 | UC-098 | chat-cross-session | two real opencode sessions exchange chat messages |
 | UC-119 | session-tab-spawn | the session_tab spawn flow end to end |
