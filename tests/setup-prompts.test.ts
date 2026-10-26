@@ -55,6 +55,18 @@ describe("systemPrompt content", () => {
     expect(text).toContain("review threshold, severity, tone, evidence, scope, false positives");
   });
 
+  test("includes prediction violation-ask guidance in all variants", () => {
+    // The violation-ask bullet is shared prose (no tool names in it), so
+    // every prompt variant must carry it verbatim. Assertions stay within
+    // single source lines - the bullet is hard-wrapped.
+    for (const text of [systemPrompt("test/repo"), claudeInstructions(), cursorInstructions()]) {
+      expect(text).toContain("When the user's choice violates a stored prediction, ask why: one line,");
+      expect(text).toContain("evidence and the choice looks deliberate; a 0-evidence prediction just");
+      expect(text).toContain("disconfirms silently. Ask follow-ups when the answer does not encode the");
+      expect(text).toContain("a contextual choice means the matcher was too broad (disconfirm here,");
+    }
+  });
+
   test("includes class-lesson guidance for predictions and behaviors", () => {
     const text = systemPrompt("test/repo");
     // The class-lesson paragraphs are shared constants - all prompt

@@ -199,6 +199,28 @@ When the user responds to a surfaced prediction, the agent calls
 `prediction_update` to reinforce or weaken. The value is fewer interruptions,
 not more.
 
+### Violation ask
+
+The retrospective complement of ambiguity surfacing: the user chose Y where
+the model predicted X. A violated prediction is the highest-information event
+the model receives, and the firewall principle means only the user can grade
+it. The User Decision Model prompt guidance (`src/prompts.ts`, both prompt
+variants) instructs: ask why, one line folded into the existing response
+("You usually prefer X; Y this time - contextual, or should I update?").
+
+The ask is budgeted. It fires only when the prediction has real evidence and
+the choice looks like a deliberate judgment call. A 0-evidence prediction
+("you may prefer") just disconfirms silently; there is nothing to learn from
+asking. When the context obviously explains the choice, the agent records the
+disconfirm with its rationale and stays quiet.
+
+The user's answer routes the update: a context-dependent choice means the
+matcher was too broad (disconfirm here, mint a tighter matcher); a preference
+change means disconfirm; a false violation means confirm. The agent asks
+follow-up questions when the answer does not encode the rationale. Without
+the ask, every violation silently erodes confidence and a too-broad matcher
+keeps misfiring in the same shape.
+
 ### Firewall principle
 
 The model that uses predictions cannot grade its own predictions. The user's

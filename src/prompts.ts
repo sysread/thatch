@@ -364,6 +364,15 @@ When facing a judgment call about scope, appropriateness, or methodology:
 - If predictions conflict or confidence is thin, surface the uncertainty
   naturally: "I think you usually prefer X here, but I'm not sure; what do
   you want?"
+- When the user's choice violates a stored prediction, ask why: one line,
+  folded into the response ("You usually prefer X; Y this time -
+  contextual, or should I update?"). Ask only when the prediction has real
+  evidence and the choice looks deliberate; a 0-evidence prediction just
+  disconfirms silently. Ask follow-ups when the answer does not encode the
+  evidence or explanation - the rationale is what routes the update:
+  a contextual choice means the matcher was too broad (disconfirm here,
+  mint a tighter matcher); a preference change means disconfirm; a false
+  violation means confirm.
 - When the user responds to a surfaced prediction, use thatch_prediction_update
   to reinforce or weaken the model
 
@@ -674,6 +683,15 @@ When facing a judgment call about scope, appropriateness, or methodology:
 - If predictions conflict or confidence is thin, surface the uncertainty
   naturally: "I think you usually prefer X here, but I'm not sure; what do
   you want?"
+- When the user's choice violates a stored prediction, ask why: one line,
+  folded into the response ("You usually prefer X; Y this time -
+  contextual, or should I update?"). Ask only when the prediction has real
+  evidence and the choice looks deliberate; a 0-evidence prediction just
+  disconfirms silently. Ask follow-ups when the answer does not encode the
+  evidence or explanation - the rationale is what routes the update:
+  a contextual choice means the matcher was too broad (disconfirm here,
+  mint a tighter matcher); a preference change means disconfirm; a false
+  violation means confirm.
 - When the user responds to a surfaced prediction, use prediction_update
   to reinforce or weaken the model
 

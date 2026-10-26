@@ -62,6 +62,26 @@ and does not update. The agent should re-query with
 Claude Code and Cursor the tool name appears with its MCP spelling
 (`mcp__thatch__prediction_query`).
 
+## When your choice goes against a prediction
+
+A choice that contradicts a well-evidenced prediction is the most useful
+feedback the model gets. In that case the agent may ask you why, in a
+single line folded into its response: "You usually prefer X; Y this
+time - contextual, or should I update?" Your answer routes the update:
+
+- "It depends on the context" means the situation description was too
+  broad. The agent disconfirms the prediction here and can record a
+  tighter situation for next time.
+- "I changed my mind" means the prediction is outdated. The agent
+  disconfirms it.
+- "No, X was right" means the violation was a one-off. The agent
+  confirms the prediction.
+
+If your answer does not say why you chose as you did, the agent may ask
+a follow-up before updating. It stays quiet when the reason is obvious
+or the prediction has no evidence yet; asking is reserved for choices
+where your rationale would change the model.
+
 ## Tools
 
 | Tool | What it does |
