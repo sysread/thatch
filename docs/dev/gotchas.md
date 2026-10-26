@@ -270,7 +270,12 @@ and fall into a short list of avoidable mistakes:
   `label` (models pass `title`/`id`/`statement` instead, or nothing),
   `prediction_update` without `signal`, `behavior_codify` without
   `situation`. Fixes: `label` is optional and derived from content;
-  tool descriptions state the all-args-required contract.
+  tool descriptions state the all-args-required contract;
+  `prediction_query`'s `context` is optional with a runtime teaching
+  message (added Oct 23 2026 after 35 failed calls in 30 days - models
+  cross-wire `query` from `memory_recall` and `situation` from
+  `prediction_update`), and the prompt shape lines now cover the
+  prediction and behavior tools.
 - **Nudges leak into tool-less agent contexts**: task-dispatched sub-agents
   (explore/general and friends) have restricted tool lists that exclude the
   thatch tools, but `chat.message` nudges fired for them anyway, producing
@@ -312,7 +317,10 @@ memory tools:
   required params are semantically unavoidable (`memory_recall`'s `query`,
   `prediction_update`'s `signal`) still hard-fail at validation by design -
   there is no meaningful behavior to fall back to. Prompt shape lines are
-  their only mitigation.
+  their only mitigation. `prediction_query` left this list on Oct 23 2026:
+  its misnames were frequent enough (35/30d, all in code-review sessions
+  running recall + query in one Promise.all) to earn the accept-then-teach
+  guard instead.
 
 ## ThatchDB lazy reopen: new accessors must go through the private getters, and journal writes stay guarded at call sites
 

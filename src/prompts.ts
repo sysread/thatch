@@ -191,6 +191,9 @@ Argument shapes (one object argument, never a bare positional string):
 - thatch_memory_remember({ content, ... }) - content carries the information; label is optional (derived from the content's first heading or line)
 - thatch_memory_recall({ query })
 - thatch_memory_show({ label }) / thatch_memory_forget({ label }) - label is the EXACT full label, copied from memory_list or recall results
+- thatch_prediction_query({ context }) - the situation to match; the key is context, NOT query (the memory search tools use query; this one does not)
+- thatch_prediction_update({ matcher, prediction, signal, rationale }) - ALL FOUR required; signal is the enum "confirm" | "disconfirm" | "soft" | "create", never prose
+- thatch_behavior_feedback({ behavior, relevant, context }) - relevant is the boolean ham/spam verdict (true = the behavior applies here)
 
 ## Stores
 
@@ -557,6 +560,9 @@ Argument shapes (one JSON object argument, never a bare positional string):
 - \`memory_remember\` with \`{"content": "..."}\` - content carries the information; label is optional (derived from the content's first heading or line)
 - \`memory_recall\` with \`{"query": "..."}\`
 - \`memory_show\` / \`memory_forget\` with \`{"label": "..."}\` - label is the EXACT full label, copied from memory_list or recall results
+- \`prediction_query\` with \`{"context": "..."}\` - the situation to match; the key is context, NOT query (the memory search tools use query; this one does not)
+- \`prediction_update\` with \`{"matcher": "...", "prediction": "...", "signal": "...", "rationale": "..."}\` - ALL FOUR required; signal is "confirm" | "disconfirm" | "soft" | "create", never prose
+- \`behavior_feedback\` with \`{"behavior": "...", "relevant": true|false, "context": "..."}\` - relevant is the boolean ham/spam verdict
 
 ## Stores
 

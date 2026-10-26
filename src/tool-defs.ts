@@ -825,18 +825,30 @@ const predictionQueryDef: ToolDef = {
     "methodology and the auto-injected prediction block did not already " +
     "cover the situation.",
   args: {
-    context: z.string().describe(
-      "The situation or context to match against. Describe the decision being faced.",
+    context: z.string().optional().describe(
+      "The situation or context to match against. Describe the decision being faced. " +
+      "Required in practice: a call without context matches nothing and returns guidance naming this parameter. " +
+      "The key is context, not query - the memory and session search tools use query; this one does not.",
     ),
     store: z.string().optional().describe(
       "Store to search. Defaults to the project store and global together.",
     ),
   },
   async execute(args, ctx) {
+    const context = (args.context as string | undefined)?.trim();
+    if (!context) {
+      // Accept-then-teach: a wrong- or missing-key call (the observed
+      // hallucinations are query and situation, cross-wired from
+      // memory_recall and prediction_update's vocabulary) reaches this
+      // teaching message instead of dying at validation - the schema key
+      // must stay optional for the guard to exist.
+      return "No context provided - pass the situation to match in the context parameter. " +
+        "Describe the decision being faced (this tool's key is context, not query).";
+    }
     const stores = args.store
       ? [args.store as string]
       : [ctx.defaultStore, "global"];
-    const embedding = await ctx.model.queryEmbed(args.context as string);
+    const embedding = await ctx.model.queryEmbed(context);
     const matchers = ctx.db.findMatchers(stores, embedding, { limit: 5 })
       .filter((m) => m.score >= PREDICTION_QUERY_THRESHOLD);
     if (matchers.length === 0) return "No matching predictions found.";

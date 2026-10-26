@@ -446,6 +446,24 @@ describe("prediction tool execute functions", () => {
     expect(result).toContain("aim for 90 percent coverage");
   });
 
+  test("prediction_query without context returns teaching, not an error", async () => {
+    // The observed hallucinated shapes: {query: ...} (cross-wired from
+    // memory_recall, which shares Promise.all blocks with this tool) and
+    // {situation: ...} (cross-wired from prediction_update/codify). The
+    // host strips unknown keys, so both arrive as an empty object; the
+    // execute-level guard must teach the key name instead of a bare
+    // missing-key rejection.
+    for (const bad of [{}, { query: "deciding on test coverage" }, { situation: "deciding" }]) {
+      const result = await findTool("prediction_query").execute(bad as Record<string, unknown>, ctx);
+      expect(result).toContain("No context provided");
+      expect(result).toContain("context, not query");
+    }
+    // Whitespace-only context is the same teaching path, and a retried
+    // correct call still works on the same context object.
+    const ws = await findTool("prediction_query").execute({ context: "   " }, ctx);
+    expect(ws).toContain("No context provided");
+  });
+
   test("prediction_query returns no predictions for unrelated context", async () => {
     await findTool("prediction_update").execute({
       matcher: "database indexing strategy",
