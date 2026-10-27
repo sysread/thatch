@@ -53,6 +53,26 @@ invoke it. The remaining commands (`refine`, `self-review`, `peer-review`,
   opencode only; the greenlight mechanics are described in the
   [user guide overview](README.md).
 
+## The TUI redo command: /s
+
+opencode v2 also gets a thatch command in the TUI itself: `/s` undoes your
+last message and resubmits it with a search-and-replace applied, in one
+keystroke. No model turn is spent - it is instant and deterministic.
+
+- `/s /colour/color/` reverts the last exchange (like `/undo`) and sends a
+  new message with `colour` replaced by `color`.
+- The pattern is a perl-style regular expression. The delimiter can be any
+  punctuation character (`/s |a|b|`), `\1`-`\9` are capture groups, and the
+  flags are `g` (all matches, not just the first), `i`, `m`, `s`, and `u`.
+- The space after `/s` is required: the command and its substitution are
+  separate words.
+- Safety: every failure is a toast and nothing changes. If an undo is
+  staged, if chat messages are queued, or if a chat wake already landed in
+  the range, `/s` refuses and points you at the built-in `/redo` or
+  `/undo`. When the pattern matches nothing, nothing is done.
+- `s/foo/bar` typed WITHOUT the slash goes to the agent as an ordinary
+  message - only the `/s` form works.
+
 ## Host support
 
 | Command | opencode | Claude Code | Cursor |

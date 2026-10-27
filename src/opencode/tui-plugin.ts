@@ -26,11 +26,93 @@
 // peer).
 
 import { Plugin } from "@opencode/plugin/tui";
+import type { SessionMessageInfo } from "@opencode/client";
 import { actsOnTabEvent, isExitTabClosedEvent, isTabClosedEvent, isTabOpenedEvent, isToastEvent } from "../session-tab-shared";
+import { redoLastMessage, walkMessages, type RedoMessage } from "../redo-shared";
+
+/** The client message union flattened to the orchestration's narrow shape. */
+function toRedoMessage(message: SessionMessageInfo): RedoMessage {
+  return {
+    id: message.id,
+    type: message.type,
+    text: "text" in message ? message.text : undefined,
+    created: message.time.created,
+  };
+}
 
 export default Plugin.define({
   id: "jeffober-thatch-tui",
   setup(context) {
+    // The /s redo command (docs/dev/features/opencode-plugin.md): undo the
+    // last exchange and resubmit the message with a perl-style substitution
+    // applied. arguments: true passes the raw substitution as run's input;
+    // the space after /s is load bearing (the host splits the command name
+    // at the first whitespace, so /s/foo/bar never reaches this command).
+    // mode: "global" so the command exists regardless of the focused
+    // renderable - it acts on the VIEWED session like /undo does.
+    context.keymap.layer(() => ({
+      mode: "global",
+      commands: [
+        {
+          id: "thatch.redo",
+          title: "Redo with substitution",
+          description: "Undo the last exchange and resubmit your message with s/PAT/REPL/flags applied",
+          group: "Session",
+          slash: { name: "s", arguments: true },
+          run(input) {
+            const route = context.ui.router.current();
+            if (route.type !== "session") {
+              context.ui.toast.show({ message: "Open a session first", variant: "warning" });
+              return;
+            }
+            const sessionID = route.sessionID;
+            const client = context.client;
+            void redoLastMessage(
+              {
+                // History walk over the client's paged message.list - the
+                // data layer's message list is a newest-20 window, not
+                // history, and a routine turn pushes the target out of it.
+                fetchMessages: (sid) =>
+                  walkMessages((page) =>
+                    client
+                      .message.list({ sessionID: sid, limit: page.limit, order: page.order, cursor: page.cursor })
+                      .then((result) => ({ data: result.data.map(toRedoMessage), cursor: result.cursor })),
+                  ),
+                // The staged-revert state the built-in /redo's enabled
+                // check reads, via the plugin data layer.
+                stagedRevertMessageID: async (sid) => context.data.session.get(sid)?.revert?.messageID,
+                pendingInboxCount: async (sid) => context.data.session.pending.list(sid).length,
+                // The /undo trio's first two steps (routes/session/index.tsx).
+                interruptAndWait: async (sid) => {
+                  await client.session.interrupt({ sessionID: sid });
+                  await client.session.wait({ sessionID: sid });
+                },
+                revertStage: async (sid, messageID) => {
+                  await client.session.revert.stage({ sessionID: sid, messageID });
+                },
+                resubmit: async (sid, text) => {
+                  await client.session.prompt({ sessionID: sid, text });
+                },
+              },
+              sessionID,
+              input ?? "",
+            )
+              .then((outcome) => {
+                context.ui.toast.show({
+                  message: outcome.message,
+                  variant: outcome.ok ? "success" : outcome.variant,
+                });
+              })
+              .catch((error) => {
+                context.ui.toast.show({
+                  message: `redo failed: ${error instanceof Error ? error.message : String(error)}`,
+                  variant: "error",
+                });
+              });
+          },
+        },
+      ],
+    }));
     const off = context.data.listen(({ details }) => {
       // Two directory identities per window: the VIEWED session's directory
       // (the location context follows navigation) and the window's own cwd

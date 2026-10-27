@@ -74,11 +74,49 @@ the shared runtime needs. It is the lifecycle-level sibling of `CoreContext`
 | session move | none | `session.move` (promise domain) | the strand sweep's self-heal for real sessions stranded in a deleted worktree; v1 has no move endpoint, so the adapter omits it and the sweep degrades to machinery-only deletion |
 | compaction trigger | `client.tui.executeCommand("session_compact")` | `session.compact({sessionID})` | wired behind a runtime guard: upstream [#52385](https://github.com/anomalyco/opencode/pull/52385) exposed `session.compact` on the promise domain (in the installed v2.0.25), newer than the pinned dev types - an older host degrades to a logged no-op (the wrap-up checklist and flush still run, the automatic compaction is skipped) |
 | toasts | `client.tui.showToast` | toast rpc event | wired: every runtime toast call site (alerts, extraction metrics, chat registration, watcher rearm notices) emits the bridge's `toast` event, which the `./tui` plugin shows via `ui.toast.show`; the pump never translates it (TUI-only by nature). Best-effort by contract: a TUI-less environment or an rpc-less SDK floor shows nothing, silently |
+| redo command (/s) | none | keymap slash command | the `./tui` plugin registers a keymap layer with `slash: {name: "s", arguments: true}` (v2 ships a built-in `/redo` that CANCELS a staged undo, so the free name is `s`); the core (src/redo-shared.ts) is SDK-free with injected client ops - parse the perl-style substitution, page-walk `client.message.list` (desc, cursor) to the last real user message, run the guards (staged undo, pending inbox, delivered chat wake), and only then the /undo trio (`interrupt` + `wait` + `revert.stage`) followed by `session.prompt` resubmit of the edited text; every failure aborts before the revert. See the redo command section below |
 | wrap-up exit | `client.tui.publish` | exit-tab-closed rpc event | the wrap-up exit records the session's watcher deaths synchronously (the runtime, before the chat unregister - `sessionDied` places the death row by the chat row, so the order is load-bearing) and then emits `rpc.thatch-tabs.exit-tab-closed`, a TUI-ONLY close of the session's OWN tab (the `./tui` plugin's `ui.tabs.close`): the tab-scoped semantic upstream [anomalyco/opencode#50984](https://github.com/anomalyco/opencode/issues/50984) asks for, since the daemon hosts every tab and `app.exit` would take down unrelated sessions. The pump deliberately never translates this event (a second death pass would erase the durable death row the first one wrote; the session_tab_close tool's `tab-closed` is the only death-translating event). Degrades to a logged no-op without the rpc surface; a TUI with no tab for the session (headless run, tabs off) never acts - the event is ephemeral |
 | session tabs | n/a | rpc event bridge | `thatch_session_tab` (v2Only) spawns a detached subordinate session (create -> move -> chat-register -> emit `rpc.thatch-tabs.tab-opened` -> prompt); the `./tui` CLI plugin consumes the event and calls `ui.tabs.open` (open-without-focus, idempotent). `thatch_session_tab_close` emits `rpc.thatch-tabs.tab-closed {sessionID, chatName}` - the pump translates it into the runtime's confirmed-death path. The registration's third event, `exit-tab-closed` (the wrap-up exit's), is TUI-only - see the wrap-up exit row |
 | tab close | n/a | no session.deleted on v2 tab close | bounded 2026-10-07: watcher death detection cancels a closed tab's watchers once its pending events age past `THATCH_WATCH_DEATH_MINUTES` (default 120) while deliveries throw 404-class errors, and announces the death to live same-project sessions; the roster row itself still lingers until the reaper. NOTE: an earlier version of this row claimed deliveries "fail their idle gate" - wrong: the v2 gate opens (the status stub reads as idle) and the PROMPT fails; same leak, different link |
 | wake gate after reload | `session.status` event map | map rehydrates empty | known gap: v2's fetchStatuses stub is structural (the promise context has no session.status), so in the reload window - until the session's next status event - the proactive-prompt gate is fully open |
 | dispose | `dispose` hook | cleanup returned from `setup` | must be idempotent: v2 auto-reloads plugins on file change, and a non-idempotent cleanup doubles pollers/pumps/nudges. Volatile runtime state (extraction buffer + accepted entries, child bookkeeping, wrap-up arms, watcher definitions) is journaled to the `runtime_state` table - instance-scoped by the writing location's directory - and rehydrated on the next `setup()`: rows from the same process AND directory (a reload) all restore; child rows carry a kind marker (extraction vs task-dispatched sub-agent, defaulting to extraction for pre-marker rows) so only extraction children restore the `extracting`/`extractionChildren` sets; rows from a dead process are pruned unless the session is the `-c`/`-s` startup resume, which inherits recovery-safe state only (buffer requeued, no live child bookkeeping - the child died with the old process); a dead process's journaled extraction children are also DELETED through the host before the prune (the opencode session row is global and would otherwise outlive the journal as a picker corpse - the restart-window leak). Exception: a dead process's watcher definitions are kept as DORMANT rows (no polling, no delivery) instead of pruned - resuming the session re-arms them on its first message (a `chat.message` scan: own rows re-arm, same-directory rows of still-dead sessions earn the live session a one-line death notice gated on the owning pid being dead, rows past the watcher TTL plus a 24h grace age out). Restored sessions on v1 get a synthetic noReply re-attach notice (v2 has no turn-free delivery and skips it). The chat poller re-hosts the instance's journaled hosted set on reload, so pending chat mail wakes sessions the reload left asleep and heartbeats keep the reaper from reaping live registrations. The embedding model is refcounted per db path, so N location instances share one resident model. An extraction journal sweep (same boot + interval timer as the strand sweep, session-lifecycle.md) reclaims stranded `buffer`/`accepted` rows whose directory died or that went silent past a TTL |
+
+## The redo command (/s)
+
+A TUI-only slash command that undoes the last exchange and resubmits the
+message with a perl-style substitution applied: `/s /foo/bar/g` (the space
+after `/s` is load bearing - the host's `parseSlashHead` splits the command
+name at the first whitespace, so `/s/foo/bar` never reaches the command).
+No LLM is involved.
+
+- **Registration**: a keymap layer in `src/opencode/tui-plugin.ts`
+  (`{id: "thatch.redo", slash: {name: "s", arguments: true}, run}`),
+  additive to the existing `data.listen` setup. The name is `s` because v2
+  ships a built-in `/redo` that cancels a staged undo - the recovery path
+  every guard toast points at, and the opposite semantic.
+- **SDK-free core**: `src/redo-shared.ts` (the session-tab-shared isolation
+  pattern - zero SDK imports; the client arrives as the injected
+  `RedoSessionOps` narrow interface, so the destructive-ordering invariant
+  is unit-tested with mocks in `tests/redo-shared.test.ts`).
+- **Engine**: JavaScript RegExp with a `u`-flag fallback (Unicode mode
+  rejects some identity escapes; the second compile failure is toasted
+  verbatim). `\1`-`\9` translate to `$1`-`$9`; `\n` and `\t` become
+  literals; flags are the subset `g i m s u`. No `g` = first match only.
+- **Guards, in order, all BEFORE the revert**: a staged undo exists
+  (`revert.messageID` on the session info - a naive findLast would target
+  an invisible undone message and the resubmit would commit the revert);
+  pending inbox rows (the resubmit's revert commit deletes queued chat
+  mail); a delivered synthetic wake newer than the target (its mail is
+  stamped delivered while the commit deletes its turn - the built-in
+  `/undo` has the same hole; this command is stricter one findLast away).
+- **The revert trio**: `interrupt` + `wait` + `client.session.revert.stage`
+  (the exact `/undo` mechanics, file-restore included), then resubmit via
+  `client.session.prompt`. The paged `message.list` walk (desc, cursor)
+  exists because the plugin data layer's message list is a reactive
+  newest-20 window, not history.
+- Known simplification: queued-prompt undo stays with the built-in (which
+  calls `mutatePending("cancel")` first); a wake admitted in the
+  microseconds after the pending guard reads is an accepted, bounded race.
 
 ## Live verification and remaining unknowns
 
@@ -157,8 +195,10 @@ self-heal it).
 - `src/index.ts` -- dual entry, merged default export, lazy wrappers
 - `src/opencode/v1.ts` -- v1 hooks adapter
 - `src/opencode/v2.ts` -- v2 promise-context adapter + capability impl
-- `src/opencode/tui-plugin.ts` -- v2 TUI CLI plugin (the `./tui` entrypoint: consumes the session-tab rpc events, drives `ui.tabs`)
+- `src/opencode/tui-plugin.ts` -- v2 TUI CLI plugin (the `./tui` entrypoint: consumes the session-tab rpc events, drives `ui.tabs`, registers the /s redo command)
 - `src/session-tab-shared.ts` -- the cross-entry session-tab contract (rpc definition, prompt builder, validators)
+- `src/redo-shared.ts` -- the /s redo command's SDK-free core (substitution parser, apply engine, orchestration over injected ops)
+- `tests/redo-shared.test.ts` -- the redo command's parser, apply, guard, and ordering tests (mocked deps)
 - `src/capabilities.ts` -- `HostCapabilities`, `capabilitiesFromClient`
 - `src/runtime.ts` -- the shared runtime (all behavioral logic)
 - `src/os-args.ts` -- pure argv helpers
