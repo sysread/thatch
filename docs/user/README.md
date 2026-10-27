@@ -246,13 +246,15 @@ Beyond the tools, thatch hooks into opencode itself:
 - **Wrap-up commands.** `/thatch/compact` and `/thatch/exit` (opencode only)
   run a pre-flight checklist before you compact or close a session: the agent
   flushes pending fact extraction, finishes any promised memory writes, and
-  surfaces todos or follow-ups it never addressed. The agent ends its
-  response with a greenlight token only when the checklist is clean. Thatch
-  watches for the token and then runs the compaction or closes the session
+  surfaces todos or follow-ups it never addressed. When the checklist is
+  clean, the agent greenlights -- by ending its response with a token
+  (compact) or by calling the `thatch_exit` tool (exit). Thatch watches for
+  the greenlight and then runs the compaction or closes the session
   (opencode 1 exits the whole app; opencode 2 closes the session's own tab.
   Either way the session's watches are cancelled, and reopening or resuming
   the session does not re-arm them - re-create watches you still want with
-  `thatch_watch_create`).
+  `thatch_watch_create`). With items outstanding, the agent lists them and
+  nothing fires -- you decide when to retry.
   Without the token nothing fires -- a toast points you at the items the
   agent listed in its response, and you re-run the command once they're
   addressed. Text typed

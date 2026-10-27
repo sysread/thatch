@@ -31,7 +31,7 @@ import { createAlerts, alertDelivery, deriveRoundShape, isNoWorkTool, replyReque
 import { mostRecentTopLevelSessionId } from "./session-db";
 import type { CoreContext } from "./tool-defs";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
-import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommandFiles, COMPACT_READY_TOKEN, EXIT_READY_TOKEN } from "./commands";
+import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommandFiles, COMPACT_READY_TOKEN } from "./commands";
 import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
@@ -102,12 +102,13 @@ const PREDICTION_THRESHOLD = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD 
 const BEHAVIOR_THRESHOLD = parseFloat(process.env.THATCH_BEHAVIOR_THRESHOLD ?? "0.60");
 
 // Wrap-up command registry: command name as opencode derives it from the
-// installed file path (~/.config/opencode/command/thatch/<name>.md), the
-// greenlight token the command instructs the model to end its response with,
-// and which TUI action the greenlight triggers.
-const WRAPUP_COMMANDS: Record<string, { token: string; kind: "compact" | "exit" }> = {
+// installed file path (~/.config/opencode/command/thatch/<name>.md), and
+// which wrap-up protocol and TUI action the command arms. Only compact
+// carries a token (its template interpolates it); the exit greenlight is
+// the zero-arg thatch_exit tool call, so its arm has no token field.
+const WRAPUP_COMMANDS: Record<string, { token?: string; kind: "compact" | "exit" }> = {
   "thatch/compact": { token: COMPACT_READY_TOKEN, kind: "compact" },
-  "thatch/exit": { token: EXIT_READY_TOKEN, kind: "exit" },
+  "thatch/exit": { kind: "exit" },
 };
 
 // The handler-set shape both host adapters consume. The methods correspond
@@ -797,13 +798,19 @@ export async function createRuntime(input: {
   };
 
   // Wrap-up slash commands (/thatch/compact, /thatch/exit) awaiting their
-  // greenlight check. command.execute.before marks the session when one of
-  // these commands runs; when the session next goes idle, the plugin reads
-  // the final assistant message for the ready token (the greenlight) and
-  // triggers the TUI action. Token absence means the model listed blockers
-  // instead, so nothing fires beyond a toast. Cleared on resolution or on
-  // session deletion.
-  const pendingWrapUp = new Map<string, { token: string; kind: "compact" | "exit" }>();
+  // greenlight. command.execute.before marks the session when one of these
+  // commands runs. Per kind:
+  // - compact: the session's next idle reads the final assistant message
+  //   for the ready token (the greenlight) and consumes the arm either way;
+  //   token absence means the model listed blockers, so nothing fires
+  //   beyond a toast.
+  // - exit: the model greenlights by calling the zero-arg thatch_exit tool,
+  //   which flips greenlit on this arm; idles before that call leave the
+  //   arm alone (a mid-exit wait must not strand the close). The next idle
+  //   after greenlit runs the close executor. Cleared on resolution, on
+  //   session deletion, or by a re-arm (a fresh command write resets
+  //   greenlit).
+  const pendingWrapUp = new Map<string, { token?: string; kind: "compact" | "exit"; greenlit?: boolean }>();
 
   // Rehydrate persisted runtime state (docs/dev/features/opencode-plugin.md,
   // the runtime_state row).
@@ -975,13 +982,15 @@ export async function createRuntime(input: {
       }
     } else if (row.kind === "wrapup") {
       if (!samePid) {
-        // An armed wrap-up inherited across a restart could auto-fire
-        // compact/exit on the resumed session's first idle if the final
-        // message already carries the token. Too dangerous to inherit.
+        // An armed wrap-up inherited across a restart is too dangerous to
+        // inherit: a compact arm could auto-fire on the resumed session's
+        // next idle (the final message may already carry the token), and an
+        // exit arm would close the session on a thatch_exit call the
+        // restarted process has no context for.
         db.runtimeStateDelete(row.kind, row.sessionID);
         continue;
       }
-      pendingWrapUp.set(row.sessionID, row.value as { token: string; kind: "compact" | "exit" });
+      pendingWrapUp.set(row.sessionID, row.value as { token?: string; kind: "compact" | "exit"; greenlit?: boolean });
     } else if (row.kind === "watcher_pending") {
       // Journaled pending watcher events (the reload-loss fix). On a
       // same-process reload the plugin re-ran in place and its sessions are
@@ -1637,6 +1646,25 @@ export async function createRuntime(input: {
       },
       watcherRegistry: watchers,
       projectDir: worktree,
+      wrapUpGreenlight: (sessionID: string): { status: "greenlit"; already: boolean } | { status: "none" } => {
+        // The thatch_exit tool's greenlight callback (the state-access
+        // seam: pendingWrapUp is module-local to this file, and the journal
+        // has no per-key read). The kind check lives here: a compact arm
+        // reads as "none" - a thatch_exit call against one is a refusal,
+        // never a greenlight. No arm at all reads as "none" too.
+        const arm = pendingWrapUp.get(sessionID);
+        if (!arm || arm.kind !== "exit") return { status: "none" };
+        if (arm.greenlit) return { status: "greenlit", already: true };
+        arm.greenlit = true;
+        pendingWrapUp.set(sessionID, arm);
+        // Durable across a same-pid plugin reload (a reload between the
+        // tool call and the closing idle must not strand a greenlit
+        // session). Same disposed guard as the arm journaling in
+        // onCommandExecuteBefore: a call still in flight when the reload's
+        // cleanup runs must not land a row through the lazy reopen.
+        if (!disposed) db.runtimeStatePut("wrapup", sessionID, arm, directory);
+        return { status: "greenlit", already: false };
+      },
     }),
     debug,
     childSessionIds: () => [...extractionChildren],
@@ -1851,7 +1879,10 @@ export async function createRuntime(input: {
     onCommandExecuteBefore: async (input) => {
       const wrapUp = WRAPUP_COMMANDS[input.command];
       if (wrapUp) {
-        pendingWrapUp.set(input.sessionID, wrapUp);
+        // Store a per-session copy: the greenlight callback later flips
+        // `greenlit` on the map entry, and mutating the shared registry
+        // object would leak the flag into every future arm.
+        pendingWrapUp.set(input.sessionID, { ...wrapUp });
         // Journaled so a v2 plugin reload before the session's next idle
         // does not silently drop the armed wrap-up. Disposed check FIRST:
         // a command execute still in flight when the reload's cleanup runs
@@ -2261,14 +2292,29 @@ export async function createRuntime(input: {
         // Runs before the wrap-up branches so a greenlit compact or exit
         // still ends with its completion alert.
         if (sessionID) await alerts.sessionIdle(sessionID);
-        // Wrap-up command resolution: the session went idle right after
-        // /thatch/compact or /thatch/exit. The final assistant message's
-        // trailing token is the greenlight - the command instructs the model
-        // to end with it only after flushing persistence and confirming no
-        // loose ends. Token absence means the model listed blockers, so the
-        // action never fires; a toast points the user at the blockers above.
+        // Wrap-up command resolution, per kind:
+        //
+        // - compact: the session went idle right after /thatch/compact. The
+        //   final assistant message's trailing token is the greenlight - the
+        //   command instructs the model to end with it only after flushing
+        //   persistence and confirming no loose ends. Token absence means
+        //   the model listed blockers, so the action never fires; a toast
+        //   points the user at the blockers above. The arm is consumed on
+        //   this first idle either way (the one-idle handshake).
+        //
+        // - exit: the model greenlights by calling the zero-arg thatch_exit
+        //   tool, which flips greenlit on the arm. Idles BEFORE that call
+        //   leave the arm alone - a mid-exit wait (e.g. a background
+        //   extractor running) must not consume the arm and strand the
+        //   close. An un-greenlit exit idle just falls through to the
+        //   normal pipeline (blockers are prose per the template; there is
+        //   no runtime "blocked" concept to toast about). The next idle
+        //   after greenlit runs the close executor below.
         const wrapUp = sessionID ? pendingWrapUp.get(sessionID) : undefined;
-        if (wrapUp) {
+        if (wrapUp?.kind === "exit" && wrapUp.greenlit) {
+          // The close executor. Arm + journal row deleted FIRST: the v2
+          // no-bridge strand (emit skipped with no TUI bridge) stays a
+          // silent skip instead of an every-idle retry loop.
           pendingWrapUp.delete(sessionID);
           // Reload ownership rule (docs/dev/gotchas.md): after a v2 plugin
           // reload this instance's journal rows belong to the reloaded
@@ -2276,6 +2322,40 @@ export async function createRuntime(input: {
           // because the only producer of this branch (the v2 pump) is
           // settled before dispose, but the guard makes that invariant
           // local instead of transitive.
+          if (disposed) return;
+          db.runtimeStateDelete("wrapup", sessionID);
+          // An exit-greenlit session is closing out: leave the chat
+          // directory too, so other sessions stop addressing mail to a
+          // roster entry whose host is about to vanish. The unregister
+          // tombstone also stops any straggler auto-register from
+          // resurrecting the row during shutdown.
+          // Watcher deaths run BEFORE the unregister: onSessionDeath
+          // places the death row by the session's chat row, and the
+          // unregister deletes that row. The v2 exit action's emit is
+          // TUI-only (the pump never translates it into a second
+          // death pass, which would erase the placed row), so this is
+          // the exit's only death recording.
+          try {
+            watchers.sessionDied(sessionID, { chatName: db.findChatSession(sessionID)?.name ?? null });
+          } catch (err) {
+            console.error(`[thatch] watcher death recording on exit failed: ${err}`);
+          }
+          try {
+            db.unregisterChatSession(sessionID, "exit");
+          } catch (err) {
+            console.error(`[thatch] chat unregister on exit failed: ${err}`);
+          }
+          try {
+            await caps.exitHost(sessionID);
+          } catch (err) {
+            console.error(`[thatch] wrap-up action failed: ${err}`);
+          }
+          // Skip extraction and pending deliveries: the process is exiting
+          // and the checklist's flush step already drained the buffer.
+          return;
+        }
+        if (wrapUp?.kind === "compact") {
+          pendingWrapUp.delete(sessionID);
           if (disposed) return;
           db.runtimeStateDelete("wrapup", sessionID);
           let ready = false;
@@ -2287,54 +2367,26 @@ export async function createRuntime(input: {
               .map((p) => p.text ?? "")
               .join("\n")
               .trimEnd();
-            ready = text.endsWith(wrapUp.token);
+            // Exit arms carry no token; only compact reaches this scan, and
+            // its template interpolates the token, so it is always present.
+            const token = wrapUp.token;
+            ready = token !== undefined && text.endsWith(token);
           } catch (err) {
             console.error(`[thatch] wrap-up message fetch failed: ${err}`);
           }
           if (ready) {
-            // An exit-greenlit session is closing out: leave the chat
-            // directory too, so other sessions stop addressing mail to a
-            // roster entry whose host is about to vanish. The unregister
-            // tombstone also stops any straggler auto-register from
-            // resurrecting the row during shutdown. Compact keeps the
-            // session alive, so only the exit path does this.
-            if (wrapUp.kind === "exit") {
-              // Watcher deaths run BEFORE the unregister: onSessionDeath
-              // places the death row by the session's chat row, and the
-              // unregister deletes that row. The v2 exit action's emit is
-              // TUI-only (the pump never translates it into a second
-              // death pass, which would erase the placed row), so this is
-              // the exit's only death recording.
-              try {
-                watchers.sessionDied(sessionID, { chatName: db.findChatSession(sessionID)?.name ?? null });
-              } catch (err) {
-                console.error(`[thatch] watcher death recording on exit failed: ${err}`);
-              }
-              try {
-                db.unregisterChatSession(sessionID, "exit");
-              } catch (err) {
-                console.error(`[thatch] chat unregister on exit failed: ${err}`);
-              }
-            }
             try {
-              if (wrapUp.kind === "compact") {
-                await caps.compactSession(sessionID);
-              } else {
-                await caps.exitHost(sessionID);
-              }
+              await caps.compactSession(sessionID);
             } catch (err) {
               console.error(`[thatch] wrap-up action failed: ${err}`);
             }
-            // Skip extraction and pending deliveries: compaction is starting
-            // (the checklist drained the buffer) or the process is exiting.
+            // Skip extraction and pending deliveries: compaction is
+            // starting and the checklist drained the buffer.
             return;
           }
           try {
             await caps.showToast({
-              message:
-                wrapUp.kind === "compact"
-                  ? "⏸ Not compacting - resolve the items listed above, then run /thatch/compact again"
-                  : "⏸ Not exiting - resolve the items listed above, then run /thatch/exit again",
+              message: "⏸ Not compacting - resolve the items listed above, then run /thatch/compact again",
               variant: "warning",
               duration: 8000,
             });

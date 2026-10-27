@@ -43,17 +43,15 @@ import {
  *
  * - Actions (/thatch/bug-intake, defrag, extract, hygiene, peer-review,
  *   refine, reflect, self-review, whois): user-invoked commands.
- * - Wrap-ups (/thatch/compact, exit): greenlight-token commands that need
+ * - Wrap-ups (/thatch/compact, exit): greenlight-gated commands that need
  *   the opencode plugin's host action routes (the compact trigger and the
- *   session close-out), so they are opencode-only.
+ *   session close-out), so they are opencode-only. Compact greenlights with
+ *   a trailing token; exit greenlights with the zero-arg thatch_exit tool.
  */
 export const COMMANDS_ARTIFACTS_DIR = join(import.meta.dir, "..", "artifacts", "commands");
 
 /** Greenlight token ending /thatch/compact's assistant response when compaction is safe. */
 export const COMPACT_READY_TOKEN = "THATCH_COMPACT_READY";
-
-/** Greenlight token ending /thatch/exit's assistant response when exiting is safe. */
-export const EXIT_READY_TOKEN = "THATCH_EXIT_READY";
 
 /**
  * The greenlight token's host action, per host: v1 drives the TUI
@@ -155,7 +153,9 @@ function interpolateTemplate(raw: string): string {
       return text;
     })
     .replace(/\$\{TOKEN:([A-Z_]+)\}/g, (_m, name: string) => {
-      const token = name === "COMPACT_READY_TOKEN" ? COMPACT_READY_TOKEN : name === "EXIT_READY_TOKEN" ? EXIT_READY_TOKEN : undefined;
+      // Exit's token arm is gone: the exit greenlight is the thatch_exit
+      // tool call, so compact is the only ${TOKEN:...} user left.
+      const token = name === "COMPACT_READY_TOKEN" ? COMPACT_READY_TOKEN : undefined;
       if (!token) throw new Error(`unknown command template token: ${name}`);
       return token;
     });

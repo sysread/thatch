@@ -38,7 +38,6 @@ const PROTOCOL_MARKERS = new Set([
   "THATCH_BEGIN_MARKER",
   "THATCH_END_MARKER",
   "THATCH_COMPACT_READY",
-  "THATCH_EXIT_READY",
 ]);
 
 describe("ENV_KNOBS registry", () => {

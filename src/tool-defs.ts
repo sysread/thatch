@@ -150,6 +150,13 @@ export interface CoreContext {
    *  worktree move, the rpc emit, and prompt delivery happen here. Absent
    *  on v1 and MCP hosts; the tool refuses with a clear message. */
   sessionTabHost?: SessionTabHost;
+  /** Greenlights the calling session's armed exit wrap-up. The runtime owns
+   *  the in-memory pendingWrapUp map (module-local) and the runtime_state
+   *  journal, so the exit tool greenlights through this injected callback
+   *  instead of touching that state directly. The callback owns the kind
+   *  check: a compact arm reads as "none" (never a greenlight). Wired only
+   *  on the opencode plugin path. */
+  wrapUpGreenlight?: (sessionID: string) => { status: "greenlit"; already: boolean } | { status: "none" };
 }
 
 /**
@@ -1617,6 +1624,43 @@ const getSessionInfoDef: ToolDef = {
 };
 
 /**
+ * Greenlights a session the user armed with /thatch/exit. The tool call
+ * replaces the old trailing-text token: the session closes on its next
+ * idle after this resolves the arm. The calling session is resolved from
+ * the per-call host context - never from a model-supplied argument, so a
+ * session can only greenlight its own arm. opencode-only: the arm is
+ * created by the opencode plugin's command hook, and MCP hosts have no
+ * session concept.
+ */
+const exitDef: ToolDef = {
+  name: "exit",
+  description:
+    "Signal that the /thatch/exit checklist is fully handled and the " +
+    "session is safe to close. Call it ONLY after the user ran " +
+    "/thatch/exit and every checklist item is handled - never to signal a " +
+    "finished task or turn, and not while checklist items are still " +
+    "outstanding (list the blockers in prose instead). Takes no arguments; " +
+    "the session closes when you go idle after the call. opencode-only.",
+  args: {},
+  opencodeOnly: true,
+  async execute(_args, ctx, host) {
+    if (!host) {
+      return "Session identity is unavailable: this host did not provide a session context.";
+    }
+    if (!ctx.wrapUpGreenlight) {
+      return "Exit greenlight is unavailable: this host did not wire the wrap-up state. The session stays open.";
+    }
+    const result = ctx.wrapUpGreenlight(host.sessionID);
+    if (result.status === "none") {
+      return "No exit in progress. This tool closes the session after /thatch/exit has armed it; run /thatch/exit first.";
+    }
+    return result.already
+      ? "Already greenlit. Finish your final response; the session closes when you go idle."
+      : "Greenlit. Finish your final response; the session closes when you go idle.";
+  },
+};
+
+/**
  * Lets the model search its own past opencode conversations. The model only
  * knows the current session id (via get_session_info); everything before
  * compaction or in earlier sessions is invisible to it otherwise. Returns
@@ -2827,6 +2871,7 @@ export const TOOL_DEFS: ToolDef[] = [
   configSetDef,
   notifyUserDef,
   getSessionInfoDef,
+  exitDef,
   sessionSearchDef,
   sessionGetDef,
   watchCreateDef,
@@ -2852,6 +2897,7 @@ export interface CoreContextExtensions {
   watcherRegistry?: WatcherRegistry;
   projectDir?: string;
   openTabs?: CoreContext["openTabs"];
+  wrapUpGreenlight?: CoreContext["wrapUpGreenlight"];
 }
 
 /**
@@ -2880,6 +2926,7 @@ export function buildCoreContext(
     watchers: extensions?.watcherRegistry,
     projectDir: extensions?.projectDir,
     openTabs: extensions?.openTabs,
+    wrapUpGreenlight: extensions?.wrapUpGreenlight,
   };
 }
 

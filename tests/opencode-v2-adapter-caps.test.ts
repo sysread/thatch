@@ -187,14 +187,13 @@ describe("opencode v2 adapter", () => {
   });
 
   test("a greenlit /thatch/exit emits the TUI-only close event for the session's own tab", async () => {
-    const context = makeContext({
-      context: async () => [
-        { type: "assistant", content: [{ type: "text", text: "flushed; no loose ends THATCH_EXIT_READY" }] },
-      ],
-    });
-    cleanup = (await setup(context as any)) as () => Promise<void>;
+    // The greenlight is the zero-arg thatch_exit tool call; the close fires
+    // on the session's next idle.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const exit = addedCommands.find((c) => c.name === "thatch/exit")!;
     await exit.execute({ sessionID: "ses_v2_exit_ok" });
+    const exitTool = addedTools.find((t) => t.name === "thatch_exit")!;
+    await exitTool.execute({}, { sessionID: "ses_v2_exit_ok", agent: "build" });
     await queueEvent({
       type: "session.execution.succeeded",
       location: { directory: SESSION_DIR },
@@ -211,17 +210,38 @@ describe("opencode v2 adapter", () => {
     expect(sessionCreateCalls.length).toBe(0);
   });
 
+  test("an un-greenlit exit arm survives an idle with no host action on v2", async () => {
+    // The fix this branch ships: a mid-exit idle (e.g. a background
+    // extractor running) must not consume the arm and strand the close.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const exit = addedCommands.find((c) => c.name === "thatch/exit")!;
+    await exit.execute({ sessionID: "ses_v2_exit_mid" });
+    await queueEvent({
+      type: "session.execution.succeeded",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_v2_exit_mid" },
+    });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(wrapupArmed("ses_v2_exit_mid")).toBe(true);
+    expect(rpcEmitted.some((e) => e.name === EXIT_TAB_CLOSED_EVENT)).toBe(false);
+    // The arm still resolves: greenlight now, close on the next idle.
+    const exitTool = addedTools.find((t) => t.name === "thatch_exit")!;
+    await exitTool.execute({}, { sessionID: "ses_v2_exit_mid", agent: "build" });
+    await queueEvent({
+      type: "session.execution.succeeded",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_v2_exit_mid" },
+    });
+    await waitFor("late exit close emitted", () => rpcEmitted.some((e) => e.name === EXIT_TAB_CLOSED_EVENT));
+    expect(wrapupArmed("ses_v2_exit_mid")).toBe(false);
+  });
+
   test("a greenlit /thatch/exit places the session's watcher deaths before unregistering it", async () => {
     // The death row's placement is the load-bearing ordering: onSessionDeath
     // places the row by the session's chat row, and the exit unregisters that
     // row - so the deaths must run FIRST or the row lands unplaceable (a
     // project-null row no peer ever surfaces and nothing deletes).
-    const context = makeContext({
-      context: async () => [
-        { type: "assistant", content: [{ type: "text", text: "flushed; no loose ends THATCH_EXIT_READY" }] },
-      ],
-    });
-    cleanup = (await setup(context as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     // The watcher's validation run executes the command in the project
     // directory, so it must exist on disk.
     mkdirSync(PROJECT_DIR, { recursive: true });
@@ -239,6 +259,8 @@ describe("opencode v2 adapter", () => {
 
     const exit = addedCommands.find((c) => c.name === "thatch/exit")!;
     await exit.execute({ sessionID });
+    const exitTool = addedTools.find((t) => t.name === "thatch_exit")!;
+    await exitTool.execute({}, { sessionID, agent: "build" });
     await queueEvent({
       type: "session.execution.succeeded",
       location: { directory: SESSION_DIR },
@@ -274,8 +296,10 @@ describe("opencode v2 adapter", () => {
     // A second greenlit exit (the user reopened the tab and ran the command
     // again) must not erase the placed row either: the second sessionDied
     // finds no watchers, and an empty-targets upsert would overwrite the
-    // placed row before the watchless cleanup deletes it.
+    // placed row before the watchless cleanup deletes it. The re-arm
+    // resets greenlit, so the model calls the tool again.
     await exit.execute({ sessionID });
+    await exitTool.execute({}, { sessionID, agent: "build" });
     await queueEvent({
       type: "session.execution.succeeded",
       location: { directory: SESSION_DIR },
@@ -354,13 +378,12 @@ describe("opencode v2 adapter", () => {
     const { lines } = await captureConsoleError(async () => {
       const context = makeContext({
         omitRpc: true,
-        context: async () => [
-          { type: "assistant", content: [{ type: "text", text: "clear THATCH_EXIT_READY" }] },
-        ],
       });
       cleanup = (await setup(context as any)) as () => Promise<void>;
       const exit = addedCommands.find((c) => c.name === "thatch/exit")!;
       await exit.execute({ sessionID: "ses_v2_exit_floor" });
+      const exitTool = addedTools.find((t) => t.name === "thatch_exit")!;
+      await exitTool.execute({}, { sessionID: "ses_v2_exit_floor", agent: "build" });
       await queueEvent({
         type: "session.execution.succeeded",
         location: { directory: SESSION_DIR },

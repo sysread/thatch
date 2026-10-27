@@ -11,7 +11,7 @@ setupToolDefsHarness();
 
 describe("TOOL_DEFS", () => {
   test("exports the full tool catalog", () => {
-    expect(TOOL_DEFS.length).toBe(39);
+    expect(TOOL_DEFS.length).toBe(40);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -37,6 +37,7 @@ describe("TOOL_DEFS", () => {
       "config_set",
       "notify_user",
       "get_session_info",
+      "exit",
       "session_search",
       "session_get",
       "watch_create",
@@ -60,6 +61,7 @@ describe("TOOL_DEFS", () => {
     const opencodeOnly = TOOL_DEFS.filter((t) => t.opencodeOnly).map((t) => t.name);
     expect(opencodeOnly).toEqual([
       "get_session_info",
+      "exit",
       "session_search",
       "session_get",
       "watch_create",

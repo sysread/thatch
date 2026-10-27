@@ -76,7 +76,9 @@ in the package), as templates with `${...}` placeholders:
 - `${COUCHING:target|pipeline}` (own line) - splices the text shared by the
   two review-mode commands, so their procedure cannot drift apart.
 - `${CHECKLIST}` (own line) and `${TOKEN:name}` (inline) - the wrap-up
-  persistence checklist and greenlight tokens.
+  persistence checklist and greenlight tokens. Only compact uses
+  `${TOKEN:...}` now: exit's greenlight is the zero-arg `thatch_exit` tool
+  call, so its template names the tool instead.
 
 An unresolved placeholder throws at load rather than passing through
 (the REVIEW_COMMON lesson: a silent passthrough once corrupted skill

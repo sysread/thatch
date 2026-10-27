@@ -202,7 +202,7 @@ Silence rules, in verdict order:
 - **Unknown shape** -- a failed or empty message fetch stays silent.
   Alerts are best-effort: a spurious banner on every broken fetch costs
   more than a rare missed completion, and the same fetch failing also
-  breaks the wrap-up greenlight check, so the session degrades
+  breaks the compact wrap-up's token check, so the session degrades
   consistently. This rule also keeps adapter-level tests (whose client
   mocks have no message surface) from ever spawning a real banner.
 - **Synthetic-trigger silence** -- nudges, background-task completions, and

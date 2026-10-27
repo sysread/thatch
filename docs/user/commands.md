@@ -49,7 +49,8 @@ invoke it. The remaining commands (`refine`, `self-review`, `peer-review`,
 - `/thatch/compact` and `/thatch/exit` — the wrap-up commands. They run a
   pre-flight checklist (flush extraction, finish promised memory writes,
   surface loose ends) before a compaction or an exit, gated by a greenlight
-  token. opencode only; the greenlight mechanics are described in the
+  (a trailing token for compact, the `thatch_exit` tool call for exit).
+  opencode only; the greenlight mechanics are described in the
   [user guide overview](README.md).
 
 ## Host support

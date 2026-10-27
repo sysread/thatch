@@ -14,7 +14,7 @@ opencode emits bus events for session lifecycle changes. Thatch subscribes to th
 - Session error recovery: child errors requeue parent's accepted entries
 - Session deletion recovery: child deletion requeues; parent deletion completes accepted entries
 - Stranded-session self-heal: sessions whose recorded directory is gone (a merged + deleted worktree) are deleted when machinery (`thatch-extraction` corpses) and moved to the project's canonical checkout when real
-- Wrap-up commands: `/thatch/compact` and `/thatch/exit` arm a greenlight check resolved on the next idle
+- Wrap-up commands: `/thatch/compact` and `/thatch/exit` arm a greenlight check; compact resolves on the next idle (trailing token), exit on the model's `thatch_exit` tool call and the next idle
 
 ## How it works
 
@@ -65,21 +65,30 @@ When a task-dispatched sub-agent (not created by `triggerExtraction`) goes idle:
 
 When a parent session (no parentID) goes idle:
 
-- Wrap-up resolution first (below): a pending `/thatch/compact` or `/thatch/exit` resolves here, and a greenlit action returns early
+- Wrap-up resolution first (below): a pending `/thatch/compact` resolves here unconditionally; a pending `/thatch/exit` resolves here only when greenlit, and a greenlit action returns early
 - `requeueStaleAccepted()` first: accepted entries whose completion signal never came (15 min) return to pending
 - If not compacting, not already extracting, and buffer has pending interactions: `triggerExtraction(sessionID)`
 - On failure: log error, clear `extracting` flag (the next idle retries -- there is no model-facing nudge fallback)
 
 ### Wrap-up commands (`/thatch/compact`, `/thatch/exit`)
 
-User-invoked slash commands, shipped as command markdown synced by the plugin (see `src/commands.ts`). The template instructs the model to flush pending fact extraction (`thatch_get_extraction_payload` + `thatch_extraction_done`), finish promised memory writes, and surface unaddressed todos -- then end its response with a greenlight token (`THATCH_COMPACT_READY` / `THATCH_EXIT_READY`) only when safe to proceed. Text typed after the command is forwarded into a labeled `# User Message` section ahead of the `# Pre-*-wrap-up` checklist section (opencode's `$ARGUMENTS` substitution): the headers give the user's words provenance, so they cannot be misread as part of the wrap-up instructions. opencode's substitution is purely mechanical with no default-value form (verified against v1.18.30), so the template cannot switch on emptiness; instead the section always carries a fallback line telling the model to treat an empty section as n/a (bare command, no user text).
+User-invoked slash commands, shipped as command markdown synced by the plugin (see `src/commands.ts`). The template instructs the model to flush pending fact extraction (`thatch_get_extraction_payload` + `thatch_extraction_done`), finish promised memory writes, and surface unaddressed todos -- then greenlight only when safe to proceed. Text typed after the command is forwarded into a labeled `# User Message` section ahead of the `# Pre-*-wrap-up` checklist section (opencode's `$ARGUMENTS` substitution): the headers give the user's words provenance, so they cannot be misread as part of the wrap-up instructions. opencode's substitution is purely mechanical with no default-value form (verified against v1.18.30), so the template cannot switch on emptiness; instead the section always carries a fallback line telling the model to treat an empty section as n/a (bare command, no user text).
 
-1. `command.execute.before` arms the session in `pendingWrapUp` when the command runs (on v2 the registered command's `execute` runs the same arming through `onCommandExecuteBefore`)
-2. On the session's next idle, the plugin fetches the session's messages (v1: SDK client; v2: `session.context`, mapped into the v1 shape) and checks the final assistant message's trailing text for the token (trimmed, exact match)
-3. Token present: trigger the host action and return early -- compaction is starting (the checklist drained the buffer) or the session is closing
+The greenlight protocol is per kind:
+
+- **compact** keeps the text-token handshake. The template tells the model to end its response with `THATCH_COMPACT_READY` (interpolated from `${TOKEN:COMPACT_READY_TOKEN}`) only when safe.
+- **exit** greenlights with the zero-arg `thatch_exit` tool call (opencode-only; the calling session resolves from the per-call host context, never a model-supplied argument). The tool flips `greenlit` on the arm and rewrites the journal row with the flag, so a same-pid plugin reload between the call and the closing idle cannot strand a greenlit session. The template's rescind rule lives in the prompt channel: with outstanding blockers the model must NOT call the tool, and if the user moves on to unrelated work after blockers were listed, the user re-runs /thatch/exit when ready (the arm has no runtime expiry).
+
+Both arms are journaled to `runtime_state` (kind `wrapup`) at arming. Resolution:
+
+1. `command.execute.before` arms the session in `pendingWrapUp` when the command runs (on v2 the registered command's `execute` runs the same arming through `onCommandExecuteBefore`). A re-arm overwrites and resets `greenlit`.
+2. On the session's next idle:
+   - compact: the arm is consumed on this first idle (the one-idle handshake). The plugin fetches the session's messages (v1: SDK client; v2: `session.context`, mapped into the v1 shape) and checks the final assistant message's trailing text for the token (trimmed, exact match).
+   - exit: an un-greenlit idle does nothing to the arm -- a mid-exit wait (e.g. a background fact-extractor running) must not consume it. Only a greenlit arm resolves.
+3. Greenlit: trigger the host action and return early -- compaction is starting (the checklist drained the buffer) or the session is closing. The close executor deletes the arm and journal row FIRST, then runs the host sequence.
    - compact: v1 dispatches the TUI's `session_compact` command (`client.tui.executeCommand` -- the execute-command route only accepts legacy alias names; `session_compact` maps to the TUI's `session.compact` action, the same thing the built-in `/compact` runs). v2 calls `session.compact({sessionID})` on the promise domain directly (upstream #52385), runtime-guarded because the pinned dev types predate the surface -- an older host degrades to a logged no-op
    - exit: record the session's watcher deaths first (`watchers.sessionDied` -- BEFORE the unregister below, because the death row is placed by the session's chat row and the unregister deletes it; the runtime also captures the project there, so the async death-notice delivery still places after the row is gone), unregister the session from the chat directory (a greenlit exit's host is about to vanish; other sessions must stop addressing mail to it; the tombstone's `exit` reason is what a later restore clears), then close the session out on the host. v1 publishes the `app.exit` TUI keymap command directly (`client.tui.publish` -- no exit alias exists). v2 emits the session-tab bridge's `exit-tab-closed` event, a TUI-ONLY close of the session's OWN tab: the daemon hosts every tab, so `app.exit` would take down unrelated sessions, and the pump deliberately never translates this event (the deaths were already recorded; a second pass would erase the durable death row). The unregister is plugin-side only, after the death recording: the template deliberately does NOT ask the model to call `thatch_chat_unregister`, because a mid-turn unregister would delete the chat row before the death placement could use it. Compaction deliberately does NOT unregister - the session continues
-4. Token absent: warning toast pointing at the blockers in the response, then fall through -- the model may have buffered tool interactions that still need extraction (on v2 the toast rides the bridge's toast event; a TUI-less environment shows nothing - the blockers themselves are in the model's response)
+4. Compact token absent: warning toast pointing at the blockers in the response, then fall through -- the model may have buffered tool interactions that still need extraction (on v2 the toast rides the bridge's toast event; a TUI-less environment shows nothing - the blockers themselves are in the model's response). There is no exit equivalent: blockers are prose per the template, and the un-greenlit arm simply persists.
 
 ### Restore-rejoin
 
@@ -199,7 +208,7 @@ itself.
 - **extracting**: `Set<parentID>` -- parent IDs with an active direct-extraction child (gates re-triggering)
 - **extractionChildren**: `Set<childID>` -- distinguishes extraction children from task-dispatched sub-agents
 - **compacting**: `Set<sessionID>` -- sessions currently being compacted (suppresses nudges)
-- **pendingWrapUp**: `Map<sessionID, {token, kind}>` -- wrap-up commands awaiting their greenlight check; armed by `command.execute.before`, resolved on the next idle, cleared on session deletion
+- **pendingWrapUp**: `Map<sessionID, {token?, kind, greenlit?}>` -- wrap-up commands awaiting their greenlight; armed by `command.execute.before` (a re-arm overwrites and resets `greenlit`), consumed on the first idle for compact, greenlit-then-closed for exit (via the `thatch_exit` tool), cleared on session deletion
 
 ## Interactions with other features
 

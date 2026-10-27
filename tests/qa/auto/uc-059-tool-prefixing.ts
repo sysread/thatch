@@ -63,6 +63,7 @@ const useCase: UseCase = {
       "config_set",
       "notify_user",
       "get_session_info",
+      "exit",
       "session_search",
       "session_get",
       "watch_create",

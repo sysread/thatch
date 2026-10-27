@@ -291,6 +291,114 @@ describe("runtime rehydration through server()", () => {
     }
   });
 
+  test("a same-pid wrap-up arm rehydrates into pendingWrapUp; a foreign-pid row is pruned", async () => {
+    // The rehydration pin for the wrap-up branch (src/runtime.ts, the
+    // row.kind === "wrapup" arm of the journal restore): no other test
+    // drives the real rehydrate path for wrap-up rows. Observable for
+    // "landed back in the map": the greenlight tool flips the rehydrated
+    // exit arm and the journal row gains greenlit - a row that never
+    // rehydrated would refuse the tool as "no exit in progress".
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut("wrapup", "ses_wrap_reload", { kind: "exit" }, WORK_DIR);
+    db.runtimeStatePut("wrapup", "ses_wrap_dead", { kind: "exit" }, WORK_DIR, process.pid + 999);
+    db.close();
+
+    let hooks: { dispose?: () => Promise<void>; event?: (arg: unknown) => Promise<void>; tool?: Record<string, { execute: (input: unknown, host?: unknown) => Promise<unknown> }> } | undefined;
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    try {
+      process.env.THATCH_DB_PATH = dbPath;
+      process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+      const mockClient = {
+        session: {
+          prompt: async () => {},
+          promptAsync: async () => {},
+          create: async () => ({ data: { id: "test-child" } }),
+          delete: async () => {},
+          get: async () => ({ data: { title: "Test session" } }),
+          messages: async () => ({ data: [] }),
+          status: async () => ({ data: {} }),
+          list: async () => ({ data: [] }),
+        },
+        tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
+      };
+      hooks = (await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree", directory: WORK_DIR } as any)) as any;
+
+      // Foreign-pid row pruned at setup; same-pid row kept (rehydrated).
+      const check = new ThatchDB(dbPath);
+      const rows = check.runtimeStateAll().filter((r) => r.kind === "wrapup");
+      check.close();
+      expect(rows.map((r) => r.sessionID)).toEqual(["ses_wrap_reload"]);
+
+      // The rehydrated un-greenlit arm survives the session's first idle:
+      // a mid-exit wait must not consume the arm (the fix this branch
+      // pins).
+      await hooks!.event!({ event: { type: "session.status", properties: { sessionID: "ses_wrap_reload", status: { type: "idle" } } } });
+      const mid = new ThatchDB(dbPath);
+      expect(mid.runtimeStateAll().some((r) => r.kind === "wrapup" && r.sessionID === "ses_wrap_reload")).toBe(true);
+      mid.close();
+
+      // The arm is live in the map: the exit tool greenlights it and the
+      // journal row is rewritten with the flag (reload preserves greenlit).
+      await hooks!.tool!.thatch_exit.execute({}, { sessionID: "ses_wrap_reload", agent: "build" } as any);
+      const after = new ThatchDB(dbPath);
+      const arm = after.runtimeStateAll().find((r) => r.kind === "wrapup" && r.sessionID === "ses_wrap_reload");
+      after.close();
+      expect((arm?.value as any)?.greenlit).toBe(true);
+    } finally {
+      await hooks?.dispose?.();
+      if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevConfig;
+      if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+      else process.env.THATCH_DB_PATH = prevDbPath;
+    }
+  });
+
+  test("a same-pid reload restores a GREENLIT exit arm; the next idle closes", async () => {
+    // The greenlit flag is journaled, so a same-pid plugin reload between
+    // the tool call and the closing idle cannot strand a greenlit session.
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut("wrapup", "ses_wrap_green", { kind: "exit", greenlit: true }, WORK_DIR);
+    db.close();
+
+    const published: any[] = [];
+    let hooks: { dispose?: () => Promise<void>; event?: (arg: unknown) => Promise<void> } | undefined;
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    try {
+      process.env.THATCH_DB_PATH = dbPath;
+      process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+      const mockClient = {
+        session: {
+          prompt: async () => {},
+          promptAsync: async () => {},
+          create: async () => ({ data: { id: "test-child" } }),
+          delete: async () => {},
+          get: async () => ({ data: { title: "Test session" } }),
+          messages: async () => ({ data: [] }),
+          status: async () => ({ data: {} }),
+          list: async () => ({ data: [] }),
+        },
+        tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async (opts: any) => { published.push(opts); return { data: true }; } },
+      };
+      hooks = (await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree", directory: WORK_DIR } as any)) as any;
+
+      await hooks!.event!({ event: { type: "session.status", properties: { sessionID: "ses_wrap_green", status: { type: "idle" } } } });
+      // The close executor ran: the v1 exit host action (app.exit publish).
+      expect(published).toHaveLength(1);
+      // The resolved arm's journal row is gone.
+      const after = new ThatchDB(dbPath);
+      expect(after.runtimeStateAll().some((r) => r.kind === "wrapup" && r.sessionID === "ses_wrap_green")).toBe(false);
+      after.close();
+    } finally {
+      await hooks?.dispose?.();
+      if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevConfig;
+      if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+      else process.env.THATCH_DB_PATH = prevDbPath;
+    }
+  });
+
   test("a same-pid reload restores journaled watcher pending events to the live registry", async () => {
     // Regression wiring test for the reload-loss incident (watch_qn449jio):
     // pending events journaled while the session was busy must come back

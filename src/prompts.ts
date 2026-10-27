@@ -185,7 +185,8 @@ Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
         thatch_watch_command_create, thatch_watch_list, thatch_watch_cancel,
         thatch_chat_register, thatch_chat_list, thatch_chat_send,
         thatch_chat_read, thatch_chat_unregister, thatch_chat_broadcast,
-        thatch_chat_status${v2Tools ? `\n        thatch_session_tab (opencode v2 only - spawn a detached subordinate\n        LLM session in a new TUI tab and supervise it over cross-session chat)\n        thatch_session_tab_close (opencode v2 only - close a dispatched\n        subordinate's tab when its task is verified and done)` : ""}
+        thatch_chat_status, thatch_exit (zero args; closes the session after
+        /thatch/exit armed it - the checklist in that command tells you when to call it)${v2Tools ? `\n        thatch_session_tab (opencode v2 only - spawn a detached subordinate\n        LLM session in a new TUI tab and supervise it over cross-session chat)\n        thatch_session_tab_close (opencode v2 only - close a dispatched\n        subordinate's tab when its task is verified and done)` : ""}
 
 Argument shapes (one object argument, never a bare positional string):
 - thatch_memory_remember({ content, ... }) - content carries the information; label is optional (derived from the content's first heading or line)
@@ -555,7 +556,7 @@ Tools are prefixed in ${host}: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__chat_broadcast\`, \`mcp__thatch__chat_status\`. Bare names
 used below for readability. get_session_info, session_search,
 session_get, watch_create, watch_branch_create, watch_command_create,
-watch_list, watch_cancel, session_tab, and session_tab_close are
+watch_list, watch_cancel, exit, session_tab, and session_tab_close are
 intentionally absent:
 they are opencode-only (MCP hosts
 have no session concept, session database, or proactive-prompt channel),

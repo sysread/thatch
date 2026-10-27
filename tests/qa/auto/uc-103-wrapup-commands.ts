@@ -32,24 +32,24 @@ const useCase: UseCase = {
     "- An isolated fixture with THATCH_DB_PATH and XDG_CONFIG_HOME set",
   ].join("\n"),
   steps: [
-    "1. Load the plugin server. Verify the command files were synced into the fixture's config home (opencode/command/thatch/compact.md and exit.md) and that the templates carry the greenlight tokens.",
+    "1. Load the plugin server. Verify the command files were synced into the fixture's config home (opencode/command/thatch/compact.md and exit.md), that compact.md carries the greenlight token, and that exit.md instructs the model to call thatch_exit.",
     "2. Verify installOpencodeCommands is idempotent (second run rewrites nothing).",
     "3. Simulate /thatch/compact: fire command.execute.before, make the last assistant message end with THATCH_COMPACT_READY, then fire session.status idle.",
     "4. Verify client.tui.executeCommand was called with the legacy alias 'session_compact' and publish was not used.",
-    "5. Simulate /thatch/exit with a THATCH_EXIT_READY greenlight. Verify client.tui.publish sent tui.command.execute with 'app.exit'.",
+    "5. Simulate /thatch/exit: arm it, call the thatch_exit tool (the greenlight), then fire session.status idle. Verify client.tui.publish sent tui.command.execute with 'app.exit'.",
     "6. Simulate /thatch/compact with a response that lacks the token. Verify no TUI action fires and a warning toast is shown.",
     "7. Simulate /thatch/compact with the token mid-text (not trailing). Verify it does not greenlight.",
     "8. Fire session.deleted for a session with a pending wrap-up, then its idle. Verify no action fires.",
     "9. v2 leg: load the v2 adapter with a mock promise context (with session.compact) and run the registered /thatch/compact command to a THATCH_COMPACT_READY greenlight over an execution.succeeded idle. Verify session.compact was called with the session's id.",
-    "10. v2 leg: run /thatch/exit to a THATCH_EXIT_READY greenlight. Verify the adapter emitted the exit-tab-closed rpc event (a TUI-only close of the session's own tab).",
+    "10. v2 leg: run /thatch/exit, call the thatch_exit tool, then fire the idle. Verify the adapter emitted the exit-tab-closed rpc event (a TUI-only close of the session's own tab).",
     "11. v2 leg: reload the adapter on a context WITHOUT session.compact (the older-SDK floor) and run /thatch/compact to a greenlight. Verify it degrades without crashing or calling anything.",
     "12. v2 leg: run /thatch/compact with a response that lacks the token. Verify a warning toast is emitted over the rpc bridge (the TUI feedback channel) and no completion action fires.",
   ].join("\n"),
   expected: [
-    "- The command files exist under the fixture's opencode/command/thatch/ after plugin load, each carrying its token and a description frontmatter.",
+    "- The command files exist under the fixture's opencode/command/thatch/ after plugin load: compact.md carries its token, exit.md names the thatch_exit tool, both carry a description frontmatter.",
     "- installOpencodeCommands returns an empty list when everything is current.",
-    "- A trailing greenlight token triggers compact via executeCommand('session_compact') and exit via publish of tui.command.execute 'app.exit'.",
-    "- A missing or non-trailing token never triggers; a warning toast fires instead (the bridge's toast event on v2).",
+    "- The compact trailing token triggers compact via executeCommand('session_compact'); the exit greenlight is the thatch_exit tool call, and the following idle triggers publish of tui.command.execute 'app.exit'.",
+    "- A missing or non-trailing token never triggers compact; a warning toast fires instead (the bridge's toast event on v2). An un-greenlit exit arm survives idles untouched.",
     "- session.deleted clears a pending wrap-up so a later idle cannot fire it.",
     "- v2: a compact greenlight calls session.compact({sessionID}); an exit greenlight emits the exit-tab-closed rpc event {sessionID}; the older-SDK floor degrades to a logged no-op.",
   ].join("\n"),
@@ -112,8 +112,8 @@ const useCase: UseCase = {
         console.log("  FAIL: compact.md missing token or description frontmatter");
         return "FAIL";
       }
-      if (!exit.includes("THATCH_EXIT_READY") || !exit.includes("description:")) {
-        console.log("  FAIL: exit.md missing token or description frontmatter");
+      if (!exit.includes("thatch_exit") || !exit.includes("description:")) {
+        console.log("  FAIL: exit.md missing the thatch_exit tool instruction or description frontmatter");
         return "FAIL";
       }
 
@@ -152,14 +152,23 @@ const useCase: UseCase = {
         return "FAIL";
       }
 
-      // Step 5: exit greenlight -> publish app.exit.
-      messages = assistant("Nothing pending.\nTHATCH_EXIT_READY");
+      // Step 5: exit greenlight via the thatch_exit tool -> publish
+      // app.exit on the following idle. An un-greenlit exit idle must
+      // leave the arm alone first (the mid-exit-wait fix).
+      const beforeExit = { publish: count(recorded.publish) };
+      messages = assistant("Nothing pending.");
       await arm("thatch/exit", "ses-qa-103b");
       await idle("ses-qa-103b");
+      if (count(recorded.publish) !== beforeExit.publish) {
+        console.log(`  FAIL: an un-greenlit exit arm must not trigger any host action, got ${JSON.stringify(recorded.publish)}`);
+        return "FAIL";
+      }
+      await hooks.tool!.thatch_exit.execute({}, { sessionID: "ses-qa-103b" } as any);
+      await idle("ses-qa-103b");
       if (
-        count(recorded.publish) !== 1 ||
-        recorded.publish[0].body.type !== "tui.command.execute" ||
-        recorded.publish[0].body.properties.command !== "app.exit"
+        count(recorded.publish) !== beforeExit.publish + 1 ||
+        recorded.publish[beforeExit.publish].body.type !== "tui.command.execute" ||
+        recorded.publish[beforeExit.publish].body.properties.command !== "app.exit"
       ) {
         console.log(`  FAIL: exit greenlight should publish tui.command.execute 'app.exit', got ${JSON.stringify(recorded.publish)}`);
         return "FAIL";
@@ -240,6 +249,7 @@ const useCase: UseCase = {
       try {
         const compactCmd = v2.commands.find((c) => c.name === "thatch/compact")!;
         const exitCmd = v2.commands.find((c) => c.name === "thatch/exit")!;
+        const exitTool = v2.addedTools.find((t) => t.name === "thatch_exit")!;
         v2.setAssistant("All clear.\nTHATCH_COMPACT_READY");
         await compactCmd.execute({ sessionID: "ses-qa-103-v2a" });
         await v2.queue({ type: "session.execution.succeeded", location: { directory: ctx.dir }, data: { sessionID: "ses-qa-103-v2a" } });
@@ -249,8 +259,9 @@ const useCase: UseCase = {
           return "FAIL";
         }
 
-        v2.setAssistant("Nothing pending.\nTHATCH_EXIT_READY");
+        v2.setAssistant("Nothing pending.");
         await exitCmd.execute({ sessionID: "ses-qa-103-v2b" });
+        await exitTool.execute({}, { sessionID: "ses-qa-103-v2b" });
         await v2.queue({ type: "session.execution.succeeded", location: { directory: ctx.dir }, data: { sessionID: "ses-qa-103-v2b" } });
         if (!(await v2wait("v2 exit-tab-closed emit", () => v2.calls.emitted.some((e) => e.name === EXIT_TAB_CLOSED_EVENT)))) return "FAIL";
         const closed = v2.calls.emitted.find((e) => e.name === EXIT_TAB_CLOSED_EVENT)!;

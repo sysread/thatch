@@ -57,9 +57,23 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
     expect(tuiPublishCalls).toHaveLength(0);
   });
 
+  // The exit flow under the tool protocol: the command arms the exit, the
+  // model greenlights with the zero-arg thatch_exit tool call, and the
+  // session's next idle runs the close. The tool resolves the session from
+  // the per-call host context.
+  const armExit = (sessionID: string) =>
+    hooks["command.execute.before"]!({ command: "thatch/exit", sessionID, arguments: "" }, { parts: [] });
+  const callExitTool = (sessionID: string) =>
+    hooks.tool!.thatch_exit.execute({}, { sessionID } as any) as Promise<string>;
+
   test("exit greenlight publishes the app.exit TUI command", async () => {
     const before = tuiPublishCalls.length;
-    await runWrapUp("thatch/exit", "ses_wrape", "Nothing pending.\nTHATCH_EXIT_READY");
+    await armExit("ses_wrape");
+    await callExitTool("ses_wrape");
+    await hooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_wrape", status: { type: "idle" } } } as any,
+    });
     expect(tuiPublishCalls.slice(before)).toEqual([
       { body: { type: "tui.command.execute", properties: { command: "app.exit" } } },
     ]);
@@ -86,17 +100,71 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
     expect(tuiExecuteCommandCalls.length).toBe(before);
   });
 
-  test("message fetch failure blocks instead of triggering", async () => {
-    wrapUpMessages = []; // empty: no assistant message -> no token -> blocked
-    await hooks["command.execute.before"]!(
-      { command: "thatch/exit", sessionID: "ses_wrapf", arguments: "" },
-      { parts: [] },
-    );
+  test("an un-greenlit exit arm survives an idle and triggers nothing", async () => {
+    // The fix behind the tool protocol: idles before the thatch_exit call
+    // must not consume the arm (the old consume-on-first-idle ate the arm
+    // during a mid-exit wait, stranding the final close). No message fetch,
+    // no toast, no host action - the arm just persists.
+    const before = { pub: tuiPublishCalls.length, toast: tuiToastCalls.length };
+    await armExit("ses_wrapu0");
     await hooks.event!({ event: {
       type: "session.status",
-      properties: { sessionID: "ses_wrapf", status: { type: "idle" } } } as any,
+      properties: { sessionID: "ses_wrapu0", status: { type: "idle" } } } as any,
     });
-    expect(tuiPublishCalls).toHaveLength(1); // still only the exit test's
+    expect(tuiPublishCalls.length).toBe(before.pub);
+    expect(tuiToastCalls.length).toBe(before.toast);
+    // The arm is still live: the tool greenlights it and the NEXT idle
+    // closes (the post-completion close the old flow lost).
+    await callExitTool("ses_wrapu0");
+    await hooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_wrapu0", status: { type: "idle" } } } as any,
+    });
+    expect(tuiPublishCalls.slice(before.pub)).toEqual([
+      { body: { type: "tui.command.execute", properties: { command: "app.exit" } } },
+    ]);
+  });
+
+  test("thatch_exit without an armed exit refuses with no side effects", async () => {
+    const before = { pub: tuiPublishCalls.length, cmd: tuiExecuteCommandCalls.length };
+    const reply = await callExitTool("ses_wrapnoarm");
+    expect(reply).toContain("No exit in progress");
+    expect(tuiPublishCalls.length).toBe(before.pub);
+    expect(tuiExecuteCommandCalls.length).toBe(before.cmd);
+  });
+
+  test("thatch_exit against a compact arm refuses and leaves the compact arm alone", async () => {
+    // A compact arm plus thatch_exit is a "no exit in progress" refusal,
+    // never a greenlight - the callback owns the kind check.
+    const before = { pub: tuiPublishCalls.length, cmd: tuiExecuteCommandCalls.length };
+    wrapUpMessages = [
+      { info: { id: "msg_ck", role: "assistant" }, parts: [{ type: "text", text: "All clear.\nTHATCH_COMPACT_READY" }] },
+    ];
+    await hooks["command.execute.before"]!({ command: "thatch/compact", sessionID: "ses_wrapck", arguments: "" }, { parts: [] });
+    const reply = await callExitTool("ses_wrapck");
+    expect(reply).toContain("No exit in progress");
+    expect(tuiPublishCalls.length).toBe(before.pub);
+    expect(tuiExecuteCommandCalls.length).toBe(before.cmd);
+    // The compact arm still resolves as compact: the token greenlights it.
+    await hooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_wrapck", status: { type: "idle" } } } as any,
+    });
+    expect(tuiExecuteCommandCalls.length).toBe(before.cmd + 1);
+  });
+
+  test("a second thatch_exit call is idempotent and closes exactly once", async () => {
+    const before = tuiPublishCalls.length;
+    await armExit("ses_wrapdbl");
+    const first = await callExitTool("ses_wrapdbl");
+    const second = await callExitTool("ses_wrapdbl");
+    expect(first).toContain("Greenlit");
+    expect(second).toContain("Already greenlit");
+    await hooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_wrapdbl", status: { type: "idle" } } } as any,
+    });
+    expect(tuiPublishCalls.slice(before)).toHaveLength(1);
   });
 
   test("unknown commands do not arm the wrap-up check", async () => {
@@ -109,7 +177,12 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
     const before = new ThatchDB(process.env.THATCH_DB_PATH!);
     before.registerChatSession("ses_wrapeu", "p", null, "opencode", "gammawrap");
     before.close();
-    await runWrapUp("thatch/exit", "ses_wrapeu", "All clear.\nTHATCH_EXIT_READY");
+    await armExit("ses_wrapeu");
+    await callExitTool("ses_wrapeu");
+    await hooks.event!({ event: {
+      type: "session.status",
+      properties: { sessionID: "ses_wrapeu", status: { type: "idle" } } } as any,
+    });
     const after = new ThatchDB(process.env.THATCH_DB_PATH!);
     expect(after.listChatSessions().find((r) => r.session_id === "ses_wrapeu")).toBeUndefined();
     after.close();

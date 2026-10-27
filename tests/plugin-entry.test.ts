@@ -51,6 +51,7 @@ describe("plugin entry", () => {
       "thatch_config_get",
       "thatch_config_set",
       "thatch_dedup_mark_checked",
+      "thatch_exit",
       "thatch_extraction_done",
       "thatch_find_duplicates",
       "thatch_get_extraction_payload",
