@@ -100,8 +100,8 @@ export interface HostCapabilities {
    */
   sessionMove?(id: string, directory: string): Promise<void>;
   /**
-   * Fetch a session's message list (wrap-up greenlight check, alert round
-   * classification). Null when unavailable. v2 reads them via
+   * Fetch a session's message list (alert round classification). Null when
+   * unavailable. v2 reads them via
    * session.context, mapped into this shape. Parts carry the fields the
    * round classifier needs: tool parts name their tool, text parts carry
    * the synthetic flag, and info.error holds the message-level error name

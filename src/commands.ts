@@ -33,8 +33,9 @@ import {
  * must not be copied: ${CORE:name} (own line) splices the prompt core from
  * src/prompts.ts so nudge and command wording cannot drift;
  * ${COUCHING:target|pipeline} (own line) splices the text shared by the two
- * review-mode commands; ${CHECKLIST} (own line) and ${TOKEN:name} (inline)
- * carry the wrap-up persistence checklist and greenlight tokens. An
+ * review-mode commands; ${CHECKLIST} (own line) splices the wrap-up
+ * persistence checklist. The wrap-ups greenlight with a zero-arg tool call
+ * (thatch_compact / thatch_exit), so no token placeholder exists. An
  * unresolved placeholder throws at load rather than passing through
  * silently (the REVIEW_COMMON lesson: a naive passthrough once corrupted
  * skill bodies).
@@ -45,16 +46,13 @@ import {
  *   refine, reflect, self-review, whois): user-invoked commands.
  * - Wrap-ups (/thatch/compact, exit): greenlight-gated commands that need
  *   the opencode plugin's host action routes (the compact trigger and the
- *   session close-out), so they are opencode-only. Compact greenlights with
- *   a trailing token; exit greenlights with the zero-arg thatch_exit tool.
+ *   session close-out), so they are opencode-only. Each greenlights with
+ *   its zero-arg tool call (thatch_compact / thatch_exit).
  */
 export const COMMANDS_ARTIFACTS_DIR = join(import.meta.dir, "..", "artifacts", "commands");
 
-/** Greenlight token ending /thatch/compact's assistant response when compaction is safe. */
-export const COMPACT_READY_TOKEN = "THATCH_COMPACT_READY";
-
 /**
- * The greenlight token's host action, per host: v1 drives the TUI
+ * The wrap-up greenlight's host action, per host: v1 drives the TUI
  * (compaction via the "session_compact" legacy alias through
  * executeCommand, the exit via the "app.exit" keymap command through
  * /tui/publish). v2 calls session.compact on the plugin's promise domain
@@ -140,7 +138,7 @@ function loadCommandTemplate(name: string): string {
 /**
  * Resolve a command artifact's ${...} placeholders. Line-form splices
  * (CORE, COUCHING, CHECKLIST) replace the whole line so multi-line text
- * lands cleanly; ${TOKEN:name} replaces inline. Any placeholder that
+ * lands cleanly. Any placeholder that
  * survives resolution throws - a typo'd directive must fail at load, not
  * ship broken prompt text.
  */
@@ -152,13 +150,6 @@ function interpolateTemplate(raw: string): string {
       if (text === undefined) throw new Error(`unknown command template splice: ${key}`);
       return text;
     })
-    .replace(/\$\{TOKEN:([A-Z_]+)\}/g, (_m, name: string) => {
-      // Exit's token arm is gone: the exit greenlight is the thatch_exit
-      // tool call, so compact is the only ${TOKEN:...} user left.
-      const token = name === "COMPACT_READY_TOKEN" ? COMPACT_READY_TOKEN : undefined;
-      if (!token) throw new Error(`unknown command template token: ${name}`);
-      return token;
-    });
   const leftover = resolved.match(/\$\{[A-Z_]+(?::[a-zA-Z_]+)?\}/);
   if (leftover) {
     throw new Error(`unresolved command template placeholder: ${leftover[0]}`);

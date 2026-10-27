@@ -87,7 +87,7 @@ describe("opencode v2 adapter", () => {
     expect(sessionSyntheticCalls.length).toBe(0);
     expect(sessionPromptCalls.length).toBe(2);
     expect(sessionPromptCalls[0].text).toContain("Pre-compact wrap-up");
-    expect(sessionPromptCalls[0].text).toContain("THATCH_COMPACT_READY");
+    expect(sessionPromptCalls[0].text).toContain("thatch_compact");
     expect(sessionPromptCalls[1].text).toContain("Pre-exit wrap-up");
   });
 
@@ -157,23 +157,20 @@ describe("opencode v2 adapter", () => {
   });
 
   // Wrap-up completion actions: the armed journal row is the resolution
-  // observable (the branch deletes it whether or not the token matched, so
-  // its absence proves the branch ran to completion - not that it never
-  // ran). The greenlight is the FINAL assistant message's trailing token,
-  // read through session.context (mapped into the v1 shape).
+  // observable (the greenlit branch deletes it, so its absence proves the
+  // branch ran to completion - not that it never ran). The greenlight is
+  // the kind's zero-arg tool call, resolved against the armed wrap-up.
   const wrapupArmed = (sessionID: string): boolean => runtimeStateRow(process.env.THATCH_DB_PATH!, "wrapup", sessionID) !== null;
 
   test("a greenlit /thatch/compact triggers session.compact on the next idle", async () => {
-    const context = makeContext({
-      compact: true,
-      context: async () => [
-        { type: "assistant", content: [{ type: "text", text: "flushed; no loose ends THATCH_COMPACT_READY" }] },
-      ],
-    });
-    cleanup = (await setup(context as any)) as () => Promise<void>;
+    // The greenlight is the zero-arg thatch_compact tool call; the compact
+    // fires on the session's next idle.
+    cleanup = (await setup(makeContext({ compact: true }) as any)) as () => Promise<void>;
     const compact = addedCommands.find((c) => c.name === "thatch/compact")!;
     await compact.execute({ sessionID: "ses_v2_wrap_ok" });
     expect(wrapupArmed("ses_v2_wrap_ok")).toBe(true);
+    const compactTool = addedTools.find((t) => t.name === "thatch_compact")!;
+    await compactTool.execute({}, { sessionID: "ses_v2_wrap_ok", agent: "build" });
     await queueEvent({
       type: "session.execution.succeeded",
       location: { directory: SESSION_DIR },
@@ -310,39 +307,36 @@ describe("opencode v2 adapter", () => {
     expect(stateRow("watcher_death")).not.toBeNull();
   });
 
-  test("a blocked wrap-up (no greenlight token) triggers no host action", async () => {
-    const context = makeContext({
-      compact: true,
-      context: async () => [
-        // Blockers listed, no trailing token: the branch falls through
-        // without firing the action (the model surfaced the blockers in
-        // its response; the blocked-path toast degrades silently on v2).
-        { type: "assistant", content: [{ type: "text", text: "two loose ends remain: the migration, the QA pass" }] },
-      ],
-    });
-    cleanup = (await setup(context as any)) as () => Promise<void>;
+  test("an un-greenlit compact arm survives an idle with no host action on v2", async () => {
+    // The blocked path died with the token: blockers are prose per the
+    // template, and an un-greenlit compact idle (e.g. a background
+    // extractor running mid-checklist) must not consume the arm or toast.
+    cleanup = (await setup(makeContext({ compact: true }) as any)) as () => Promise<void>;
     const compact = addedCommands.find((c) => c.name === "thatch/compact")!;
-    await compact.execute({ sessionID: "ses_v2_wrap_blocked" });
+    await compact.execute({ sessionID: "ses_v2_wrap_mid" });
     await queueEvent({
       type: "session.execution.succeeded",
       location: { directory: SESSION_DIR },
-      data: { sessionID: "ses_v2_wrap_blocked" },
+      data: { sessionID: "ses_v2_wrap_mid" },
     });
-    await waitFor("wrap-up resolved without greenlight", () => !wrapupArmed("ses_v2_wrap_blocked"));
-    // The row delete happens BEFORE the token check, so the branch is
-    // still running at row-gone: settle before asserting the negatives.
     await new Promise((r) => setTimeout(r, 150));
+    expect(wrapupArmed("ses_v2_wrap_mid")).toBe(true);
     expect(sessionCompactCalls.length).toBe(0);
-    // Neither close event - the blocked path must not fire any host action.
+    // No blocked-path warning toast (find it by variant + command name:
+    // the fall-through auto-register may emit its own info toast), and no
+    // close event of either kind.
+    expect(rpcEmitted.some((e) => e.name === TOAST_EVENT && e.data?.variant === "warning" && String(e.data?.message).includes("/thatch/compact"))).toBe(false);
     expect(rpcEmitted.filter((e) => e.name === TAB_CLOSED_EVENT || e.name === EXIT_TAB_CLOSED_EVENT).length).toBe(0);
-    // The blocked-path warning toast rides the bridge on v2 - find it by
-    // variant + command name, not position: the fall-through auto-register
-    // can emit its own toast after it.
-    expect(
-      rpcEmitted.some(
-        (e) => e.name === TOAST_EVENT && e.data?.variant === "warning" && String(e.data?.message).includes("/thatch/compact"),
-      ),
-    ).toBe(true);
+    // The arm still resolves: greenlight now, compact on the next idle.
+    const compactTool = addedTools.find((t) => t.name === "thatch_compact")!;
+    await compactTool.execute({}, { sessionID: "ses_v2_wrap_mid", agent: "build" });
+    await queueEvent({
+      type: "session.execution.succeeded",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_v2_wrap_mid" },
+    });
+    await waitFor("late session.compact called", () => sessionCompactCalls.length === 1);
+    expect(wrapupArmed("ses_v2_wrap_mid")).toBe(false);
   });
 
   test("an older SDK without session.compact degrades to a logged no-op, not a crash", async () => {
@@ -350,14 +344,11 @@ describe("opencode v2 adapter", () => {
     // the call at runtime; the default context (no compact member) models
     // that older host.
     const { lines } = await captureConsoleError(async () => {
-      const context = makeContext({
-        context: async () => [
-          { type: "assistant", content: [{ type: "text", text: "clear THATCH_COMPACT_READY" }] },
-        ],
-      });
-      cleanup = (await setup(context as any)) as () => Promise<void>;
+      cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
       const compact = addedCommands.find((c) => c.name === "thatch/compact")!;
       await compact.execute({ sessionID: "ses_v2_wrap_floor" });
+      const compactTool = addedTools.find((t) => t.name === "thatch_compact")!;
+      await compactTool.execute({}, { sessionID: "ses_v2_wrap_floor", agent: "build" });
       await queueEvent({
         type: "session.execution.succeeded",
         location: { directory: SESSION_DIR },

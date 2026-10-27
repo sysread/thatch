@@ -16,7 +16,7 @@ describe("command artifacts", () => {
       if (!file.endsWith(".md")) continue;
       const name = file.replace(/\.md$/, "");
       const raw = readFileSync(join(COMMANDS_ARTIFACTS_DIR, file), "utf8");
-      const unresolved = raw.match(/\$\{(?!TOOL:|CORE:|COUCHING:|CHECKLIST|TOKEN:)[A-Z_]*(?::[a-zA-Z_]+)?\}/);
+      const unresolved = raw.match(/\$\{(?!TOOL:|CORE:|COUCHING:|CHECKLIST)[A-Z_]*(?::[a-zA-Z_]+)?\}/);
       expect(unresolved, `${name}.md has an unresolvable placeholder`).toBeNull();
     }
   });

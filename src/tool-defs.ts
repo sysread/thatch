@@ -154,9 +154,13 @@ export interface CoreContext {
    *  the in-memory pendingWrapUp map (module-local) and the runtime_state
    *  journal, so the exit tool greenlights through this injected callback
    *  instead of touching that state directly. The callback owns the kind
-   *  check: a compact arm reads as "none" (never a greenlight). Wired only
-   *  on the opencode plugin path. */
+   *  check: an arm of the other kind reads as "none" (never a greenlight).
+   *  Wired only on the opencode plugin path. */
   wrapUpGreenlight?: (sessionID: string) => { status: "greenlit"; already: boolean } | { status: "none" };
+  /** Greenlights the calling session's armed compact wrap-up - the same
+   *  seam as wrapUpGreenlight, kind-routed to compact arms (an exit arm
+   *  reads as "none"). Wired only on the opencode plugin path. */
+  wrapUpCompactGreenlight?: (sessionID: string) => { status: "greenlit"; already: boolean } | { status: "none" };
 }
 
 /**
@@ -1661,6 +1665,44 @@ const exitDef: ToolDef = {
 };
 
 /**
+ * Greenlights a session the user armed with /thatch/compact. The twin of
+ * exitDef: the tool call replaces the old trailing-text token, and
+ * compaction starts on the session's next idle after this resolves the
+ * arm. The calling session is resolved from the per-call host context -
+ * never from a model-supplied argument, so a session can only greenlight
+ * its own arm. opencode-only: the arm is created by the opencode plugin's
+ * command hook, and MCP hosts have no session concept.
+ */
+const compactDef: ToolDef = {
+  name: "compact",
+  description:
+    "Signal that the /thatch/compact checklist is fully handled and the " +
+    "session is safe to compact. Call it ONLY after the user ran " +
+    "/thatch/compact and every checklist item is handled - never to signal a " +
+    "finished task or turn, and not while checklist items are still " +
+    "outstanding (list the blockers in prose instead). Takes no arguments; " +
+    "compaction starts when you go idle after the call. It does not compact " +
+    "by itself - it greenlights the armed wrap-up. opencode-only.",
+  args: {},
+  opencodeOnly: true,
+  async execute(_args, ctx, host) {
+    if (!host) {
+      return "Session identity is unavailable: this host did not provide a session context.";
+    }
+    if (!ctx.wrapUpCompactGreenlight) {
+      return "Compact greenlight is unavailable: this host did not wire the wrap-up state. Nothing was armed.";
+    }
+    const result = ctx.wrapUpCompactGreenlight(host.sessionID);
+    if (result.status === "none") {
+      return "No compaction in progress. This tool completes /thatch/compact's checklist; run /thatch/compact first.";
+    }
+    return result.already
+      ? "Already greenlit. Finish your final response; compaction starts when you go idle."
+      : "Greenlit. Finish your final response; compaction starts when you go idle.";
+  },
+};
+
+/**
  * Lets the model search its own past opencode conversations. The model only
  * knows the current session id (via get_session_info); everything before
  * compaction or in earlier sessions is invisible to it otherwise. Returns
@@ -2872,6 +2914,7 @@ export const TOOL_DEFS: ToolDef[] = [
   notifyUserDef,
   getSessionInfoDef,
   exitDef,
+  compactDef,
   sessionSearchDef,
   sessionGetDef,
   watchCreateDef,
@@ -2898,6 +2941,7 @@ export interface CoreContextExtensions {
   projectDir?: string;
   openTabs?: CoreContext["openTabs"];
   wrapUpGreenlight?: CoreContext["wrapUpGreenlight"];
+  wrapUpCompactGreenlight?: CoreContext["wrapUpCompactGreenlight"];
 }
 
 /**
@@ -2927,6 +2971,7 @@ export function buildCoreContext(
     projectDir: extensions?.projectDir,
     openTabs: extensions?.openTabs,
     wrapUpGreenlight: extensions?.wrapUpGreenlight,
+    wrapUpCompactGreenlight: extensions?.wrapUpCompactGreenlight,
   };
 }
 

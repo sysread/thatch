@@ -48,6 +48,7 @@ describe("plugin entry", () => {
       "thatch_chat_send",
       "thatch_chat_status",
       "thatch_chat_unregister",
+      "thatch_compact",
       "thatch_config_get",
       "thatch_config_set",
       "thatch_dedup_mark_checked",

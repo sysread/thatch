@@ -23,7 +23,7 @@ export interface EnvKnob {
 /**
  * Every THATCH_* knob that exists in code, in presentation order. Protocol
  * markers (THATCH_MARKER, THATCH_BEGIN, THATCH_END, THATCH_BEGIN_MARKER,
- * THATCH_END_MARKER, THATCH_COMPACT_READY) are not knobs
+ * THATCH_END_MARKER) are not knobs
  * and are deliberately absent; the drift test's exclusion set must match
  * this list.
  */

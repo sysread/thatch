@@ -171,9 +171,8 @@ export function deriveRoundShape(messages: RoundMessage[] | null | undefined): R
 
 /**
  * Whether the finished round did real work and deserves a done alert.
- * Unknown shape stays silent (alerts are best-effort; the same fetch
- * failure also breaks the wrap-up greenlight check, so the session
- * degrades consistently). A round triggered by synthetic input stays
+ * Unknown shape stays silent (alerts are best-effort). A round triggered
+ * by synthetic input stays
  * silent even when it did real work - see the RoundShape.syntheticTrigger
  * doc for why.
  */

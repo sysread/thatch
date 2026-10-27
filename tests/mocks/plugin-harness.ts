@@ -63,13 +63,6 @@ export const tuiExecuteCommandCalls: any[] = [];
 export const tuiPublishCalls: any[] = [];
 export const tuiToastCalls: any[] = [];
 
-export interface PluginHarnessOptions {
-  // The wrap-up part rebinds the canned session.messages list per test;
-  // the mock client reads it through this getter at fetch time, so the
-  // part's reassignment is visible to the hook.
-  getWrapUpMessages?: () => any[];
-}
-
 let dbDir = "";
 // The real console.error, bound at module load (before any hook can swap
 // it), so afterAll can restore it UNCONDITIONALLY after the auto-register
@@ -77,7 +70,7 @@ let dbDir = "";
 const realConsoleError = console.error.bind(console);
 let activeHooks: Awaited<ReturnType<typeof server>> | undefined;
 
-export async function setupPluginHarness(options?: PluginHarnessOptions) {
+export async function setupPluginHarness() {
   dbDir = mkdtempSync(join(tmpdir(), "thatch-plugin-test-"));
   process.env.THATCH_DB_PATH = join(dbDir, "test.db");
   // Redirect skill installation away from the real ~/.config.
@@ -107,7 +100,6 @@ export async function setupPluginHarness(options?: PluginHarnessOptions) {
   // runtime.ts is first imported. Setting the env var here can't change it,
   // but 0.55 works: the hash-based mock scores ~1.0 for identical texts and
   // near-orthogonal for different texts.
-  const getWrapUpMessages = options?.getWrapUpMessages ?? (() => [] as any[]);
   const mockClient = {
     session: {
       prompt: async () => {},
@@ -116,7 +108,6 @@ export async function setupPluginHarness(options?: PluginHarnessOptions) {
       },
       create: async () => ({ data: { id: "test-child" } }),
       delete: async () => {},
-      messages: async () => ({ data: getWrapUpMessages() }),
     },
     tui: {
       showToast: async (opts: any) => {

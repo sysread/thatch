@@ -62,7 +62,7 @@ import { TOOL_DEFS, trimHostContext, type HostToolContext, type SessionTabCloseI
 //   fetchStatuses returns {} because the wake gate treats an unknown session
 //   as idle; the event-fed status map inside the runtime does the gating.
 //   Session MESSAGES are readable via session.context (mapped into the v1
-//   shape), so the wrap-up greenlight check works.
+//   shape), so the alert round-shape derivation works.
 
 type V2Context = Plugin.Context;
 type V2Cleanup = Plugin.Cleanup;
@@ -558,8 +558,8 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
 }
 
 // Map v2's SessionMessageInfo list into the v1 {info: {role}, parts} shape
-// the runtime's wrap-up greenlight check and the alert round-derivation
-// read. The alert classifier reads ROLES (idle markers delimit rounds),
+// the alert round-derivation
+// reads. The alert classifier reads ROLES (idle markers delimit rounds),
 // synthetic flags, and message-level errors from this mapping - tool names
 // are irrelevant to it (the real-work signal comes from live tool
 // bookkeeping), but they are preserved for other consumers. Assistant
@@ -576,8 +576,8 @@ export function mapSessionContextMessages(
     parts:
       m?.type === "assistant"
         ? (m.content ?? [])
-            // Reasoning parts carry no wrap-up token and no tool name -
-            // skipping them keeps the wrap-up greenlight text identical to
+            // Reasoning parts carry no tool name -
+            // skipping them keeps the round-shape text identical to
             // the pre-alert mapping.
             .filter((c: any) => c.type === "text" || c.type === "tool")
             .map((c: any) =>
@@ -954,8 +954,8 @@ function buildCapabilities(
       // The pinned promise domain has no message-list endpoint (no `message`
       // accessor; compact/remove exist on newer SDK builds but not here).
       // `session.context` IS exposed and returns the session's message list
-      // (Array<SessionMessageInfo>); map into the v1 shape the wrap-up
-      // greenlight check reads.
+      // (Array<SessionMessageInfo>); map into the v1 shape the alert
+      // round-derivation reads.
       const result = await session.context({ sessionID: id });
       return mapSessionContextMessages(result);
     },

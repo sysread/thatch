@@ -55,7 +55,7 @@ describe("runtime_state db API", () => {
     const db = new ThatchDB(dbPath);
     db.runtimeStatePut("buffer", "ses_a", [ix("ses_a")], "/test/dir");
     db.runtimeStatePut("buffer", "ses_a", [ix("ses_a"), ix("ses_a", "read")], "/test/dir");
-    db.runtimeStatePut("wrapup", "ses_b", { token: "T", kind: "compact" }, "/test/dir");
+    db.runtimeStatePut("wrapup", "ses_b", { kind: "compact" }, "/test/dir");
 
     const rows = db.runtimeStateAll();
     expect(rows).toHaveLength(2);
@@ -301,6 +301,11 @@ describe("runtime rehydration through server()", () => {
     const db = new ThatchDB(dbPath);
     db.runtimeStatePut("wrapup", "ses_wrap_reload", { kind: "exit" }, WORK_DIR);
     db.runtimeStatePut("wrapup", "ses_wrap_dead", { kind: "exit" }, WORK_DIR, process.pid + 999);
+    // The compact arm follows the same rehydration transitions; pinned with
+    // its own rows so an exit-only regression cannot hide behind the shared
+    // map.
+    db.runtimeStatePut("wrapup", "ses_wrap_reload_c", { kind: "compact" }, WORK_DIR);
+    db.runtimeStatePut("wrapup", "ses_wrap_dead_c", { kind: "compact" }, WORK_DIR, process.pid + 999);
     db.close();
 
     let hooks: { dispose?: () => Promise<void>; event?: (arg: unknown) => Promise<void>; tool?: Record<string, { execute: (input: unknown, host?: unknown) => Promise<unknown> }> } | undefined;
@@ -324,27 +329,32 @@ describe("runtime rehydration through server()", () => {
       };
       hooks = (await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree", directory: WORK_DIR } as any)) as any;
 
-      // Foreign-pid row pruned at setup; same-pid row kept (rehydrated).
+      // Foreign-pid rows pruned at setup; same-pid rows kept (rehydrated).
       const check = new ThatchDB(dbPath);
       const rows = check.runtimeStateAll().filter((r) => r.kind === "wrapup");
       check.close();
-      expect(rows.map((r) => r.sessionID)).toEqual(["ses_wrap_reload"]);
+      expect(rows.map((r) => r.sessionID).sort()).toEqual(["ses_wrap_reload", "ses_wrap_reload_c"]);
 
       // The rehydrated un-greenlit arm survives the session's first idle:
       // a mid-exit wait must not consume the arm (the fix this branch
-      // pins).
+      // pins). Pinned for both kinds.
       await hooks!.event!({ event: { type: "session.status", properties: { sessionID: "ses_wrap_reload", status: { type: "idle" } } } });
+      await hooks!.event!({ event: { type: "session.status", properties: { sessionID: "ses_wrap_reload_c", status: { type: "idle" } } } });
       const mid = new ThatchDB(dbPath);
       expect(mid.runtimeStateAll().some((r) => r.kind === "wrapup" && r.sessionID === "ses_wrap_reload")).toBe(true);
+      expect(mid.runtimeStateAll().some((r) => r.kind === "wrapup" && r.sessionID === "ses_wrap_reload_c")).toBe(true);
       mid.close();
 
-      // The arm is live in the map: the exit tool greenlights it and the
+      // The arm is live in the map: the kind's tool greenlights it and the
       // journal row is rewritten with the flag (reload preserves greenlit).
       await hooks!.tool!.thatch_exit.execute({}, { sessionID: "ses_wrap_reload", agent: "build" } as any);
+      await hooks!.tool!.thatch_compact.execute({}, { sessionID: "ses_wrap_reload_c", agent: "build" } as any);
       const after = new ThatchDB(dbPath);
       const arm = after.runtimeStateAll().find((r) => r.kind === "wrapup" && r.sessionID === "ses_wrap_reload");
+      const armC = after.runtimeStateAll().find((r) => r.kind === "wrapup" && r.sessionID === "ses_wrap_reload_c");
       after.close();
       expect((arm?.value as any)?.greenlit).toBe(true);
+      expect((armC?.value as any)?.greenlit).toBe(true);
     } finally {
       await hooks?.dispose?.();
       if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
@@ -354,14 +364,16 @@ describe("runtime rehydration through server()", () => {
     }
   });
 
-  test("a same-pid reload restores a GREENLIT exit arm; the next idle closes", async () => {
+  test("a same-pid reload restores a GREENLIT arm (either kind); the next idle fires it", async () => {
     // The greenlit flag is journaled, so a same-pid plugin reload between
     // the tool call and the closing idle cannot strand a greenlit session.
     const db = new ThatchDB(dbPath);
     db.runtimeStatePut("wrapup", "ses_wrap_green", { kind: "exit", greenlit: true }, WORK_DIR);
+    db.runtimeStatePut("wrapup", "ses_wrap_green_c", { kind: "compact", greenlit: true }, WORK_DIR);
     db.close();
 
     const published: any[] = [];
+    const executed: any[] = [];
     let hooks: { dispose?: () => Promise<void>; event?: (arg: unknown) => Promise<void> } | undefined;
     const prevConfig = process.env.XDG_CONFIG_HOME;
     const prevDbPath = process.env.THATCH_DB_PATH;
@@ -379,16 +391,19 @@ describe("runtime rehydration through server()", () => {
           status: async () => ({ data: {} }),
           list: async () => ({ data: [] }),
         },
-        tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async (opts: any) => { published.push(opts); return { data: true }; } },
+        tui: { showToast: async () => {}, executeCommand: async (opts: any) => { executed.push(opts); return { data: true }; }, publish: async (opts: any) => { published.push(opts); return { data: true }; } },
       };
       hooks = (await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree", directory: WORK_DIR } as any)) as any;
 
       await hooks!.event!({ event: { type: "session.status", properties: { sessionID: "ses_wrap_green", status: { type: "idle" } } } });
       // The close executor ran: the v1 exit host action (app.exit publish).
       expect(published).toHaveLength(1);
-      // The resolved arm's journal row is gone.
+      await hooks!.event!({ event: { type: "session.status", properties: { sessionID: "ses_wrap_green_c", status: { type: "idle" } } } });
+      // The compact executor ran: the v1 host action (the legacy alias).
+      expect(executed).toEqual([{ body: { command: "session_compact" } }]);
+      // The resolved arms' journal rows are gone.
       const after = new ThatchDB(dbPath);
-      expect(after.runtimeStateAll().some((r) => r.kind === "wrapup" && r.sessionID === "ses_wrap_green")).toBe(false);
+      expect(after.runtimeStateAll().some((r) => r.kind === "wrapup" && (r.sessionID === "ses_wrap_green" || r.sessionID === "ses_wrap_green_c"))).toBe(false);
       after.close();
     } finally {
       await hooks?.dispose?.();
@@ -1016,7 +1031,7 @@ describe("extraction journal sweep", () => {
     db.runtimeStatePut("buffer", "ses_live", [ix("ses_live")], live);
     db.runtimeStatePut("buffer", "ses_stale", [ix("ses_stale")], live);
     db.runtimeStatePut("accepted", "ses_dead", [ix("ses_dead")], dead);
-    db.runtimeStatePut("wrapup", "ses_wrap", { token: "T", kind: "compact" }, dead);
+    db.runtimeStatePut("wrapup", "ses_wrap", { kind: "compact" }, dead);
     // Backdate one live-directory row past the TTL (8 days).
     const raw = new Database(dbPath);
     raw.run(`UPDATE runtime_state SET created_at = ? WHERE kind = 'buffer' AND session_id = 'ses_stale'`, [
