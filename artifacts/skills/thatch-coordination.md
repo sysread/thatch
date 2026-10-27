@@ -34,10 +34,12 @@ Reconcile your task list against reality every turn:
 - `chat_read` drains mail from subordinates; answer questions, send
   corrections, and record status changes in the task list.
 - A subordinate that goes quiet is not necessarily dead — but the watcher
-  machinery sends death notices when a subordinate's session disappears
-  (`watcherDeathNotice` names the dead session's chat name). On a death
-  notice: mark the task failed, salvage what the subordinate reported, and
-  re-dispatch if the work still matters.
+  machinery sends a death notice to YOU when a subordinate you spawned
+  dies (the notice reads the `thatch.coordinatorSessionID` link written
+  at spawn; it names the dead session's chat name). You get the notice
+  as a prompt at death time or on your next message; unrelated sessions
+  get nothing. On a death notice: mark the task failed, salvage what the
+  subordinate reported, and re-dispatch if the work still matters.
 - Do not block on one subordinate while others run. Answer mail in priority
   order; keep your own turns short.
 

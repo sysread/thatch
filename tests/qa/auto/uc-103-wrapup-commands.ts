@@ -253,9 +253,11 @@ const useCase: UseCase = {
         await v2.queue({ type: "session.execution.succeeded", location: { directory: ctx.dir }, data: { sessionID: "ses-qa-103-v2b" } });
         if (!(await v2wait("v2 exit-tab-closed emit", () => v2.calls.emitted.some((e) => e.name === EXIT_TAB_CLOSED_EVENT)))) return "FAIL";
         const closed = v2.calls.emitted.find((e) => e.name === EXIT_TAB_CLOSED_EVENT)!;
-        // TUI-only payload: the runtime records the session's watcher deaths
-        // synchronously before the action, and the pump never translates
-        // this event (a tab-closed-style payload would invite that).
+        // TUI-only payload: the runtime's death callback runs synchronously
+        // before the action (registry cancellation + project capture; the
+        // durable row write rides the async continuation), and the pump
+        // never translates this event (a tab-closed-style payload would
+        // invite that).
         if (closed.data.sessionID !== "ses-qa-103-v2b") {
           console.log(`  FAIL: v2 exit greenlight should emit exit-tab-closed {sessionID}, got ${JSON.stringify(closed.data)}`);
           return "FAIL";

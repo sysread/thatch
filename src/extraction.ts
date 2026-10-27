@@ -473,7 +473,12 @@ export const RUNTIME_STATE_TTL_MS = 7 * 86_400_000;
  * partition only finalizes child rows for dead directories) or when it has
  * not been rewritten for ttlMs (the owning session went quiet). Rows with an
  * empty directory (pre-directory-column legacy writes) are exempt from the
- * path check; only age can doom them. The startup-resumed session's rows are
+ * path check; only age can doom them. Watcher death rows are exempt from
+ * the path check entirely: their consumer (the dead subordinate's
+ * coordinator) runs in the MAIN checkout, so a merged-and-deleted
+ * worktree must not eat a pickup row before the coordinator's next prompt
+ * - age is their only doom criterion (the global age-out for stamped
+ * rows). The startup-resumed session's rows are
  * always kept when keepSessionID names one: the rehydration partition
  * deliberately inherited them for crash recovery, and the sweep must not
  * contradict that decision for a row that is old only because the session
@@ -485,6 +490,7 @@ export function planJournalPrune(
 ): JournalRowRef[] {
   return rows.filter((row) => {
     if (opts.keepSessionID !== undefined && row.sessionID === opts.keepSessionID) return false;
+    if (row.kind === "watcher_death") return opts.nowMs - Date.parse(row.createdAt) > opts.ttlMs;
     if (row.directory && !opts.pathExists(row.directory)) return true;
     return opts.nowMs - Date.parse(row.createdAt) > opts.ttlMs;
   });

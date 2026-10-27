@@ -6,6 +6,15 @@ persists, so the pre-cancel re-check keys on the throw class). The
 build's gate is open. Two refinement rounds converged (round 2: BUILD,
 no blockers).
 
+CROSS-REF (2026-10-27, watcher-death-notice-removal changeset): death
+NOTICES are now care-routed - the user (toast banner) and the dead
+subordinate's coordinator (`thatch.coordinatorSessionID` spawn metadata;
+durable `watcher_death` row, ID-matched pickup on the coordinator's next
+message), never an arbitrary same-project peer. Any FUTURE pickup built
+from this plan (the reader for the persisted row below) inherits that
+care-based routing: match rows by `coordinatorSessionID`, not by project
+or directory. See docs/plans/watcher-death-notice-removal.md.
+
 ## Problem
 
 v2 tab close fires no `session.deleted`, so the closed tab's entry in

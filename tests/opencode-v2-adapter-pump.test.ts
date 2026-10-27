@@ -1,15 +1,18 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
 import { setup } from "../src/opencode/v2";
-import { tabClosedEventType, tabOpenedEventType } from "../src/session-tab-shared";
+import { TOAST_EVENT, tabClosedEventType, tabOpenedEventType } from "../src/session-tab-shared";
 import {
   dbDir,
   makeContext,
   PROJECT_DIR,
   queueEvent,
+  rpcEmitted,
   SESSION_DIR,
   sessionCreateCalls,
   sessionGetCalls,
+  sessionPromptCalls,
+  sessionSyntheticCalls,
   setupTestEnv,
   teardownTestEnv,
   toolAfterHook,
@@ -126,12 +129,15 @@ describe("opencode v2 adapter", () => {
     expect(sessionCreateCalls[0].title).toBe("thatch-extraction");
   });
 
-  test("pump: tab_closed routes by the closed session's own location - owned sessions die here", async () => {
+  test("pump: tab_closed death is care-routed - a busy coordinator's row survives, no peer is prompted", async () => {
     // Regression (M3): the tab-closed event is stamped with the publisher's
     // (coordinator's) directory, so only the coordinator's instance passed
     // the instance filter and its registry held none of the subordinate's
     // watchers - the confirmed close silently no-oped. Routing now keys on
-    // the CLOSED session's own directory.
+    // the CLOSED session's own directory. The death notice itself is
+    // care-routed: only the coordinator named in the dead subordinate's
+    // spawn metadata is a candidate recipient - never an arbitrary
+    // same-project peer.
     const { ThatchDB } = await import("../src/db");
     const db = new ThatchDB(join(dbDir, "test.db"));
     db.runtimeStatePut(
@@ -146,7 +152,21 @@ describe("opencode v2 adapter", () => {
     );
     db.close();
 
-    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext({
+      // The dead subordinate's spawn stamp: the coordinator link the death
+      // delivery reads from session metadata.
+      get: async (input: any) =>
+        input?.sessionID === "ses_sub_close"
+          ? { title: "subordinate", metadata: { thatch: { coordinatorSessionID: "ses_coord" } } }
+          : { title: "some title" },
+    }) as any)) as () => Promise<void>;
+    // The coordinator is mid-turn: the push gate stays closed, so the
+    // stamped row survives for the coordinator-scoped pickup.
+    await queueEvent({
+      type: "session.execution.started",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_coord" },
+    });
     // The tab-opened cached the subordinate under THIS instance's directory
     // (a directory-variant spawn: the subordinate lives here).
     await queueEvent({
@@ -162,24 +182,123 @@ describe("opencode v2 adapter", () => {
       location: { directory: "/some/coordinator/dir" },
       data: { sessionID: "ses_sub_close", chatName: "rosie-unit-one-00007" },
     });
-    await waitFor("watcher_death row for the closed subordinate", () => {
+    await waitFor("watcher_death row stamped with the coordinator", () => {
       const check = new ThatchDB(join(dbDir, "test.db"));
-      const rows = check.runtimeStateAll().filter((r) => r.sessionID === "ses_sub_close");
+      const death = check.runtimeStateAll().find((r) => r.kind === "watcher_death" && r.sessionID === "ses_sub_close");
       check.close();
-      return rows.some((r) => r.kind === "watcher_death");
+      return (death?.value as any)?.coordinatorSessionID === "ses_coord";
     });
     const check = new ThatchDB(join(dbDir, "test.db"));
     // The confirmed close cancelled the subordinate's watchers...
     expect(check.runtimeStateAll().some((r) => r.kind === "watchers" && r.sessionID === "ses_sub_close")).toBe(false);
-    // ...and the death row carries the watch targets for peer surfacing.
+    // ...and the death row carries the targets for the coordinator pickup.
     const death = check.runtimeStateAll().find((r) => r.kind === "watcher_death" && r.sessionID === "ses_sub_close");
     expect((death?.value as any)?.targets).toContain("acme/widgets#7");
+    // No delivery of any kind went to a session: the busy coordinator's
+    // closed gate means no push, and no arbitrary peer is ever consulted.
+    expect(sessionSyntheticCalls).toEqual([]);
+    expect(sessionPromptCalls).toEqual([]);
+    // The user's banner still fired (source-labeled toast).
+    expect(rpcEmitted.some((e) => e.name === TOAST_EVENT && String(e.data?.message).includes("watcher died"))).toBe(true);
     // The roster's demotion record rides the same event: a chat_tab_closed
     // marker lets every reader (roster render, broadcast targeting) distrust
     // a residue tab row for this session instantly.
     const closure = check.runtimeStateAll().find((r) => r.kind === "chat_tab_closed" && r.sessionID === "ses_sub_close");
     expect(typeof (closure?.value as any)?.at).toBe("string");
     check.close();
+  });
+
+  test("pump: a reachable coordinator gets the death push; the row is deleted on success", async () => {
+    // Delete-on-success: a surviving row would make the coordinator-scoped
+    // pickup re-inject the identical notice on the coordinator's next
+    // message - double delivery.
+    const { ThatchDB } = await import("../src/db");
+    const db = new ThatchDB(join(dbDir, "test.db"));
+    db.runtimeStatePut(
+      "watchers",
+      "ses_sub_push",
+      [{
+        id: "watch_push", source: "pr", sessionID: "ses_sub_push", repo: "acme/widgets", pr: 9,
+        events: ["pr_commit"], once: false, expiresAt: Date.now() + 600_000,
+        createdAt: Date.now(), state: { headSha: "aaaa1111" },
+      }],
+      SESSION_DIR,
+    );
+    db.close();
+
+    cleanup = (await setup(makeContext({
+      get: async (input: any) =>
+        input?.sessionID === "ses_sub_push"
+          ? { title: "subordinate", metadata: { thatch: { coordinatorSessionID: "ses_coord" } } }
+          : { title: "some title" },
+    }) as any)) as () => Promise<void>;
+    await queueEvent({
+      type: tabOpenedEventType,
+      location: { directory: "/some/coordinator/dir" },
+      data: { sessionID: "ses_sub_push", directory: SESSION_DIR },
+    });
+    await queueEvent({
+      type: tabClosedEventType,
+      location: { directory: "/some/coordinator/dir" },
+      data: { sessionID: "ses_sub_push", chatName: null },
+    });
+    await waitFor("the death push to the coordinator", () =>
+      sessionSyntheticCalls.some((c: any) => c?.sessionID === "ses_coord" && String(c?.text).includes("acme/widgets#9")),
+    );
+    // The push went ONLY to the coordinator.
+    expect(sessionSyntheticCalls.length).toBe(1);
+    expect(sessionPromptCalls).toEqual([]);
+    await waitFor("death row deleted after the successful push", () => {
+      const check = new ThatchDB(join(dbDir, "test.db"));
+      const left = check.runtimeStateAll().some((r) => r.kind === "watcher_death" && r.sessionID === "ses_sub_push");
+      check.close();
+      return !left;
+    });
+    // The user's banner fired too - it is their watch.
+    expect(rpcEmitted.some((e) => e.name === TOAST_EVENT && String(e.data?.message).includes("watcher died"))).toBe(true);
+  });
+
+  test("pump: a death with no coordinator link is banner-only - the row is deleted after the attempt", async () => {
+    // Non-subordinate death (no spawn metadata): the user banner is the
+    // whole delivery. The row could never be picked up (pickup matches the
+    // coordinator id only), so it is deleted rather than stranded.
+    const { ThatchDB } = await import("../src/db");
+    const db = new ThatchDB(join(dbDir, "test.db"));
+    db.runtimeStatePut(
+      "watchers",
+      "ses_sub_orphan",
+      [{
+        id: "watch_orphan", source: "pr", sessionID: "ses_sub_orphan", repo: "acme/widgets", pr: 10,
+        events: ["pr_commit"], once: false, expiresAt: Date.now() + 600_000,
+        createdAt: Date.now(), state: { headSha: "aaaa1111" },
+      }],
+      SESSION_DIR,
+    );
+    db.close();
+
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await queueEvent({
+      type: tabOpenedEventType,
+      location: { directory: "/some/coordinator/dir" },
+      data: { sessionID: "ses_sub_orphan", directory: SESSION_DIR },
+    });
+    await queueEvent({
+      type: tabClosedEventType,
+      location: { directory: "/some/coordinator/dir" },
+      data: { sessionID: "ses_sub_orphan", chatName: "lone-wolf-00001" },
+    });
+    await waitFor("the death banner", () =>
+      rpcEmitted.some((e) => e.name === TOAST_EVENT && String(e.data?.message).includes("watcher died")),
+    );
+    // No prompt of any kind: an arbitrary peer is never the recipient.
+    expect(sessionSyntheticCalls).toEqual([]);
+    expect(sessionPromptCalls).toEqual([]);
+    await waitFor("death row deleted after the banner-only attempt", () => {
+      const check = new ThatchDB(join(dbDir, "test.db"));
+      const left = check.runtimeStateAll().some((r) => r.kind === "watcher_death" && r.sessionID === "ses_sub_orphan");
+      check.close();
+      return !left;
+    });
   });
 
   test("pump: tab_closed for a session owned elsewhere is ignored", async () => {

@@ -1180,22 +1180,25 @@ No re-registration is needed; notifications will arrive here as usual. This is a
 }
 
 /**
- * Watcher death notice: a dormant watcher's owning session died with its
- * harness and has not been resumed. Delivered as a synthetic part to a live
- * session in the same project, so a watch that will never fire is at least
- * heard about instead of silently vanishing. Pointer-only: target labels,
- * never event content. The dead session's chat name and session id ride
- * the notice when known, so a coordinator session (thatch-coordination
- * skill) can mark its task-list entry failed and respawn keyed by chat
- * name without an SDK lookup.
+ * Watcher death notice: a watched session died with its harness and its
+ * watchers were cancelled. Care-based routing renders this ONLY to a party
+ * that cares: the dead subordinate's coordinator, via one prompt push at
+ * death time or pickup from the durable `watcher_death` row on the
+ * coordinator's own next message. The user hears a short toast banner
+ * instead, and an arbitrary same-project peer hears nothing (the
+ * observed-misroute fix: the first live same-project peer used to get this
+ * notice regardless of caring). Pointer-only: target labels, never event
+ * content. The dead session's chat name and session id ride the notice,
+ * so the coordinator can mark its task-list entry failed and respawn
+ * keyed by chat name without an SDK lookup.
  *
- * Two death paths with different aftermaths: the dormant-scan path (a
- * restart left the watcher rows in place) re-arms on resume, while the
- * confirmed-death path (sessionDied: tab closed, or the delivery-failure
- * heuristic) DELETED the watchers and journaled a watcher_death row -
- * those are gone and only re-arming the user's attention (this notice)
- * remains. rearmsOnResume must match the path: a notice promising an
- * automatic re-arm that never comes strands the wait silently.
+ * The notice says the watches were CANCELLED and points at `watch_create`
+ * - the re-arm-on-resume promise belongs only to the restart-dormant path,
+ * where the definitions survive and resuming the session re-arms them
+ * (that path banners the user rather than rendering this notice since the
+ * care-based routing). rearmsOnResume must match the path: a notice
+ * promising an automatic re-arm that never comes strands the wait
+ * silently.
  */
 export function watcherDeathNotice(
   targets: string[],

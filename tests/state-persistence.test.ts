@@ -683,13 +683,16 @@ describe("dormant watcher recovery through server()", () => {
     state: { headSha: "aaaa1111" },
     ...overrides,
   });
+  // The notify pipeline's mock: the death banner and other user-facing
+  // toasts land here (the capabilities layer wraps them in { body }).
+  const toasts: { body: { message: string; variant: string } }[] = [];
   const mockClient = {
     session: {
       prompt: async () => {}, promptAsync: async () => {}, create: async () => ({ data: { id: "c" } }),
       delete: async () => {}, get: async () => ({ data: { title: "Test session" } }),
       messages: async () => ({ data: [] }), status: async () => ({ data: {} }), list: async () => ({ data: [] }),
     },
-    tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
+    tui: { showToast: async (t: any) => { toasts.push(t); }, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
   };
   const startServer = async () => {
     const prevConfig = process.env.XDG_CONFIG_HOME;
@@ -760,27 +763,30 @@ describe("dormant watcher recovery through server()", () => {
     }
   });
 
-  test("a live session hears one death notice about dead sessions' watchers; the next session hears none", async () => {
+  test("a live session's dormant scan banners the user about dead sessions' watchers; no peer notice", async () => {
     // A process that already exited: a genuinely dead pid, not a guess.
     const deadPid = Bun.spawnSync(["true"]).pid;
     const db = new ThatchDB(dbPath);
     db.runtimeStatePut("watchers", "ses_d1", [prDef("watch_d1", "ses_d1")], WORK_DIR, deadPid);
     db.close();
 
+    toasts.length = 0;
     const { hooks, finally: done } = await startServer();
     try {
       const p1 = await sendMessage(hooks, "ses_live1");
-      const notice = p1.find((p: any) => p.synthetic && p.text.includes("no longer running"));
-      expect(notice).toBeTruthy();
-      expect(notice.text).toContain("sysread/thatch#16");
-      // The dormant row survives the notice - its session may still be
+      // Care-based routing: the user gets the source-labeled banner (the
+      // notify pipeline), and NO synthetic death-notice part lands in any
+      // session - an arbitrary peer is never prompted.
+      expect(toasts.some((t) => String(t.body?.message).includes("watcher died"))).toBe(true);
+      expect(p1.some((p: any) => p.synthetic && p.text.includes("no longer running"))).toBe(false);
+      // The dormant row survives the banner - its session may still be
       // resumed, and resuming re-arms it.
       const mid = new ThatchDB(dbPath);
       expect(mid.runtimeStateAll().some((r) => r.sessionID === "ses_d1")).toBe(true);
       mid.close();
 
-      // Deduplicated per process per target: a second live session hears
-      // nothing.
+      // No session ever hears a death notice about another: the next
+      // session's scan produces no notice part either.
       const p2 = await sendMessage(hooks, "ses_live2");
       expect(p2.some((p: any) => p.synthetic && p.text.includes("no longer running"))).toBe(false);
     } finally {
@@ -797,15 +803,93 @@ describe("dormant watcher recovery through server()", () => {
       db.runtimeStatePut("watchers", "ses_sib", [prDef("watch_s", "ses_sib")], WORK_DIR, sibling.pid);
       db.close();
 
+      toasts.length = 0;
       const { hooks, finally: done } = await startServer();
       try {
         const parts = await sendMessage(hooks, "ses_live");
         expect(parts.some((p: any) => p.synthetic && p.text.includes("no longer running"))).toBe(false);
+        // The pid-liveness gate covers the banner too: a live sibling's
+        // watchers must not banner the user as dead.
+        expect(toasts.some((t) => String(t.body?.message).includes("watcher died"))).toBe(false);
       } finally {
         await done();
       }
     } finally {
       sibling.kill();
+    }
+  });
+
+  test("rehydration keeps stamped unexpired death rows and deletes unstamped or expired ones", async () => {
+    // The discriminated cleanup at BOTH rehydration sites: a stamped row's
+    // consumer (the dead subordinate's coordinator) may simply be busy - a
+    // routine reload or restart must not eat its pickup row. An unstamped
+    // row has no care party left (pickup matches the coordinator id only),
+    // and an expired one is past the age-out.
+    const at = new Date().toISOString();
+    const db = new ThatchDB(dbPath);
+    // Same-pid rows: the v2 plugin-reload site.
+    db.runtimeStatePut("watcher_death", "ses_reload_stamped", { name: "n", targets: ["acme/widgets#1"], project: "p", at, coordinatorSessionID: "ses_coord" }, WORK_DIR);
+    db.runtimeStatePut("watcher_death", "ses_reload_unstamped", { name: "n", targets: ["acme/widgets#2"], project: "p", at }, WORK_DIR);
+    // Foreign-pid rows: the process-restart site.
+    db.runtimeStatePut("watcher_death", "ses_reboot_stamped", { name: "n", targets: ["acme/widgets#3"], project: "p", at, coordinatorSessionID: "ses_coord" }, WORK_DIR, -1);
+    db.runtimeStatePut("watcher_death", "ses_reboot_unstamped", { name: "n", targets: ["acme/widgets#4"], project: "p", at }, WORK_DIR, -1);
+    // Stamped but expired: falls through to the generic delete.
+    db.runtimeStatePut(
+      "watcher_death",
+      "ses_expired",
+      { name: "n", targets: ["acme/widgets#5"], project: "p", at: new Date(Date.now() - RUNTIME_STATE_TTL_MS - 60_000).toISOString(), coordinatorSessionID: "ses_coord" },
+      WORK_DIR,
+      -1,
+    );
+    db.close();
+
+    const { finally: done } = await startServer();
+    try {
+      const check = new ThatchDB(dbPath);
+      const survivors = check.runtimeStateAll().filter((r) => r.kind === "watcher_death").map((r) => r.sessionID).sort();
+      check.close();
+      expect(survivors).toEqual(["ses_reboot_stamped", "ses_reload_stamped"]);
+    } finally {
+      await done();
+    }
+  });
+
+  test("a death row surfaces only to its stamped coordinator, whatever directory wrote it", async () => {
+    const db = new ThatchDB(dbPath);
+    // Written by the dead subordinate's own runtime instance in its
+    // WORKTREE directory (the session_tab tool's preferred flow): the
+    // coordinator-ID match alone authorizes pickup - no directory or
+    // project filter gates it.
+    db.runtimeStatePut(
+      "watcher_death",
+      "ses_dead_sub",
+      { name: "grep-goblin-00004", targets: ["sysread/thatch#16"], project: "sysread/thatch", at: new Date().toISOString(), coordinatorSessionID: "ses_coord" },
+      "/tmp/thatch-state-a",
+      -1,
+    );
+    db.close();
+
+    const { hooks, finally: done } = await startServer();
+    try {
+      // An unrelated session's prompt leaves the row alone: the misroute
+      // this change fixes never happens.
+      const pOther = await sendMessage(hooks, "ses_bystander");
+      expect(pOther.some((p: any) => p.synthetic && p.text.includes("no longer running"))).toBe(false);
+      const mid = new ThatchDB(dbPath);
+      expect(mid.runtimeStateAll().some((r) => r.kind === "watcher_death" && r.sessionID === "ses_dead_sub")).toBe(true);
+      mid.close();
+
+      // The coordinator's own next message picks the row up and deletes it.
+      const pCoord = await sendMessage(hooks, "ses_coord");
+      const notice = pCoord.find((p: any) => p.synthetic && p.text.includes("no longer running"));
+      expect(notice).toBeTruthy();
+      expect(notice.text).toContain("sysread/thatch#16");
+      expect(notice.text).toContain("grep-goblin-00004");
+      const after = new ThatchDB(dbPath);
+      expect(after.runtimeStateAll().some((r) => r.kind === "watcher_death" && r.sessionID === "ses_dead_sub")).toBe(false);
+      after.close();
+    } finally {
+      await done();
     }
   });
 

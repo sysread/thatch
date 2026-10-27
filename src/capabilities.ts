@@ -73,8 +73,13 @@ export interface HostCapabilities {
     body: { parts: PromptPart[]; noReply?: boolean },
     mode: "sync" | "async",
   ): Promise<void>;
-  /** Fetch one session's info (title, location). Null when the host rejects. */
-  sessionGet(id: string): Promise<{ title?: string } | null>;
+  /**
+   * Fetch one session's info (title, location). Null when the host rejects.
+   * The metadata bag rides along on v2 (the spawn stamp
+   * `thatch.coordinatorSessionID` lives there); v1 sessions carry none, so
+   * the coordinator link is v2-only.
+   */
+  sessionGet(id: string): Promise<{ title?: string; metadata?: Record<string, unknown> } | null>;
   /** List sessions in this directory. Null when unavailable (v2 degrade). */
   sessionList(): Promise<{ id: string; parentID?: string; time?: { updated?: number } }[] | null>;
   /**

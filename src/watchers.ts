@@ -333,9 +333,11 @@ export interface WatcherRegistryOptions {
    * Death callback: the registry declares a session dead (pending queue
    * aged out with consecutive thrown deliveries, 404-class re-check
    * passed) and has already cancelled its watchers and dropped its queue.
-   * The runtime removes the chat hosting state and tells live same-project
-   * sessions. A pending `watcher_death` row is the runtime's durable
-   * fallback for sessions that were busy at death time.
+   * The runtime removes the chat hosting state and delivers the death
+   * care-based: the user gets a toast banner, and the dead subordinate's
+   * coordinator (read from the session's `thatch.coordinatorSessionID`
+   * spawn metadata) gets one prompt push, falling back to a durable
+   * `watcher_death` row the coordinator picks up on its own next message.
    */
   onSessionDeath?: (sessionID: string, death: { chatName: string | null; targets: string[] }) => void;
   /** Eligibility for death detection: only sessions this process hosts are eligible (sibling v1 processes and MCP sessions never qualify). */

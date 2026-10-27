@@ -413,14 +413,40 @@ export async function createRuntime(input: {
     console.error(`[thatch] project directory ${from} deleted; watcher falling back to main checkout ${to}`);
   });
 
-  /** Tells one live same-project session about a dead session's watchers
-   *  (promptAsync, the watcher-notification path) and clears the durable
-   *  death row on success. No live peer = the row waits for the next
-   *  prompt-time surfacing pass. The dead session's project is the one
-   *  captured at death time (onSessionDeath), not a re-read of the chat
-   *  roster: the wrap-up exit unregisters the row between the death record
-   *  and this delivery, and a re-read would strand a placed death as
-   *  unplaceable. */
+  /** User-facing banner for a watcher death - the notify pipeline's toast,
+   *  short and source-labeled per the notification wording rule. The
+   *  user's channel: it is their watch, and re-arming is their call.
+   *  Best-effort - the TUI may not be connected (headless mode). */
+  const bannerWatcherDeath = async (targets: string[], owner: { name: string | null; sessionID: string }): Promise<void> => {
+    const who = owner.name ? `${owner.name} (${owner.sessionID})` : owner.sessionID;
+    try {
+      await caps.showToast({
+        message: `⏰ watcher died: ${targets.join(", ")} - session ${who}`,
+        variant: "warning",
+        duration: 6000,
+      });
+    } catch {
+      // TUI may not be connected. Best-effort.
+    }
+  };
+
+  /** Care-based watcher-death delivery: a notice about a dead session's
+   *  watchers goes only to parties that CARE - the user (banner, always)
+   *  and the dead subordinate's coordinator (one prompt push). Never an
+   *  arbitrary same-project peer. The coordinator link is READ from the
+   *  spawn stamp `thatch.coordinatorSessionID` that the session_tab tool
+   *  wrote into the dead session's metadata at spawn - an async host read,
+   *  so onSessionDeath schedules this as a continuation after its
+   *  synchronous cleanup (the project below is captured there, while the
+   *  chat row still places the session - the wrap-up exit unregisters that
+   *  row right after recording, and it cannot be re-derived later).
+   *
+   *  A successful coordinator push deletes the durable row; the
+   *  coordinator-scoped pickup would otherwise re-inject the identical
+   *  notice on the coordinator's next message (double delivery). The row
+   *  survives a gate-false or thrown push - the pickup path catches the
+   *  coordinator on its next message. With no linkable coordinator the row
+   *  is deleted after the banner: no care party can ever consume it. */
   const deliverWatcherDeathNotices = async (
     deadSessionID: string,
     death: { chatName: string | null; targets: string[] },
@@ -434,27 +460,53 @@ export async function createRuntime(input: {
       // /thatch/exit); the surfacing pass cleans any legacy empty row.
       return;
     }
-    if (!deadProject) return; // unplaceable death - the row waits for surfacing
-    for (const peerID of sessionStatus.keys()) {
-      if (peerID === deadSessionID) continue;
-      const peerRow = db.findChatSession(peerID);
-      if (!peerRow || peerRow.project !== deadProject) continue;
-      if (!(await canPromptSession(peerID))) continue;
-      try {
-        await caps.promptSession(
-          peerID,
-          { parts: [{ type: "text", text: watcherDeathNotice(death.targets, { name: death.chatName, sessionID: deadSessionID }, { rearmsOnResume: false }), synthetic: true }] },
-          "async",
-        );
-        // Delayed journal writer (post-await): the reload ownership rule
-        // applies - a disposed runtime's rows belong to the reloaded
-        // instance (docs/dev/gotchas.md).
-        if (disposed) return;
-        db.runtimeStateDelete("watcher_death", deadSessionID);
-        return;
-      } catch (err) {
-        console.error(`[thatch] death-notice delivery to ${peerID} failed: ${err}`);
+    // Best-effort metadata read: a non-subordinate session (or a host
+    // without the surface) yields no coordinator - banner-only delivery.
+    let coordinatorSessionID: string | null = null;
+    try {
+      const info = await caps.sessionGet(deadSessionID);
+      const thatch = info?.metadata?.thatch as { coordinatorSessionID?: unknown } | undefined;
+      if (typeof thatch?.coordinatorSessionID === "string" && thatch.coordinatorSessionID.length > 0) {
+        coordinatorSessionID = thatch.coordinatorSessionID;
       }
+    } catch (err) {
+      debug("watcher-death", `coordinator metadata read failed for ${deadSessionID}: ${err}`);
+    }
+    // Delayed journal writer (post-await): the reload ownership rule
+    // applies - a disposed runtime's rows belong to the reloaded
+    // instance (docs/dev/gotchas.md).
+    if (disposed) return;
+    db.runtimeStatePut(
+      "watcher_death",
+      deadSessionID,
+      { name: death.chatName, targets: death.targets, project: deadProject, at: nowIso(), coordinatorSessionID },
+      directory,
+    );
+    // The user hears every death - including an unplaceable one (no chat
+    // row to derive a project from): the banner must not be gated on
+    // placeability.
+    await bannerWatcherDeath(death.targets, { name: death.chatName, sessionID: deadSessionID });
+    if (!coordinatorSessionID) {
+      // Nobody but the user cares. The row could never be picked up
+      // (pickup is coordinator-scoped), so delete it after the banner
+      // rather than stranding it for the TTL sweep.
+      if (disposed) return;
+      db.runtimeStateDelete("watcher_death", deadSessionID);
+      return;
+    }
+    try {
+      // A closed gate is not a throw: both a gate-false and a thrown gate
+      // or push leave the row for the coordinator-scoped pickup.
+      if (!(await canPromptSession(coordinatorSessionID))) return;
+      await caps.promptSession(
+        coordinatorSessionID,
+        { parts: [{ type: "text", text: watcherDeathNotice(death.targets, { name: death.chatName, sessionID: deadSessionID }, { rearmsOnResume: false }), synthetic: true }] },
+        "async",
+      );
+      if (disposed) return;
+      db.runtimeStateDelete("watcher_death", deadSessionID);
+    } catch (err) {
+      console.error(`[thatch] death-notice delivery to coordinator ${coordinatorSessionID} failed: ${err}`);
     }
   };
 
@@ -530,19 +582,17 @@ export async function createRuntime(input: {
       if (hostedRow && Array.isArray(hostedRow.value)) {
         db.runtimeStatePut("hosted", directory, (hostedRow.value as string[]).filter((sid) => sid !== deadSessionID), directory);
       }
-      // Durable death record first, then best-effort live delivery - the
-      // row is deleted when a live same-project session has the news. The
-      // project is captured HERE (while the chat row still places it): the
-      // wrap-up exit unregisters the row right after recording, so the
-      // project cannot be re-derived at delivery time. A watchless death
-      // writes no row at all: runtimeStatePut upserts, so an empty-targets
-      // write would erase an earlier placed row for the same session (a
-      // reopened session that greenlights /thatch/exit a second time).
+      // Durable death record + care-based delivery run as an ASYNC
+      // continuation (the coordinator link is read from the dead session's
+      // spawn metadata over the host). The project is captured HERE (while
+      // the chat row still places it): the wrap-up exit unregisters the
+      // row right after recording, so the project cannot be re-derived at
+      // delivery time. A watchless death writes no row at all:
+      // runtimeStatePut upserts, so an empty-targets write would erase an
+      // earlier placed row for the same session (a reopened session that
+      // greenlights /thatch/exit a second time).
       const deadRow = db.findChatSession(deadSessionID);
       const deadProject = deadRow?.project ?? null;
-      if (death.targets.length > 0) {
-        db.runtimeStatePut("watcher_death", deadSessionID, { name: death.chatName, targets: death.targets, project: deadProject, at: nowIso() }, directory);
-      }
       void deliverWatcherDeathNotices(deadSessionID, death, deadProject);
     },
   });
@@ -808,6 +858,21 @@ export async function createRuntime(input: {
   // write resets greenlit).
   const pendingWrapUp = new Map<string, { kind: "compact" | "exit"; greenlit?: boolean }>();
 
+  /** Whether a watcher_death row still has a care party worth keeping it
+   *  for: stamped with the dead subordinate's coordinator AND not yet past
+   *  the runtime-state TTL (the env-tunable 7-day default - the same knob
+   *  the journal sweep ages out by). The row value's `at` stamp decides;
+   *  an unparseable stamp keeps the row (deletion is the destructive
+   *  move). The coordinator-scoped pickup deletes the row on delivery. */
+  const deathRowWorthKeeping = (value: unknown): boolean => {
+    const death = (value ?? {}) as { coordinatorSessionID?: unknown; at?: unknown };
+    if (typeof death.coordinatorSessionID !== "string" || death.coordinatorSessionID.length === 0) return false;
+    const at = Date.parse(typeof death.at === "string" ? death.at : "");
+    if (!Number.isFinite(at)) return true;
+    const ttlMs = Number(process.env.THATCH_RUNTIME_STATE_TTL_MS) || RUNTIME_STATE_TTL_MS;
+    return Date.now() - at <= ttlMs;
+  };
+
   // Rehydrate persisted runtime state (docs/dev/features/opencode-plugin.md,
   // the runtime_state row).
   // Rows are instance-scoped (kind+session, tagged with the writer's pid and
@@ -885,11 +950,13 @@ export async function createRuntime(input: {
         }
         continue;
       }
-      if (row.kind === "watcher_pending" || row.kind === "watcher_death") {
-        // Durable pending events and death records survive restarts: the
-        // pending queue rides a resumed session's rearm, the death record
-        // surfaces at a live session's next prompt. Both are deleted on
-        // consumption.
+      if (row.kind === "watcher_pending" || (row.kind === "watcher_death" && deathRowWorthKeeping(row.value))) {
+        // Durable pending events and CARE-placed death records survive
+        // restarts: the pending queue rides a resumed session's rearm, and
+        // a stamped death record waits for its coordinator's next prompt
+        // (ID-matched, any directory). Unstamped or expired death rows
+        // fall through to the generic delete: no coordinator can ever
+        // pick them up.
         continue;
       }
       // Restart-window leak fix (same as the child-row branch below): the
@@ -1005,9 +1072,13 @@ export async function createRuntime(input: {
         watchers.hydratePending(row.sessionID, row.value as { event: WatcherEvent; queuedAt: number }[]);
       }
     } else if (row.kind === "watcher_death") {
-      // Death records are surfaced at the live session's next prompt
-      // (surfaceWatcherDeaths), not through registry hydration - leave the
-      // row for that consumption to delete.
+      // Discriminated cleanup: a death row stamped with the dead
+      // subordinate's coordinator stays for the coordinator-scoped pickup
+      // (a busy coordinator must not lose the notice to a routine reload);
+      // an unstamped row has no care party left (pickup matches the
+      // coordinator id only) and is deleted.
+      if (deathRowWorthKeeping(row.value)) continue;
+      db.runtimeStateDelete(row.kind, row.sessionID);
       continue;
     } else {
       continue; // unknown kind - leave it for a future version
@@ -1059,16 +1130,16 @@ export async function createRuntime(input: {
   // is resumable. A resumed session's first message scans the dormant rows:
   //   - the session's own rows re-arm into the live registry (no
   //     re-registration step, so stated watch policy survives reboots);
-  //   - rows of other still-dead sessions in THIS directory earn the live
-  //     session a one-line death notice - a watch that will never fire is
-  //     at least heard about. Deduplicated per process per target, so one
-  //     active session hears about each corpse once;
+  //   - rows of other still-dead sessions in THIS directory banner the
+  //     user (the care-based routing: no coordinator link is derivable
+  //     from a dormant definition row, and an arbitrary same-project peer
+  //     must never be prompted - a watch that will never fire is at least
+  //     heard about by the person who owns it). Gated on the owning pid
+  //     actually being dead: a v1 sibling process (separate TUI window,
+  //     shared project db, different pid, still alive) owns live watchers
+  //     that must never be reported dead;
   //   - rows past the TTL plus the dormant grace age out silently.
-  // Death notices are gated on the owning pid actually being dead: a v1
-  // sibling process (separate TUI window, shared project db, different pid,
-  // still alive) owns live watchers that must never be reported dead.
   const dormantScanned = new Set<string>();
-  const notifiedWatcherDeaths = new Set<string>();
   const pidAlive = (pid: number): boolean => {
     if (!Number.isInteger(pid) || pid <= 0) return false;
     try {
@@ -1080,28 +1151,31 @@ export async function createRuntime(input: {
       return (err as NodeJS.ErrnoException).code !== "ESRCH";
     }
   };
-  /** Surfaces persisted watcher-death rows to this session (same project
-   *  only), deleting each row on surfacing. Runs per prompt - deaths are
-   *  rare and the row read is cheap - so the once-per-process
+  /** Surfaces persisted watcher-death rows addressed to THIS session -
+   *  the coordinator-scoped pickup. A row is delivered only to the session
+   *  whose id matches the dead subordinate's `coordinatorSessionID` spawn
+   *  stamp; never to an arbitrary same-project peer. The old directory +
+   *  project filters are deliberately dropped as gating conditions: the
+   *  subordinate's own per-directory runtime journaled the row under the
+   *  WORKTREE's directory (which never matches the coordinator's
+   *  main-directory instance), and worktree spawns are the session_tab
+   *  tool's preferred flow - the coordinator-ID match alone authorizes
+   *  pickup, and the row is deleted on delivery. Runs per prompt - deaths
+   *  are rare and the row read is cheap - so the once-per-process
    *  dormantScanned guard deliberately does NOT apply: a death row
    *  persisted after this session's first prompt must still surface. */
   const surfaceWatcherDeaths = (forSessionID: string): string[] => {
-    const ownRow = db.findChatSession(forSessionID);
-    const project = ownRow?.project ?? null;
-    if (!project) return [];
     const notices: string[] = [];
     for (const row of db.runtimeStateAll()) {
-      if (row.kind !== "watcher_death" || row.directory !== directory) continue;
-      const death = (row.value ?? {}) as { name?: string | null; targets?: string[]; project?: string | null };
+      if (row.kind !== "watcher_death") continue;
+      const death = (row.value ?? {}) as { name?: string | null; targets?: string[]; coordinatorSessionID?: string | null };
       if (!Array.isArray(death.targets) || death.targets.length === 0) {
         // Malformed or fully-consumed row - clean it up.
         db.runtimeStateDelete("watcher_death", row.sessionID);
         continue;
       }
-      // Only the dead session's own project hears the death. The "global"
-      // project matches globally - the same accepted class as the identity
-      // binding's unknown-to-global mapping.
-      if ((death.project ?? "global") !== project) continue;
+      // Care-based routing: only the stamped coordinator hears the row.
+      if (death.coordinatorSessionID !== forSessionID) continue;
       notices.push(watcherDeathNotice(death.targets, { name: death.name ?? null, sessionID: row.sessionID }, { rearmsOnResume: false }));
       db.runtimeStateDelete("watcher_death", row.sessionID);
     }
@@ -1114,7 +1188,6 @@ export async function createRuntime(input: {
     try {
       const rows = db.runtimeStateAll().filter((r) => r.kind === "watchers" && r.pid !== process.pid);
       const own: Watcher[] = [];
-      const deadSessions = new Map<string, string[]>();
       for (const row of rows) {
         const defs = Array.isArray(row.value) ? (row.value as Watcher[]) : [];
         if (dormantWatchersStale(defs)) {
@@ -1126,16 +1199,16 @@ export async function createRuntime(input: {
           // re-arming is a no-op there and the notice would be redundant.
           if (!rehydratedSessions.has(sessionID)) own.push(...defs);
         } else if (row.directory === directory && !pidAlive(row.pid)) {
-          // Dedup per dead SESSION (not per target): a resumed-then-died-
-          // again cycle re-arms the same session under new ids, and its
-          // second death deserves a fresh notice. Its own re-arm clears
-          // the entry below.
-          if (!notifiedWatcherDeaths.has(row.sessionID)) {
-            deadSessions.set(row.sessionID, defs.map(watcherTarget));
-          }
+          // A restart-killed session's watchers: banner the user instead
+          // of prompting a peer (care-based routing - the dead session's
+          // coordinator link, if any, is not recoverable from a dormant
+          // definition row).
+          await bannerWatcherDeath(defs.map(watcherTarget), {
+            name: db.findChatSession(row.sessionID)?.name ?? null,
+            sessionID: row.sessionID,
+          });
         }
       }
-      for (const dead of deadSessions.keys()) notifiedWatcherDeaths.add(dead);
       const notices: string[] = [];
       if (own.length > 0) {
         const { rearmed, expired, failed } = await watchers.rearm(sessionID, own);
@@ -1150,14 +1223,7 @@ export async function createRuntime(input: {
           db.runtimeStateDelete("watcher_pending", sessionID);
           watchers.hydratePending(sessionID, pendingRow.value as { event: WatcherEvent; queuedAt: number }[]);
         }
-        // This session came back to life: its own previous death notice is
-        // obsolete - a future death deserves a fresh one.
-        notifiedWatcherDeaths.delete(sessionID);
         if (rearmed.length > 0) notices.push(watcherRearmNotice(rearmed.map(watcherTarget), expired, failed));
-      }
-      if (deadSessions.size > 0) {
-        const targets = [...new Set([...deadSessions.values()].flat())];
-        notices.push(watcherDeathNotice(targets));
       }
       return notices;
     } catch (err) {
@@ -1362,14 +1428,19 @@ export async function createRuntime(input: {
   // rows for THIS directory at boot, but nothing reclaims other
   // directories' rows between that directory's restarts, and dead
   // directories never restart (observed 7.9MB stranded in deleted
-  // worktrees, 2026-10-14). Runs on the same timer as the strand sweep
-  // (boot + interval) but reads its own gate: it touches only thatch.db,
-  // never opencode.db, so THATCH_STRAND_SWEEP does not cover it.
+  // worktrees, 2026-10-14). watcher_death rows ride along as a GLOBAL
+  // age-only pass - the bound on unpicked stamped rows whose coordinator
+  // never prompts again - and planJournalPrune exempts them from the
+  // dead-directory rule: a busy coordinator's pickup row must survive its
+  // subordinate's merged-and-deleted worktree. Runs on the same timer as
+  // the strand sweep (boot + interval) but reads its own gate: it touches
+  // only thatch.db, never opencode.db, so THATCH_STRAND_SWEEP does not
+  // cover it.
   const sweepExtractionJournal = (trigger: string): void => {
     if (disposed) return;
     try {
       const ttlMs = Number(process.env.THATCH_RUNTIME_STATE_TTL_MS) || RUNTIME_STATE_TTL_MS;
-      const doomed = planJournalPrune(db.runtimeStateJournalRows(EXTRACTION_JOURNAL_KINDS), {
+      const doomed = planJournalPrune(db.runtimeStateJournalRows([...EXTRACTION_JOURNAL_KINDS, "watcher_death"]), {
         nowMs: Date.now(),
         ttlMs,
         pathExists: (p) => existsSync(p),

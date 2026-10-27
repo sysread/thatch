@@ -158,14 +158,29 @@ a wedged server, never death), and the session is hosted by this
 process (sibling v1 processes and MCP sessions are never touched).
 MCP-owner watches keep TTL-only death: their turn-driven heartbeat
 cannot distinguish a closed Cursor tab from a parked one. On death:
-watchers and pending drop, and live same-project sessions get a
-`watcherDeathNotice` carrying the dead session's chat name and session
-id (the thatch-coordination loop's respawn key); a durable
-`watcher_death` runtime_state row covers sessions that were busy at
-death time, surfaced and cleared at other sessions' next prompt. The
-notice says the watches were CANCELLED and points at `watch_create` -
-the re-arm-on-resume promise belongs only to the restart-dormant path,
-where the definitions survive and resuming the session re-arms them.
+watchers and pending drop, and the notice is CARE-ROUTED - delivered
+only to parties that care about it, never an arbitrary same-project
+peer (the observed misroute this fixed: the first live peer in the
+project used to get the notice regardless of caring). The user gets a
+source-labeled toast banner naming the watched targets and the dead
+session ("watcher died: sysread/thatch#16 - session
+grep-goblin-00004 (ses_...)"); the dead subordinate's COORDINATOR -
+read from the session's `thatch.coordinatorSessionID` spawn metadata,
+written by the
+session_tab tool - gets one prompt push at death time, falling back to
+a durable `watcher_death` runtime_state row when the coordinator is
+busy or the push fails: the coordinator's own next message picks the
+row up (matched by session ID alone - no directory or project filter,
+because the subordinate's runtime journaled the row under the
+worktree's directory) and deletes it. A death with no linkable
+coordinator is banner-only, and the row is deleted after the attempt.
+The notice (`watcherDeathNotice`) says the watches were CANCELLED and
+points at `watch_create` - the re-arm-on-resume promise belongs only
+to the restart-dormant path, where the definitions survive and
+resuming the session re-arms them (that path banners the user rather
+than prompting anyone). Surviving stamped rows are bounded: the
+journal sweep's global age-only pass drops them past the runtime-state
+TTL (7-day default, `THATCH_RUNTIME_STATE_TTL_MS`).
 
 ### Command watches
 

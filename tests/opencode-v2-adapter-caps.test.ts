@@ -237,8 +237,24 @@ describe("opencode v2 adapter", () => {
     // The death row's placement is the load-bearing ordering: onSessionDeath
     // places the row by the session's chat row, and the exit unregisters that
     // row - so the deaths must run FIRST or the row lands unplaceable (a
-    // project-null row no peer ever surfaces and nothing deletes).
-    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    // project-null row no coordinator pickup can rescue). The death row is
+    // written by the ASYNC enrichment continuation (the coordinator link is
+    // read from the session's spawn metadata), so the assertions wait for it.
+    cleanup = (await setup(makeContext({
+      // The exiting session's spawn stamp: a coordinator link, so the
+      // placed row is a care-routed pickup row rather than banner-only.
+      get: async (input: any) =>
+        input?.sessionID === "ses_v2_exit_watch"
+          ? { title: "t", metadata: { thatch: { coordinatorSessionID: "ses_exit_coord" } } }
+          : { title: "some title" },
+    }) as any)) as () => Promise<void>;
+    // The coordinator is mid-turn: the push gate stays closed and the
+    // placed row survives for the coordinator-scoped pickup.
+    await queueEvent({
+      type: "session.execution.started",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_exit_coord" },
+    });
     // The watcher's validation run executes the command in the project
     // directory, so it must exist on disk.
     mkdirSync(PROJECT_DIR, { recursive: true });
@@ -266,9 +282,14 @@ describe("opencode v2 adapter", () => {
     await waitFor("exit close emitted", () => rpcEmitted.some((e) => e.name === EXIT_TAB_CLOSED_EVENT));
 
     const stateRow = (kind: string): any => runtimeStateRow(process.env.THATCH_DB_PATH!, kind, sessionID);
-    // The death row is placed (project resolved from the still-registered
-    // chat row) and carries the cancelled watch as a target.
-    const death = stateRow("watcher_death") as { project?: string; targets?: string[] };
+    // The death row is placed asynchronously (project resolved from the
+    // still-registered chat row), carries the cancelled watch as a target,
+    // and is stamped with the coordinator from the spawn metadata.
+    await waitFor("the stamped death row", () => {
+      const death = stateRow("watcher_death") as { coordinatorSessionID?: string } | null;
+      return death?.coordinatorSessionID === "ses_exit_coord";
+    });
+    const death = stateRow("watcher_death") as { project?: string; targets?: string[]; coordinatorSessionID?: string };
     expect(death).not.toBeNull();
     expect(death!.project).toBeTruthy();
     expect(death!.targets).toContain("test -f /nonexistent-thatch-exit-watch-marker");
@@ -283,9 +304,9 @@ describe("opencode v2 adapter", () => {
     }
 
     // The SSE echo of the emit (the bus feeds a plugin's own events back to
-    // it) must not translate into a second death pass: the second pass would
-    // write an empty-targets row over the placed one and delete it, erasing
-    // the notice the surfacing pass owes the session's peers.
+    // it) must not translate into a second death pass: the second pass
+    // would write an empty-targets row over the placed one and delete it,
+    // erasing the pickup row the coordinator is owed.
     await queueEvent({ type: exitTabClosedEventType, data: { sessionID }, location: { directory: SESSION_DIR } });
     await new Promise((r) => setTimeout(r, 150));
     expect(stateRow("watcher_death")).not.toBeNull();

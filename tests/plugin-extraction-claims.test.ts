@@ -87,9 +87,9 @@ describe("plugin entry", () => {
     const foreignPid = process.pid + 12345;
     const jdb = new ThatchDB(process.env.THATCH_DB_PATH!);
     // A directory that does NOT match the runtime's own: a dead-pid row
-    // whose directory matches would fire a watcher-death notice into the
-    // next chat.message in this file (test isolation). Delete the row at
-    // the end regardless.
+    // whose directory matches would banner the user about a watcher death
+    // in the next chat.message in this file (test isolation). Delete the
+    // row at the end regardless.
     jdb.runtimeStatePut("watchers", "ses_dormant", [watcher], "/tmp/not-the-runtime-dir", foreignPid);
 
     const listed = await (hooks as any).tool.thatch_watch_list.execute({}, { sessionID: "ses_dormant" });

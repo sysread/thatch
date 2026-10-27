@@ -158,10 +158,11 @@ restarts:
 - Watch definitions whose 8-hour TTL expired while the session was
   away are not re-armed; the re-arm notice reports how many expired.
 - If a watched session's tab is closed (or the watcher's deliveries fail
-  past the death threshold), its watchers are cancelled, and a live
-  session in the same project hears a one-line notice that the watch
-  died with its session - the notice says the watches were cancelled,
-  not re-armed, so a watch that will never fire is at least explained.
+  past the death threshold), its watchers are cancelled, and you get a
+  toast banner naming the dead session and its watch targets ("watcher
+  died: ..."). The banner is yours because the watch was yours - decide
+  whether to re-create it. The watches are cancelled, not re-armed, so a
+  watch that will never fire is at least explained.
 - A watcher expires after 8 hours by default, and reports its own
   expiry: the session gets a final notification naming the watched
   target and how long the watch lived (for example, "watch on
@@ -172,9 +173,10 @@ restarts:
 - A watch also dies with its session: on opencode v2, a closed tab's
   watchers are cancelled automatically once its undelivered events
   have aged past 2 hours (THATCH_WATCH_DEATH_MINUTES) while delivery
-  keeps failing, and live sessions in the same project hear a death
-  notice naming the dead session and its watch targets. A coordinator
-  can use that notice to mark a subordinate's task failed and respawn.
+  keeps failing. The death goes only to the parties that care: you
+  (the banner above) and, if the dead session was a coordinator's
+  subordinate, that coordinator - it can use the notice to mark the
+  task failed and respawn. Nothing lands in unrelated sessions.
 - Each session can hold up to 5 active watchers (all sources share
   the budget).
 - A one-shot watch cancels itself after its first event - a single

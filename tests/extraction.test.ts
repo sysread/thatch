@@ -666,11 +666,27 @@ describe("planJournalPrune", () => {
     expect(plan.map((r) => r.sessionID)).toEqual(["ses_other"]);
   });
 
+  test("watcher_death rows are exempt from the dead-directory rule; age still dooms them", () => {
+    // A stamped death row's consumer (the dead subordinate's coordinator)
+    // runs in the MAIN checkout, so a merged-and-deleted worktree must not
+    // eat the pickup row before the coordinator's next prompt. Age is the
+    // only doom criterion (the global age-out for unpicked rows).
+    const plan = planJournalPrune(
+      [
+        row("watcher_death", "ses_pickup", "/dead", 0),
+        row("watcher_death", "ses_aged", "/dead", RUNTIME_STATE_TTL_MS + 60_000),
+      ],
+      opts,
+    );
+    expect(plan.map((r) => r.sessionID)).toEqual(["ses_aged"]);
+  });
+
   test("only the extraction journal kinds are in scope by design", () => {
     // Child rows are finalized (with session cleanup) by the rehydration
     // partition; watchers/hosted/wrapup rows own their lifecycles. The
-    // sweep's kind list must stay narrow even though the planner itself is
-    // kind-agnostic.
+    // watcher_death kind joins the sweep's CALL-SITE list as a global
+    // age-only pass (with its own dead-directory exemption), but the
+    // extraction module's own constant stays narrow.
     expect(EXTRACTION_JOURNAL_KINDS).toEqual(["buffer", "accepted"]);
   });
 });

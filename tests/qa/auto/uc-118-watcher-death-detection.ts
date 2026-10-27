@@ -3,7 +3,8 @@ import { WatcherRegistry, type WatcherEvent } from "../../../src/watchers";
 
 /**
  * UC-118: watcher death detection - a dead session's watchers stop
- * polling, and the death is announced.
+ * polling, and the death is declared to the runtime (care-routed
+ * delivery happens above the registry).
  *
  * Automatable: yes - the registry runs with injected dependencies and an
  * injectable clock. A closed v2 tab fires no session.deleted, so its
