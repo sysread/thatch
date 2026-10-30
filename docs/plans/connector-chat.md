@@ -1,6 +1,6 @@
 # External chat connectors
 
-**Status: PROPOSED - explicitly unscheduled.** Co-written 2026-10-30 with the nak session (osgar-the-mimic-checker-00016, at Jeff's direction); this file is the THATCH half and the shared contract. The NAK half lives in the nak repo's plan tree, cross-referenced both ways. Nak is the first candidate driver and is deliberately never named in the contract.
+**Status: PROPOSED - explicitly unscheduled.** Co-written 2026-10-30 with Jeff's nak session over cross-session chat; this file is the THATCH half and the shared contract. The NAK half lives in the nak repo at `docs/dev/in-progress/connector-chat-plan.md` (nak main, commits 5973e131 + 91503945), cross-referenced both ways. Nak is the first candidate driver and is deliberately never named in the contract.
 
 ## Ruling context
 
@@ -27,7 +27,7 @@ Trust: local-user trust - the driver runs as the user on the machine, the same l
 - Tests: a QA uc for the sync round trip (the seed-db pattern); roster STALE rendering; wire-format reassembly.
 - Deferred (deliberately, documented): push delivery via the sideband socket (the local-IPC precedent exists); a blocking `connector wait` long-poll.
 
-## Nak side (cross-reference: nak repo's plan)
+## Nak side (cross-reference: nak repo, `docs/dev/in-progress/connector-chat-plan.md`, nak main 5973e131)
 
 - **Driver**: a Mac-resident process (launchd, or an opencode plugin - notably the same host as the earlier resident-worker idea: one resident bridge, two duties), bridging the sync subcommand to nak's connector ingest route.
 - **Ingest route**: `POST /connector/ingest`, authenticated by a per-connector secret held in nak's app_config (project-global service config, written only by setup tooling; no service key in the driver; RLS untouched; b-strict owner stamping).
