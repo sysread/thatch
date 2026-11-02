@@ -136,7 +136,10 @@ import only `@opencode/plugin/tui` and this module.
 `thatch_session_tab_close {session}` (the target: the subordinate's chat
 name or session id, resolved name-first through the chat roster) emits
 `rpc.thatch-tabs.tab-closed {sessionID, chatName?}` over the same rpc
-bridge. The TUI plugin consumes it symmetrically with open, except that the
+bridge. An unmatched target's error suggests close chat names from the
+roster (`Did you mean "..."?`, the same matcher as the chat_send miss via
+`src/fuzzy.ts`; a far-off target - e.g. an unregistered `ses_` id - gets
+no suggestion). The TUI plugin consumes it symmetrically with open, except that the
 close is session-scoped: no directory guard, because a session that moved
 after its tab was opened stamps the close with its new directory while the
 tab lives in the original window. `ui.tabs.close(sessionID)` closes the tab

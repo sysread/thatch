@@ -6,6 +6,7 @@ import { BgeEmbeddingModel } from "./embeddings";
 import { detectRepo } from "./git";
 import { checkSetup, setupClaudeCode, setupCursor } from "./setup";
 import { TOOL_DEFS, type CoreContext, type ToolDef } from "./tool-defs";
+import { deepPassthrough } from "./tool-schema";
 import { chatOpenTabs as chatOpenTabsProvider } from "./tab-state";
 import { actionDefs, mcpSpelling, type ActionDef } from "./commands";
 import { SidebandServer, sidebandSocketPath } from "./sideband";
@@ -74,9 +75,22 @@ export function compileTools(): Map<string, CompiledTool> {
     // no MCP equivalent - same rule.
     if (def.opencodeOnly || def.v2Only) continue;
     const schema = z.object(def.args);
+    // The validator deep-passthroughs so typo'd keys survive into the
+    // tool's accept-then-teach guards at EVERY object level ("you passed
+    // 'labels'; did you mean 'label'?"; a typo'd config_set field). The
+    // DECLARED inputSchema stays byte-identical to the strict shape:
+    // tools/list advertises additionalProperties: false at every level,
+    // and only our own validation loosens. The strictness stays in the
+    // declaration because no host validates between caller and tool on
+    // MCP - the declared schema IS the public contract. (opencode v2
+    // loosens its declaration instead, because opencode-core validates
+    // against it - see src/opencode/v2.ts.) A client that strips unknown
+    // keys against the declared schema before sending still degrades to
+    // the plain teaching text - nothing breaks.
+    const validatorSchema = deepPassthrough(schema);
     map.set(def.name, {
       def,
-      validator: (input: unknown) => schema.parse(input) as Record<string, unknown>,
+      validator: (input: unknown) => validatorSchema.parse(input),
       inputSchema: z.toJSONSchema(schema) as Record<string, unknown>,
     });
   }

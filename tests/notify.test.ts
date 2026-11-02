@@ -305,6 +305,46 @@ describe("config and notify tool execute functions", () => {
     expect(recorded.length).toBe(0);
   });
 
+  test("config_set rejects a typo'd section with a suggestion and writes nothing", async () => {
+    const dbPath = join(dbDir, "thatch.db");
+    saveConfig({ notifications: { mode: "banner" } }, dbPath);
+    const before = readFileSync(join(dbDir, "config.json"), "utf8");
+    const def = TOOL_DEFS.find((t) => t.name === "config_set")!;
+    // The typo'd section is passed raw: both hosts deliver unknown keys to
+    // execute (MCP's validator deep-passthroughs; v2's declared schema
+    // permits them and core's input repair no longer strips what the
+    // schema permits; opencode v1 forwards raw input by host
+    // implementation). A stripping validator would turn this call into
+    // "Nothing to update" instead.
+    const result = await def.execute({ notifcations: { mode: "voice" } } as Record<string, unknown>, ctx);
+    expect(result).toContain("Unknown config_set section 'notifcations'");
+    expect(result).toContain('Did you mean "notifications"?');
+    expect(readFileSync(join(dbDir, "config.json"), "utf8")).toBe(before);
+  });
+
+  test("config_set rejects a typo'd field with a suggestion and writes nothing", async () => {
+    const dbPath = join(dbDir, "thatch.db");
+    saveConfig({ chat: { enabled: true } }, dbPath);
+    const before = readFileSync(join(dbDir, "config.json"), "utf8");
+    const def = TOOL_DEFS.find((t) => t.name === "config_set")!;
+    const result = await def.execute({ chat: { enabld: false } } as Record<string, unknown>, ctx);
+    expect(result).toContain("Unknown chat field 'enabld'");
+    expect(result).toContain('Did you mean "enabled"?');
+    expect(readFileSync(join(dbDir, "config.json"), "utf8")).toBe(before);
+  });
+
+  test("config_set does not steer an environment typo into the read-only refusal", async () => {
+    // "environment" is a valid top-level key but read-only for config_set,
+    // so it is excluded from the suggestion candidates: a free-transposition
+    // typo ("enviroment") gets the valid list but no suggestion, rather
+    // than being steered into the read-only refusal.
+    const def = TOOL_DEFS.find((t) => t.name === "config_set")!;
+    const result = await def.execute({ enviroment: {} } as Record<string, unknown>, ctx);
+    expect(result).toContain("Unknown config_set section 'enviroment'");
+    expect(result).toContain("Valid sections:");
+    expect(result).not.toContain("Did you mean");
+  });
+
   test("notify_user no-ops when the configured mode is none", async () => {
     saveConfig({ notifications: { mode: "none" } }, join(dbDir, "thatch.db"));
     const def = TOOL_DEFS.find((t) => t.name === "notify_user")!;

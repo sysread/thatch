@@ -174,3 +174,34 @@ schemas and a `thatch_` prefix; the MCP server (used by both Claude Code and
 Cursor) wraps them in `z.object()` for validation and `z.toJSONSchema()` for
 the protocol response. See `docs/dev/setup-and-hooks.md` for the concrete
 files, hook event names, and command shapes each host writes.
+
+### Validation: passthrough for the guard tools, strict declared surfaces
+
+A typo'd argument key ("labels" for "label") must survive host validation
+and reach the accept-then-teach guards in `src/tool-defs.ts`, which answer
+"you passed 'labels'; did you mean 'label'?" (matcher in `src/fuzzy.ts`).
+The MCP server and the opencode v2 plugin each get this with a different
+mechanism:
+
+- **MCP server:** the validator (built in `compileTools`) is a
+  deep-passthrough clone - nested section objects included, so a typo'd
+  config_set FIELD also reaches execute. The declared `tools/list`
+  inputSchema is the strict `z.object` conversion (`additionalProperties:
+  false` at every level): no host validates between caller and tool on
+  MCP, so the declared schema IS the public contract, and it stays
+  strict. A client that strips unknown keys against the declared schema
+  before sending degrades to the plain teaching text - nothing breaks.
+- **opencode v2:** opencode-core validates (and its tool-input repair
+  strips unknown fields of closed objects) against the DECLARED schema,
+  so the declaration itself must permit what the guards teach. Only the
+  four guard-bearing tools (`memory_remember`, `memory_show`,
+  `memory_forget`, `config_set`) declare deep-passthrough schemas - deep,
+  because a strict nested section would be stripped or rejected before
+  execute could teach the correction. Every other tool declares the
+  strict conversion (`additionalProperties: false`): the declared surface
+  is the honest contract, and a permissive additionalProperties renders
+  as a `[key: string]: unknown` index signature in the Code Mode catalog.
+  Passthrough only ever admits unknown keys; declared keys keep their
+  required shape (the accept-then-teach keys are schema-optional so host
+  validation cannot preempt the guards). A test pins both halves in
+  `tests/opencode-v2-adapter-caps.test.ts`.

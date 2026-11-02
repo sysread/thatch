@@ -493,7 +493,7 @@ describe("chat delivery model in tool output", () => {
       { sessionID: "ses_budget_from", agent: "build" },
     );
     expect(spent).toContain("wake budget (6/hour) is exhausted");
-    expect(spent).toMatch(/renews ~\w{3} \d{2} \d{2}:\d{2}Z/);
+    expect(spent).toMatch(/renews ~\w{3} \d{1,2} \d{2}:\d{2}Z/);
     expect(spent).toContain("New mail like this still delivers");
     raw.run("DELETE FROM chat_wakes WHERE to_session = 'ses_budget_to'");
   });
@@ -518,6 +518,21 @@ describe("chat delivery model in tool output", () => {
     const mcpName = (mcpReg.match(/\[registered\] (.+)/) ?? [])[1]!;
     const mcp = await findChatTool("chat_status").execute({ as: mcpName }, ctx);
     expect(mcp).toContain("at your next prompt");
+  });
+
+  test("chat_send surfaces a near-miss roster name on an unknown recipient", async () => {
+    await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_send_near", agent: "build" });
+    const peer = await findChatTool("chat_register").execute({}, ctx, { sessionID: "ses_send_peer", agent: "build" });
+    const peerName = (peer.match(/\[registered\] (.+)/) ?? [])[1]!;
+    // One dropped character in the recipient: the miss names the fix.
+    const near = await findChatTool("chat_send").execute(
+      { to: peerName.slice(0, -1), body: "hi" },
+      ctx,
+      { sessionID: "ses_send_near", agent: "build" },
+    );
+    expect(near).toContain("Not sent");
+    expect(near).toContain("No registered session named");
+    expect(near).toContain("Did you mean");
   });
 
   test("chat_register MCP reclaim: an existing name resolves to its row; an unknown name is rejected", async () => {

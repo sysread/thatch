@@ -4,6 +4,7 @@ import { openSync, readSync, closeSync, readdirSync, statSync, mkdtempSync, writ
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { CHAT_NAME_POOL } from "./chat-names";
+import { withDidYouMean } from "./fuzzy";
 
 /**
  * Cross-session chat: opt-in messaging between live opencode sessions on one
@@ -963,7 +964,17 @@ export class ChatStore {
     if (!sender) return { ok: false, error: "You are not registered - call chat_register first." };
     const recipient = this.find(toNameOrID);
     if (!recipient) {
-      return { ok: false, error: `No registered session named "${toNameOrID}". Use chat_list to see who is available.` };
+      // Same suggestion surface as the memory misses (same matcher, same
+      // default cap): a typo'd recipient is a one-step fix instead of a
+      // chat_list round trip.
+      return {
+        ok: false,
+        error: withDidYouMean(
+          `No registered session named "${toNameOrID}". Use chat_list to see who is available.`,
+          toNameOrID,
+          this.list().map((s) => s.name),
+        ),
+      };
     }
     if (recipient.session_id === fromSession) {
       return { ok: false, error: "You cannot message yourself." };

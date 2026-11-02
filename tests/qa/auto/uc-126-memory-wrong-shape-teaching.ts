@@ -2,7 +2,7 @@ import { registerUseCase, type UseCase, type QaContext } from "../runner";
 import { ThatchDB } from "../../../src/db";
 import { MockEmbeddingModel } from "../../mocks/embeddings";
 import { TOOL_DEFS, type CoreContext } from "../../../src/tool-defs";
-import { z } from "zod";
+import { compileTools } from "../../../src/mcp";
 
 /**
  * UC-126: Memory tool wrong-shape teaching.
@@ -12,11 +12,11 @@ import { z } from "zod";
  * across all classes, ~402 of them missing-or-misnamed keys) showed calls
  * like memory_remember with a misnamed content key ("text") and
  * memory_show/memory_forget with no label - both died at host schema
- * validation. With the keys schema-optional, validation strips unknown
- * keys and the executes return teaching guidance naming the right
- * parameter and how to find exact labels. Every step here simulates the
- * production shape by parsing the misnamed args through the real schema
- * (z.object strips unknown keys, exactly like the hosts) before execute.
+ * validation. With the keys schema-optional and the host validators
+ * deep-passthrough (unknown keys survive), the executes return teaching
+ * guidance naming the right parameter and how to find exact labels.
+ * Every step here delivers the misnamed args through the real compiled
+ * MCP validator - the same shape both hosts hand to execute.
  */
 
 const useCase: UseCase = {
@@ -25,10 +25,10 @@ const useCase: UseCase = {
     "- A clean DB (no memories pre-saved in the teaching-test store)",
   ].join("\n"),
   steps: [
-    '1. Call `memory_remember` with args `{ text: "hello" }` parsed through the tool schema (misnamed content key).',
-    "2. Call `memory_remember` with an empty args object parsed through the tool schema.",
-    '3. Call `memory_show` with args `{ id: "nope" }` parsed through the tool schema (misnamed label key).',
-    "4. Call `memory_forget` with an empty args object parsed through the tool schema.",
+    '1. Call `memory_remember` with args `{ text: "hello" }` delivered through the real compiled validator (misnamed content key).',
+    "2. Call `memory_remember` with an empty args object.",
+    '3. Call `memory_show` with args `{ id: "nope" }` delivered through the real compiled validator (misnamed label key).',
+    "4. Call `memory_forget` with an empty args object.",
     "5. Call `memory_forget` with a whitespace label.",
     "6. Call `memory_show` with a valid label after saving one memory, to confirm the guards did not break the happy path.",
   ].join("\n"),
@@ -44,11 +44,11 @@ const useCase: UseCase = {
     const store = "wrong-shape-test";
     const coreCtx: CoreContext = { db, model, defaultStore: store };
     const findTool = (name: string) => TOOL_DEFS.find((t) => t.name === name)!;
-    // The production shape: the host validates with z.object(def.args),
-    // which strips unknown keys. Parsing the misnamed args through the
-    // real schema reproduces exactly what execute receives.
-    const parsed = (name: string, args: Record<string, unknown>) =>
-      z.object(findTool(name).args).parse(args);
+    // The production shape: the host validators deep-passthrough, so
+    // unknown keys survive into execute. The real compiled MCP validator
+    // reproduces exactly what execute receives (no hand-rebuilt schema).
+    const compiled = compileTools();
+    const parsed = (name: string, args: Record<string, unknown>) => compiled.get(name)!.validator(args);
 
     try {
       // Step 1: misnamed content key ("text" instead of "content").

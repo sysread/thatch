@@ -79,14 +79,22 @@ On overwrite, the upsert clears stale dedup verdicts: any `dedup_pairs` rows ref
 
 Three memory-tool keys are schema-optional but required in practice:
 `memory_remember`'s `content` and `memory_show`/`memory_forget`'s `label`.
-When a call omits the key (or misnames it — host validation strips unknown
-keys), execute returns a teaching message naming the right parameter and,
-for show/forget, how to find exact labels (`memory_list` or `memory_recall`,
-then retry with the label copied in full) instead of the call dying at
-validation. Optionality is what makes the teaching reachable: on the
+When a call omits the key, execute returns a teaching message naming the
+right parameter and, for show/forget, how to find exact labels
+(`memory_list` or `memory_recall`, then retry with the label copied in
+full) instead of the call dying at validation. When the call MISNAMES the
+key, the near-miss reaches the guard (unknown keys survive host
+validation: the MCP validator clone deep-passthroughs, the opencode v2
+plugin's declared schema permits them, and the opencode v1 host forwards
+raw input by its own implementation), and the guard answers with the
+correction: "you passed 'labels'; did you mean
+'label'?" - teach-only, the misnamed key's value is never applied.
+Optionality is what makes the teaching reachable: on the
 opencode v2 host the plugin's zod schema is compiled to JSON Schema and the
 HOST validates, so a key left in the schema's required array rejects the
-call before any plugin code runs. A `[saved]` output is what drains the
+call before any plugin code runs (the declared v2 schema permits unknown
+keys for the same reason - see `docs/dev/mcp-parity.md`). A `[saved]`
+output is what drains the
 extraction buffer and completes claims (both the opencode hook and the
 MCP-host queue gate on the shared `MEMORY_SAVED_MARKER` constant from
 `src/tool-defs.ts`), so a teaching-only call never drains; a `[forgotten]`
@@ -95,6 +103,17 @@ output shapes they cannot read, and the execute-wrapped Code Mode path
 stays ungated (its code-scan cannot see results); the residual
 false-positives and the full contract are in `docs/dev/gotchas.md`
 ("LLMs guess tool-call shapes").
+
+### Miss suggestions (did-you-mean)
+
+A `memory_show`/`memory_forget` miss against a stored label appends a
+fuzzy suggestion line: `Did you mean "X"?` (or git's "one of these"
+phrasing for several, max 3). Candidates are the labels of the SAME store,
+archived included. The matcher (`src/fuzzy.ts`) is a restricted
+Damerau-Levenshtein with git's empirically-derived weights (adjacent
+transposition free, substitution 2, insertion 1, deletion 3) and a
+length-scaled threshold; it is git-strict - when nothing is close, no
+suggestion line is appended, and a far-off label never gets a fallback guess.
 
 ### Read path (memory_recall)
 

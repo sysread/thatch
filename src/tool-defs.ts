@@ -28,6 +28,7 @@ import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, 
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, DEFAULT_COMMAND_EXIT_CODES, commandTargetLabel, describeBaselineCheckRuns, type WatcherRegistry, type Watcher, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
 import { CHAT_STALE_MS, CHAT_SPLIT_PART_LEN, CHAT_MAX_BODY_CHARS, CHAT_MAX_NUDGES_PER_HOUR, chatLiveness, humanAge, renderChatParticipant, sortChatRoster, splitChatRoster, chatReadClip, chatReadPage, type ChatHostKind, isoMinutesAgo } from "./chat";
 import { detectWorktreeKind, pathExists } from "./git";
+import { didYouMean, didYouMeanLine, nearMissParam, withDidYouMean } from "./fuzzy";
 import { isSameMainCheckout, validateLocationArgs, validateTitle } from "./session-tab-shared";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
@@ -233,8 +234,9 @@ export interface SessionTabHost {
  * A tool definition - the single source of truth shared by the opencode plugin
  * wrapper (tools.ts) and the MCP server (mcp.ts). The `args` field is a ZodRawShape
  * (a plain object of Zod types), which opencode's `tool()` accepts directly and
- * the MCP server wraps in `z.object()` for validation and `z.toJSONSchema()` for
- * the protocol response.
+ * the MCP server wraps in `z.object()` for validation (a deep-passthrough clone,
+ * so typo'd keys survive into the accept-then-teach guards) and
+ * `z.toJSONSchema()` for the protocol response.
  */
 export interface ToolDef {
   name: string;
@@ -418,6 +420,15 @@ function renderClusters(candidates: DedupCandidate[]): string {  const parent = 
 export const MEMORY_SAVED_MARKER = "[saved]";
 export const MEMORY_FORGOTTEN_MARKER = "[forgotten]";
 
+/**
+ * memory_remember's optional keys, minus content: a typo'd key among these
+ * rides a successful save with its value silently dropped (the note names
+ * it). Content is excluded - the content guard already owns that case -
+ * and these are the keys whose values accept strings, which is what the
+ * near-miss detector requires.
+ */
+const REMEMBER_OPTIONAL_KEYS = ["label", "store", "branch", "confidence", "overwrite", "archived"];
+
 const rememberDef: ToolDef = {
   name: "memory_remember",
   description:
@@ -462,13 +473,29 @@ const rememberDef: ToolDef = {
     // teaches instead.
     const rawContent = (args.content as string | undefined)?.trim();
     if (!rawContent) {
+      // A typo'd content key ("contents") lands here as an unknown key:
+      // name the correction before the general teaching.
+      const miss = nearMissParam(args, ["content"]);
+      if (miss) {
+        return `You passed '${miss}'; did you mean 'content'? Pass the information to remember in the content parameter.`;
+      }
       return "No content provided - pass the information to remember in the content parameter.";
     }
     let label = (args.label as string | undefined)?.trim();
     let content = rawContent;
+    // A typo'd optional key ("labels" for "label") survives validation as
+    // an unknown key and rides into this execute: the save succeeds and
+    // the value would be silently dropped. The note below names it on the
+    // way out - teach-only, the value is never applied.
+    const missKey = nearMissParam(args, REMEMBER_OPTIONAL_KEYS);
+    let missNote = "";
+    if (missKey && didYouMean(missKey, ["label"]).length === 0) {
+      // A stray non-label key (branch, store, ...): never applied.
+      const suggestion = didYouMean(missKey, REMEMBER_OPTIONAL_KEYS)[0] ?? missKey;
+      missNote = `[note] you passed '${missKey}'; did you mean '${suggestion}'? That value was not applied.`;
+    }
     if (!label) {
-      // Label omitted (or arrived under a misnamed key that schema
-      // validation stripped): derive it from the content so the write
+      // Label omitted: derive it from the content so the write
       // still lands instead of erroring. A leading markdown heading
       // becomes the label and is stripped from the stored content
       // (heading-only content keeps the heading text as the body so the
@@ -483,6 +510,16 @@ const rememberDef: ToolDef = {
         content = rest.length > 0 ? rest : heading[1].trim();
       } else {
         label = firstLine.slice(0, 80);
+      }
+      if (missKey) {
+        // The caller's intended label arrived under a typo'd key: the save
+        // lands under a DERIVED label, so the intended label would vanish
+        // without notice. Name both labels and the exact recovery.
+        const intended = args[missKey] as string;
+        missNote =
+          `[note] you passed '${missKey}'; did you mean 'label'? The memory saved under the ` +
+          `derived label "${label}" - to file it under "${intended}", memory_forget the ` +
+          `derived label and retry with label: "${intended}".`;
       }
     }
     content = `# ${label}\n\n${content}`;
@@ -501,7 +538,7 @@ const rememberDef: ToolDef = {
 
     if (!result.ok) return result.error;
 
-    const saved = `${MEMORY_SAVED_MARKER} ${store} :: ${label}`;
+    const saved = `${MEMORY_SAVED_MARKER} ${store} :: ${label}${missNote ? `\n${missNote}` : ""}`;
     if (similar.length === 0) return saved;
 
     return (
@@ -607,15 +644,28 @@ const showDef: ToolDef = {
     // find labels, then the caller retries with the real thing.
     const label = (args.label as string | undefined)?.trim();
     if (!label) {
-      return (
-        "No label provided - memory_show reads one memory by its EXACT full label. " +
+      // A typo'd key survives validation as an unknown key and lands here:
+      // name the correction before the general teaching.
+      const miss = nearMissParam(args, ["label"]);
+      const tail =
+        "memory_show reads one memory by its EXACT full label. " +
         "Find exact labels with memory_list or memory_recall, then call memory_show " +
-        "again with the label copied in full."
-      );
+        "again with the label copied in full.";
+      if (miss) return `You passed '${miss}'; did you mean 'label'? ${tail}`;
+      return `No label provided - ${tail}`;
     }
     const entry = ctx.db.showEntry(store, label);
 
-    if (!entry) return `No memory labeled "${label}" found in store "${store}".`;
+    if (!entry) {
+      // Suggest close labels from the same store (archived included -
+      // showEntry matches archived too), git-strict: nothing close means
+      // no suggestion line.
+      return withDidYouMean(
+        `No memory labeled "${label}" found in store "${store}".`,
+        label,
+        ctx.db.listEntries(store).map((e) => e.label),
+      );
+    }
 
     return withMemoryCaveat(formatEntry(entry) || "Error formatting entry.");
   },
@@ -642,16 +692,29 @@ const forgetDef: ToolDef = {
     // routes missing/misnamed keys here instead of a host validation error.
     const label = (args.label as string | undefined)?.trim();
     if (!label) {
-      return (
-        "No label provided - memory_forget removes one memory by its EXACT full label. " +
+      // Same accept-then-teach guard as memory_show: the schema-optional
+      // label routes missing/misnamed keys here instead of a host
+      // validation error.
+      const miss = nearMissParam(args, ["label"]);
+      const tail =
+        "memory_forget removes one memory by its EXACT full label. " +
         "Find exact labels with memory_list or memory_recall, then call memory_forget " +
         "again with the label copied in full. A label that matches no memory deletes " +
-        "nothing, so retrying is safe."
-      );
+        "nothing, so retrying is safe.";
+      if (miss) return `You passed '${miss}'; did you mean 'label'? ${tail}`;
+      return `No label provided - ${tail}`;
     }
     const deleted = ctx.db.forgetEntry(store, label);
 
-    if (!deleted) return `No memory labeled "${label}" found in store "${store}".`;
+    if (!deleted) {
+      // Same-store label suggestions (archived included), git-strict like
+      // memory_show's miss.
+      return withDidYouMean(
+        `No memory labeled "${label}" found in store "${store}".`,
+        label,
+        ctx.db.listEntries(store).map((e) => e.label),
+      );
+    }
 
     return `${MEMORY_FORGOTTEN_MARKER} ${store} :: ${label}`;
   },
@@ -1458,6 +1521,51 @@ const configSetDef: ToolDef = {
     ),
   },
   async execute(args) {
+    // Unknown keys are REJECTED, not silently ignored, and nothing is
+    // written: a typo'd section or field would otherwise never reach this
+    // check with its key intact (the MCP validator throws a raw zod
+    // "Unrecognized key" error for a typo'd field; v2's input repair
+    // strips the typo, so a mixed patch could write the valid fields and
+    // silently drop it). The suggestion line names the likely intended
+    // key. The declared arg schemas are nullable/optional wrappers around
+    // the config schemas, so the FIELD LISTS derive from config.ts's
+    // shapes and cannot drift from what the file actually accepts.
+    //
+    // The suggestion candidates exclude "environment": it is a valid
+    // top-level key but read-only for config_set, so steering a typo there
+    // funnels into the read-only refusal instead of a fix.
+    const knownSections: string[] = [...CONFIG_SECTIONS, "environment"];
+    const unknownSection = Object.keys(args).find((k) => !knownSections.includes(k));
+    if (unknownSection !== undefined) {
+      const line = didYouMeanLine(unknownSection, CONFIG_SECTIONS);
+      return `Unknown config_set section '${unknownSection}'.${line ? " " + line : ""} Valid sections: ${knownSections.join(", ")}.`;
+    }
+    const sectionFieldChecks: { section: string; patch: unknown; fields: string[] }[] = [
+      { section: "notifications", patch: args.notifications, fields: Object.keys(notificationPrefsSchema.shape) },
+      { section: "chat", patch: args.chat, fields: Object.keys(chatPrefsSchema.shape) },
+      { section: "alerts", patch: args.alerts, fields: ALERT_EVENT_KINDS },
+    ];
+    for (const { section, patch, fields } of sectionFieldChecks) {
+      if (patch === null || typeof patch !== "object") continue;
+      const unknownField = Object.keys(patch).find((k) => !fields.includes(k));
+      if (unknownField !== undefined) {
+        const line = didYouMeanLine(unknownField, fields);
+        return `Unknown ${section} field '${unknownField}'.${line ? " " + line : ""} Valid fields: ${fields.join(", ")}.`;
+      }
+      if (section === "alerts") {
+        // One level deeper than the other sections: each alert event is
+        // its own patch object, and only "mode" is valid inside it.
+        const eventFields = Object.keys(alertEventPrefsSchema.shape);
+        for (const [event, eventPatch] of Object.entries(patch)) {
+          if (eventPatch === null || typeof eventPatch !== "object") continue;
+          const unknownEventField = Object.keys(eventPatch).find((k) => !eventFields.includes(k));
+          if (unknownEventField !== undefined) {
+            const line = didYouMeanLine(unknownEventField, eventFields);
+            return `Unknown alerts.${event} field '${unknownEventField}'.${line ? " " + line : ""} Valid fields: ${eventFields.join(", ")}.`;
+          }
+        }
+      }
+    }
     // Environment knobs are process state, not file state: no write path.
     if (args.environment !== undefined) {
       return "config_set cannot change the environment section: " +
@@ -2871,7 +2979,14 @@ const sessionTabCloseDef: ToolDef = {
     const row = ctx.db.findChatSession(target);
     const sessionID = row?.session_id ?? (target.startsWith("ses_") ? target : "");
     if (!sessionID) {
-      return `No registered session matches "${target}" - pass the subordinate's chat name (from the spawn response) or its session id.`;
+      // Suggest close chat names from the roster (same source chat_send
+      // suggests from), git-strict: a far-off target (e.g. an unregistered
+      // ses_ id) adds no suggestion line.
+      return withDidYouMean(
+        `No registered session matches "${target}" - pass the subordinate's chat name (from the spawn response) or its session id.`,
+        target,
+        ctx.db.listChatSessions().map((s) => s.name),
+      );
     }
     const chatName = row?.name ?? null;
     await ctx.sessionTabHost.closeTab({ sessionID, chatName });

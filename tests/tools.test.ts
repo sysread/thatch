@@ -230,6 +230,20 @@ describe("thatch_memory_show", () => {
     expect(result).toContain("Nope");
   });
 
+  test("suggests a near-miss label on a miss", async () => {
+    await tools.thatch_memory_remember.execute({ label: "Pull Request Summary", content: "Detailed content" });
+    const result = await tools.thatch_memory_show.execute({ label: "Pull Request Sumary" });
+    expect(result).toContain("No memory");
+    expect(result).toContain('Did you mean "Pull Request Summary"?');
+  });
+
+  test("suggests nothing for a garbage label (no fallback guess)", async () => {
+    await tools.thatch_memory_remember.execute({ label: "Pull Request Summary", content: "Detailed content" });
+    const result = await tools.thatch_memory_show.execute({ label: "zzz qqq completely unrelated" });
+    expect(result).toContain("No memory");
+    expect(result).not.toContain("Did you mean");
+  });
+
   test("respects store argument", async () => {
     await tools.thatch_memory_remember.execute({ label: "Cross Store", content: "Content", store: "other" });
 
@@ -257,6 +271,14 @@ describe("thatch_memory_forget", () => {
   test("returns not-found for unknown label", async () => {
     const result = await tools.thatch_memory_forget.execute({ label: "Ghost" });
     expect(result).toContain("No memory");
+  });
+
+  test("suggests a near-miss label on a miss and deletes nothing", async () => {
+    await tools.thatch_memory_remember.execute({ label: "Delete Target", content: "Temp" });
+    const result = await tools.thatch_memory_forget.execute({ label: "Delete Tagret" });
+    expect(result).toContain("No memory");
+    expect(result).toContain('Did you mean "Delete Target"?');
+    expect(db.showEntry(defaultStore, "Delete Target")).not.toBeNull();
   });
 });
 

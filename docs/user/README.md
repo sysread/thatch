@@ -107,8 +107,8 @@ Stores are created automatically. No setup required.
 | `thatch_memory_remember` | Save a piece of information; thatch embeds it for later recall. The label is optional - it is derived from the content's first heading or line when omitted. Content is required in practice: a call without it saves nothing and returns guidance naming the parameter. |
 | `thatch_memory_recall` | Search for relevant information using natural language. Searches both the current project's store and `global` by default. |
 | `thatch_memory_list` | List all memory labels in a store. |
-| `thatch_memory_show` | Read the full content of a memory by its exact, full label. A call without the label returns guidance pointing at `memory_list`/`memory_recall`. |
-| `thatch_memory_forget` | Delete a memory by its exact, full label. A call without the label returns guidance pointing at `memory_list`/`memory_recall`. |
+| `thatch_memory_show` | Read the full content of a memory by its exact, full label. A call without the label returns guidance pointing at `memory_list`/`memory_recall`; a typo'd label gets a `Did you mean "..."?` suggestion when one is close. |
+| `thatch_memory_forget` | Delete a memory by its exact, full label. A call without the label returns guidance pointing at `memory_list`/`memory_recall`; a typo'd label gets a `Did you mean "..."?` suggestion when one is close. |
 
 ### Store tools
 
@@ -154,7 +154,7 @@ Stores are created automatically. No setup required.
 | Tool | What it does |
 |------|-------------|
 | `thatch_config_get` | Read the user config (`~/.config/thatch/config.json`), with defaults annotated. The `environment` section lists the `THATCH_*` env knobs and their effective values (read-only). The agent manages config through these tools; you can also edit the file by hand. |
-| `thatch_config_set` | Update config fields. Field-level merge: only fields you pass change; pass `null` as a field's value to unset it (the default applies again). The environment section is refused (set env vars in your shell). Returns the resulting section so the agent can verify. |
+| `thatch_config_set` | Update config fields. Field-level merge: only fields you pass change; pass `null` as a field's value to unset it (the default applies again). The environment section is refused (set env vars in your shell). Returns the resulting section so the agent can verify. Unknown sections or fields are rejected with a `Did you mean ...?` suggestion, and nothing is written. |
 
 ### Notification tools
 
@@ -195,7 +195,7 @@ requirements.
 | Tool | What it does |
 |------|-------------|
 | `thatch_session_tab` | Spawn a detached subordinate LLM session in a new TUI tab: creates the session, pre-assigns its chat name, delivers your task prompt with your coordinator-identity framing, and opens its tab beside yours (unfocused). Takes `prompt` and `title` (required) plus exactly one of `worktree` (a git worktree of the current repository) or `directory` (any existing directory). Requires opencode v2 and the `thatch-coordination` skill describes the supervisor workflow. |
-| `thatch_session_tab_close` | Close a dispatched subordinate's TUI tab when its task is verified and done. Tab-level only: the session survives and the user can reopen the tab; nothing is deleted. Target: the subordinate's chat name or session id. opencode v2 only. |
+| `thatch_session_tab_close` | Close a dispatched subordinate's TUI tab when its task is verified and done. Tab-level only: the session survives and the user can reopen the tab; nothing is deleted. Target: the subordinate's chat name or session id; an unmatched target suggests close chat names. opencode v2 only. |
 
 ### Chat tools
 
@@ -203,7 +203,7 @@ requirements.
 |------|-------------|
 | `thatch_chat_register` | Join the cross-session chat directory, so other sessions on this machine can message you. Display names are assigned by thatch, never chosen (a pool name plus a never-reused counter), so a name always refers to the same session. Call with no arguments to join, rejoin after unregistering, or check your name. On hosts without session context (Claude Code, Cursor), pass the name your thatch hook printed as `as`. |
 | `thatch_chat_list` | List registered sessions grouped into Active, Recent, and Stale sections (recent = alive but no open tab, so a wake may not be guaranteed; stale = two missed heartbeats, about a minute; its host process has probably stopped), with how long ago each last checked in, each session's project and checkout kind (project root or linked worktree), its topic, and your unread count. |
-| `thatch_chat_send` | Send a message to another registered session, by name or session id. The recipient is nudged when its session is idle. |
+| `thatch_chat_send` | Send a message to another registered session, by name or session id. The recipient is nudged when its session is idle; an unknown recipient suggests close registered names. |
 | `thatch_chat_read` | Drain your inbox: all unread messages oldest-first, marked read. Senders identified by display name. |
 | `thatch_chat_unregister` | Leave the chat directory. |
 | `thatch_chat_broadcast` | Send one message to every other live registered session at once. Opencode sessions without an open tab (stale, or fresh but tab-less) are skipped and reported by name. Use sparingly: every open session pays a model turn for a broadcast. |

@@ -40,6 +40,22 @@ Key decisions:
   from the file; the default applies again). The stored schemas stay strict:
   null is an arg-level marker only and never reaches the file. A null section
   object is refused (null unsets fields, not sections).
+- **Unknown `config_set` keys are rejected, not silently ignored.** Without
+  this check a typo'd section or field would never reach the merge with its
+  key intact: the MCP validator throws a raw zod "Unrecognized key" error,
+  and v2's input repair strips it (a bare "Nothing to update", or worse a
+  mixed patch that writes the valid fields while silently dropping the
+  typo); only a call that reaches execute unvalidated (opencode v1
+  forwards raw input) dies at the strict section schemas during the merge.
+  `execute` validates every key against the config schema's field lists
+  (derived from `config.ts`'s schema shapes, so they cannot drift) and
+  returns an error naming the typo with a fuzzy `Did you mean ...?`
+  suggestion (`src/fuzzy.ts`, the same git-weighted matcher the memory and
+  chat misses use). Nothing is written on a typo. Both plugin hosts
+  deliver unknown keys to this check (MCP: the validator clone
+  deep-passthroughs; opencode v2: the declared schema permits them;
+  opencode v1 forwards raw input by its own implementation) - see
+  `docs/dev/mcp-parity.md` for the exact per-host schema surfaces.
 - **`config_set` refuses to write when the file failed to parse.** A save
   would write a merged-whole file from the empty fallback config and silently
   discard whatever the user hand-wrote; the refusal names the file and points

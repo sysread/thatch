@@ -197,7 +197,11 @@ with the roster already in hand.
 ### Messages
 
 `chat_send` addresses a recipient by display name or session ID. Both
-endpoints must be registered and distinct. `chat_read` drains the calling
+endpoints must be registered and distinct. An unknown recipient's error
+carries a fuzzy suggestion line (`Did you mean "X"?`, max 3, same
+git-weighted matcher as the memory misses via `src/fuzzy.ts`) when a
+registered roster name is close to what was typed; a far-off name gets no
+guess. `chat_read` drains the calling
 session's inbox oldest-first and stamps rows read. Message history survives
 unregistration: each row snapshots the sender's and recipient's roster
 names at send time (`from_name`/`to_name`), so a departed sender renders

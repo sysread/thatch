@@ -268,6 +268,27 @@ describe("opencode v2 adapter", () => {
     }
   });
 
+  test("session_tab_close miss suggests near-miss roster names", async () => {
+    const { ThatchDB } = await import("../src/db");
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const db = new ThatchDB(join(dbDir, "test.db"));
+    try {
+      db.registerChatSession("ses_sub_near", "test-owner/test-repo", null, "opencode", null, null);
+      const name = db.findChatSession("ses_sub_near")!.name!;
+      const tool = addedTools.find((t) => t.name === "thatch_session_tab_close")!;
+      // One dropped character: the miss names the close roster fix.
+      const raw = await tool.execute(
+        { session: name.slice(0, -1) },
+        { sessionID: "ses_coordinator", agent: "build" },
+      );
+      const result = typeof raw === "string" ? raw : (raw as any)?.content;
+      expect(result).toContain("No registered session matches");
+      expect(result).toContain("Did you mean");
+    } finally {
+      db.close();
+    }
+  });
+
   test("session_tab degrade: no session context and no seam refuse cleanly", async () => {
     const { buildCoreContext } = await import("../src/tool-defs");
     const { ThatchDB } = await import("../src/db");

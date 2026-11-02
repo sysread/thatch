@@ -3,6 +3,7 @@
 import { describe, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { TOOL_DEFS, formatAge, MEMORY_SAVED_MARKER, MEMORY_FORGOTTEN_MARKER } from "../src/tool-defs";
+import { compileTools } from "../src/mcp";
 import { setupToolDefsHarness, ctx, db, model, dbPath, defaultStore } from "./mocks/tool-defs-harness";
 
 setupToolDefsHarness();
@@ -127,18 +128,53 @@ describe("tool-defs execute functions", () => {
     expect(result.startsWith(MEMORY_FORGOTTEN_MARKER)).toBe(true);
   });
 
-  test("misnamed keys are stripped by validation and routed to the teaching guards", async () => {
-    // The production shape: { text: "..." } instead of content, or { id: "..." }
-    // instead of label. z.object strips unknown keys, so the parsed args are
-    // empty and execute's guards teach the right shape.
-    const { z } = await import("zod");
+  test("misnamed keys survive the passthrough validator and route to the teaching guards", async () => {
+    // The production shape: the hosts' validators deep-passthrough, so
+    // unknown keys reach execute, which answers a near-miss key with the
+    // correction and a far-off key with the plain teaching text. The real
+    // compiled MCP validator pins the wiring (no hand-rebuilt schema).
     const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
     const show = TOOL_DEFS.find((t) => t.name === "memory_show")!;
-    const parsedRemember = z.object(remember.args).parse({ text: "hello" });
-    expect(await remember.execute(parsedRemember, ctx)).toContain("content parameter");
-    const parsedShow = z.object(show.args).parse({ id: "some-label" });
-    expect(await show.execute(parsedShow, ctx)).toContain("No label provided");
+    const forget = TOOL_DEFS.find((t) => t.name === "memory_forget")!;
+    const compiled = compileTools();
+    const parsed = (name: string, args: Record<string, unknown>) => compiled.get(name)!.validator(args);
+    // Far-off keys keep the generic teaching (no near miss to name).
+    expect(await remember.execute(parsed("memory_remember", { text: "hello" }), ctx)).toContain("content parameter");
+    expect(await show.execute(parsed("memory_show", { id: "some-label" }), ctx)).toContain("No label provided");
     expect(db.listEntries(defaultStore).length).toBe(0);
+    // Near-miss keys get the correction named.
+    const missShow = await show.execute(parsed("memory_show", { labels: "Some Label" }), ctx);
+    expect(missShow).toContain("You passed 'labels'; did you mean 'label'?");
+    const missForget = await forget.execute(parsed("memory_forget", { lable: "Some Label" }), ctx);
+    expect(missForget).toContain("You passed 'lable'; did you mean 'label'?");
+    const missRemember = await remember.execute(parsed("memory_remember", { cotnent: "hello" }), ctx);
+    expect(missRemember).toContain("You passed 'cotnent'; did you mean 'content'?");
+    // Teach-only: the misnamed key's value is never applied.
+    expect(db.listEntries(defaultStore).length).toBe(0);
+  });
+
+  test("a misnamed label key on a successful save names the derived label and the recovery", async () => {
+    // The dangerous case: { labels: "My Label", content: "body" } SAVES -
+    // under a derived label - so the caller's intended label vanishes
+    // without the note. The note teaches the exact recovery (forget the
+    // derived label, retry with the right key).
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const compiled = compileTools();
+    const parsed = compiled.get("memory_remember")!.validator({ labels: "My Label", content: "body" });
+    const result = await remember.execute(parsed, ctx);
+    expect(result).toContain("[saved]");
+    expect(result).toContain("[note] you passed 'labels'; did you mean 'label'?");
+    expect(result).toContain('The memory saved under the derived label "');
+    expect(result).toContain('retry with label: "My Label"');
+  });
+
+  test("a stray non-label near-miss key is noted as not applied, and the save lands", async () => {
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const compiled = compileTools();
+    const parsed = compiled.get("memory_remember")!.validator({ label: "Named", content: "body", sore: "x" });
+    const result = await remember.execute(parsed, ctx);
+    expect(result).toContain("[saved]");
+    expect(result).toContain("[note] you passed 'sore'; did you mean 'store'? That value was not applied.");
   });
 
   test("memory_recall returns matches", async () => {
@@ -450,9 +486,9 @@ describe("prediction tool execute functions", () => {
     // The observed hallucinated shapes: {query: ...} (cross-wired from
     // memory_recall, which shares Promise.all blocks with this tool) and
     // {situation: ...} (cross-wired from prediction_update/codify). The
-    // host strips unknown keys, so both arrive as an empty object; the
-    // execute-level guard must teach the key name instead of a bare
-    // missing-key rejection.
+    // hosts' validators run passthrough, so those keys arrive intact and
+    // none of them is "context"; the execute-level guard must teach the
+    // key name instead of a bare missing-key rejection.
     for (const bad of [{}, { query: "deciding on test coverage" }, { situation: "deciding" }]) {
       const result = await findTool("prediction_query").execute(bad as Record<string, unknown>, ctx);
       expect(result).toContain("No context provided");

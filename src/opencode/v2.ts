@@ -12,6 +12,7 @@ import { detectRepo, detectWorktreeKind } from "../git";
 import { chatEnabled, loadConfig } from "../config";
 import { EXIT_TAB_CLOSED_EVENT, SESSION_TAB_RPC, TAB_CLOSED_EVENT, TAB_OPENED_EVENT, TOAST_EVENT, buildSubordinatePrompt, tabClosedEventType, tabOpenedEventType } from "../session-tab-shared";
 import { TOOL_DEFS, trimHostContext, type HostToolContext, type SessionTabCloseInput, type SessionTabHost, type SessionTabSpawnInput, type SessionTabSpawnResult } from "../tool-defs";
+import { deepPassthrough } from "../tool-schema";
 
 // The opencode v2 adapter (opencode 2.x, plugin API @opencode/plugin 2.x).
 // Loaded only by v2 hosts - the dual entry (src/index.ts) lazy-imports this
@@ -194,12 +195,26 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   // LLM then guesses argument names and the tools crash on undefined args).
   // A plain JSON Schema object flows through v2's inputJsonSchema untouched
   // and validates through v2's JSON-schema codec cache.
+  //
+  // Guard-bearing tools (the accept-then-teach guards + config_set key
+  // validation) declare a deep-passthrough schema: a typo'd key must
+  // survive opencode-core's validation AND its tool-input repair (which
+  // strips unknown fields of closed objects) to reach execute's "did you
+  // mean" teaching. Every other tool declares the STRICT conversion -
+  // additionalProperties: false, no index-signature leak into the Code
+  // Mode catalog's rendered signatures. Passthrough only ever admits
+  // unknown keys; declared keys keep their required shape, and the
+  // guard-taught keys (content, label) are schema-optional on purpose so
+  // host validation cannot preempt the guards (which live in
+  // src/tool-defs.ts).
+  const GUARD_TOOLS = new Set(["memory_remember", "memory_show", "memory_forget", "config_set"]);
   const registerTools = await context.tool.transform((editor) => {
     for (const def of TOOL_DEFS) {
+      const objectSchema = z.object(def.args);
       editor.add({
         name: `thatch_${def.name}`,
         description: def.description,
-        input: z.toJSONSchema(z.object(def.args)),
+        input: z.toJSONSchema(GUARD_TOOLS.has(def.name) ? deepPassthrough(objectSchema) : objectSchema),
         execute: async (input: unknown, toolContext: V2ToolContext) => {
           // In-flight counter (read by the cleanup below): v2 tears the old
           // activation down while a call it registered may still be running,

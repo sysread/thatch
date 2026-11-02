@@ -115,6 +115,29 @@ describe("MCP compileTools", () => {
     expect(requiredFor("memory_show")).not.toContain("label");
     expect(requiredFor("memory_forget")).not.toContain("label");
   });
+
+  test("the declared inputSchema stays strict while the validator deep-passthroughs", () => {
+    // Two deliberate halves (see compileTools): tools/list advertises
+    // additionalProperties: false at EVERY level - byte-identical to the
+    // plain z.object shape - while the validator clone lets unknown keys
+    // survive at every level, so a typo'd key reaches the accept-then-teach
+    // guards and gets named.
+    const tools = compileTools();
+    const schema = tools.get("memory_show")!.inputSchema as { additionalProperties?: unknown };
+    expect(schema.additionalProperties).toBe(false);
+    const parsed = tools.get("memory_show")!.validator({ labels: "Some Label" });
+    expect(parsed).toEqual({ labels: "Some Label" });
+  });
+
+  test("config_set field typos survive the validator for execute to teach", () => {
+    // The section schemas are z.strictObject; without the validator's
+    // deep-passthrough, a typo'd FIELD dies here as a generic
+    // "Unrecognized key" error and the execute-level did-you-mean check is
+    // unreachable on MCP hosts.
+    const validator = compileTools().get("config_set")!.validator;
+    const parsed = validator({ chat: { enabld: true } }) as Record<string, any>;
+    expect(Object.keys(parsed.chat)).toContain("enabld");
+  });
 });
 
 describe("MCP compilePrompts", () => {

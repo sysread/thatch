@@ -299,6 +299,22 @@ describe("ChatStore via ThatchDB", () => {
     expect(db.sendChatMessage("ses_b", "ses_a", "hello alice").ok).toBe(true);
   });
 
+  test("send miss suggests near-miss roster names, stays silent for garbage", () => {
+    reg("ses_a", "alice");
+    const bob = reg("ses_b", "bob").name;
+    // One dropped character: a one-step fix is named alongside the miss.
+    const near = db.sendChatMessage("ses_a", bob.slice(0, -1), "hi");
+    expect(near.ok).toBe(false);
+    if (!near.ok) {
+      expect(near.error).toContain("No registered session named");
+      expect(near.error).toContain("Did you mean");
+    }
+    // A far-off recipient gets no guess (git-strict, never a fallback guess).
+    const garbage = db.sendChatMessage("ses_a", "qqq zzz utterly different", "hi");
+    expect(garbage.ok).toBe(false);
+    if (!garbage.ok) expect(garbage.error).not.toContain("Did you mean");
+  });
+
   test("an identical resend within the dedupe window lands one row, outside it lands two", () => {
     const bob = reg("ses_b", "bob").name;
     reg("ses_a", "alice");

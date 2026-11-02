@@ -36,6 +36,8 @@ explicitly with `thatch_chat_register` (no arguments) - useful after
   git worktree, its topic, and your unread count
 - `thatch_chat_send` delivers a message to another registered session, by
   name or session id, and states the recipient's liveness at send time.
+  An unknown recipient suggests close registered names
+  (`Did you mean "..."?`) when one is near the typo.
   For a recipient with no open tab it says so plainly: the message waits
   in the inbox, but the wake is not guaranteed to start a turn
   (daemon-resident sessions like subordinates usually still pick the

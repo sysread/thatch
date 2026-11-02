@@ -69,6 +69,45 @@ describe("opencode v2 adapter", () => {
     }
   });
 
+  test("the registered v2 input schema permits unknown keys (typo'd keys reach the guards)", async () => {
+    // Pins the v2 declared surface (src/opencode/v2.ts, registerTools):
+    // the GUARD-BEARING tools' schemas are built with deepPassthrough so
+    // they convert to additionalProperties: {} instead of false.
+    // opencode-core validates tool calls against this declared schema; a
+    // strict false would strip or reject a typo'd key ("labels") before
+    // the accept-then-teach guards could name it. JSON Schema semantics
+    // for additionalProperties: {} allow any additional property, which is
+    // the strongest pin this repo can make without running opencode-core
+    // itself.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const registered = addedTools.find((t) => t.name === "thatch_memory_show")!;
+    const schema = registered.input as { additionalProperties?: unknown };
+    expect(schema.additionalProperties).not.toBe(false);
+    expect(schema.additionalProperties).toEqual({});
+  });
+
+  test("v2 declared schemas: non-guard tools stay strict; config_set sections permit unknown fields", async () => {
+    // Two halves of the same rule: only the four guard-bearing tools
+    // (memory_remember/show/forget, config_set) declare passthrough
+    // schemas - a permissive additionalProperties renders as a
+    // "[key: string]: unknown" index signature in the Code Mode catalog,
+    // so every other tool keeps the strict honest signature. And
+    // config_set's loosening is DEEP (nested section objects too):
+    // opencode-core's tool-input repair strips unknown fields of closed
+    // objects, so a strict nested section would eat a typo'd field and
+    // execute could never teach the correction.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const strict = addedTools.find((t) => t.name === "thatch_notify_user")!;
+    expect((strict.input as { additionalProperties?: unknown }).additionalProperties).toBe(false);
+    const configSet = addedTools.find((t) => t.name === "thatch_config_set")!;
+    const schema = configSet.input as {
+      additionalProperties?: unknown;
+      properties?: Record<string, { additionalProperties?: unknown }>;
+    };
+    expect(schema.additionalProperties).toEqual({});
+    expect(schema.properties?.chat?.additionalProperties).toEqual({});
+  });
+
   test("wrap-up commands deliver a real (non-synthetic) prompt", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     // The wrap-up body is the user-visible prompt (like v1's command file

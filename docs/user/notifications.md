@@ -22,7 +22,7 @@ Two mechanisms:
 |------|-------------|
 | `thatch_notify_user` | Send a banner and/or spoken notification. |
 | `thatch_config_get` | Read the current config, with defaults annotated. Also lists the `THATCH_` environment knobs (read-only). |
-| `thatch_config_set` | Update config fields; pass `null` as a field's value to unset it. Returns the resulting section. |
+| `thatch_config_set` | Update config fields; pass `null` as a field's value to unset it. Returns the resulting section. Unknown sections or fields are rejected with a `Did you mean ...?` suggestion, and nothing is written. |
 
 ### notify_user
 
