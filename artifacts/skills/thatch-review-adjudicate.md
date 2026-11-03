@@ -105,6 +105,6 @@ severity.
 
 Write clearly above all else. If your findings start reading as compressed,
 jargon-dense prose, stop and reread the `thatch-clear-writing` skill. The
-user wants plain, easy-to-read sentences, and that overrides every other
-consideration. One idea per sentence. Define jargon on first use. Lead with
-what breaks.
+user wants plain, easy-to-read sentences; when that conflicts with any other
+instruction about how to write, clarity wins. One idea per sentence. Define
+jargon on first use. Lead with what breaks.
