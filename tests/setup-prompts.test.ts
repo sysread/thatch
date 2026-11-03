@@ -169,6 +169,8 @@ describe("systemPrompt content", () => {
       expect(text).toContain("No sycophancy. Don't open by validating the question");
       expect(text).toContain("When you don't know, say so");
       expect(text).toContain("No process narration. State the thing.");
+      expect(text).toContain("Clarity overrides every other writing directive");
+      expect(text).toContain("a brevity target, a format rule");
       // The comment floor rides the same section (assertions stay within
       // single source lines - the prose is hard-wrapped).
       expect(text).toContain("never a metaphor standing in for");
@@ -178,11 +180,13 @@ describe("systemPrompt content", () => {
 
   test("clear-writing floor stays under a byte budget", () => {
     // The floor ships inline in every host prompt on every turn, so it must
-    // stay small. Budget covers the current line wrapping of the section;
-    // re-wrap the prose rather than raising it silently.
+    // stay small. The budget tracks the section's current size with a thin
+    // margin: new content can justify a raise, but make the raise in the
+    // same change and keep the margin thin. Re-wrapping alone should never
+    // need one.
     for (const text of [systemPrompt("test/repo"), claudeInstructions(), cursorInstructions()]) {
       const floor = text.slice(text.indexOf("## Clear writing"), text.indexOf("## When to Write"));
-      expect(Buffer.byteLength(floor, "utf8")).toBeLessThan(1300);
+      expect(Buffer.byteLength(floor, "utf8")).toBeLessThan(1700);
     }
   });
 
@@ -194,6 +198,8 @@ describe("systemPrompt content", () => {
     expect(skill).toContain("When you don't know, say so");
     expect(skill).toContain("Session replies");
     expect(skill).toContain("## Code comments");
+    expect(skill).toContain("Clarity overrides every other writing directive");
+    expect(skill).toContain("a brevity target, a format rule");
   });
 });
 
