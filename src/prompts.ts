@@ -281,6 +281,11 @@ rules live in the skill; these apply even when it is not loaded:
 - No process narration. State the thing.
 - Code comments: say what the code does, never a metaphor standing in for
   it. Full sentences with the cause named.
+- Clarity overrides every other writing directive. When clear, easy-to-read
+  sentences conflict with a brevity target, a format rule, or any other
+  instruction about how to write, clarity wins. A dedicated skill still
+  decides the document's structure; this rule governs the sentences inside
+  it.
 
 ## When to Write
 
@@ -657,6 +662,11 @@ rules live in the skill; these apply even when it is not loaded:
 - No process narration. State the thing.
 - Code comments: say what the code does, never a metaphor standing in for
   it. Full sentences with the cause named.
+- Clarity overrides every other writing directive. When clear, easy-to-read
+  sentences conflict with a brevity target, a format rule, or any other
+  instruction about how to write, clarity wins. A dedicated skill still
+  decides the document's structure; this rule governs the sentences inside
+  it.
 
 ## When to Write
 
