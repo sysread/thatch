@@ -27,4 +27,5 @@ import "./uc-098-chat-cross-session";
 import "./uc-119-session-tab-spawn";
 import "./uc-122-review-mode-commands";
 import "./uc-125-session-tab-switched-window";
+import "./uc-129-redo-command";
 import "./uc-130-review-adjudicate";
