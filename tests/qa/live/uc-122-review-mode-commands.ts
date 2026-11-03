@@ -29,10 +29,12 @@ const useCase: UseCase = {
     "5. Run /thatch/self-review on the same branch.",
     "6. Verify the slop lens output leads the findings (Seed C) and Seed D is presented as an adopt-or-dismiss decision, not an informational aside.",
     "7. Fix the Seed C findings, then verify the round loop: the command runs a second round on the updated state and stops there (no third round when round two produces no meaningful findings).",
+    "8. In the peer-review run, after synthesis verify the adjudication stage: the session presents the change walkthrough first, then the findings one at a time in the finding template with the verdict line, and asks for a verdict per finding (keep/drop/reframe/verify/elaborate/abort/post as draft). Give verdicts for the findings and verify only the kept ones are staged as a draft review, and that the session does NOT submit the review itself.",
   ].join("\n"),
   expected: [
     "- peer-review reports the existing-helper finding (Seed A) with evidence and never reports the future-change trap (Seed B).",
     "- peer-review's report shows the memory walk over the touched area.",
+    "- peer-review ends in the adjudication stage: walkthrough first, then one finding at a time in the template with the verdict line, kept findings staged as a draft review, and the review submitted by the user, never the session.",
     "- self-review leads with the reputation lenses (Seed C) and surfaces the simpler design as a decision (Seed D).",
     "- self-review iterates a second round after fixes and terminates at the first round with no meaningful findings (never more than three).",
     "- Both commands resolve the review target from the command text or default to the current branch, and cite file:line against the range head SHA.",

@@ -167,7 +167,7 @@ describe("setupClaudeCode (project-local)", () => {
     // Shared skills only — opencode-only skills (thatch-code-review) are not
     // installed for Claude Code because they require sub-agent support.
     expect(result.skills.dir).toBe(join(projectDir, ".claude", "skills"));
-    expect(result.skills.added.length).toBe(39);
+    expect(result.skills.added.length).toBe(40);
     expect(result.skills.updated).toEqual([]);
     expect(result.skills.unchanged).toEqual([]);
     expect(result.skills.removed).toEqual([]);
@@ -187,6 +187,7 @@ describe("setupClaudeCode (project-local)", () => {
     expect(skillNames).toContain("thatch-review-highlights");
     expect(skillNames).toContain("thatch-review-technique");
     expect(skillNames).toContain("thatch-review-synthesizer");
+    expect(skillNames).toContain("thatch-review-adjudicate");
     expect(skillNames).toContain("thatch-review-context");
     expect(skillNames).toContain("thatch-code-archaeology");
     expect(skillNames).toContain("thatch-review-followup");
@@ -331,7 +332,7 @@ describe("CLAUDE_CONFIG_DIR override", () => {
       expect(result.settings).toBe(join(customDir, "settings.json"));
       // skills are installed under the custom dir
       expect(result.skills.dir).toBe(join(customDir, "skills"));
-      expect(result.skills.added.length).toBe(39);
+      expect(result.skills.added.length).toBe(40);
       for (const skill of result.skills.added) {
         expect(skill.path.startsWith(customDir + "/")).toBe(true);
       }
@@ -361,7 +362,7 @@ describe("CLAUDE_CONFIG_DIR override", () => {
       expect(existsSync(join(projectDir, ".claude", "settings.json"))).toBe(true);
 
       expect(result.skills.dir).toBe(join(projectDir, ".claude", "skills"));
-      expect(result.skills.added.length).toBe(39);
+      expect(result.skills.added.length).toBe(40);
       for (const skill of result.skills.added) {
         expect(skill.path.startsWith(projectDir + "/")).toBe(true);
       }

@@ -39,7 +39,10 @@ invoke it. The remaining commands (`refine`, `self-review`, `peer-review`,
   incidents, constraints, and footguns the author could not have known,
   and checks them against the change. Settled designs are not
   re-litigated, and "if someone changes this later it breaks" findings
-  are never reported. See [code-review.md](code-review.md).
+  are never reported. After synthesis, the findings are presented to you
+  one at a time for verdicts (`thatch-review-adjudicate`), and the kept
+  ones are staged as a draft review you submit. See
+  [code-review.md](code-review.md).
 - `/thatch/self-review` — review your own completed work before
   submitting it: the full review pipeline weighted for reputation and
   simplicity. Takes the same target argument as peer-review. Rounds

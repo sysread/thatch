@@ -59,6 +59,7 @@ function loadSharedSkills(): SkillDef[] {
     // diverge.
     ...REVIEW_SPECIALISTS,
     "thatch-review-synthesizer",
+    "thatch-review-adjudicate",
     "thatch-review-context",
     "thatch-code-archaeology",
     "thatch-review-followup",

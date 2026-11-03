@@ -352,3 +352,12 @@ Note which files or areas were NOT covered by any specialist.
 ### Human-verifiable unknowns
 
 Flag conclusions that rest on something static analysis cannot reach: a rollout state, a config value in a different environment, a deploy order, a feature flag setting, a migration that has not run. These are things a human reviewer can check and the review cannot. Each entry names the unknown and where to check it. If none, write "None."
+
+## After the report
+
+The report is this skill's end point. The next step is mode-specific and
+deliberately not wired here or in the coordinator: peer review continues with
+the `thatch-review-adjudicate` skill (driven by the peer-review command's mode
+rules), while self-review works the findings over chat in its own round loop.
+Both modes share this skill, so an adjudicate handoff added here would fire
+during self-review too.

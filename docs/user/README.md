@@ -321,7 +321,7 @@ updated, removed, or already current.
 
 ### Code review skills
 
-Nine specialist review lenses, plus the synthesizer, context, followup,
+The specialist review lenses, plus the synthesizer, adjudicate, context, followup,
 response, walkthrough, and workflow skills that support the review pipeline:
 
 | Skill | Focus |
@@ -337,6 +337,7 @@ response, walkthrough, and workflow skills that support the review pipeline:
 | `thatch-review-highlights` | Positive finding detection: notably clever solutions, cleanup done along the way, documentation that helps. Medium-high bar against generic praise. |
 | `thatch-review-technique` | Technique lens: teaching-grade notes on unseen helpers/internal packages, companion techniques, house patterns, test-craft, API-shape principles, next-reader discoverability. Informational only, never blocking. |
 | `thatch-review-synthesizer` | Verifies and synthesizes findings from multiple specialists into a report that starts with workflow changes, then highlights, then deduplicated severity-grouped findings. |
+| `thatch-review-adjudicate` | Presents a completed peer review's findings to you for adjudication: the walkthrough first, then one finding at a time in a fixed template with a verdict line (keep, drop, reframe, verify, elaborate, abort, post as draft), highlights and technique notes in the same loop, then a staged draft review you submit. Peer review only; self-review and subordinate-session work route findings over chat and stay automatic. |
 | `thatch-review-context` | Gathers project context (PR descriptions, git archaeology, ticket references, linked docs/tickets, memory, related PRs) before a review. Prevents false positives about intentionally deferred work and about pieces delivered by sibling PRs in a stack or release train. |
 | `thatch-code-archaeology` | Investigates an existing feature, debugs an unfamiliar area, or begins a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features, skeletons) before proposing changes. Pairs with `thatch-coding-workflow`. |
 | `thatch-review-followup` | Alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed your prior findings, offers to reply on resolved items, then optionally re-runs the full structured review. |
@@ -378,6 +379,7 @@ response, walkthrough, and workflow skills that support the review pipeline:
 | Memory skills | Yes | Yes | Yes |
 | Review specialists | Yes | Yes | Yes |
 | Review synthesizer | Yes | Yes | Yes |
+| Review adjudication | Yes | Yes | Yes |
 | Review context + code archaeology | Yes | Yes | Yes |
 | Review followup | Yes | Yes | Yes |
 | Review response (author-side) | Yes | Yes | Yes |
@@ -412,7 +414,13 @@ specialist in sequence, then synthesize:
 2. Load thatch-review-acceptance, review the same branch.
 3. ... repeat for state-flow, no-slop, clarity, breadcrumbs, mark-and-sweep ...
 4. Load thatch-review-synthesizer, verify and aggregate all findings.
+5. Load thatch-review-adjudicate, walk me through the findings one at a time
+   for verdicts, then stage the kept ones as a draft review I submit.
 ```
+
+Step 5 applies when the work is another author's (peer review). For your own
+work or a subordinate session's, skip it: those findings route over chat and
+the loop stays automatic.
 
 For a **follow-up round** (the author responded or pushed changes after your
 review), load the re-check skill:

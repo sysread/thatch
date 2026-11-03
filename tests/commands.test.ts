@@ -126,6 +126,12 @@ describe("review-mode commands (peer-review, self-review)", () => {
     expect(self!.content).toContain("three rounds");
     expect(self!.content).not.toContain("org velocity");
 
+    // The post-synthesis adjudication is peer-mode only: self-review stays
+    // an automatic chat loop with no user verdicts by default, so the
+    // adjudicate skill must never leak into its command body.
+    expect(peer!.content).toContain("thatch-review-adjudicate");
+    expect(self!.content).not.toContain("thatch-review-adjudicate");
+
     // Claude Code's set carries both (they need no session identity), with
     // the memory-walk tool in MCP spelling and no opencode spelling.
     const claudePeer = claudeCommandDefs().find((d) => d.name === "peer-review")!;

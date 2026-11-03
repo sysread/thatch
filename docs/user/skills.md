@@ -49,6 +49,7 @@ Skills are split into shared (all hosts) and opencode-only:
 | `thatch-review-highlights` | Positive finding detection: notably clever solutions, cleanup done along the way, documentation that helps. Medium-high bar. |
 | `thatch-review-technique` | Technique lens: teaching-grade notes on unseen helpers/internal packages, companion techniques, house patterns, test-craft, API-shape principles, next-reader discoverability. Informational only, never blocking. |
 | `thatch-review-synthesizer` | Verifies and synthesizes findings from multiple specialists into a deduplicated, severity-grouped report. |
+| `thatch-review-adjudicate` | Presents a completed peer review's findings to you one at a time in a fixed template with a verdict line, then stages the kept findings as a draft review you submit. Peer review only. |
 | `thatch-review-context` | Gathers project context (PRs, tickets, linked docs/designs followed from the change, TODOs, deferred work, related PRs) before a review. Prevents false positives about intentionally deferred work and about pieces delivered by sibling PRs in a stack or release train. |
 | `thatch-code-archaeology` | Investigates an existing feature, debugs an unfamiliar area, or begins a new ticket. The research skill; pair with `thatch-coding-workflow`. |
 | `thatch-review-followup` | Verifies whether the author's responses and code changes since your last review adequately addressed your prior findings. |

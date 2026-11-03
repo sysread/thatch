@@ -136,7 +136,7 @@ describe("setupCursor (project-local)", () => {
     const result = setupCursor("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
     expect(result.skills.dir).toBe(join(projectDir, ".cursor", "skills"));
-    expect(result.skills.added.length).toBe(39);
+    expect(result.skills.added.length).toBe(40);
     expect(result.skills.updated).toEqual([]);
     expect(result.skills.unchanged).toEqual([]);
     expect(result.skills.removed).toEqual([]);
@@ -150,6 +150,7 @@ describe("setupCursor (project-local)", () => {
     expect(skillNames).toContain("thatch-review-technique");
     expect(skillNames).toContain("thatch-review-economy");
     expect(skillNames).toContain("thatch-review-followup");
+    expect(skillNames).toContain("thatch-review-adjudicate");
     expect(skillNames).toContain("thatch-change-walkthrough");
     expect(skillNames).toContain("thatch-code-walkthrough");
     expect(skillNames).toContain("thatch-pr-description");
@@ -208,7 +209,7 @@ describe("setupCursor (global)", () => {
     const result = setupCursor("/usr/local/bin/thatch", true, projectDir, fakeHome);
 
     expect(result.skills.dir).toBe(join(fakeHome, ".cursor", "skills"));
-    expect(result.skills.added.length).toBe(39);
+    expect(result.skills.added.length).toBe(40);
     for (const skill of result.skills.added) {
       expect(skill.path.startsWith(join(fakeHome, ".cursor", "skills"))).toBe(true);
     }

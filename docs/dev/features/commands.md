@@ -48,16 +48,23 @@ overlay.
 (`reviewPipelineCouching` in src/commands.ts): run the code review
 machinery — the `thatch-code-review` coordinator where that skill is
 installed (opencode), the inline specialist sequence where it is not
-(Claude Code, Cursor) — and apply a mode overlay that reweights the
-findings for whose work is under review. The roster and count for the
-inline sequence come from `REVIEW_SPECIALISTS` in src/prompts.ts, the
-same source as the install list in src/skills.ts and both host
-instruction skill lists. `peer-review` weights org
+(Claude Code, Cursor) — and apply a mode overlay of mode rules. Mode rules
+carry two kinds of content: a weighting for whose work is under review, and
+mode-scoped pipeline phases. The weighting: `peer-review` weights org
 velocity and walks the project's persistent memory (the one tool it
 names, spelled through the `ToolNamer` so MCP renderings stay correct);
 `self-review` weights the reputation lenses (no-slop, clarity,
 technique, breadcrumbs) and iterates rounds until a round produces no meaningful
-findings. The couching also names the MCP `Focus:` line as a target
+findings. The mode-scoped phase: `peer-review` continues after synthesis with
+the `thatch-review-adjudicate` skill, walking the user through the findings
+one at a time for verdicts and staging a draft review the user submits. That
+handoff lives in the mode rules, not in the shared couching or the
+coordinator/synthesizer skills, because those are shared with `self-review`,
+which stays an automatic chat loop with no user adjudication by default. The
+roster and count for the
+inline sequence come from `REVIEW_SPECIALISTS` in src/prompts.ts, the
+same source as the install list in src/skills.ts and both host
+instruction skill lists. The couching also names the MCP `Focus:` line as a target
 source, because MCP prompts replace the file commands' `$ARGUMENTS`
 section with a `Focus:` line.
 

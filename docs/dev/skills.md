@@ -49,6 +49,7 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-highlights` | Positive finding detection: notably clever solutions, cleanup done along the way, documentation that helps. Medium-high bar against generic praise. |
 | `thatch-review-technique` | Technique lens: teaching-grade notes on unseen helpers/internal packages, companion techniques, house patterns, test-craft, API-shape principles, next-reader discoverability. Informational only, verified citations, never blocking. |
 | `thatch-review-synthesizer` | Verify specialist findings against code, dedupe, classify, calibrate severity. Starts the final report with a workflow-change preface, then cross-references findings against prior review comments when a follow-up round register is provided, and against sibling PR registers when related PRs were detected (cross-PR notes appendix). |
+| `thatch-review-adjudicate` | Present a completed review's findings to the user for adjudication: the walkthrough first, then one finding at a time in a fixed template (location, shape, plain-English description) with a verdict line (keep, drop, reframe, verify, elaborate, abort, post as draft), highlights and technique notes in the same loop, then a staged draft review the user submits. Peer review only: self-review and subordinate-session work route findings over chat and stay automatic. |
 | `thatch-review-context` | Gather project/feature context (PR descriptions, git archaeology, ticket references, linked docs/tickets followed from the change, memory) before fan-out. Prevents false positives about intentionally deferred work, and checks whether main moved past the merge-base touching the same paths (staleness signal for the synthesizer). Also fetches prior review comments on a connected PR/MR for follow-up-round detection and builds a register with preliminary addressed-check status per comment. Also discovers related PRs (stacks chained through base branches, release trains ordered by tracker relations) and builds a sibling register with targeted consistency verdicts. |
 | `thatch-code-archaeology` | Investigate an existing feature, debug an unfamiliar area, or begin a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features, skeletons) before proposing changes. The research skill; pair with `thatch-coding-workflow`. |
 | `thatch-review-followup` | Alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review round adequately addressed your prior findings, offers to reply on resolved items, then optionally re-runs the full structured review. |
@@ -161,6 +162,12 @@ and `--cursor` pass only the shared set.
 - **Full review on opencode**: load `thatch-code-review` — it gathers project context, researches affected workflows, dispatches all review specialists in parallel (with both the context brief and workflow guide injected into each briefing), then synthesizes a report that starts with the workflow changes before findings.
 - **Full review on Claude Code/Cursor**: run each specialist in sequence, then
   run `thatch-review-synthesizer` to verify and aggregate.
+- **Presenting findings to the user**: when the reviewed work is another
+  author's (peer review), load `thatch-review-adjudicate` after synthesis. It
+  walks the user through the findings one at a time with a verdict per
+  finding, then stages the kept findings as a draft review the user submits.
+  Self-review and subordinate-session work skip it: those findings route over
+  chat and the loop stays automatic.
 - **Follow-up round (re-review)**: load `thatch-review-followup` when the author
   has responded or pushed changes after your initial review. It verifies whether
   your prior findings were adequately addressed, offers to reply on resolved

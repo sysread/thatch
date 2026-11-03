@@ -1,6 +1,6 @@
 # Code Review
 
-Thatch ships a multi-agent code review pipeline. Nine specialist
+Thatch ships a multi-agent code review pipeline. The specialist
 review lenses run in parallel, then a synthesizer verifies and
 deduplicates their findings into a single report.
 
@@ -82,7 +82,13 @@ whose work is under review.
   the change. Settled designs are not re-litigated, and "if someone
   changes this later it breaks" findings are never reported; instead
   the review verifies the change leaves a breadcrumb trail to wherever
-  the project records how the feature works.
+  the project records how the feature works. After synthesis, the
+  findings are presented to you through the `thatch-review-adjudicate`
+  skill: a walkthrough of the change first, then one finding at a time
+  in a fixed template with a verdict line (keep, drop, reframe, verify,
+  elaborate, abort, post as draft), highlights and technique notes in
+  the same loop, and finally a staged draft review that you submit -
+  the agent never submits it for you.
 
 Both commands work on every host. On opencode they drive the
 coordinator with sub-agents. On Claude Code and Cursor the same
