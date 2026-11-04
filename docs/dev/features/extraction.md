@@ -37,8 +37,8 @@ directly for conversation-derived knowledge.
 
 ### Tool interaction buffering
 
-After every tool execution, non-`thatch_*`, non-`skill`, non-`task` tool
-calls are buffered for later extraction.
+After every tool execution, non-`thatch_*` tool calls are buffered for
+later extraction, except harness meta-tools (below).
 
 **opencode** — `tool.execute.after` hook (v1) / `tool.hook` (v2) in `src/runtime.ts`:
 
@@ -51,9 +51,15 @@ calls are buffered for later extraction.
   the `event` handler silently never fires it — the event bus has no such
   event
 - Filtering rationale: `thatch_*` tools would echo the store back into
-  itself; `skill`/`task` meta-tools would create a feedback loop (extraction
-  triggers a skill load, which gets buffered, which triggers another
-  extraction)
+  itself; harness meta-tools would create a feedback loop (extraction
+  triggers a dispatch or schema load, which gets buffered, which triggers
+  another extraction). The deny set matches every known dispatch and
+  orchestration spelling: `skill`/`task`/`agent`/`subagent` (the harness
+  dispatch tools on opencode, Claude Code, and Cursor), `SubagentHandback`
+  (a Claude Code sub-agent's return call, which lands in the parent's
+  queue), and `ToolSearch` (Claude Code's deferred MCP tool-schema loader,
+  which the extraction nudge itself instructs - buffering it guarantees
+  the nudge loop, GitHub issue #22)
 - Code Mode `execute` calls are **unwrapped before filtering**
   (`unwrapExecuteThatchCalls` in `src/extraction.ts`): when the call's code
   invokes `tools.thatch_*` tools, the wrapped tools' hook semantics run
@@ -279,9 +285,10 @@ The payload fetch is the delivery record:
 
 ## Key invariants
 
-1. **Tool filtering is absolute.** `thatch_*`, `skill`, `task`, and
-   `subagent` tools are never buffered. Buffering them would echo the store
-   into itself or create a feedback loop.
+1. **Tool filtering is absolute.** `thatch_*` tools and harness meta-tools
+   (`skill`, `task`, `agent`, `subagent`, `subagenthandback`, `toolsearch`)
+   are never buffered. Buffering them would echo the store into itself or
+   re-trigger the extraction nudge with the pipeline's own exhaust.
 2. **Extraction never depends on model cooperation on opencode.** The
    plugin creates the extraction child, interpolates the session ID, and
    drives the lifecycle from events. The old model-driven handshake (model

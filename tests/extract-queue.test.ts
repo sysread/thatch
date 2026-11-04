@@ -61,17 +61,42 @@ describe("appendBatch + peekQueue", () => {
     expect(out.map((ix) => ix.tool)).toEqual(["Read", "Bash"]);
   });
 
-  test("filters out skill/task/agent meta-tools (feedback loop prevention)", () => {
+  test("filters out skill/task/agent/subagent dispatch meta-tools (feedback loop prevention)", () => {
     appendBatch("session-1", [
       call("Read", { file_path: "/a" }, "a"),
       call("Skill", { name: "thatch-fact-extractor" }, "loaded"),
       call("Task", { description: "extract" }, "done"),
       call("Agent", { prompt: "extract" }, "done"),
+      call("subagent", { description: "extract" }, "done"),
       call("Bash", { command: "ls" }, "file1\n"),
     ]);
     const out = peekQueue("session-1");
     expect(out.length).toBe(2);
     expect(out.map((ix) => ix.tool)).toEqual(["Read", "Bash"]);
+  });
+
+  test("filters out SubagentHandback and ToolSearch (extraction nudge loop, issue #22)", () => {
+    // On Claude Code, a sub-agent's return call lands in the PARENT's queue
+    // under the parent's session_id, and ToolSearch loads the deferred MCP
+    // tool schemas the nudge itself instructs. Buffering either means every
+    // completed extraction queues the next nudge: a batch of only these two
+    // must leave the queue empty (no file at all), while real tools in the
+    // same batch still buffer.
+    appendBatch("session-1", [
+      call("SubagentHandback", { report: "nothing worth saving" }, "ok"),
+      call("ToolSearch", { query: "select:mcp__thatch__extraction_done" }, "schema loaded"),
+    ]);
+    expect(peekQueue("session-1")).toEqual([]);
+
+    appendBatch("session-2", [
+      call("SubagentHandback", { report: "done" }, "ok"),
+      call("ToolSearch", { query: "select:mcp__thatch__get_extraction_payload" }, "schema loaded"),
+      call("Bash", { command: "ls" }, "file1\n"),
+      call("Read", { file_path: "/a" }, "a"),
+      call("Edit", { file_path: "/a" }, "a2"),
+    ]);
+    const out = peekQueue("session-2");
+    expect(out.map((ix) => ix.tool)).toEqual(["Bash", "Read", "Edit"]);
   });
 
   test("appends across multiple PostToolBatch invocations", () => {

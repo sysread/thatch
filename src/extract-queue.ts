@@ -38,13 +38,22 @@ function queuePath(sessionID: string): string {
 }
 
 /**
- * Buffer a batch of tool calls for later extraction. Filters out:
- * - thatch's own MCP tools (mcp__thatch__*) to avoid self-echo - extracting
- *   facts from memory operations would just write the store back into itself.
- * - skill/task/agent meta-tools - these orchestrate agent behavior (loading
- *   skills, dispatching sub-agents) and buffering them creates a feedback
- *   loop where the extraction nudge triggers a skill load, which gets
- *   buffered, which triggers another nudge on the next turn.
+ * Buffer a batch of tool calls for later extraction. Filters out thatch's
+ * own MCP tools (mcp__thatch__*) and harness meta-tools. Buffering either
+ * class feeds the extraction nudge with its own exhaust: extracting facts
+ * from memory operations would write the store back into itself, and a
+ * buffered orchestration call re-triggers the nudge on the next turn
+ * (the nudge -> sub-agent -> hand-back -> nudge loop, GitHub issue #22).
+ *
+ * The meta-tool deny set must match EVERY known dispatch/orchestration
+ * spelling across hosts: skill/task/agent/subagent are the harness
+ * dispatch tools (Claude Code, Cursor, opencode v1 and v2),
+ * SubagentHandback is a Claude Code sub-agent's return call (it lands in
+ * the PARENT's queue under the parent's session_id), and ToolSearch is
+ * Claude Code's deferred MCP tool-schema loader (it only loads schemas -
+ * the nudge itself instructs those calls, so buffering them guarantees
+ * the loop). Match the full set everywhere; the next harness meta-tool
+ * gets added here, never special-cased at the call sites.
  * Memory writes reset the missed-nudge escalation counter.
  * Each surviving call is mapped to a ToolInteraction (title synthesized since
  * Claude Code doesn't supply one) and appended as one JSON line.
@@ -90,7 +99,10 @@ export function appendBatch(sessionID: string, toolCalls: BatchToolCall[]): void
       resetMissedCount(sessionID);
     }
     if (lower.startsWith("mcp__thatch__")) continue;
-    if (lower === "skill" || lower === "task" || lower === "agent") continue;
+    if (
+      lower === "skill" || lower === "task" || lower === "agent" || lower === "subagent" ||
+      lower === "subagenthandback" || lower === "toolsearch"
+    ) continue;
     const response = typeof tc.tool_response === "string"
       ? tc.tool_response
       : JSON.stringify(tc.tool_response).slice(0, 500);

@@ -60,10 +60,13 @@ here first. These are the things that have already cost time.
   start.** opencode loads config (including command discovery) before
   plugins, so `installOpencodeCommands` self-heals on every load but a
   first-ever install only lands after a restart.
-- **`tool.execute.after` excludes `skill` and `task` tools**, not just
-  `thatch_*`. Buffering them creates a feedback loop: the nudge triggers a
-  skill load, which gets buffered, which triggers another nudge on the next
-  turn.
+- **`tool.execute.after` excludes harness meta-tools** (`skill`, `task`,
+  `agent`, `subagent`), not just `thatch_*`. Buffering them creates a
+  feedback loop: the nudge triggers a dispatch or skill load, which gets
+  buffered, which triggers another nudge on the next turn. The MCP-host
+  queue (`src/extract-queue.ts`) matches the same class plus
+  `SubagentHandback` and `ToolSearch` (Claude Code) - match the full set
+  everywhere; dispatch-tool names are host- and version-dependent.
 - **Hook failures are logged with a `[thatch]` prefix and never swallowed.** Two
   hooks were dead for weeks before failures were made visible. If you add a
   hook, log on failure.

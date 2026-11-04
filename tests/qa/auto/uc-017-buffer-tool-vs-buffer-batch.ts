@@ -16,8 +16,10 @@ import { buildExtractionPayload } from "../../../src/extraction";
  * file-backed operations. We set THATCH_QUEUE_DIR to an isolated temp dir,
  * then verify: buffer-batch handles a tool_calls array with session_id,
  * buffer-tool handles a single call with conversation_id (both route through
- * appendBatch), mcp__thatch__* calls are filtered, the 20 cap drops oldest,
- * peek does not drain, and consume deletes the queue file.
+ * appendBatch), mcp__thatch__* calls are filtered, harness meta-tools are
+ * filtered (SubagentHandback and ToolSearch would loop the extraction nudge
+ * on Claude Code, issue #22), the 20 cap drops oldest, peek does not drain,
+ * and consume deletes the queue file.
  */
 
 function makeToolCall(tool: string, response = "ok"): BatchToolCall {
@@ -51,6 +53,9 @@ const useCase: UseCase = {
     "  `flush-tools` drains them identically and `buildExtractionPayload` produces an",
     "  identical contract for the fact-extractor skill.",
     "- Thatch's own tools never appear in either queue (no self-echo feedback loop).",
+    "- Harness meta-tools (skill/task/agent/subagent dispatch, SubagentHandback,",
+    "  ToolSearch) never appear in either queue either - buffering them re-triggers",
+    "  the extraction nudge with its own exhaust (issue #22).",
   ].join("\n"),
 
   async run(ctx: QaContext) {
@@ -157,6 +162,25 @@ const useCase: UseCase = {
           }
         }
         consumeQueue(unsafeID);
+      }
+
+      // --- harness meta-tools are filtered (issue #22 nudge loop) ---
+      {
+        const sessionID = "meta-tool-session";
+        appendBatch(sessionID, [
+          makeToolCall("Skill"),
+          makeToolCall("Task"),
+          makeToolCall("Agent"),
+          makeToolCall("subagent"),
+          { tool_name: "SubagentHandback", tool_input: { report: "done" }, tool_response: "ok" },
+          { tool_name: "ToolSearch", tool_input: { query: "select:mcp__thatch__extraction_done" }, tool_response: "schema loaded" },
+          makeToolCall("bash", "real work"),
+        ]);
+        const queue = peekQueue(sessionID);
+        if (queue.length !== 1 || queue[0].tool !== "bash") {
+          failures.push(`meta-tools: expected only bash buffered, got ${queue.map((ix) => ix.tool).join(",") || "nothing"}`);
+        }
+        consumeQueue(sessionID);
       }
 
       // --- 20 cap: oldest interactions are dropped ---
