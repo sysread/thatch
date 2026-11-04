@@ -111,3 +111,4 @@ import "./uc-127-bug-intake-command";
 import "./uc-128-chat-cli-broadcast";
 import "./uc-129-fuzzy-did-you-mean";
 import "./uc-130-claude-inline-extraction-cycle";
+import "./uc-131-cli-memory-write";

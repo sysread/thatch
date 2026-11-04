@@ -162,7 +162,9 @@ The slug plus store name form the composite primary key: `PRIMARY KEY (slug, sto
 
 ### CLI access
 
-The `bin/thatch` CLI provides read-only access to the store:
+The `bin/thatch` CLI reads the store, and writes one way: `thatch
+remember` saves through the same `memory_remember` tool execute() the
+agents use (see [cli.md](cli.md)):
 
 | Command | Description |
 |---------|-------------|
@@ -171,6 +173,7 @@ The `bin/thatch` CLI provides read-only access to the store:
 | `thatch show <label> [store]` | Display one memory |
 | `thatch forget <label> [store]` | Delete one memory |
 | `thatch search <query> [store]` | Semantic cosine search (limit 10; `"all"` searches project + global) |
+| `thatch remember <content> [flags]` | Save a memory (tool-equivalent write; `--label`, `--store`, `--branch`, `--confidence`, `--overwrite`) |
 
 ## Interactions with other features
 
@@ -188,7 +191,8 @@ The `bin/thatch` CLI provides read-only access to the store:
 | `src/embeddings.ts` | `BgeEmbeddingModel` (lazy-load, query/passage embed, mean pooling, L2 normalization) and `MockEmbeddingModel` for tests |
 | `src/git.ts` | Detect repo identity (store name) from git remote; worktree-safe fallback chain |
 | `src/tool-defs.ts` | Tool definitions — single source of truth for all tools, including the six memory tools |
-| `bin/thatch` | CLI subcommands: `stores`, `list`, `show`, `forget`, `search` |
+| `bin/thatch` | CLI subcommands: `stores`, `list`, `show`, `forget`, `search`, `remember` |
+| `src/memory-write.ts` | `thatch remember` input parsing (shell flags + stdin -> memory_remember's argument shape); the write itself stays in the tool |
 
 ## Key invariants
 

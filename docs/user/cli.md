@@ -1,8 +1,8 @@
 # CLI
 
-Thatch ships with a command-line tool for inspecting memories and
-running maintenance tasks outside the agent. It requires `bun` on your
-PATH.
+Thatch ships with a command-line tool for inspecting and writing
+memories and running maintenance tasks outside the agent. It requires
+`bun` on your PATH.
 
 `thatch --help` (or `-h`) prints the full command list and exits 0.
 The flag works anywhere in the command line: `thatch chat list -h`
@@ -25,6 +25,46 @@ with `search` to search the project store and `global` together.
 `search` uses the same cosine-similarity search as
 `thatch_memory_recall`. Results include a similarity score for each
 match. Limited to 10 results.
+
+## Writing a memory
+
+```bash
+thatch remember "rebased payments branch, keep the feature flag on" --confidence 5
+cat merge-notes.md | thatch remember --label "merge notes" --branch release/1.4
+thatch remember "updated body" --label "merge notes" --overwrite
+```
+
+`remember` is the write counterpart to `forget`: it saves a memory
+through the same code path as the agent's `memory_remember` tool. The
+content comes as arguments (words are joined, so quotes are optional)
+or piped on stdin for long text. Without `--label`, the label derives
+from the content's first line (a leading markdown heading becomes the
+label). Without `--store`, it writes to the current git repo's project
+store.
+
+On success it prints one line to stdout, ready for scripts:
+
+```text
+[saved] acme/payments :: merge notes
+```
+
+Flags:
+
+- `--label L` - the memory's label; derived from the content when
+  omitted.
+- `--store S` - target store; defaults to the current repo's project
+  store, `global` for the shared store.
+- `--branch B` - scope the memory to a git branch.
+- `--confidence N` - how well-established the observation is, 1-10.
+- `--overwrite` - replace an existing memory with the same label.
+
+Exit code 0 means saved; anything else exits 1 with the reason on
+stderr (a duplicate label without `--overwrite`, for example).
+
+One behavior is inherited from the tool on purpose: overwriting a
+branch-scoped memory WITHOUT `--branch` keeps the old branch scope.
+To promote a branch-scoped memory to project-wide, forget it and save
+it again without `--branch`, then check with `thatch show`.
 
 ## Maintenance
 

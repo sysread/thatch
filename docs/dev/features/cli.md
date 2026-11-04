@@ -1,6 +1,6 @@
 # CLI (bin/thatch)
 
-The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection, MCP server startup, hook commands for MCP hosts, the setup installer, session archaeology over the opencode database, and a window on the cross-session chat directory (read-only except `chat broadcast`).
+The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection and writing, MCP server startup, hook commands for MCP hosts, the setup installer, session archaeology over the opencode database, and a window on the cross-session chat directory (read-only except `chat broadcast`).
 
 ## Subcommands
 
@@ -11,6 +11,7 @@ The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection, M
 | `show <label> [store]` | label, optional store | none | none | Display one memory by label |
 | `forget <label> [store]` | label, optional store | none | none | Delete one memory by label |
 | `search <query> [store]` | query, optional store | none | none | Semantic cosine search (limit 10; "all" searches project + global) |
+| `remember <content> [flags]` | content words (or stdin) | `--label`, `--store`, `--branch`, `--confidence`, `--overwrite` | content text | Save a memory through the memory_remember tool's execute(); prints `[saved] <store> :: <label>`, exit 1 on failure |
 | `mcp` | none | none | none | Start the stdio MCP server (for Claude Code, Cursor) |
 | `reminder [--json]` | none | `--json` | none | Print session-start reminder + hygiene report |
 | `hygiene` | none | none | none | Print the hygiene report standalone |
@@ -38,6 +39,29 @@ The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection, M
 - Args are positional, parsed by hand from `process.argv.slice(2)`. No arg-parsing library.
 - DB opened once at startup, closed at end (except `mcp` which closes early).
 - Stores default to git remote detected by `detectRepo()`; "unknown" (no git repo, or a deleted project directory with no cache entry) degrades to "global". "global" is the shared store. "all" (search only) means project + global.
+
+## remember
+
+The CLI's memory write path. The memory_remember tool's `execute()` in
+`src/tool-defs.ts` is the single implementation - store resolution, label
+derivation, the write-time dedup cross-check, and the overwrite rules -
+so the CLI cannot silently differ from the tool. `bin/thatch` is only the
+dispatcher; input parsing lives in `src/memory-write.ts` (in src/ because
+bin/thatch is outside tsconfig, the same split as `src/flush.ts`).
+
+- Content: positional words joined (quoting optional), or piped stdin
+  when no positional content is present (no pipe = error naming both
+  shapes). A bare `--` puts later tokens in the content.
+- Flags: `--store` (default: the CLI's `defaultStore()` - the same
+  repo detection and unknown-to-global mapping the tool layer applies,
+  passed as the CoreContext's defaultStore so `resolveStore` runs),
+  `--branch`, `--confidence` (validated 1-10 at parse time), `--label`,
+  `--overwrite`. Unknown flags and bad values die loudly.
+- Output contract: on success stdout is the tool's confirmation
+  (`[saved] <store> :: <label>` via `MEMORY_SAVED_MARKER`), with the
+  write-time similarity warning appended when one fires and the
+  model-load note on stderr. Any non-saved result goes to stderr with
+  exit 1, so scripts (tm's merge hook) get a clean exit-code contract.
 
 ## prime
 

@@ -61,7 +61,7 @@ Steps:
 | `qa-dry-run` | List QA use cases without spawning opencode sessions |
 | `qa-auto` | Run only automatable QA use cases (no LLM, fast) |
 | `qa-live` | Run only live-session QA use cases (spawns opencode, costs model tokens) |
-| `cli` | Run the thatch CLI (list, show, search, forget) |
+| `cli` | Run the thatch CLI (list, show, search, forget, remember) |
 
 `mise.toml` pins Bun 1.3.14 and sets `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`.
 

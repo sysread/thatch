@@ -76,7 +76,7 @@ MCP server path
   └── setup.ts        → `thatch setup --claude` / `--cursor`: writes .mcp.json,
                         CLAUDE.md / AGENTS.md, settings/hooks JSON, installs skills
 
-bin/thatch             → CLI: stores|list|show|forget|search|mcp|reminder|hygiene|
+bin/thatch             → CLI: stores|list|show|forget|search|remember|mcp|reminder|hygiene|
                         prime|buffer-batch|buffer-tool|flush-tools|flush-predictions|setup|
                         session (archaeology)|chat (list|tail)
 ```

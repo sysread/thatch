@@ -453,8 +453,8 @@ plugin initializes (this is how skill improvements ship with new versions).
 
 ## CLI
 
-Thatch ships with a command-line tool for reviewing memories outside opencode.
-It requires Bun on your PATH:
+Thatch ships with a command-line tool for reviewing and writing memories
+outside opencode. It requires Bun on your PATH:
 
 ```bash
 # After npm publish: available globally
@@ -463,6 +463,8 @@ thatch list [store]
 thatch show <label> [store]
 thatch forget <label> [store]
 thatch search <query> [store]
+thatch remember "one-line memory" [--label L] [--branch B] [--confidence N]
+cat notes.md | thatch remember --label "merge notes"   # long content via stdin
 
 # Before publish: run from a git checkout or symlink
 bun run bin/thatch stores
@@ -471,6 +473,9 @@ ln -s ~/dev/thatch/bin/thatch ~/.local/bin/thatch
 ```
 
 `search` uses the same cosine-similarity search as `thatch_memory_recall`.
+`remember` is the write path: the same code as the agent's
+`memory_remember` tool, from any terminal or script. It prints
+`[saved] <store> :: <label>` on success.
 Store defaults to your current git repo.
 
 ## Configuration

@@ -44,6 +44,12 @@ function usage(exitCode = 1): never {
   thatch show   <label> [store]    Display a memory by label
   thatch forget <label> [store]    Remove a memory by label
   thatch search <query> [store]    Semantic search (cosine similarity)
+  thatch remember <content>        Save a memory (the memory_remember tool,
+                    [--label L]      from the CLI): content as arguments or
+                    [--store S]      piped on stdin, store defaults to the
+                    [--branch B]     cwd repo's project store
+                    [--confidence N]
+                    [--overwrite]
   thatch mcp                       Start the stdio MCP server (for Claude Code, Cursor, etc.)
   thatch reminder [--json]         Print session-start reminder (for SessionStart hook)
   thatch hygiene                   Print the hygiene report (standalone)
@@ -983,6 +989,50 @@ switch (command) {
       }
     }
     break;
+  }
+
+  case "remember": {
+    // The CLI write path. The memory_remember tool's execute() is the
+    // single implementation - store resolution, label derivation, the
+    // dedup cross-check, and the overwrite rules - so the CLI can never
+    // silently differ from the tool. Arg/stdin parsing is
+    // parseRememberInput (src/memory-write.ts); this case is only the
+    // dispatcher, same split as flush-tools.
+    const { parseRememberInput } = await import("../src/memory-write");
+    const parsed = await parseRememberInput(args, process.stdin.isTTY ? null : process.stdin);
+    if (!parsed.ok) {
+      console.error(`error: ${parsed.error}`);
+      process.exit(1);
+    }
+    // Without --store, resolveStore falls back to ctx.defaultStore: the
+    // same repo detection and unknown-to-global mapping every other
+    // memory subcommand uses.
+    const projectStore = await defaultStore();
+    const { TOOL_DEFS, MEMORY_SAVED_MARKER } = await import("../src/tool-defs");
+    const def = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    console.error("Loading embedding model...");
+    const model = new BgeEmbeddingModel();
+    const result = await def.execute(
+      {
+        content: parsed.request.content,
+        label: parsed.request.label,
+        store: parsed.request.store,
+        branch: parsed.request.branch,
+        confidence: parsed.request.confidence,
+        overwrite: parsed.request.overwrite,
+      },
+      { db, model, defaultStore: projectStore },
+    );
+    // A save prints the tool's confirmation ([saved] store :: label) to
+    // stdout so scripts can parse it; the semantic-similarity warning,
+    // when present, rides after it. Anything else (duplicate label,
+    // archived guard, no content) is a failure: stderr, exit 1.
+    if (result.startsWith(MEMORY_SAVED_MARKER)) {
+      console.log(result);
+      break;
+    }
+    console.error(result);
+    process.exit(1);
   }
 
   case "mcp": {
