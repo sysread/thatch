@@ -113,6 +113,12 @@ export interface CoreContext {
    *  fetches the payload as a tool response instead of receiving it
    *  inline in the nudge text. */
   extractionPayloadProvider?: (sessionID: string, fetcherID?: string) => string | null;
+  /** The Claude Code plugin regime's stage tool: one call per user prompt
+   *  from the mod (via $.mcp.call), returning the nudge text to inject into
+   *  the turn's context - the sideband's role, reborn as an in-process
+   *  MCP tool call (the mod has no Node APIs and cannot reach a socket).
+   *  Also stamps the mod liveness file. Absent on the standalone server. */
+  pluginStage?: (prompt: string, sessionID: string) => Promise<string>;
   /** Drains a session's extraction queue. On the MCP path this deletes the
    *  file-backed queue and resets the missed-nudge counter. On the opencode
    *  path this is unused (the tool.execute.after hook handles drain via
@@ -249,6 +255,16 @@ export interface ToolDef {
    * capabilities MCP hosts lack (e.g. session identity).
    */
   opencodeOnly?: boolean;
+  /**
+   * When true, the tool exists only on the PLUGIN-regime bundled server
+   * (the Claude Code plugin's own MCP component): compileTools filters it
+   * out for the standalone server and the opencode adapters, because its
+   * behavior is wired through the bundled server's CoreContext only and
+   * exposing it on other servers would advertise a tool that answers
+   * "not available". The def carries bundledOnly only - never also
+   * opencodeOnly.
+   */
+  bundledOnly?: boolean;
   /**
    * When true, the tool exists only on the opencode v2 adapter path: the v1
    * adapter's createTools and the MCP server filter it out. Used for tools
@@ -3013,6 +3029,38 @@ const sessionTabCloseDef: ToolDef = {
  * non-opencodeOnly ones via `tools/list` and dispatches `tools/call` to
  * their execute functions.
  */
+/**
+ * The plugin regime's per-prompt stage tool: the Claude Code mod calls it
+ * once per prompt.submit (via $.mcp.call), and the bundled server runs the
+ * flush tiers server-side (extraction peek/escalation, recall, prediction,
+ * behavior, write fallback) and stamps the mod liveness file. The tool's
+ * text return value is what the mod injects into the turn's context -
+ * replacing the one-shot flush-tools hook process and its sideband
+ * round-trip entirely on the plugin regime. bundledOnly: the standalone
+ * server has no plugin-stage wiring, so advertising it there would
+ * advertise a tool that answers "not available".
+ */
+const pluginStageDef: ToolDef = {
+  name: "plugin_stage",
+  description:
+    "Per-prompt nudge staging for the thatch Claude Code plugin's mod. " +
+    "Returns the nudge text (extraction payload, recall matches, " +
+    "predictions, behaviors, or the write fallback) to inject into the " +
+    "turn's context, and stamps the mod liveness file. Not for the model " +
+    "to call.",
+  bundledOnly: true,
+  args: {
+    prompt: z.string().describe("The user's prompt text, as submitted."),
+    session_id: z.string().describe("The session id the mod read from its own host context."),
+  },
+  async execute(args, ctx) {
+    if (!ctx.pluginStage) {
+      return "Plugin stage delivery is not available on this server.";
+    }
+    return ctx.pluginStage(args.prompt as string, args.session_id as string);
+  },
+};
+
 export const TOOL_DEFS: ToolDef[] = [
   rememberDef,
   recallDef,
@@ -3024,6 +3072,7 @@ export const TOOL_DEFS: ToolDef[] = [
   markCheckedDef,
   extractionDoneDef,
   getExtractionPayloadDef,
+  pluginStageDef,
   predictionQueryDef,
   predictionUpdateDef,
   predictionListDef,
@@ -3061,6 +3110,7 @@ export const TOOL_DEFS: ToolDef[] = [
 export interface CoreContextExtensions {
   extractionPayloadProvider?: CoreContext["extractionPayloadProvider"];
   drainExtractionQueue?: CoreContext["drainExtractionQueue"];
+  pluginStage?: CoreContext["pluginStage"];
   watcherRegistry?: WatcherRegistry;
   projectDir?: string;
   openTabs?: CoreContext["openTabs"];
@@ -3091,6 +3141,7 @@ export function buildCoreContext(
     defaultStore,
     extractionPayloadProvider: extensions?.extractionPayloadProvider,
     drainExtractionQueue: extensions?.drainExtractionQueue,
+    pluginStage: extensions?.pluginStage,
     watchers: extensions?.watcherRegistry,
     projectDir: extensions?.projectDir,
     openTabs: extensions?.openTabs,

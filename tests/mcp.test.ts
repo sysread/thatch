@@ -85,9 +85,16 @@ describe("MCP teardown", () => {
 describe("MCP compileTools", () => {
   test("exposes every shared tool under its bare name", () => {
     const tools = compileTools();
-    for (const def of TOOL_DEFS.filter((d) => !d.opencodeOnly && !d.v2Only)) {
+    for (const def of TOOL_DEFS.filter((d) => !d.opencodeOnly && !d.v2Only && !d.bundledOnly)) {
       expect(tools.has(def.name), `missing ${def.name}`).toBe(true);
     }
+  });
+
+  test("bundledOnly tools surface only on the plugin regime's bundled server", () => {
+    const standalone = compileTools();
+    const bundled = compileTools({ bundled: true });
+    expect(standalone.has("plugin_stage")).toBe(false);
+    expect(bundled.has("plugin_stage")).toBe(true);
   });
 
   test("filters out opencode-only tools", () => {

@@ -70,6 +70,72 @@ export function npmCachePath(dbPath: string): string {
   return join(cacheDir(dbPath), "npm-latest");
 }
 
+/** Path to the mod liveness stamp: the Claude Code plugin mod touches it on
+ *  every prompt (via the bundled server's stage tool); the bundled server
+ *  warns on its first tools/call when the stamp is stale. This is the
+ *  disabled-mod hole's detector: disableAllHooks and managed
+ *  allowManagedModsOnly silence the mod's hooks but leave the plugin's
+ *  server running - nudges and context injection stop silently. */
+export function modLivenessPath(dbPath: string): string {
+  return join(cacheDir(dbPath), "mod-liveness");
+}
+
+/** Stamps the mod liveness file with the current epoch ms. Best-effort: a
+ *  failed stamp only risks a false stale warning, never a wrong nudge. */
+export function stampModLiveness(dbPath: string): void {
+  const path = modLivenessPath(dbPath);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, String(Date.now()), "utf-8");
+  } catch {
+    // Best-effort - see the doc comment.
+  }
+}
+
+/** Epoch ms of the mod's last ping, or null when it has never pinged. */
+export function readModLiveness(dbPath: string): number | null {
+  try {
+    const path = modLivenessPath(dbPath);
+    if (!existsSync(path)) return null;
+    return parseInt(readFileSync(path, "utf-8"), 10) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Path to the install-regime marker: "plugin" means the Claude Code
+ *  plugin regime owns this machine's install (bundled server, in-process
+ *  mod, NO fallback hooks/markers/mcp-config). Its readers: checkSetup
+ *  (so a plugin-only install reports installed), the standalone server
+ *  (warns it should not be configured under the plugin regime), and the
+ *  next setup run (detects the orphaned marker when the plugin was
+ *  uninstalled). */
+export function regimeMarkerPath(dbPath: string): string {
+  return join(cacheDir(dbPath), "regime");
+}
+
+export function writeRegimeMarker(dbPath: string, regime: "plugin"): void {
+  const path = regimeMarkerPath(dbPath);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, regime, "utf-8");
+  } catch {
+    // Best-effort: a missing marker only means the fallback-regime
+    // diagnostics reappear, never a wrong delivery.
+  }
+}
+
+export function readRegimeMarker(dbPath: string): "plugin" | null {
+  try {
+    const path = regimeMarkerPath(dbPath);
+    if (!existsSync(path)) return null;
+    const v = readFileSync(path, "utf-8").trim();
+    return v === "plugin" ? "plugin" : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Check B: version skew (local, instant, no network)
 // ---------------------------------------------------------------------------

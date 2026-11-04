@@ -1,8 +1,10 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { claudeInstructions, cursorInstructions } from "./prompts";
 import { installSkills, type InstallReport } from "./skills";
 import { installClaudeCommands } from "./commands";
+import { readRegimeMarker } from "./version-check";
+import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
 // Path resolution
@@ -31,8 +33,14 @@ function claudeConfigDir(homeDir: string): string {
   return process.env.CLAUDE_CONFIG_DIR ?? join(homeDir, ".claude");
 }
 
-function resolvePaths(global: boolean, projectDir: string, homeDir: string): SetupPaths {
-  const configDir = claudeConfigDir(homeDir);
+/** The thatch DB path, resolved the same way bin/thatch and the MCP server
+ *  do (THATCH_DB_PATH override, else under the config home). The regime
+ *  marker derives from it (version-check's cacheDir chain). */
+function thatchDbPath(homeDir: string): string {
+  return process.env.THATCH_DB_PATH ?? join(process.env.XDG_CONFIG_HOME ?? join(homeDir, ".config"), "thatch", "thatch.db");
+}
+
+function resolvePaths(global: boolean, projectDir: string, homeDir: string): SetupPaths {  const configDir = claudeConfigDir(homeDir);
 
   if (global) {
     return {
@@ -101,6 +109,67 @@ function writeMcpConfig(path: string, thatchBin: string, projectDir?: string): v
 
   mkdirSync(join(path, ".."), { recursive: true });
   writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
+}
+
+/** Removes the thatch server entry from an mcpServers config file (the
+ *  plugin regime's deactivation of the STANDALONE server). Leaves every
+ *  other server and key untouched; drops the mcpServers key when it
+ *  empties. */
+function removeMcpServerEntry(path: string): void {
+  if (!existsSync(path)) return;
+  let config: any;
+  try {
+    config = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    // Corrupt - leave it alone; the regime marker still reports the regime.
+    return;
+  }
+  if (!config?.mcpServers?.thatch) return;
+  delete config.mcpServers.thatch;
+  if (Object.keys(config.mcpServers).length === 0) delete config.mcpServers;
+  writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
+}
+
+/** Removes every thatch hook group from a Claude Code settings file - the
+ *  inverse of replaceThatchHooks, which only ever adds (its filter drops
+ *  our groups, then re-adds ours). The plugin regime's deactivation uses
+ *  this: opt-in must DELETE the fallback's writers, or both regimes
+ *  deliver every prompt. Other settings and other hooks stay untouched. */
+function removeThatchHooks(settingsPath: string): void {
+  if (!existsSync(settingsPath)) return;
+  let settings: any;
+  try {
+    settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  } catch {
+    return;
+  }
+  const hooks = settings?.hooks;
+  if (!hooks) return;
+  for (const event of Object.keys(hooks)) {
+    const groups = hooks[event];
+    if (!Array.isArray(groups)) continue;
+    const kept = groups.filter((g: any) => !g?.hooks?.some((h: any) => h?.command?.includes("thatch")));
+    if (kept.length === 0) delete hooks[event];
+    else hooks[event] = kept;
+  }
+  if (Object.keys(hooks).length === 0) delete settings.hooks;
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+}
+
+/** Removes the thatch instruction block (between THATCH_BEGIN/THATCH_END)
+ *  from an instructions file - the plugin regime's deactivation of the
+ *  CLAUDE.md/AGENTS.md marker block. Deletes the file when nothing but
+ *  whitespace remains. */
+function removeBlock(path: string): void {
+  if (!existsSync(path)) return;
+  const existing = readFileSync(path, "utf8");
+  if (!existing.includes(THATCH_BEGIN)) return;
+  const beginIdx = existing.indexOf(THATCH_BEGIN);
+  const endIdx = existing.indexOf(THATCH_END, beginIdx);
+  if (endIdx < 0) return; // broken markers - leave it; checkSetup reports it
+  const rest = (existing.slice(0, beginIdx) + existing.slice(endIdx + THATCH_END.length)).trim();
+  if (rest) writeFileSync(path, rest + "\n");
+  else rmSync(path);
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +474,134 @@ export function setupClaudeCode(
       ? `claude mcp add --scope user thatch -- ${thatchBin} mcp`
       : null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Claude Code plugin regime (Track 2, QA-only - never merges to main)
+// ---------------------------------------------------------------------------
+
+/** Result of a plugin-regime setup run: where the generated plugin lives
+ *  and what fallback machinery was deactivated (reported to the user -
+ *  deactivation is the point of the regime opt-in, so it says what it did). */
+export interface PluginRegimeResult {
+  pluginDir: string;
+  deactivated: string[];
+}
+
+/**
+ * Installs the Claude Code PLUGIN regime: generates the plugin directory
+ * (manifest + bundled MCP server + mod) and deactivates the fallback
+ * regime's writers (settings hooks, CLAUDE.md block, standalone MCP
+ * config). Opt-in must deactivate, or both regimes deliver every prompt -
+ * the fallback's auto-refresh would resurrect hooks this run removed.
+ *
+ * The generated plugin: plugin.json (manifest, bundling the MCP server as
+ * `thatch mcp --bundled`), hooks/hooks.json (the modules list - what makes
+ * the plugin a mod), hooks/register.js (thin shim binding the rendered
+ * instructions), hooks/instructions.js (the ONE-TEMPLATE system prompt,
+ * generated from src/prompts.ts so it cannot drift from the fallback
+ * regime's rendering), and hooks/mod.js (the bundled mod logic, built with
+ * the browser target so any node: import in its graph fails the build -
+ * the mods runtime gives hooks no Node APIs).
+ *
+ * The plugin directory is stable across runs (idempotent re-generation),
+ * so the user loads it once (`claude --plugin-dir <dir>` for QA) and setup
+ * refreshes it in place.
+ */
+export async function setupClaudePluginRegime(
+  thatchBin: string,
+  global: boolean,
+  projectDir: string,
+  homeDir?: string,
+): Promise<PluginRegimeResult> {
+  const home = homeDir ?? process.env.HOME ?? "/tmp";
+  const paths = resolvePaths(global, projectDir, home);
+  const pluginDir = global
+    ? join(claudeConfigDir(home), "thatch-plugin")
+    : join(projectDir, ".claude", "thatch-plugin");
+  const hooksDir = join(pluginDir, "hooks");
+  mkdirSync(join(pluginDir, ".claude-plugin"), { recursive: true });
+  mkdirSync(hooksDir, { recursive: true });
+
+  // Manifest: the plugin's OWN MCP server is the bundled one - no
+  // `claude mcp add` / .mcp.json entry in this regime. Project-local runs
+  // pin THATCH_PROJECT_DIR (same rule as the standalone config).
+  const manifest = {
+    name: "thatch",
+    version: pkg.version,
+    description: "Thatch memory, extraction, and cross-session chat for Claude Code.",
+    mcpServers: {
+      thatch: {
+        type: "stdio",
+        command: thatchBin,
+        args: ["mcp", "--bundled"],
+        ...(global ? {} : { env: { THATCH_PROJECT_DIR: projectDir } }),
+      },
+    },
+  };
+  writeFileSync(join(pluginDir, ".claude-plugin", "plugin.json"), JSON.stringify(manifest, null, 2) + "\n");
+  writeFileSync(
+    join(hooksDir, "hooks.json"),
+    JSON.stringify({ description: "The thatch hooks module", modules: ["./register.js"] }, null, 2) + "\n",
+  );
+  writeFileSync(
+    join(hooksDir, "register.js"),
+    `// Generated by thatch setup - do not edit; re-run setup to refresh.
+import { register as thatchRegister } from "./mod.js";
+import { INSTRUCTIONS } from "./instructions.js";
+
+export function register(on) {
+  return thatchRegister(on, {
+    instructions: INSTRUCTIONS,
+    stageTool: { server: "thatch", tool: "plugin_stage" },
+  });
+}
+`,
+  );
+  writeFileSync(
+    join(hooksDir, "instructions.js"),
+    `// Generated by thatch setup - do not edit; re-run setup to refresh.\n` +
+      `export const INSTRUCTIONS = ${JSON.stringify(claudeInstructions())};\n`,
+  );
+
+  // The mod bundle: browser target - a node: import anywhere in the mod's
+  // graph fails HERE (at setup) instead of at load in Claude Code.
+  const build = await Bun.build({
+    entrypoints: [join(import.meta.dir, "..", "src", "claude-plugin", "mod.ts")],
+    target: "browser",
+    outdir: hooksDir,
+    naming: "mod.js",
+  });
+  if (!build.success) {
+    const logs = build.logs.map((l) => String(l)).join("\n");
+    throw new Error(`building the thatch mod failed (the mod's graph must be Node-free):\n${logs}`);
+  }
+
+  // Deactivate the fallback regime's writers - BOTH scopes: the plugin
+  // regime replaces the install, and a surviving hook or marker from
+  // either scope would double-deliver every prompt.
+  const deactivated: string[] = [];
+  for (const settings of [join(claudeConfigDir(home), "settings.json"), join(projectDir, ".claude", "settings.json")]) {
+    if (existsSync(settings)) {
+      removeThatchHooks(settings);
+      deactivated.push(`hooks: ${settings}`);
+    }
+  }
+  for (const md of [join(claudeConfigDir(home), "CLAUDE.md"), join(projectDir, "CLAUDE.md")]) {
+    if (existsSync(md)) {
+      removeBlock(md);
+      deactivated.push(`instructions: ${md}`);
+    }
+  }
+  if (paths.mcpConfigPath && existsSync(paths.mcpConfigPath)) {
+    removeMcpServerEntry(paths.mcpConfigPath);
+    deactivated.push(`standalone MCP config: ${paths.mcpConfigPath}`);
+  }
+  deactivated.push(
+    "global MCP registration (run `claude mcp remove thatch` by hand if `claude mcp get thatch` reports one)",
+  );
+
+  return { pluginDir, deactivated };
 }
 
 // ---------------------------------------------------------------------------
@@ -718,7 +915,7 @@ export function setupSkillsOnly(
 export type HostKind = "claude" | "cursor";
 
 export type SetupStatus =
-  | { status: "installed"; scope: "local" | "global"; host: HostKind }
+  | { status: "installed"; scope: "local" | "global"; host: HostKind; regime?: "plugin" }
   | { status: "not-installed"; host: HostKind; message: string }
   | { status: "markers-broken"; host: HostKind; file: string; message: string };
 
@@ -764,6 +961,15 @@ export function checkSetup(projectDir: string, homeDir?: string): SetupStatus | 
 
 function checkClaudeSetup(projectDir: string, home: string): SetupStatus {
   const configDir = claudeConfigDir(home);
+
+  // The regime marker outranks the marker files: a plugin-regime install
+  // DELETES the fallback markers on purpose, so "absent" would misreport
+  // an installed plugin as not-installed. Scope follows the plugin
+  // directory's location (global config dir vs the project's .claude/).
+  if (readRegimeMarker(thatchDbPath(home)) === "plugin") {
+    const scope = existsSync(join(claudeConfigDir(home), "thatch-plugin")) ? "global" : "local";
+    return { status: "installed", scope, host: "claude", regime: "plugin" };
+  }
 
   const localMd = join(projectDir, "CLAUDE.md");
   const localCheck = checkInstructionsFile(localMd, THATCH_MARKER, THATCH_END_MARKER);

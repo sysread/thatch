@@ -12,8 +12,9 @@ import { actionDefs, mcpSpelling, type ActionDef } from "./commands";
 import { SidebandServer, sidebandSocketPath } from "./sideband";
 import { peekQueue, consumeQueue, resetMissedCount } from "./extract-queue";
 import { buildExtractionPayload } from "./extraction";
+import { computePluginStage } from "./flush";
 import { seedDefaultBehaviors } from "./seed-behaviors";
-import { writeVersionFile, removeVersionFile, startVersionChecker, stopVersionChecker, getVersionChecker } from "./version-check";
+import { writeVersionFile, removeVersionFile, startVersionChecker, stopVersionChecker, getVersionChecker, readModLiveness, readRegimeMarker } from "./version-check";
 import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
@@ -66,14 +67,18 @@ interface CompiledTool {
   inputSchema: Record<string, unknown>;
 }
 
-export function compileTools(): Map<string, CompiledTool> {
+export function compileTools(opts?: { bundled?: boolean }): Map<string, CompiledTool> {
   const map = new Map<string, CompiledTool>();
   for (const def of TOOL_DEFS) {
     // opencode-only tools depend on host capabilities MCP servers don't
     // have (e.g. session identity via HostToolContext) - never expose them.
     // v2-only tools ride v2 plugin surfaces (session move, rpc emit) with
-    // no MCP equivalent - same rule.
+    // no MCP equivalent - same rule. bundledOnly tools are wired through
+    // the PLUGIN-regime bundled server's CoreContext only (src/mcp.ts
+    // builds it with mode: "bundled") - the standalone server would
+    // advertise a tool that answers "not available".
     if (def.opencodeOnly || def.v2Only) continue;
+    if (def.bundledOnly && !opts?.bundled) continue;
     const schema = z.object(def.args);
     // The validator deep-passthroughs so typo'd keys survive into the
     // tool's accept-then-teach guards at EVERY object level ("you passed
@@ -120,6 +125,26 @@ export function compilePrompts(): Map<string, ActionDef> {
 // MCP server
 // ---------------------------------------------------------------------------
 
+/** How this server instance was started. "standalone" is the classic
+ *  one-shot-hooks regime (sideband, version file, auto-refresh all live).
+ *  "bundled" is the Claude Code plugin regime: the server ships inside the
+ *  plugin, is reached in-process by the mod ($.mcp.call), and updates with
+ *  it - so everything that exists to bridge "no in-process runtime" is
+ *  skipped: no sideband (the shared hashed socket path would collide with
+ *  a running Cursor/standalone server), no version file (plugin updates
+ *  are the host's own mechanism; a shared version file would flip-flop the
+ *  fallback regime's skew detection), no auto-refresh (setup is regime-2),
+ *  no behavior seeding (idempotent but per-session waste). */
+export type McpServerMode = "standalone" | "bundled";
+
+/** Minutes without a mod liveness ping after which the bundled server
+ *  warns that the mod's hooks have gone silent (the disabled-mod hole:
+ *  disableAllHooks / allowManagedModsOnly stop the hooks but leave the
+ *  server running). Conservative: prompts can legitimately pause for
+ *  longer than this inside one working session, so the warning says
+ *  "may", never "is". */
+const MOD_LIVENESS_STALE_MS = 30 * 60 * 1000;
+
 /**
  * Runs the thatch MCP server over stdio. Reads newline-delimited JSON-RPC from
  * stdin, writes responses to stdout. All diagnostics go to stderr - any stray
@@ -135,7 +160,7 @@ export function compilePrompts(): Map<string, ActionDef> {
  * processes (thatch flush-tools) can ask the warm MCP server to embed a
  * prompt and search for matches without loading the model themselves.
  */
-export async function runMcpServer(): Promise<void> {
+export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<void> {
   // Deliberate superset of detectRepo's own chain (src/git.ts): the pinned
   // THATCH_PROJECT_DIR (written into project-local MCP configs by setup)
   // beats ambient host vars, which beat the spawn cwd - the server's spawn
@@ -160,7 +185,11 @@ export async function runMcpServer(): Promise<void> {
   const repo = detected === "unknown" ? "global" : detected;
   const model = new BgeEmbeddingModel(modelName);
 
-  await seedDefaultBehaviors(db, model);
+  // Bundled mode (plugin regime) skips everything that exists to bridge
+  // "no in-process runtime" - see the McpServerMode doc comment.
+  if (mode === "standalone") {
+    await seedDefaultBehaviors(db, model);
+  }
 
   // Extraction payload provider: peeks the file-backed queue and returns the
   // serialized JSON payload. Called by the get_extraction_payload tool when a
@@ -187,6 +216,15 @@ export async function runMcpServer(): Promise<void> {
     defaultStore: repo,
     extractionPayloadProvider,
     drainExtractionQueue,
+    // The plugin regime's stage tool: the mod's prompt.submit handler calls
+    // it per prompt ($.mcp.call), and the server runs the flush tiers
+    // server-side (the sideband's role, reborn in-process).
+    ...(mode === "bundled"
+      ? {
+          pluginStage: (prompt: string, sessionID: string) =>
+            computePluginStage({ db, model, repo, dbPath }, prompt, sessionID),
+        }
+      : {}),
     // Same-machine tab reader: the MCP server can read the local opencode
     // state tree, so its roster renders the same open/recent split.
     openTabs: chatOpenTabsProvider(() => db.chatTabClosures()),
@@ -206,30 +244,48 @@ export async function runMcpServer(): Promise<void> {
       return envID ? db.findChatSession(mcpSessionID(envID))?.session_id ?? null : null;
     },
   };
-  const tools = compileTools();
+  const tools = compileTools({ bundled: mode === "bundled" });
   const prompts = compilePrompts();
 
   // Check whether `thatch setup` was run for the current host. If not, or if
   // markers are broken, surface a warning on the first tools/call response so
   // the agent can tell the user to run setup. Also emit to stderr for
-  // visibility in host debug logs.
+  // visibility in host debug logs. Bundled mode skips this: the plugin IS
+  // the install (its marker-based checkSetup logic is the fallback
+  // regime's, and a plugin-only install writes no fallback markers).
   let setupWarning: string | null = null;
-  const setupStatus = checkSetup(projectDir);
-  if (setupStatus && setupStatus.status !== "installed") {
-    setupWarning = setupStatus.message;
-    console.error(`[thatch] ${setupWarning}`);
+  // The regime marker decides what a STANDALONE server says: under the
+  // plugin regime a standalone server should not be configured at all
+  // (double delivery), so it warns instead of auto-refreshing (auto-
+  // refresh would resurrect the deactivated fallback hooks and markers).
+  const regimeMarker = mode === "standalone" ? readRegimeMarker(dbPath) : null;
+  if (mode === "standalone") {
+    const setupStatus = checkSetup(projectDir);
+    if (regimeMarker === "plugin") {
+      setupWarning =
+        "Thatch is in the PLUGIN regime (the Claude Code plugin owns this install), but a standalone thatch MCP server is still configured in this host's MCP config. Remove the mcpServers.thatch entry (`claude mcp remove thatch`, or delete it from .mcp.json) - both servers delivering means nudges and context arrive twice.";
+      console.error(`[thatch] ${setupWarning}`);
+    } else if (setupStatus && setupStatus.status !== "installed") {
+      setupWarning = setupStatus.message;
+      console.error(`[thatch] ${setupWarning}`);
+    }
   }
 
   // Version warning: surfaced once on the first tools/call response. The
   // primary delivery channel is flush-tools (fires on every prompt), so this
   // is a backup. Combines npm update-available and version-skew warnings.
+  // Bundled mode skips it: the server updates with the plugin, so skew
+  // cannot arise there, and the shared version file belongs to the
+  // standalone regime.
   let versionWarning: string | null = null;
-  const checker = getVersionChecker();
-  if (checker) {
-    const updateMsg = checker.getUpdateWarning();
-    if (updateMsg) {
-      versionWarning = updateMsg;
-      console.error(`[thatch] ${updateMsg}`);
+  if (mode === "standalone") {
+    const checker = getVersionChecker();
+    if (checker) {
+      const updateMsg = checker.getUpdateWarning();
+      if (updateMsg) {
+        versionWarning = updateMsg;
+        console.error(`[thatch] ${updateMsg}`);
+      }
     }
   }
 
@@ -240,21 +296,26 @@ export async function runMcpServer(): Promise<void> {
   // up to date without requiring the user to manually re-run setup after
   // upgrading thatch. The MCP config itself is also re-written, but it
   // writes the same command that's already running, so it's a no-op in
-  // practice.
-  if (setupStatus && setupStatus.status === "installed") {
-    const thatchBin = resolve(process.argv[1] ?? process.execPath);
-    const isGlobal = setupStatus.scope === "global";
-    try {
-      if (setupStatus.host === "claude") {
-        setupClaudeCode(thatchBin, isGlobal, projectDir);
-      } else if (setupStatus.host === "cursor") {
-        setupCursor(thatchBin, isGlobal, projectDir);
+  // practice. Bundled mode NEVER auto-refreshes: re-running the fallback
+  // setup here would resurrect the deactivated settings hooks and CLAUDE.md
+  // markers behind the plugin regime's back (the regime-warfare failure).
+  if (mode === "standalone" && regimeMarker !== "plugin") {
+    const setupStatus = checkSetup(projectDir);
+    if (setupStatus?.status === "installed") {
+      const thatchBin = resolve(process.argv[1] ?? process.execPath);
+      const isGlobal = setupStatus.scope === "global";
+      try {
+        if (setupStatus.host === "claude") {
+          setupClaudeCode(thatchBin, isGlobal, projectDir);
+        } else if (setupStatus.host === "cursor") {
+          setupCursor(thatchBin, isGlobal, projectDir);
+        }
+      } catch (err) {
+        // Auto-refresh is best-effort. A failure here does not affect the
+        // MCP server's ability to serve tool calls -- it just means skills
+        // or instructions may be stale until the user re-runs setup.
+        console.error(`[thatch] auto-refresh of skills/instructions failed: ${err}`);
       }
-    } catch (err) {
-      // Auto-refresh is best-effort. A failure here does not affect the
-      // MCP server's ability to serve tool calls -- it just means skills
-      // or instructions may be stale until the user re-runs setup.
-      console.error(`[thatch] auto-refresh of skills/instructions failed: ${err}`);
     }
   }
 
@@ -262,24 +323,49 @@ export async function runMcpServer(): Promise<void> {
   // warm MCP server to embed a prompt and search for matches - without
   // loading the ~34 MB model themselves. If the socket can't be opened
   // (permissions, tmpdir issues), the MCP server still works; only the
-  // prompt-aware recall nudge degrades.
-  const sockPath = sidebandSocketPath(dbPath);
-  const sideband = new SidebandServer(sockPath, model, db);
-  try {
-    sideband.start();
-  } catch (err) {
-    console.error(`[thatch] sideband socket failed: ${err}`);
+  // prompt-aware recall nudge degrades. Bundled mode skips it: the mod
+  // reaches the server through $.mcp.call, and the shared hashed socket
+  // path belongs to the standalone regime (a second bind would race a
+  // running Cursor/standalone server).
+  const sideband = new SidebandServer(sidebandSocketPath(dbPath), model, db);
+  if (mode === "standalone") {
+    try {
+      sideband.start();
+    } catch (err) {
+      console.error(`[thatch] sideband socket failed: ${err}`);
+    }
+  }
+  // In bundled mode the sideband NEVER starts and NEVER stops: stop()
+  // unlinks the shared hashed socket path, which a live standalone/Cursor
+  // server may own - unlinking it would silently kill the fallback
+  // regime's recall nudges. The teardown gets a no-op shape instead.
+
+  // Version file + npm update polling: standalone-regime machinery (the
+  // hook processes' skew/update checks read these). Bundled mode touches
+  // neither - a plugin-era write would flip-flop the fallback regime's
+  // skew detection, and the plugin's own update channel replaces the
+  // npm poll.
+  if (mode === "standalone") {
+    writeVersionFile(dbPath);
+    startVersionChecker(dbPath);
   }
 
-  // Stamp the running version so hook processes (flush-tools) can detect
-  // version skew after an upgrade. The hook reads this file on every
-  // UserPromptSubmit and compares it to its own package.json version.
-  writeVersionFile(dbPath);
-
-  // Start background npm update polling. The checker caches the latest
-  // version to a file so hook processes can read it without making network
-  // requests. Never blocks tool calls.
-  startVersionChecker(dbPath);
+  // The disabled-mod warning (bundled mode): when a tools/call arrives and
+  // the mod's liveness ping is stale, the plugin's hooks are probably
+  // silenced (disableAllHooks, managed allowManagedModsOnly) - context
+  // injection and nudges are not reaching the model. Warned once per
+  // session, on the first tools/call response, through the same channel
+  // as the setup warning. The ping is stamped by the stage tool the mod
+  // calls on every prompt.
+  let modSilentWarning: string | null = null;
+  if (mode === "bundled") {
+    const lastPing = readModLiveness(dbPath);
+    if (lastPing !== null && Date.now() - lastPing > MOD_LIVENESS_STALE_MS) {
+      modSilentWarning =
+        "The thatch plugin's mod has not pinged in a while, so its nudges and context injection are probably NOT being delivered (hooks may be disabled by disableAllHooks, --safe-mode, or a managed allowManagedModsOnly setting). Tell the user their thatch plugin is not delivering.";
+      console.error(`[thatch] ${modSilentWarning}`);
+    }
+  }
 
   // Idempotent teardown, shared by the stdin-end path (the host closed the
   // pipe - the normal shutdown) and the signal handlers (SIGINT/SIGTERM/
@@ -289,12 +375,14 @@ export async function runMcpServer(): Promise<void> {
   // before the db closes, and the db close runs in a finally so a disposal
   // failure cannot leak the connection.
   const teardown = createMcpTeardown({
-    sideband,
+    sideband: mode === "standalone" ? sideband : { stop() { /* never started - do not unlink the shared socket path */ } },
     model,
     db,
     dbPath,
     stopVersionChecker,
-    removeVersionFile,
+    // Bundled mode never wrote the version file - removing it here would
+    // delete the STAMP a live standalone server owns (same shared path).
+    removeVersionFile: mode === "standalone" ? removeVersionFile : () => {},
   });
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     process.on(signal, () => {
@@ -341,13 +429,18 @@ export async function runMcpServer(): Promise<void> {
       // Surface the version warning once per session on the first tools/call.
       // The primary delivery channel is flush-tools (fires on every prompt),
       // so this is a backup for when hooks are missing or fail. Cleared after
-      // one surfacing.
-      if (versionWarning && req.method === "tools/call" && !res.error) {
-        const content = res.result?.content;
-        if (Array.isArray(content) && content[0]?.text != null) {
-          content[0].text = `[thatch] ${versionWarning}\n\n${content[0].text}`;
+      // one surfacing. In bundled mode the same slot carries the disabled-mod
+      // warning instead (the plugin regime has no version-skew surface).
+      if (req.method === "tools/call" && !res.error) {
+        const warning = mode === "standalone" ? versionWarning : modSilentWarning;
+        if (warning) {
+          const content = res.result?.content;
+          if (Array.isArray(content) && content[0]?.text != null) {
+            content[0].text = `[thatch] ${warning}\n\n${content[0].text}`;
+          }
+          if (mode === "standalone") versionWarning = null;
+          else modSilentWarning = null;
         }
-        versionWarning = null;
       }
 
       send(res);

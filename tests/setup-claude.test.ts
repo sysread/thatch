@@ -449,3 +449,65 @@ describe("registerClaudeMcpServer", () => {
     expect(result.mcpAddCommand).toContain("claude mcp add --scope user thatch --");
   });
 });
+
+describe("setupClaudePluginRegime (plugin regime, QA-only)", () => {
+  test("generates the plugin and deactivates the fallback writers", async () => {
+    // Pre-seed a fallback install: hooks in settings.json, a CLAUDE.md
+    // marker block, and a .mcp.json server entry. The plugin regime's
+    // opt-in must DELETE all three (opt-in that only adds leaves both
+    // regimes delivering every prompt).
+    const binPath = join(projectDir, "bin", "thatch");
+    setupClaudeCode(binPath, false, projectDir, fakeHome);
+    const settingsPath = join(projectDir, ".claude", "settings.json");
+    expect(readFileSync(settingsPath, "utf8")).toContain("thatch");
+
+    const { setupClaudePluginRegime } = await import("../src/setup");
+    const result = await setupClaudePluginRegime(binPath, false, projectDir, fakeHome);
+
+    // The generated plugin: manifest (bundling the server), the modules
+    // list that makes it a mod, the shim, the rendered instructions, and
+    // the Node-free mod bundle.
+    const pluginDir = result.pluginDir;
+    const manifest = JSON.parse(readFileSync(join(pluginDir, ".claude-plugin", "plugin.json"), "utf8"));
+    expect(manifest.name).toBe("thatch");
+    expect(manifest.mcpServers.thatch.args).toEqual(["mcp", "--bundled"]);
+    expect(manifest.mcpServers.thatch.env.THATCH_PROJECT_DIR).toBe(projectDir);
+    const hooksJson = JSON.parse(readFileSync(join(pluginDir, "hooks", "hooks.json"), "utf8"));
+    expect(hooksJson.modules).toEqual(["./register.js"]);
+    expect(readFileSync(join(pluginDir, "hooks", "instructions.js"), "utf8")).toContain("When a system nudge reports queued tool interactions");
+    expect(existsSync(join(pluginDir, "hooks", "mod.js"))).toBe(true);
+
+    // The deactivation: hooks, instructions, and the standalone MCP entry
+    // are GONE from the fallback files. A CLAUDE.md that held ONLY the
+    // thatch block is deleted outright (removeBlock's contract); one with
+    // other content survives minus the block.
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    expect(JSON.stringify(settings)).not.toContain("thatch");
+    const claudeMdPath = join(projectDir, "CLAUDE.md");
+    if (existsSync(claudeMdPath)) {
+      expect(readFileSync(claudeMdPath, "utf8")).not.toContain(claudeInstructions().slice(0, 40).split("\n")[0]);
+    }
+    const mcpJson = JSON.parse(readFileSync(join(projectDir, ".mcp.json"), "utf8"));
+    expect(mcpJson.mcpServers?.thatch).toBeUndefined();
+
+    // The reported deactivation list says what it did.
+    expect(result.deactivated.some((d) => d.includes("settings.json"))).toBe(true);
+  });
+
+  test("checkSetup reports installed under the plugin regime (marker read)", async () => {
+    const binPath = join(projectDir, "bin", "thatch");
+    const { setupClaudePluginRegime, checkSetup } = await import("../src/setup");
+    const { writeRegimeMarker } = await import("../src/version-check");
+    await setupClaudePluginRegime(binPath, false, projectDir, fakeHome);
+    writeRegimeMarker(join(process.env.THATCH_DB_PATH ?? join(fakeHome, ".config", "thatch", "thatch.db")), "plugin");
+    // checkSetup only runs when the host env names a Claude session.
+    process.env.CLAUDE_PROJECT_DIR = projectDir;
+    try {
+      const status = checkSetup(projectDir, fakeHome);
+      expect(status?.status).toBe("installed");
+      expect((status as { regime?: string }).regime).toBe("plugin");
+    } finally {
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+  });
+});
