@@ -1,6 +1,6 @@
 # Claude Code: inline extraction (retire the sub-agent handshake)
 
-**Status: CONVERGED (round 5 + coordinator review + final evidence/consistency audits, both PASS).** Mitigation for the issue #22 nudge loop landed on main as `6ea9967` (buffer meta-tool exclusions). This plan migrates the Claude Code extraction flow off the model-driven sub-agent handshake onto the inline path. **Implementation is HELD** pending Jeff's review; this doc is the only artifact of the planning work.
+**Status: CONVERGED (round 5 + coordinator review + final evidence/consistency audits, both PASS).** Superseded on the Claude Code plugin path by claude-code-holistic-integration.md; this bridge remains the Cursor and fallback-regime delivery path. Mitigation for the issue #22 nudge loop landed on main as `6ea9967` (buffer meta-tool exclusions). This plan migrates the Claude Code extraction flow off the model-driven sub-agent handshake onto the inline path. **Implementation is HELD** pending Jeff's review; this doc is the only artifact of the planning work.
 
 ## Goal
 
