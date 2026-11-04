@@ -1,4 +1,4 @@
-import type { ModRegistrar, ModsApi, PromptSubmitEvent, PromptComposeEvent } from "../src/claude-plugin/mod";
+import type { ModRegistrar, ModsApi, PromptSubmitEvent, PromptComposeEvent } from "../../src/claude-plugin/mod";
 
 /**
  * A hand-rolled mods-$ double for the Claude Code plugin mod's unit tests.
@@ -42,7 +42,7 @@ export function installModsHarness(options: { instructions: string; stageRespons
       id: async () => sessionId,
     },
     mcp: {
-      call: async (call) => {
+      call: async (call: { server: string; tool: string; arguments?: Record<string, unknown> }) => {
         if (call.tool !== "plugin_stage") throw new Error(`unexpected tool call: ${call.server}/${call.tool}`);
         stageCalls.push({ prompt: String(call.arguments?.prompt ?? ""), sessionId: String(call.arguments?.session_id ?? "") });
         if (stageError) throw stageError;

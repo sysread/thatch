@@ -1,6 +1,6 @@
 import { $ } from "bun";
 import { join } from "node:path";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 
@@ -51,7 +51,7 @@ const useCase: UseCase = {
     /** A JSON-RPC client over one spawned server: ONE stdout reader shared
      *  by every call (a stream re-getReader per call locks up after the
      *  first), reading until the response with the sent id arrives. */
-    const client = (proc: ReturnType<typeof Bun.spawn>) => {
+    const client = (proc: { stdin: { write(b: Uint8Array): unknown; flush(): void }; stdout: ReadableStream<Uint8Array> }) => {
       const reader = proc.stdout.getReader();
       const dec = new TextDecoder();
       let buf = "";
@@ -104,11 +104,12 @@ const useCase: UseCase = {
         failures.push("stage response must not dispatch or name a fetch tool");
       }
       // The liveness stamp: written by the stage call, under the cache dir
-      // derived from the db path (version-check's chain).
+      // derived from the db path - stamped to EITHER tmpdir base (the
+      // subprocess-boundary trap; see block 2's comment).
       const { createHash } = await import("node:crypto");
-      const hash = createHash("sha256").update(env.THATCH_DB_PATH).digest("hex").slice(0, 16);
-      const livenessFile = join(tmpdir(), `thatch-${hash}`, "mod-liveness");
-      if (!existsSync(livenessFile)) failures.push("the stage call did not stamp the mod liveness file");
+      const hash = createHash("sha256").update(ctx.env.THATCH_DB_PATH).digest("hex").slice(0, 16);
+      const stamped = [tmpdir(), "/tmp"].some((base) => existsSync(join(base, `thatch-${hash}`, "mod-liveness")));
+      if (!stamped) failures.push("the stage call did not stamp the mod liveness file");
     } finally {
       proc.kill();
     }
@@ -116,12 +117,33 @@ const useCase: UseCase = {
     // Step 3: the disabled-mod warning - a stale liveness stamp prepends
     // the warning to the FIRST tools/call response, exactly once.
     const { createHash } = await import("node:crypto");
-    const hash = createHash("sha256").update(env.THATCH_DB_PATH).digest("hex").slice(0, 16);
-    const cacheDir = join(tmpdir(), `thatch-${hash}`);
-    mkdirSync(cacheDir, { recursive: true });
-    writeFileSync(join(cacheDir, "mod-liveness"), String(Date.now() - 60 * 60 * 1000), "utf-8");
-    console.log(`  [debug] stale stamp at ${join(cacheDir, "mod-liveness")}: ${readFileSync(join(cacheDir, "mod-liveness"), "utf8")}, now=${Date.now()}`);
-    const proc2 = Bun.spawn([bin, "mcp", "--bundled"], { env, stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+    // The liveness path is NOT stable across the env-replacing subprocess
+    // boundary (the same trap uc-009's skew stamp documents): the spawned
+    // server gets ctx.env (no TMPDIR -> /tmp) while this test process
+    // resolves /var/folders. Stamp BOTH candidate bases.
+    const livenessPaths = (dbPath: string) => {
+      const hash = createHash("sha256").update(dbPath).digest("hex").slice(0, 16);
+      return [tmpdir(), "/tmp"].map((base) => join(base, `thatch-${hash}`, "mod-liveness"));
+    };
+    for (const p of livenessPaths(ctx.env.THATCH_DB_PATH)) {
+      mkdirSync(join(p, ".."), { recursive: true });
+      writeFileSync(p, String(Date.now() - 60 * 60 * 1000), "utf-8");
+    }
+    const proc2 = Bun.spawn([bin, "mcp", "--bundled"], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    // Collect stderr in the background (the server logs the warning there
+    // when it fires); reading to EOF only completes after kill.
+    const errChunks: string[] = [];
+    const errDone = (async () => {
+      try {
+        const reader = proc2.stderr.getReader();
+        const dec = new TextDecoder();
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          errChunks.push(dec.decode(value));
+        }
+      } catch { /* killed mid-read */ }
+    })();
     try {
       const c2 = client(proc2);
       await c2.request("initialize", {});
@@ -137,6 +159,9 @@ const useCase: UseCase = {
       }
     } finally {
       proc2.kill();
+      await errDone;
+      const errText = errChunks.join("");
+      if (errText) console.log(`  [debug] proc2 stderr: ${errText.slice(0, 400)}`);
     }
 
     if (failures.length > 0) {
