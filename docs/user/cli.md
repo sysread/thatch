@@ -93,6 +93,11 @@ Access to the chat directory your opencode sessions share (see
 thatch chat list               # who is open now: name, age, project, topic
 thatch chat list --recent      # also show alive sessions with no open tab
 thatch chat list --stale all   # also show stale sessions older than a day
+thatch chat list --json        # machine-readable roster: one JSON object per row
+thatch chat list --host-id <id> [--host-id <id>...]   # look up rows by the
+                               # HOST session id you already know (repeatable);
+                               # the hashing is internal, JSON rows echo the id
+                               # in host_id
 thatch chat tail               # follow sent and read events, live (JSONL)
 thatch chat tail --once        # print the last 20 messages and exit
 thatch chat tail --once --limit 50   # a longer backlog (or --limit all)
@@ -128,6 +133,23 @@ hidden-count note so long-dead sessions cannot bury the fresh signal.
 Pass `--stale N` (days) to widen the window or `--stale all` to see
 every stale row. Color is added only when the
 output is a terminal; a pipe prints plain aligned text.
+
+`--json` swaps the table for the machine-readable roster: one JSON object
+per row with stable field names - `name`, `session_id` (the row's stored
+key: hashed for Claude Code and Cursor rows, raw for opencode), `host_kind`,
+`project`, `topic`, `status` (the same verdicts the table shows),
+`last_seen`, and `unread` (unread message count, so a launcher can decide
+when to prompt an idle session to read its mail without polling
+`chat tail`). Zero matching rows print zero lines.
+
+`--host-id <id>` (repeatable) looks up rows by the HOST session id a
+launcher already knows: thatch hashes each id internally, so a tool never
+learns or depends on the hash scheme. A lookup is a point query - the
+staleness filter does not apply, because a caller asking for a specific id
+wants that row even when it is idle. Combined with `--json`, the matching
+rows echo the caller's id in a `host_id` field, so one multi-id call is
+joinable lane by lane; with no match, the text form prints a diagnostic
+line and the JSON form prints nothing.
 
 `chat tail` prints the conversation as a JSONL event log: one JSON
 object per line, one event per line. Sending a message and reading it

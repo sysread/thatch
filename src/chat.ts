@@ -445,6 +445,49 @@ export function chatLiveness(row: ChatSessionRow, now = Date.now(), openTabs?: R
   return openTabs?.has(row.session_id) ? "open" : "recent";
 }
 
+/**
+ * True when the roster row is the chat identity of the given host session
+ * id - the `--host-id` lookup's matcher. Opencode rows store the raw id;
+ * MCP rows store only the mcp_ hash of the lowercased host id
+ * (mcpSessionID), so the CLI hashes internally and the caller never learns
+ * the scheme (GitHub issue #23).
+ */
+export function matchesHostSessionID(row: ChatSessionRow, hostSessionID: string): boolean {
+  return row.session_id === hostSessionID || (row.host_kind === "mcp" && row.session_id === mcpSessionID(hostSessionID));
+}
+
+/** One machine-readable roster row for `chat list --json`. Field names are
+ *  a stable contract (docs/user/cli.md); session_id is the row's STORED key
+ *  (hashed for MCP rows, raw for opencode rows) - the raw host id appears
+ *  ONLY as the optional host_id echo, set when the caller supplied the id
+ *  via --host-id, so a multi-id lookup is joinable without any reverse
+ *  hashing or a raw-id column. */
+export interface ChatRosterJsonRow {
+  name: string;
+  session_id: string;
+  host_kind: ChatHostKind;
+  project: string | null;
+  topic: string | null;
+  status: ReturnType<typeof chatLiveness>;
+  last_seen: string;
+  unread: number;
+  host_id?: string;
+}
+
+export function buildChatRosterJsonRow(row: ChatSessionRow, status: ReturnType<typeof chatLiveness>, unread: number, hostSessionID?: string): ChatRosterJsonRow {
+  return {
+    name: row.name,
+    session_id: row.session_id,
+    host_kind: row.host_kind,
+    project: row.project,
+    topic: row.topic,
+    status,
+    last_seen: row.last_seen,
+    unread,
+    ...(hostSessionID !== undefined ? { host_id: hostSessionID } : {}),
+  };
+}
+
 /** Orders roster rows for display: project first (so a shared-tree reader
  *  sees each repo's sessions together; rows with no project sort last),
  *  then by heartbeat, most recently seen first, so the recoverable rows

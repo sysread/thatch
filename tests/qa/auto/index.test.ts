@@ -112,3 +112,4 @@ import "./uc-128-chat-cli-broadcast";
 import "./uc-129-fuzzy-did-you-mean";
 import "./uc-130-claude-inline-extraction-cycle";
 import "./uc-131-cli-memory-write";
+import "./uc-132-chat-roster-json";

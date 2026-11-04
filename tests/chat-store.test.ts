@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { nowIso, isoMinutesAgo as cutoffAgo, NAME_CHARSET, slugifyTitle, isDefaultSessionTitle, humanAge, renderChatParticipant, CHAT_CLI_SENDER, cliBroadcastFrame, sanitizeCliSenderName } from "../src/chat";
+import { nowIso, isoMinutesAgo as cutoffAgo, NAME_CHARSET, slugifyTitle, isDefaultSessionTitle, humanAge, renderChatParticipant, CHAT_CLI_SENDER, cliBroadcastFrame, sanitizeCliSenderName, matchesHostSessionID, buildChatRosterJsonRow, mcpSessionID, type ChatSessionRow } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { TOOL_DEFS } from "../src/tool-defs";
 import { makeChatDbFixture, disposeChatDbFixture, makeReg } from "./mocks/chat-harness";
@@ -845,5 +845,70 @@ describe("CLI broadcast helpers", () => {
     expect(framed).toContain("Do NOT reply into thatch chat");
     // The user's body rides after the note, unmodified.
     expect(framed.endsWith("the actual message")).toBe(true);
+  });
+});
+
+describe("chat list machine-readable roster (issue #23)", () => {
+  const mcpHostID = "host-session-abc123";
+  const mcpRowID = mcpSessionID(mcpHostID);
+
+  const opencodeRow: ChatSessionRow = {
+    session_id: "ses_opencode_raw",
+    name: "raw-row",
+    topic: null,
+    project: "p",
+    host_kind: "opencode",
+    registered_at: nowIso(),
+    last_seen: nowIso(),
+    worktree: "" as ChatSessionRow["worktree"],
+  };
+  const mcpRow: ChatSessionRow = {
+    session_id: mcpRowID,
+    name: "hashed-row",
+    topic: "t",
+    project: "sysread/thatch",
+    host_kind: "mcp",
+    registered_at: nowIso(),
+    last_seen: nowIso(),
+    worktree: "" as ChatSessionRow["worktree"],
+  };
+
+  test("matchesHostSessionID: opencode rows match the raw id only", () => {
+    expect(matchesHostSessionID(opencodeRow, "ses_opencode_raw")).toBe(true);
+    // A hash never matches an opencode row's raw id, and a wrong id never matches.
+    expect(matchesHostSessionID(opencodeRow, mcpRowID)).toBe(false);
+    expect(matchesHostSessionID(opencodeRow, "ses_other")).toBe(false);
+  });
+
+  test("matchesHostSessionID: MCP rows match the hashed host id, never a raw guess", () => {
+    expect(matchesHostSessionID(mcpRow, mcpHostID)).toBe(true);
+    // Case-insensitive on the host id side (mcpSessionID lowercases): a
+    // Claude Code id's case in the caller's hands must not matter.
+    expect(matchesHostSessionID(mcpRow, mcpHostID.toUpperCase())).toBe(true);
+    expect(matchesHostSessionID(mcpRow, "host-session-other")).toBe(false);
+    // The row's hashed key is NOT matched by a raw-id equality rule
+    // against a DIFFERENT row's raw id.
+    expect(matchesHostSessionID(mcpRow, "ses_opencode_raw")).toBe(false);
+  });
+
+  test("buildChatRosterJsonRow: stable field names, no host_id echo without a lookup", () => {
+    const row = buildChatRosterJsonRow(mcpRow, "active", 3);
+    expect(row).toEqual({
+      name: "hashed-row",
+      session_id: mcpRowID,
+      host_kind: "mcp",
+      project: "sysread/thatch",
+      topic: "t",
+      status: "active",
+      last_seen: mcpRow.last_seen,
+      unread: 3,
+    });
+    expect("host_id" in row).toBe(false);
+  });
+
+  test("buildChatRosterJsonRow: the host_id echo carries the CALLER's id", () => {
+    const row = buildChatRosterJsonRow(mcpRow, "active", 0, mcpHostID);
+    expect(row.host_id).toBe(mcpHostID);
+    expect(row.session_id).toBe(mcpRowID);
   });
 });

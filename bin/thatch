@@ -12,7 +12,7 @@ import { setupClaudeCode, setupCursor, setupSkillsOnly, registerClaudeMcpServer,
 import { installSkills, type InstallReport } from "../src/skills";
 import { installCommandsToDir, opencodeCommandDefs } from "../src/commands";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
-import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, createChatTailPretty, markdownBodyLines, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, CHAT_MAX_BODY_CHARS, CHAT_CLI_SENDER, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, resolveRegisteredPredecessor, cliBroadcastFrame, sanitizeCliSenderName, type ChatSessionRow, type ChatTailFilter, type ChatTailEvent } from "../src/chat";
+import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, createChatTailPretty, markdownBodyLines, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, CHAT_MAX_BODY_CHARS, CHAT_CLI_SENDER, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, resolveRegisteredPredecessor, cliBroadcastFrame, sanitizeCliSenderName, matchesHostSessionID, buildChatRosterJsonRow, type ChatSessionRow, type ChatTailFilter, type ChatTailEvent } from "../src/chat";
 import { chatEnabled, loadConfig } from "../src/config";
 import { chatNotificationNudge } from "../src/prompts";
 import { chatOpenTabs as chatOpenTabsProvider } from "../src/tab-state";
@@ -82,7 +82,7 @@ function usage(exitCode = 1): never {
                                    Full conversation as OpenAI chat-completions JSONL
   thatch session search <query> [--session <id>] [--regex] [--limit N]
                                    JSONL of matching parts across sessions (decoded content)
-  thatch chat list [--recent] [--stale N|all]
+  thatch chat list [--recent] [--stale N|all] [--json] [--host-id ID]...
                                     Registered chat sessions. Default shows
                                     only open sessions (plus MCP rows, which
                                     read mail at their next prompt): name,
@@ -92,6 +92,15 @@ function usage(exitCode = 1): never {
                                     --stale adds the stale section: N bounds
                                     it to sessions seen in the last N days
                                     (default 1); all shows every stale one.
+                                    --json prints one JSON object per row
+                                    instead (name, session_id, host_kind,
+                                    project, topic, status, last_seen, unread).
+                                    --host-id ID (repeatable) looks up rows by
+                                    the HOST session id a launcher already
+                                    knows - the hashing is internal; a lookup
+                                    is a point query (staleness filter does
+                                    not apply) and its JSON rows echo the id
+                                    in host_id.
   thatch chat tail [--once] [--pretty] [--limit N|all] [--match RE]
                    [--from NAME] [--to NAME] [--since DT] [--until DT]
                                    Follow cross-session chat as a JSONL
@@ -614,6 +623,20 @@ async function chatCommand(rest: string[]): Promise<void> {
       // it takes no window value: recent rows are bounded by the heartbeat
       // window itself, so there is nothing to cap. The value is parsed by
       // hand (not flagValue) because bare --stale is meaningful.
+      // --json swaps the table for the machine-readable roster: one JSON
+      // object per row (GitHub issue #23). Same staleness/recent filters
+      // as the text view; zero matching rows print zero lines.
+      const jsonMode = restArgs.includes("--json");
+      // --host-id <id> is REPEATABLE: a lane orchestrator looks up all its
+      // lanes in one call. Each id is matched internally (raw for
+      // opencode rows, hashed for MCP rows) so the caller never learns
+      // the hash scheme; a lookup is a POINT QUERY - it skips the
+      // staleness pre-filter (a caller asking for a specific id wants
+      // that row even when idle), and the JSON row echoes the caller's id
+      // in host_id so a multi-id lookup is joinable. No match prints
+      // nothing (JSON) or a diagnostic line (text).
+      const hostIds = restArgs.flatMap((a, i) => (a === "--host-id" ? [restArgs[i + 1]] : []))
+        .filter((v): v is string => v !== undefined && !v.startsWith("--"));
       const showRecent = restArgs.includes("--recent");
       const showStale = restArgs.includes("--stale");
       const staleIdx = restArgs.indexOf("--stale");
@@ -638,6 +661,38 @@ async function chatCommand(rest: string[]): Promise<void> {
       // boundary mid-render could land in two sections at once.
       const now = Date.now();
       const registered = db.listChatSessions();
+
+      // Lookup mode (--host-id): a point query over the whole roster,
+      // bypassing the staleness pre-filter (see the comment above).
+      if (hostIds.length > 0) {
+        const echo = new Map<string, string>();
+        const matched = registered.filter((r) => {
+          const hit = hostIds.find((h) => matchesHostSessionID(r, h));
+          if (hit) echo.set(r.session_id, hit);
+          return hit !== undefined;
+        });
+        if (jsonMode) {
+          for (const r of matched) {
+            console.log(JSON.stringify(buildChatRosterJsonRow(r, chatLiveness(r, now, openTabs), db.unreadChatCount(r.session_id), echo.get(r.session_id))));
+          }
+          break;
+        }
+        if (matched.length === 0) {
+          console.log(`No chat session matches the given --host-id (${hostIds.length} id${hostIds.length === 1 ? "" : "s"} given).`);
+          break;
+        }
+        console.log(formatChatRoster(matched, showStale ? staleCapMs : null, openTabs, showRecent, now));
+        break;
+      }
+
+      if (jsonMode) {
+        const rows = showStale ? registered : registered.filter((r) => chatLiveness(r, now, openTabs) !== "stale");
+        for (const r of rows) {
+          console.log(JSON.stringify(buildChatRosterJsonRow(r, chatLiveness(r, now, openTabs), db.unreadChatCount(r.session_id))));
+        }
+        break;
+      }
+
       // Stale rows are hidden here (not in the renderer) so the
       // emptiness check can tell an empty directory from a stale-only
       // one; recent rows are left in because formatChatRoster needs them
