@@ -27,6 +27,14 @@ export interface ModsApi {
      *  reference). Fallback: read it from the event payload if the event
      *  carries one. */
     id(): Promise<string>;
+    /** PIN: the host's compaction action (verified present in the mods
+     *  reference's $.session namespace). */
+    compact(): Promise<unknown>;
+  };
+  ui: {
+    /** PIN: the out-of-band notification with the documented resolution
+     *  contract. Used only for the exit wrap-up's degradation. */
+    notify(text: string): Promise<unknown>;
   };
   mcp: {
     /** PIN: calling a manifest-listed server's tool. The response shape
@@ -36,12 +44,33 @@ export interface ModsApi {
      *  without thatch context. */
     call(call: { server: string; tool: string; arguments?: Record<string, unknown> }): Promise<unknown>;
   };
+  command: {
+    /** PIN: programmatic command registration (session.start; a taken
+     *  name throws). */
+    register(def: { name: string; description: string; argumentHint?: string }): Promise<unknown>;
+  };
+  tool: {
+    /** PIN: programmatic tool registration (surfaced as
+     *  mcp__<plugin>__<name>). */
+    register(def: { name: string; description: string; inputSchema: Record<string, unknown>; isDeferred?: boolean }): Promise<unknown>;
+  };
 }
 
 /** The `on` registrar's handler shape, narrowed to what the mod registers. */
 export interface ModRegistrar {
   (event: "prompt.submit", handler: ($: ModsApi, e: PromptSubmitEvent, next: (e?: PromptSubmitEvent) => Promise<PromptSubmitEvent>) => Promise<PromptSubmitEvent>): unknown;
   (event: "prompt.compose", handler: ($: ModsApi, e: PromptComposeEvent, next: (e?: PromptComposeEvent) => Promise<PromptComposeEvent>) => Promise<PromptComposeEvent>): unknown;
+  (event: "tool.call", handler: ($: ModsApi, e: ToolCallEvent, next: (e?: ToolCallEvent) => Promise<unknown>) => Promise<unknown>): unknown;
+  (event: "turn.start", handler: ($: ModsApi, e: TurnEvent, next: (e?: TurnEvent) => Promise<unknown>) => Promise<unknown>): unknown;
+  (event: "turn.complete", handler: ($: ModsApi, e: TurnCompleteEvent, next: (e?: TurnCompleteEvent) => Promise<unknown>) => Promise<unknown>): unknown;
+  (event: "command.run", handler: ($: ModsApi, e: CommandRunEvent, next: (e?: CommandRunEvent) => Promise<unknown>) => Promise<unknown>): unknown;
+  (event: "classic.PermissionRequest", handler: ($: ModsApi, e: Record<string, unknown>, next: (e?: Record<string, unknown>) => Promise<unknown>) => Promise<unknown>): unknown;
+  (event: "classic.PermissionDenied", handler: ($: ModsApi, e: Record<string, unknown>, next: (e?: Record<string, unknown>) => Promise<unknown>) => Promise<unknown>): unknown;
+  (event: "session.start", handler: ($: ModsApi, e: Record<string, unknown>, next: (e?: Record<string, unknown>) => Promise<unknown>) => Promise<unknown>): unknown;
+  // The matcher form (the docs' second argument): an object whose fields
+  // narrow which events reach the handler.
+  (event: string, matcher: Record<string, unknown>, handler: ($: ModsApi, e: Record<string, unknown>, next: (e?: unknown) => Promise<unknown>) => Promise<unknown>): unknown;
+  (event: string, handler: (...args: never[]) => Promise<unknown>): unknown;
 }
 
 export interface PromptSubmitEvent {
@@ -55,6 +84,26 @@ export interface PromptComposeEvent {
   [key: string]: unknown;
 }
 
+export interface ToolCallEvent {
+  tool: string;
+  agentId?: string;
+  [key: string]: unknown;
+}
+
+export interface TurnEvent {
+  agentId?: string;
+  [key: string]: unknown;
+}
+
+export interface TurnCompleteEvent extends TurnEvent {
+  isAborted?: boolean;
+}
+
+export interface CommandRunEvent {
+  args?: string;
+  [key: string]: unknown;
+}
+
 export interface ThatchModOptions {
   /** The rendered instructions (one template, generated at plugin build
    *  time from src/prompts.ts's claudeInstructions) - injected via
@@ -64,6 +113,30 @@ export interface ThatchModOptions {
   /** The bundled server's stage tool coordinates (the plugin's own
    *  manifest server). */
   stageTool: { server: string; tool: string };
+  /** The bundled server's lifecycle tool coordinates. */
+  lifecycleTool: { server: string; tool: string };
+}
+
+/** The wrap-up kinds the mod registers as command + greenlight-tool pairs. */
+const WRAPUP_KINDS = ["compact", "exit"] as const;
+
+/**
+ * Tolerant reader for the lifecycle tool's response: the wrap-up action
+ * rides as JSON {text, wrapup?}; the envelope shape is a QA pin.
+ */
+function readLifecycleResult(res: unknown): { text: string; wrapup?: "compact" | "exit" } {
+  if (typeof res === "string") {
+    try {
+      return JSON.parse(res) as { text: string; wrapup?: "compact" | "exit" };
+    } catch {
+      return { text: res };
+    }
+  }
+  const obj = (res ?? {}) as Record<string, unknown>;
+  const inner = typeof obj.text === "string" ? obj : ((obj.result ?? {}) as Record<string, unknown>);
+  const text = typeof inner.text === "string" ? inner.text : "";
+  const wrapup = inner.wrapup === "compact" || inner.wrapup === "exit" ? inner.wrapup : undefined;
+  return { text, wrapup };
 }
 
 /**
@@ -122,4 +195,142 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
     if (!stageText.trim()) return next(e);
     return next({ ...e, context: [...(e.context ?? []), stageText] } as PromptSubmitEvent);
   });
+
+  // --- alerts: the mod forwards, the server classifies and delivers ---
+
+  // Main conversation only (e.agentId set = a subagent's turn): subagent
+  // rounds are not the user's waiting-on work.
+  on("turn.start", async ($, e, next) => {
+    if (e.agentId === undefined) {
+      try {
+        await forwardLifecycle($, options, { event: "busy" });
+      } catch { /* alerts are best-effort */ }
+    }
+    return next(e);
+  });
+
+  on("tool.call", async ($, e, next) => {
+    // The wrap-up greenlight tools route to the arm check, not to work
+    // bookkeeping. Everything else main-conversation forwards as a
+    // real-work candidate; the server owns the meta/no-work filtering.
+    const result = await next(e);
+    if (e.agentId === undefined) {
+      try {
+        await forwardLifecycle($, options, { event: "realwork", tool: e.tool });
+      } catch { /* alerts are best-effort */ }
+    }
+    return result;
+  });
+
+  on("turn.complete", async ($, e, next) => {
+    try {
+      if (e.agentId === undefined) {
+        const res = await forwardLifecycle($, options, { event: "complete", isAborted: e.isAborted === true });
+        // The wrap-up resolution fires at idle, exactly the opencode
+        // contract: compact = the host action; exit has no host close API,
+        // so it degrades to a user notification (the plan's documented
+        // degradation).
+        if (res.wrapup === "compact") {
+          await $.session.compact();
+        } else if (res.wrapup === "exit") {
+          await $.ui.notify("Thatch wrap-up complete - it is safe to close this session.");
+        }
+      }
+    } catch { /* the wrap-up action is best-effort */ }
+    return next(e);
+  });
+
+  // Permission asks: the pause alert. Resolution signals are
+  // undocumented on this host (PIN) - PermissionDenied is the one
+  // observed end; an unresolved ask suppresses only its own repeats.
+  on("classic.PermissionRequest", async ($, e, next) => {
+    try {
+      await forwardLifecycle($, options, {
+        event: "ask",
+        kind: "permission",
+        requestID: typeof e.tool_use_id === "string" ? e.tool_use_id : undefined,
+      });
+    } catch { /* alerts are best-effort */ }
+    return next(e);
+  });
+  on("classic.PermissionDenied", async ($, e, next) => {
+    try {
+      await forwardLifecycle($, options, {
+        event: "resolved",
+        requestID: typeof e.tool_use_id === "string" ? e.tool_use_id : undefined,
+      });
+    } catch { /* alerts are best-effort */ }
+    return next(e);
+  });
+
+  // Wrap-up commands + their zero-arg greenlight tools: the opencode
+  // protocol (arm on command, the model greenlights with the tool, the
+  // action fires at turn end), ported. Registration goes in
+  // session.start - wait for Step B's commit for the command names'
+  // rationale; register COMMANDS LAST (a taken name throws and a throw
+  // skips the rest of the hook).
+  on("session.start", async ($, e, next) => {
+    try {
+      for (const kind of WRAPUP_KINDS) {
+        await $.command.register({
+          name: `thatch_${kind}`,
+          description: kind === "compact"
+            ? "Arm the compact wrap-up: run your closing checklist, then call the compact tool."
+            : "Arm the exit wrap-up: run your closing checklist, then call the exit tool.",
+        });
+      }
+      for (const kind of WRAPUP_KINDS) {
+        await $.tool.register({
+          name: kind,
+          description: `Greenlight the ${kind} wrap-up (the user armed it with /thatch_${kind}). Call when the checklist is done.`,
+          inputSchema: { type: "object", properties: {} },
+        });
+      }
+    } catch { /* a taken name skips the rest - the catch keeps the session start alive */ }
+    return next(e);
+  });
+  on("command.run", { command: "thatch_compact" }, async ($) => {
+    return await armWrapup($, options, "compact");
+  });
+  on("command.run", { command: "thatch_exit" }, async ($) => {
+    return await armWrapup($, options, "exit");
+  });
+  on("tool.call", { tool: "mcp__thatch__compact" }, async ($) => {
+    return await greenlightWrapup($, options, "compact");
+  });
+  on("tool.call", { tool: "mcp__thatch__exit" }, async ($) => {
+    return await greenlightWrapup($, options, "exit");
+  });
+}
+
+async function forwardLifecycle($: ModsApi, options: ThatchModOptions, args: Record<string, unknown>): Promise<{ text: string; wrapup?: "compact" | "exit" }> {
+  const sessionId = await $.session.id();
+  const res = await $.mcp.call({
+    server: options.lifecycleTool.server,
+    tool: options.lifecycleTool.tool,
+    arguments: { ...args, session_id: sessionId },
+  });
+  return readLifecycleResult(res);
+}
+
+async function armWrapup($: ModsApi, options: ThatchModOptions, kind: "compact" | "exit"): Promise<{ text: string }> {
+  try {
+    const res = await forwardLifecycle($, options, { event: "arm", kind });
+    return { text: res.text };
+  } catch {
+    return { text: `[thatch] the ${kind} wrap-up could not be armed (the bundled server is unreachable). Nothing was armed.` };
+  }
+}
+
+async function greenlightWrapup($: ModsApi, options: ThatchModOptions, kind: "compact" | "exit"): Promise<unknown> {
+  let teach: string;
+  try {
+    const res = await forwardLifecycle($, options, { event: "greenlight", kind });
+    teach = res.text;
+  } catch {
+    teach = "[thatch] the wrap-up greenlight could not reach the bundled server; the wrap-up will not fire.";
+  }
+  // Answer the call without running anything (there is no real tool) -
+  // the text is all the model learns, accept-then-teach style.
+  return { result: teach };
 }

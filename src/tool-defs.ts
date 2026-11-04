@@ -119,6 +119,20 @@ export interface CoreContext {
    *  MCP tool call (the mod has no Node APIs and cannot reach a socket).
    *  Also stamps the mod liveness file. Absent on the standalone server. */
   pluginStage?: (prompt: string, sessionID: string) => Promise<string>;
+  /** The plugin regime's lifecycle dispatcher: the mod forwards host
+   *  events (turn start/complete, tool calls, permission asks) and the
+   *  bundled server classifies alerts and resolves wrap-up arms
+   *  server-side (the mod cannot shell out to the notification
+   *  dispatcher). Absent on the standalone server. */
+  pluginLifecycle?: (event: {
+    event: "busy" | "realwork" | "error" | "complete" | "arm" | "greenlight" | "ask" | "resolved";
+    sessionID: string;
+    tool?: string;
+    error?: string;
+    isAborted?: boolean;
+    kind?: "compact" | "exit" | "question" | "permission";
+    requestID?: string;
+  }) => Promise<{ text: string; wrapup?: "compact" | "exit" }>;
   /** Drains a session's extraction queue. On the MCP path this deletes the
    *  file-backed queue and resets the missed-nudge counter. On the opencode
    *  path this is unused (the tool.execute.after hook handles drain via
@@ -3061,6 +3075,47 @@ const pluginStageDef: ToolDef = {
   },
 };
 
+/**
+ * The plugin regime's lifecycle dispatcher: the Claude Code mod forwards
+ * host events (turn.start -> busy, tool.call -> realwork, turn.complete ->
+ * complete, classic.StopFailure -> error, classic.PermissionRequest ->
+ * ask, the wrap-up command/tool pair -> arm/greenlight) and this tool
+ * classifies alerts server-side (the same machine the opencode path uses;
+ * delivery rides the per-platform dispatcher notify_user uses - the mod
+ * cannot shell out). bundledOnly, like plugin_stage.
+ */
+const pluginLifecycleDef: ToolDef = {
+  name: "plugin_lifecycle",
+  description:
+    "Per-event lifecycle staging for the thatch Claude Code plugin's " +
+    "mod. Not for the model to call.",
+  bundledOnly: true,
+  args: {
+    event: z.enum(["busy", "realwork", "error", "complete", "arm", "greenlight", "ask", "resolved"]),
+    session_id: z.string(),
+    tool: z.string().optional(),
+    error: z.string().optional(),
+    is_aborted: z.boolean().optional(),
+    kind: z.enum(["compact", "exit", "question", "permission"]).optional(),
+    request_id: z.string().optional(),
+  },
+  async execute(args, ctx) {
+    if (!ctx.pluginLifecycle) {
+      return "Plugin lifecycle delivery is not available on this server.";
+    }
+    const result = await ctx.pluginLifecycle({
+      event: args.event as "busy",
+      sessionID: args.session_id as string,
+      tool: args.tool as string | undefined,
+      error: args.error as string | undefined,
+      isAborted: args.is_aborted as boolean | undefined,
+      kind: args.kind as "compact" | undefined,
+      requestID: args.request_id as string | undefined,
+    });
+    return JSON.stringify(result);
+  },
+};
+
 export const TOOL_DEFS: ToolDef[] = [
   rememberDef,
   recallDef,
@@ -3073,6 +3128,7 @@ export const TOOL_DEFS: ToolDef[] = [
   extractionDoneDef,
   getExtractionPayloadDef,
   pluginStageDef,
+  pluginLifecycleDef,
   predictionQueryDef,
   predictionUpdateDef,
   predictionListDef,

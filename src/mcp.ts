@@ -13,6 +13,7 @@ import { SidebandServer, sidebandSocketPath } from "./sideband";
 import { peekQueue, consumeQueue, resetMissedCount } from "./extract-queue";
 import { buildExtractionPayload } from "./extraction";
 import { computePluginStage } from "./flush";
+import { createPluginLifecycle } from "./claude-plugin/lifecycle";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { writeVersionFile, removeVersionFile, startVersionChecker, stopVersionChecker, getVersionChecker, readModLiveness, readRegimeMarker } from "./version-check";
 import pkg from "../package.json";
@@ -210,6 +211,9 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
     consumeQueue(sessionID);
   };
 
+  const lifecycle = mode === "bundled"
+    ? createPluginLifecycle({ db, model, repo, dbPath })
+    : null;
   const ctx: CoreContext = {
     db,
     model,
@@ -223,9 +227,9 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
       ? {
           pluginStage: (prompt: string, sessionID: string) =>
             computePluginStage({ db, model, repo, dbPath }, prompt, sessionID),
+          pluginLifecycle: (event) => lifecycle!.handle(event),
         }
-      : {}),
-    // Same-machine tab reader: the MCP server can read the local opencode
+      : {}),    // Same-machine tab reader: the MCP server can read the local opencode
     // state tree, so its roster renders the same open/recent split.
     openTabs: chatOpenTabsProvider(() => db.chatTabClosures()),
     // Claude Code identity anchor, two model-proof layers:

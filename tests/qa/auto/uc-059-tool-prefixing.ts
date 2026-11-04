@@ -82,6 +82,7 @@ const useCase: UseCase = {
       "session_tab",
       "session_tab_close",
       "plugin_stage",
+      "plugin_lifecycle",
     ];
 
     for (const name of expected) {
