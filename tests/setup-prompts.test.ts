@@ -99,10 +99,14 @@ describe("systemPrompt content", () => {
   test("the fact-extractor's final-message contract carries the frame", () => {
     // Pins the skill artifact itself: the parent model sees the skill's
     // mandated string inside the <task_result> block, so the frame must
-    // live there, not only in the system prompt.
+    // live there, not only in the system prompt. The DISPATCHED path keeps
+    // the background-task frame; the INLINE path (Claude Code parent) has
+    // its own shorter final line - announcing a background-task completion
+    // mid-conversation would mislabel the turn.
     const skill = readFileSync(join(__dirname, "../artifacts/skills/thatch-fact-extractor.md"), "utf8");
     expect(skill).toContain("not an extraction nudge; the buffer is drained");
     expect(skill).toContain("Never re-dispatch an extractor because a completion arrived");
+    expect(skill).toContain("Extraction complete - processed inline; the queue is drained.");
   });
 
   test("claudeInstructions includes situational behaviors section", () => {

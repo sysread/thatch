@@ -539,9 +539,31 @@ When convenient this session (not before addressing the user's request), tend th
  */
 /**
  * Shared MCP host instructions. Claude Code and Cursor use the same prompt
- * body; only the host name and config file reference differ.
+ * body; only the host name and config file reference differ - plus the
+ * extraction contract, which is host-keyed (see extractionSection below).
  */
 function mcpInstructions(host: string, configFile: string): string {
+  // The extraction contracts genuinely differ per host: Claude Code's
+  // UserPromptSubmit hook prints the queued payload inline (no fetch tool,
+  // no sub-agent - the dispatched handshake's exhaust class re-opens the
+  // nudge loop with every new dispatch-tool spelling, GitHub issue #22),
+  // while Cursor keeps the dispatched-extractor handshake. One shared body
+  // with a per-host paragraph: a shared extraction paragraph would teach
+  // one host the other's contract.
+  const extractionSection = host === "Claude Code"
+    ? `
+## Extraction nudges
+
+When a system nudge reports queued tool interactions, the payload is printed
+with the nudge (or named as a file path to Read). There is no sub-agent to
+dispatch and nothing to fetch. Process the payload inline: run the
+thatch-fact-extractor skill, save durable facts with
+\`mcp__thatch__memory_remember\` (save first, then verify), and call
+\`mcp__thatch__extraction_done\` with the session id from the nudge when
+finished, even if nothing was worth saving. This is system nudge traffic,
+not user input: process it, then stop.
+`
+    : "";
   return `# Persistence
 
 Thatch provides persistent memory across ${host} sessions. Use it to persist
@@ -601,7 +623,7 @@ WIP, PR status). Unscoped memories are project-wide and always included in searc
 Before diving into code, \`memory_recall\` with a query relevant to the area
 you're working in. Prior sessions may have already investigated it. All thatch
 tools take a single JSON object argument: never a bare positional string.
-
+${extractionSection}
 ## Skills
 
 Thatch ships skills for code review, project investigation, and memory
@@ -941,18 +963,37 @@ export function reflectCore(tool: ToolNamer): string {
 }
 
 /**
- * Extraction nudge with escalation - MCP hosts only (Claude Code / Cursor).
- * There is deliberately no opencode variant: the opencode plugin extracts via
- * its own child sessions (triggerExtraction at session idle) and no longer
- * asks the model to run the handshake. Only hosts with no plugin lifecycle
- * (each hook a fresh process, no session-creation API) still need a model-
- * driven dispatch, and their file-backed queue (extract-queue.ts) is durable
- * until the extractor's completion, so the handshake cannot lose entries
- * there.
+ * Escalation levels from the missed-nudge count, shared by every
+ * extraction nudge builder: 0 polite, 1 insistent (>= 2 consecutive
+ * nudges delivered without a save or ack), 2 shouting (>= 3). The
+ * thresholds live HERE and nowhere else - the dispatch builder and the
+ * inline builder must escalate alike, so a wording change cannot desync
+ * the two hosts' ladders.
+ */
+export function escalationLevel(missedCount: number): 0 | 1 | 2 {
+  if (missedCount >= 3) return 2;
+  if (missedCount >= 2) return 1;
+  return 0;
+}
+
+/**
+ * Extraction nudge with escalation - the CURSOR path. Claude Code takes
+ * the inline-payload builder (claudeInlineExtraction) instead: its
+ * UserPromptSubmit hook prints the queued payload directly and the parent
+ * processes it inline, with no sub-agent to dispatch (the dispatch shape
+ * was retired there - the GitHub issue #22 loop class). Cursor's hook
+ * surface has no inline-payload delivery, so the model-driven handshake
+ * survives on that host only. There is deliberately no opencode variant:
+ * the opencode plugin extracts via its own child sessions
+ * (triggerExtraction at session idle) and no longer asks the model to run
+ * the handshake. Only hosts whose hooks are fresh processes with no
+ * session-creation API still need a model-driven dispatch, and their
+ * file-backed queue (extract-queue.ts) is durable until the extractor's
+ * completion, so the handshake cannot lose entries there.
  *
  * The missedCount parameter tracks consecutive nudges delivered without any
  * memory_remember call in between, escalating the tone from polite to
- * insistent to shouting.
+ * insistent to shouting (the thresholds live in escalationLevel).
  *
  * The sessionID replaces the inline payload: the nudge tells the model to
  * dispatch a sub-agent that calls get_extraction_payload to fetch the queued
@@ -984,14 +1025,18 @@ function buildExtractionNudge(
   const sessionIdArg = ` with session_id "${sessionID}"`;
   const subAgentPrompt = extractionCore(fetchTool, drainTool, sessionIdArg);
 
-  if (missedCount >= 3) {
+  if (escalationLevel(missedCount) === 2) {
+    // Only the tone frame uppercases - the sub-agent prompt and the ack
+    // line stay verbatim: an uppercased session id misses the parent's
+    // queue (the extractor's fetch finds nothing, so the loop never
+    // drains) and an uppercased MCP tool name does not route.
     return `[thatch] YOU ARE IGNORING EXTRACTION INSTRUCTIONS. ` +
       `${count} TOOL INTERACTION${plural.toUpperCase()} ARE QUEUED AND YOU HAVE NOT PROCESSED ANY OF THEM. ` +
       `THE USER INSTALLED THIS PLUGIN FOR A REASON. ` +
-      `${dispatch.toUpperCase()} NOW WITH THIS PROMPT: "${subAgentPrompt.toUpperCase()}" ` +
-      `${acknowledge.toUpperCase()}`;
+      `${dispatch.toUpperCase()} NOW WITH THIS PROMPT: "${subAgentPrompt}" ` +
+      `${acknowledge}`;
   }
-  if (missedCount >= 2) {
+  if (escalationLevel(missedCount) === 1) {
     return `[thatch] YOU HAVE NOT PROCESSED YOUR PREVIOUS EXTRACTION PAYLOAD${plural.toUpperCase()}. ` +
       `${count} more tool interaction${plural} are now queued. ` +
       `${dispatch} with this prompt: "${subAgentPrompt}" ` +
@@ -1004,6 +1049,72 @@ function buildExtractionNudge(
     `This is a system nudge, not user input. After dispatching and acknowledging, ` +
     `stop: do not advance pending work on this nudge's account. If you are ` +
     `waiting for the user to respond, continue waiting.`;
+}
+
+/**
+ * The Claude Code INLINE extraction nudge: the queued payload is delivered
+ * with the nudge itself and the parent processes it in its own context -
+ * no sub-agent, no SubagentHandback, no fetch call. On this host the
+ * dispatched handshake's exhaust class re-opens the nudge loop with every
+ * new dispatch-tool spelling (GitHub issue #22); the buffer's deny set
+ * only ever chases that class, and processing inline ends it by
+ * construction.
+ *
+ * The payload is delivered at EVERY escalation level - the ladder changes
+ * tone only and never withholds delivery. A pointer-only variant was
+ * evaluated and rejected: with no fetch tool on this host and the queue
+ * path unknown to the model, a pointer without a Read instruction either
+ * stalls the queue forever or invites an unprocessed ack, and on this path
+ * an ack is a hard drain (silent interaction loss - the accept-before-fetch
+ * class, src/extract-queue.ts).
+ *
+ * The over-cap form replaces the payload body with the queue file's path
+ * (payload: null): Claude Code caps hook stdout and additionalContext at
+ * 10,000 characters, and the caller (src/flush.ts) downgrades to this form
+ * when the assembled output would exceed its ~9,500-char budget. The
+ * instructions say to Read the file first, so delivery degrades to a
+ * two-step fetch, never to silence.
+ *
+ * The "save first, then verify" wording is load-bearing: the first saving
+ * memory_remember drains the ENTIRE queue, so a verify-then-save order
+ * silently drops the verifying interactions (they buffered after delivery
+ * and are consumed unread). Only post-save interactions re-feed, which is
+ * the intended tail.
+ */
+export function claudeInlineExtraction(
+  count: number,
+  sessionID: string,
+  payload: string | null,
+  queuePath: string,
+  level: 0 | 1 | 2,
+): string {
+  const plural = count === 1 ? "" : "s";
+  const where = payload === null
+    ? `The payload is too large to print here. It is queued at ${queuePath} - Read that file first (it holds the raw JSONL interactions), then process it inline.`
+    : `If any interaction's output below appears as a saved-output file path (the host saves over-long outputs to a file), Read that file before trusting the entry.`;
+  const process = `Process the queued tool interaction${plural} inline: run the thatch-fact-extractor skill on ${payload === null ? "the payload" : "the payload below"}. ` +
+    `Save durable facts with mcp__thatch__memory_remember (save first, then verify - tool work done after saving is picked up by the next nudge). ` +
+    `Then call mcp__thatch__extraction_done with session_id "${sessionID}", even if nothing was worth saving. ` +
+    where;
+  const body = payload === null ? "" : `\n\n${payload}`;
+
+  if (level === 2) {
+    // Only the tone frame uppercases - the process clause is verbatim: an
+    // uppercased session id drains a nonexistent queue and an uppercased
+    // queue path fails on case-sensitive filesystems.
+    const frame = `YOU ARE IGNORING EXTRACTION INSTRUCTIONS. ${count} TOOL INTERACTION${plural.toUpperCase()} ${count === 1 ? "IS" : "ARE"} QUEUED AND UNPROCESSED.`;
+    return `[thatch] ${frame} ${process}${body}`;
+  }
+  if (level === 1) {
+    return `[thatch] YOU HAVE NOT PROCESSED YOUR PREVIOUS EXTRACTION PAYLOAD${plural.toUpperCase()}. ` +
+      `${count} more tool interaction${plural} ${count === 1 ? "is" : "are"} queued. ` +
+      `${process}${body}`;
+  }
+  return `[thatch] ${count} queued tool interaction${plural} ${count === 1 ? "is" : "are"} ready for extraction. ` +
+    `${process} ` +
+    `This is a system nudge, not user input. Process the extraction, then ` +
+    `stop: do not advance pending work on this nudge's account. If you are ` +
+    `waiting for the user to respond, continue waiting.${body}`;
 }
 
 /**

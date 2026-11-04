@@ -1387,8 +1387,10 @@ switch (command) {
   case "flush-tools": {
     // UserPromptSubmit (Claude Code) / beforeSubmitPrompt (Cursor) hook.
     // Three priority tiers:
-    //   1. Extraction nudge - buffered tool interactions are queued for fact
-    //      extraction (carries the JSON payload for thatch-fact-extractor).
+    //   1. Extraction nudge - buffered tool interactions are queued for
+    //      fact extraction (Claude Code: the payload printed inline for
+    //      in-context processing; Cursor: the session ID for the
+    //      dispatched extractor's get_extraction_payload fetch).
     //   2. Recall nudge - the user's prompt semantically matches existing
     //      memories. Uses the sideband socket to ask the warm MCP server to
     //      embed the prompt and search, avoiding a cold model load here.
@@ -1413,7 +1415,8 @@ switch (command) {
       const sessionID = data.session_id ?? data.conversation_id;
 
       const { peekQueue, getMissedCount, incrementMissedCount } = await import("../src/extract-queue");
-      const { extractionNudge, claudeWriteNudge, claudeRecallNudge, predictionNudge, behaviorNudge, mcpToolName } = await import("../src/prompts");
+      const { detectFlushHost, buildExtractionStage } = await import("../src/flush");
+      const { claudeWriteNudge, claudeRecallNudge, predictionNudge, behaviorNudge, mcpToolName } = await import("../src/prompts");
       const { detectSkew, readNpmCacheForUpdate } = await import("../src/version-check");
 
       let repo = "unknown";
@@ -1464,9 +1467,9 @@ switch (command) {
       // dispatch-time ack resets the escalation counter but does NOT drain:
       // a drain at ack time deleted the queue before the sub-agent fetched
       // (the accept-before-fetch loss). If the agent ignores the nudge, the
-      // payload grows on the next flush. The nudge carries the session ID,
-      // not the full payload - the sub-agent fetches it via
-      // get_extraction_payload.
+      // payload grows on the next flush. Stage logic (host detection and
+      // the per-host nudge shape) lives in src/flush.ts - this case body
+      // is only the dispatcher.
       const interactions = sessionID ? peekQueue(sessionID) : [];
       if (interactions.length > 0 && serverStale) {
         emit(
@@ -1480,7 +1483,9 @@ switch (command) {
       if (interactions.length > 0) {
         const missed = sessionID ? getMissedCount(sessionID) : 0;
         if (sessionID) incrementMissedCount(sessionID);
-        const output = extractionNudge(interactions.length, missed, sessionID ?? "");
+        const host = detectFlushHost(data);
+        if (!host) break; // unreachable: interactions implies sessionID implies a host id
+        const output = buildExtractionStage({ interactions, missedCount: missed, host, sessionID, repo });
         emit(output, versionWarning, isJson, chatLine);
         break;
       }

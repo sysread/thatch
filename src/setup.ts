@@ -249,10 +249,12 @@ function writeHooks(path: string, thatchBin: string): void {
   // (see src/extract-queue.ts). No stdout - the next model call must not block
   // on a payload that should be invisible to the agent until UserPromptSubmit.
   const bufferCmd = `${thatchBin} buffer-batch`;
-  // UserPromptSubmit peeks the queue. With buffered interactions, it prints
-  // the extraction nudge carrying the JSON payload; with an empty queue, it
-  // falls back to the static write-nudge. Either output is transcript-visible
-  // since UserPromptSubmit adds stdout to context.
+  // UserPromptSubmit peeks the queue. With buffered interactions, it
+  // prints the extraction nudge - on Claude Code with the payload inline
+  // for in-context processing (no sub-agent), on Cursor as the
+  // dispatched-extractor nudge. With an empty queue, it falls back to the
+  // static write-nudge. Either output is transcript-visible since
+  // UserPromptSubmit adds stdout to context.
   const flushCmd = `${thatchBin} flush-tools`;
   // Stop fires when the agent turn ends. chat-notify emits a Stop-hook
   // additionalContext reminder when chat mail is unread - the turn

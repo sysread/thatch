@@ -29,9 +29,17 @@ conversation.
 ## Fallback path (Claude Code and Cursor)
 
 On MCP hosts (Claude Code, Cursor), there is no SDK client to create
-child sessions. The extraction nudge is injected into the next user
-message instead. The agent dispatches a sub-agent to run the
-fact-extractor skill, then calls `thatch_extraction_done` to acknowledge.
+child sessions, so extraction rides the next user message as a nudge.
+The two hosts deliver it differently:
+
+- **Claude Code (inline)**: the nudge prints the queued interactions
+  directly into the conversation (or names the queue file when they are
+  too large to print). The agent processes them in its own context - no
+  sub-agent - then calls `thatch_extraction_done` to acknowledge.
+- **Cursor (dispatched)**: the nudge tells the agent to dispatch a
+  sub-agent for the fact-extractor skill, which fetches the payload with
+  `thatch_get_extraction_payload`, then calls `thatch_extraction_done` to
+  acknowledge.
 
 ## What gets extracted
 

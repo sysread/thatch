@@ -804,7 +804,10 @@ const getExtractionPayloadDef: ToolDef = {
     "thatch-fact-extractor skill on the returned payload. Omit session_id " +
     "when acting on the session you are running in. If you are an " +
     "extraction child whose parent link the plugin knows, an omitted or " +
-    "self-named session_id resolves to the parent's queue automatically.",
+    "self-named session_id resolves to the parent's queue automatically. " +
+    "(Cursor only on the MCP path: a Claude Code parent receives the " +
+    "payload inline with the extraction nudge - there is nothing to fetch " +
+    "there.)",
   args: {
     session_id: z.string().optional().describe(
       "The session whose tool interactions are queued for extraction. " +
@@ -846,10 +849,13 @@ const getExtractionPayloadDef: ToolDef = {
  * are not lost.
  *
  * On the MCP path the parent session may also call this after dispatching
- * the fact-extractor, to reset the nudge escalation counter. The ack does
+ * the fact-extractor, to reset the nudge escalation counter. That ack does
  * NOT drain the parent's queue - a drain at ack time deleted the queue
  * before the sub-agent's payload fetch (the accept-before-fetch loss); the
- * queue is consumed by the extractor's completion instead.
+ * queue is consumed by the extractor's completion instead. That no-drain
+ * rule is DISPATCH-PATH-ONLY (Cursor): on the Claude Code inline path the
+ * parent processes the payload itself, so its own ack IS the intended hard
+ * drain of a delivered payload.
  *
  * The actual state changes happen in the host's post-tool hook
  * (tool.execute.after for opencode, PostToolBatch/appendBatch for MCP) -
@@ -873,8 +879,11 @@ const extractionDoneDef: ToolDef = {
     session_id: z.string().optional().describe(
       "The parent session's ID, when called from a sub-agent. Drains the " +
       "parent's file-backed queue (MCP path) and completes the entries " +
-      "this sub-agent claimed. Omit when called from the parent session " +
-      "itself.",
+      "this sub-agent claimed. On the dispatched path (Cursor) a parent " +
+      "session may omit it - the ack only resets the escalation counter. " +
+      "On the inline path (Claude Code) the parent ALWAYS passes its own " +
+      "session id from the nudge: the ack is the drain of the delivered " +
+      "payload, and omitting it strands the post-save re-feed tail.",
     ),
   },
   async execute(args, ctx) {

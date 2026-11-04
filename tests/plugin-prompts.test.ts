@@ -223,10 +223,14 @@ describe("extractionNudge escalation (MCP hosts only)", () => {  const sessionID
     expect(nudge).toContain("IGNORING");
   });
 
-  test("all tiers include the session ID (case-insensitive for ALL-CAPS tier)", () => {
+  test("all tiers include the session ID VERBATIM (identifiers survive shouting)", () => {
+    // The shouted tier uppercases only the tone frame: an uppercased
+    // session id misses the parent's queue (the extractor's fetch finds
+    // nothing and the loop never drains), so the id must arrive
+    // case-exact at every tier.
     for (const missed of [0, 2, 3]) {
       const nudge = extractionNudge(1, missed, sessionID);
-      expect(nudge.toLowerCase()).toContain(sessionID.toLowerCase());
+      expect(nudge).toContain(sessionID);
     }
   });
 

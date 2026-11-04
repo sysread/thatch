@@ -131,18 +131,34 @@ If the extraction child is deleted before completing,
 completion signal never comes at all, `requeueStaleAccepted` (15 min)
 returns the accepted entries to pending — the next idle re-extracts them.
 
-### Nudge-based extraction (MCP hosts only)
+### Nudge-based extraction (MCP hosts)
 
 Claude Code and Cursor have no SDK client to create child sessions and no
 plugin lifecycle (each hook invocation is a fresh process), so extraction
-there is still model-driven. When the buffer has pending interactions, the
-next user prompt (`UserPromptSubmit`/`beforeSubmitPrompt`) gets an
-extraction nudge telling the agent to spawn a sub-agent for the
-fact-extractor skill.
+there is nudge-driven. When the buffer has pending interactions, the next
+user prompt (`UserPromptSubmit`/`beforeSubmitPrompt`) gets an extraction
+nudge — and the two hosts take different delivery shapes:
 
-- The nudge carries the session ID and fetch tool name — not the full
-  payload — so the sub-agent calls `thatch_get_extraction_payload` to
-  retrieve the interactions as a tool response
+- **Claude Code (inline):** `flush-tools` prints the processing
+  instructions and the FULL PAYLOAD (the same JSON `buildExtractionPayload`
+  produces) as hook stdout, which `UserPromptSubmit` adds to context. The
+  parent processes the payload inline — runs the fact-extractor skill,
+  saves memories, then acks with `extraction_done` (its own session id),
+  which drains the delivered queue. No sub-agent is dispatched and nothing
+  is fetched: the dispatched handshake loops on this host — its exhaust
+  class (dispatch tools, sub-agent handbacks, deferred-tool schema loads)
+  is open-ended and every new host spelling re-opens the nudge loop
+  (GitHub issue #22; the buffer's deny set only ever chases it), so this
+  host processes inline and the class dies by construction. When the
+  output crosses the ~9,500-character budget (which sits under the host's
+  10,000-character stdout cap), the payload body is replaced by the queue
+  file's path — the instructions say to Read that file first — so
+  delivery degrades to a two-step fetch, never to silence. The payload is
+  delivered at every escalation level; only the tone changes.
+- **Cursor (dispatched):** the nudge carries the session ID and fetch tool
+  name — not the full payload — so the sub-agent calls
+  `thatch_get_extraction_payload` to retrieve the interactions as a tool
+  response.
 
 **Nudge escalation** (via the file-backed missed counter):
 
@@ -152,12 +168,14 @@ fact-extractor skill.
 | 2 | Insistent |
 | 3+ | All-caps shouting |
 
-The file-backed queue persists until the extractor completes
-(`extraction_done` with the parent's `session_id`) or the parent writes a
-memory itself. The parent's dispatch-time ack resets the escalation
-counter but does NOT drain the queue — a drain at ack time deleted the
-queue before the sub-agent fetched (the accept-before-fetch loss; the
-opencode path removed the handshake for the same failure class).
+The file-backed queue persists until a memory write saves, or — per host —
+until the run's ack arrives. On Claude Code the parent's own
+`extraction_done` ack IS the drain (the payload was delivered inline; the
+nudge's save-first wording is the guard against an unprocessed ack). On
+Cursor the parent's dispatch-time ack resets the escalation counter but
+does NOT drain the queue — a drain at ack time deleted the queue before
+the sub-agent fetched (the accept-before-fetch loss; the opencode path
+removed the handshake for the same failure class).
 
 ### Buffer lifecycle (opencode, AMQP-style)
 

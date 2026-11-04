@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import yaml from "yaml";
 import { setupClaudeCode, setupCursor, setupSkillsOnly, thatchMcpServerEntry } from "../src/setup";
-import { REVIEW_SPECIALISTS } from "../src/prompts";
+import { REVIEW_SPECIALISTS, claudeInstructions, cursorInstructions } from "../src/prompts";
 import { SHARED_SKILLS, OPENCODE_ONLY_SKILLS, installSkills } from "../src/skills";
 import { installSetupHarness, projectDir, fakeHome } from "./mocks/setup-harness";
 
@@ -385,6 +385,21 @@ describe("skill artifact registry parity", () => {
 
     const adjudicate = SHARED_SKILLS.find((s) => s.name === "thatch-review-adjudicate")!;
     expect(adjudicate.content).toContain("are NOT presented");
+  });
+
+  test("the extraction instruction paragraph is host-keyed (no Cursor bleed)", () => {
+    // mcpInstructions renders one body for both MCP hosts; the inline
+    // extraction paragraph is Claude Code-only. A regression that makes it
+    // unconditional teaches Cursor the wrong contract (its nudge still
+    // dispatches).
+    const claude = claudeInstructions();
+    const cursor = cursorInstructions();
+    // Whitespace collapsed: the template wraps lines.
+    const claudeProse = claude.replace(/\s+/g, " ");
+    expect(claudeProse).toContain("## Extraction nudges");
+    expect(claudeProse).toContain("There is no sub-agent to dispatch and nothing to fetch");
+    expect(cursor).not.toContain("## Extraction nudges");
+    expect(cursor).not.toContain("no sub-agent to dispatch");
   });
 
   test("the adjudication walkthrough presents one finding per message in plain text", () => {

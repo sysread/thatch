@@ -30,7 +30,13 @@ const useCase: UseCase = {
   ].join("\n"),
   expected: [
     "- Tiers fire in strict priority — **extraction > recall > write** — at most one nudge per call:",
-    "  - extraction: queue non-empty -> nudge with session ID and fetch tool name. The queue is peeked, not deleted; it persists until a memory write or `extraction_done` (drains via `consumeQueue` in `appendBatch`).",
+    "  - extraction: queue non-empty -> nudge. Claude Code (session_id): the",
+    "    INLINE nudge - processing instructions + the full payload printed",
+    "    with the session ID, no sub-agent, no fetch tool. Cursor",
+    "    (conversation_id): the DISPATCH nudge - session ID and fetch tool",
+    "    name for the dispatched extractor. The queue is peeked, not deleted;",
+    "    it persists until a memory write or the host's ack (drains via",
+    "    `consumeQueue` in `appendBatch`).",
     "  - recall: queue empty, socket live, match at or above `THATCH_RECALL_THRESHOLD` (default 0.55) -> nudge with match labels; below threshold -> no nudge.",
     '  - write: socket unavailable, no matches, or socket error -> static "did you learn anything worth persisting?" nudge.',
     "- Sideband failure **never blocks** the agent: server down, a stale socket file, and a > 2 s timeout all degrade to the write nudge. A stale socket file left by a crash is cleaned up on connection error.",
@@ -56,8 +62,10 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // Tier 1: seed the queue via buffer-batch, then flush-tools.
-    // The extraction nudge should fire (priority over recall/write).
+    // Tier 1 (Claude Code, inline): seed the queue via buffer-batch, then
+    // flush-tools. The extraction nudge should fire (priority over
+    // recall/write) with the PAYLOAD printed inline - no sub-agent, no
+    // fetch tool.
     const batchInput = JSON.stringify({
       session_id: "uc009-extract",
       tool_calls: [{
@@ -79,8 +87,34 @@ const useCase: UseCase = {
       console.log(`  FAIL: extraction tier output unexpected: ${extractOut.slice(0, 200)}`);
       return "FAIL";
     }
-    if (!extractOut.includes("uc009-extract") || !extractOut.includes("get_extraction_payload")) {
-      console.log(`  FAIL: extraction tier should include session ID and fetch tool name: ${extractOut.slice(0, 200)}`);
+    if (!extractOut.includes("uc009-extract") || !extractOut.includes('"interactions"')) {
+      console.log(`  FAIL: the inline nudge should carry the session ID and the payload: ${extractOut.slice(0, 200)}`);
+      return "FAIL";
+    }
+    if (extractOut.includes("Spawn a background sub-agent") || extractOut.includes("get_extraction_payload")) {
+      console.log("  FAIL: the inline nudge must not dispatch or name a fetch tool");
+      return "FAIL";
+    }
+
+    // Tier 1 (Cursor, dispatched): same queue contract, different delivery
+    // shape - the nudge carries the session ID and fetch tool name for the
+    // dispatched extractor (Cursor's hooks have no inline-payload delivery).
+    const cursorBatch = JSON.stringify({
+      conversation_id: "uc009-cursor",
+      tool_name: "Read",
+      tool_input: { path: "/foo/bar" },
+      tool_response: "file contents here",
+    });
+    await $`echo ${cursorBatch} | ${bin} buffer-tool`.env(env).quiet().nothrow();
+    const cursorFlush = JSON.stringify({ conversation_id: "uc009-cursor", prompt: "What is the meaning of life?" });
+    const cursorResult = await $`echo ${cursorFlush} | ${bin} flush-tools`.env(env).quiet().nothrow();
+    if (cursorResult.exitCode !== 0) {
+      console.log("  FAIL: Cursor extraction tier exited non-zero");
+      return "FAIL";
+    }
+    const cursorOut = cursorResult.stdout.toString();
+    if (!cursorOut.includes("uc009-cursor") || !cursorOut.includes("get_extraction_payload") || !cursorOut.includes("Spawn a background sub-agent")) {
+      console.log(`  FAIL: Cursor's dispatch nudge should name the session, the sub-agent, and the fetch tool: ${cursorOut.slice(0, 200)}`);
       return "FAIL";
     }
 
@@ -105,9 +139,10 @@ const useCase: UseCase = {
 
     // Skew gate: a stale SERVER version file (the hook binary is fresh)
     // suppresses the extraction nudge - the old server's compiled tool
-    // list may lack get_extraction_payload - and emits the restart
-    // instruction instead. The queue survives (peek-not-drain) and the
-    // extraction nudge returns once the version file matches.
+    // list may lack the tools the nudge names (extraction_done included,
+    // on either delivery shape) - and emits the restart instruction
+    // instead. The queue survives (peek-not-drain) and the extraction
+    // nudge returns once the version file matches.
     //
     // The version file lives under tmpdir() - which is NOT stable across
     // the env-replacing subprocess boundary: the test process resolves
@@ -143,7 +178,8 @@ const useCase: UseCase = {
     }
     clearSkew();
     const postFix = await $`echo ${flushInput} | ${bin} flush-tools`.env(env).quiet().nothrow();
-    if (!postFix.stdout.toString().includes("get_extraction_payload")) {
+    const postFixOut = postFix.stdout.toString();
+    if (!postFixOut.includes("queued tool interaction") || !postFixOut.includes("uc009-extract")) {
       console.log("  FAIL: the extraction nudge should return once the skew clears");
       return "FAIL";
     }

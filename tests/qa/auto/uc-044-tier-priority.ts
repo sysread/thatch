@@ -27,7 +27,7 @@ const useCase: UseCase = {
     "6. Verify the extraction nudge does NOT fire (queue is empty).",
   ].join("\n"),
   expected: [
-    "- Step 3: the output contains the extraction nudge (references fact-extractor, queued tool interaction, the session ID, and get_extraction_payload). It does NOT contain recall match labels.",
+    "- Step 3: the output contains the extraction nudge (references fact-extractor, queued tool interaction, the session ID). On Claude Code (session_id) it is the INLINE nudge: the payload is printed with the nudge and there is no dispatch instruction or fetch tool; on Cursor (conversation_id) it is the dispatch nudge naming get_extraction_payload. It does NOT contain recall match labels.",
     "- Step 5–6: with the queue empty, tier 1 is skipped. The sideband tier is attempted (no server → falls through to write nudge).",
   ].join("\n"),
 
@@ -56,13 +56,18 @@ const useCase: UseCase = {
     }
     const extractOut = extractResult.stdout.toString();
 
-    // Step 3: verify extraction nudge fired.
+    // Step 3: verify extraction nudge fired (Claude Code session_id ->
+    // the INLINE shape: payload printed, no dispatch instruction).
     if (!extractOut.includes("fact-extractor") || !extractOut.includes("queued tool interaction")) {
       console.log(`  FAIL: tier 1 should fire extraction nudge, got: ${extractOut.slice(0, 200)}`);
       return "FAIL";
     }
-    if (!extractOut.includes(sessionID) || !extractOut.includes("get_extraction_payload")) {
-      console.log(`  FAIL: extraction nudge should include session ID and fetch tool, got: ${extractOut.slice(0, 200)}`);
+    if (!extractOut.includes(sessionID) || !extractOut.includes('"interactions"')) {
+      console.log(`  FAIL: the inline nudge should include session ID and payload, got: ${extractOut.slice(0, 200)}`);
+      return "FAIL";
+    }
+    if (extractOut.includes("Spawn a background sub-agent") || extractOut.includes("get_extraction_payload")) {
+      console.log("  FAIL: the inline nudge must not dispatch or name a fetch tool");
       return "FAIL";
     }
 
@@ -102,6 +107,27 @@ const useCase: UseCase = {
     // With no sideband server, it should fall through to the write nudge.
     if (!postOut.includes("did you learn")) {
       console.log(`  FAIL: post-drain should produce write nudge, got: ${postOut.slice(0, 200)}`);
+      return "FAIL";
+    }
+
+    // Cursor pin: the dispatch nudge is unchanged there (session_id-based
+    // inline delivery is Claude Code-only).
+    const cursorBatch = JSON.stringify({
+      conversation_id: "uc044-cursor",
+      tool_name: "Read",
+      tool_input: { path: "/foo/bar" },
+      tool_response: "file contents here",
+    });
+    await $`echo ${cursorBatch} | ${bin} buffer-tool`.env(env).quiet().nothrow();
+    const cursorFlush = JSON.stringify({ conversation_id: "uc044-cursor", prompt: "fix the bug in the parser code" });
+    const cursorResult = await $`echo ${cursorFlush} | ${bin} flush-tools`.env(env).quiet().nothrow();
+    if (cursorResult.exitCode !== 0) {
+      console.log("  FAIL: Cursor tier 1 exited non-zero");
+      return "FAIL";
+    }
+    const cursorOut = cursorResult.stdout.toString();
+    if (!cursorOut.includes("Spawn a background sub-agent") || !cursorOut.includes("get_extraction_payload")) {
+      console.log(`  FAIL: Cursor must keep the dispatched-extractor nudge, got: ${cursorOut.slice(0, 200)}`);
       return "FAIL";
     }
 

@@ -110,3 +110,4 @@ import "./uc-126-memory-wrong-shape-teaching";
 import "./uc-127-bug-intake-command";
 import "./uc-128-chat-cli-broadcast";
 import "./uc-129-fuzzy-did-you-mean";
+import "./uc-130-claude-inline-extraction-cycle";

@@ -20,7 +20,9 @@ behavior auto-fire.
 On every user message, thatch runs through the priority tiers:
 
 1. **Extraction nudge** (MCP hosts only)---if tool interactions are queued,
-   tell the agent to dispatch an extractor. There is deliberately no
+   tell the agent to extract. Claude Code prints the queued payload inline
+   (the parent processes it in its own context, no sub-agent); Cursor
+   tells the agent to dispatch an extractor. There is deliberately no
    opencode extraction nudge: extraction is plugin-driven at session idle.
 2. **Recall nudge**---semantically search stored memories for context
    relevant to the user's prompt.

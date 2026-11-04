@@ -85,9 +85,10 @@ export function appendBatch(sessionID: string, toolCalls: BatchToolCall[]): void
         existing.length = 0;
       }
     } else if (lower === "mcp__thatch__extraction_done") {
-      // An extraction_done ack must NOT drain the queue. When the PARENT
-      // acks after dispatching (per the nudge), a drain here deletes the
-      // queue before the sub-agent's get_extraction_payload fetch - the
+      // An extraction_done ack must NOT drain the queue - ON THE DISPATCH
+      // PATH (a Cursor extractor's parent acking after dispatch). When the
+      // PARENT acks after dispatching (per the nudge), a drain here deletes
+      // the queue before the sub-agent's get_extraction_payload fetch - the
       // accept-before-fetch race, which on this path is a hard delete
       // (silent interaction loss). The queue is consumed instead by the
       // extractor's completion: extraction_done with the parent's
@@ -96,6 +97,10 @@ export function appendBatch(sessionID: string, toolCalls: BatchToolCall[]): void
       // counter - the queue persists on disk (durable across
       // interruption), and an extractor that dies without completing
       // leaves it in place for the next nudge to re-dispatch.
+      // ON THE CLAUDE CODE INLINE PATH the parent's own ack IS a hard
+      // drain by design (the payload was delivered with the nudge; the
+      // guard is the nudge's save-first wording) - see
+      // docs/plans/claude-code-inline-extraction.md.
       resetMissedCount(sessionID);
     }
     if (lower.startsWith("mcp__thatch__")) continue;
@@ -132,6 +137,16 @@ export function peekQueue(sessionID: string): ToolInteraction[] {
   }
   if (!existsSync(path)) return [];
   return readQueueFile(path);
+}
+
+/**
+ * The absolute path of a session's queue file. The inline extraction nudge
+ * names this path when the payload is too large to print (the model Reads
+ * it instead) - the only consumer outside this module that needs the file
+ * location.
+ */
+export function queueFilePath(sessionID: string): string {
+  return queuePath(sessionID);
 }
 
 /** Delete a session's queue file. Called when the agent writes a memory. */
