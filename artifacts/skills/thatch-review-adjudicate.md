@@ -42,7 +42,12 @@ review, stop and hand the synthesized report to the chat loop instead.
 4. Walk the highlights and the technique notes through the same loop, right
    after the defect findings. Never hold them back for a later offer; their
    counts were announced up front so they cannot be missed. A keep verdict
-   stages them like any finding.
+   stages them like any finding. Confirmatory-only technique notes —
+   correctness confirmations with no change the author could make ("verified
+   X is correct; no change requested") — are NOT presented: they do not
+   survive synthesis, and if the report carries one anyway, drop it without
+   a verdict and subtract it from the announced count. A note that only
+   confirms the code is fine wastes the adjudication loop's attention.
 5. When every item has a verdict, give a final summary of what will be
    staged.
 6. Offer to stage the draft review. Place each kept finding at its line in

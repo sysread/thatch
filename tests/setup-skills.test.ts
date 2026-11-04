@@ -367,6 +367,26 @@ describe("skill artifact registry parity", () => {
     }
   });
 
+  test("the technique lens gates confirmatory-only notes out of its report", () => {
+    // A technique note must be an improvement option - a change the author
+    // could actually make. A confirmatory-only note ("verified X is correct
+    // and in place; no change requested") spends the adjudication loop's
+    // attention on nothing: correctness is the baseline the lens assumes.
+    // The gate is pinned in the three places that must agree: the lens's
+    // own bar, the synthesizer's technique verification track, and the
+    // adjudication walkthrough.
+    const technique = SHARED_SKILLS.find((s) => s.name === "thatch-review-technique")!;
+    expect(technique.content).toContain("improvement option, not a confirmation");
+    expect(technique.content).toContain("no change requested");
+    expect(technique.content).toContain("dropped at reporting time, never presented for adjudication");
+
+    const synthesizer = SHARED_SKILLS.find((s) => s.name === "thatch-review-synthesizer")!;
+    expect(synthesizer.content).toContain("rejected as confirmatory-only");
+
+    const adjudicate = SHARED_SKILLS.find((s) => s.name === "thatch-review-adjudicate")!;
+    expect(adjudicate.content).toContain("are NOT presented");
+  });
+
   test("the followup and review-response skills gate prose the fixes introduce", () => {
     // The followup and review-response skills gate prose the fixes
     // introduce (comments, docstrings, error strings, docs), which no

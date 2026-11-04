@@ -27,6 +27,7 @@ Three conditions, all required:
 1. **The teaching is concrete.** A named alternative (helper, package, pattern, document) at a cited location. "This could be simpler" is not a finding.
 2. **The code as written is not wrong.** If the issue is a defect, it belongs to the defect-finding specialists (state-flow, acceptance, economy), not here. Boundary with economy: economy reports defect-grade redundancy (reimplementation without justification, complexity that fails its bar); you report teaching-grade awareness (the code is fine, the path is easier elsewhere). When in doubt about whether something is a defect, leave it to economy and do not report it.
 3. **The author plausibly lacks the knowledge.** Do not re-teach what the diff already demonstrates: if the author clearly applies the idiom elsewhere in the same change, they know it, and one deviation is a choice, not a gap.
+4. **The note is an improvement option, not a confirmation.** A technique note names a change the author could actually make - an alternative to adopt, a helper to use, a shape to rework. A note that only confirms the current code ("verified X is correct and in place; no change requested") is not a finding: correctness is the baseline this lens assumes, and reporting it spends the author's attention on nothing. Confirmatory observations are dropped at reporting time, never presented for adjudication.
 
 If nothing qualifies, report: "No technique notes." Do not manufacture teaching moments. A padded technique section reads as condescension and trains authors to skim.
 
@@ -142,6 +143,7 @@ What does NOT count:
 ## What NOT to report
 
 - Code that is correct, conventional, and already the easiest path (that is the baseline — an empty report is the common case)
+- Confirmatory-only notes ("verified correct; no change requested") — correctness needs no announcement; the empty report is already the honest output for competent code
 - Anything that is a defect; hand it to the defect specialists instead
 - Style preferences with no teaching content
 - Teaching the author something their own diff already demonstrates they know
