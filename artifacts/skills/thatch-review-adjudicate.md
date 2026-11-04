@@ -32,9 +32,16 @@ review, stop and hand the synthesized report to the chat loop instead.
    and by class or lens, plus the highlights count and the technique-notes
    count. Then stop and let the user digest. Never open with an individual
    finding. The map gives each finding a place to land.
-2. Present findings one at a time, highest severity first, each in the
-   finding template below. End every finding with the verdict line on its own
-   line, so the prompt never crowds out the finding.
+2. Present findings ONE AT A TIME: strictly one finding template per
+   message, highest severity first, one verdict per finding. Never present
+   a batch - no message ever carries more than one template block, even for
+   small, related, or same-root findings (they become separate findings in
+   sequence), and never issue a blended ruling over several findings at
+   once. The reason is the point of the loop: a batch forces one verdict
+   over findings the user would have adjudicated differently, so the
+   per-finding verdict is only real if each finding arrives alone. End every
+   finding with the verdict line on its own line, so the prompt never crowds
+   out the finding.
 3. After each verdict, check for a preference signal. When a verdict encodes
    a reusable preference - severity taste, scope threshold, tone, what is
    worth posting - query the prediction store for an existing matcher that
@@ -70,6 +77,13 @@ Every finding, highlight, and technique note is presented in this exact shape:
 
 Choose your adventure: (k)eep • (d)rop • (r)eframe • (v)erify • (e)laborate • (a)bort • (p)ost as draft
 ```
+
+The verdict line is plain text in the chat message, part of the finding
+presentation. Never route the verdict options through the host's interactive
+question/prompt tool: that tool exists for blocking questions the agent
+cannot answer itself, and a review verdict is not one - it is the user's
+ruling on work they are reading, and it arrives in their next message like
+every other line of the conversation.
 
 ## Verdicts
 

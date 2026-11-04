@@ -387,6 +387,24 @@ describe("skill artifact registry parity", () => {
     expect(adjudicate.content).toContain("are NOT presented");
   });
 
+  test("the adjudication walkthrough presents one finding per message in plain text", () => {
+    // Two presentation defects observed in live walkthroughs: sessions
+    // batching several finding templates into one message (a batch forces
+    // one verdict over findings the user would have adjudicated
+    // differently) and routing the verdict options through the host's
+    // interactive question tool (built for blocking questions the agent
+    // cannot answer itself - a review verdict is not one). Both rules are
+    // pinned so they cannot drift out of the walkthrough.
+    const adjudicate = SHARED_SKILLS.find((s) => s.name === "thatch-review-adjudicate")!;
+    // Whitespace is collapsed before asserting so the pins survive
+    // markdown line wrapping.
+    const prose = adjudicate.content.replace(/\s+/g, " ");
+    expect(prose).toContain("ONE AT A TIME: strictly one finding template per message");
+    expect(prose).toContain("never issue a blended ruling over several findings at once");
+    expect(prose).toContain("The verdict line is plain text in the chat message, part of the finding presentation.");
+    expect(prose).toContain("Never route the verdict options through the host's interactive question/prompt tool");
+  });
+
   test("the followup and review-response skills gate prose the fixes introduce", () => {
     // The followup and review-response skills gate prose the fixes
     // introduce (comments, docstrings, error strings, docs), which no
