@@ -75,8 +75,21 @@ Every finding, highlight, and technique note is presented in this exact shape:
 **Shape:** <the kind of problem: missing test, poorly phrased comment, race condition, unnecessary complexity, inconsistent naming, and so on>
 **Description:** <plain-English description, written for a reader who has not read the delta. Lead with what breaks, who it affects, and the blast radius.>
 
+Review tally: <kept>/<adjudicated>
+
 Choose your adventure: (k)eep • (d)rop • (r)eframe • (v)erify • (e)laborate • (a)bort • (p)ost as draft
 ```
+
+The tally line rides every finding template, one line above the verdict
+line, so the user sees the running state without hunting for it. The
+denominator is the number of items already adjudicated (verdicts on
+merit: keep or drop), NEVER the total number of findings - it grows as
+the walkthrough proceeds. The numerator is how many of those the user
+kept. Verify and elaborate do not advance the tally (they are not
+verdicts on merit); a re-presented reframe counts when it lands its
+final verdict, not twice. A bulk ruling ("skip the rest", post-as-draft
+remainder) advances the denominator by everything it covered, in one
+step.
 
 The verdict line is plain text in the chat message, part of the finding
 presentation. Never route the verdict options through the host's interactive
