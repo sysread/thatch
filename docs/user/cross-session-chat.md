@@ -244,6 +244,11 @@ trying to wake that session at all. If you see the "swallowed its wake
 prompt" toast for a session you expected to be alive, restart or reopen
 that session - it is not processing prompts.
 
+The poller also re-checks each hosted session's directory against
+opencode's own database every cycle, so a session that moved while the
+plugin was reloading is handed off within seconds instead of waiting for
+the swallow detector.
+
 ## Turning chat off
 
 Set `chat.enabled: false` in the thatch config file

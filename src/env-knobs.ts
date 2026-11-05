@@ -92,6 +92,12 @@ export const ENV_KNOBS: EnvKnob[] = [
     default: "1440 (24 hours)",
   },
   {
+    name: "THATCH_CHAT_DIRECTORY_REVERIFY_CYCLES",
+    description:
+      "Poll cycles between the chat poller's hosted directory re-verifications against opencode.db (clamped to 1..120).",
+    default: "1 (every 30s cycle)",
+  },
+  {
     name: "THATCH_CHILD_RECONCILE_MS",
     description: "How often the runtime reconciles background extraction child sessions, in milliseconds.",
     default: "10000",

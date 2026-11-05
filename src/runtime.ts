@@ -28,7 +28,7 @@ import {
   type ToolInteraction,
 } from "./extraction";
 import { createAlerts, alertDelivery, deriveRoundShape, isNoWorkTool, replyRequestID } from "./alerts";
-import { mostRecentTopLevelSessionId } from "./session-db";
+import { mostRecentTopLevelSessionId, sessionDirectories } from "./session-db";
 import type { CoreContext } from "./tool-defs";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
 import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommandFiles } from "./commands";
@@ -707,6 +707,13 @@ export async function createRuntime(input: {
       }
     },
     onSwallowDead: (sessionID) => releaseSessionHosting(sessionID, "swallow detector"),
+    // Periodic directory re-verification (issue #25 fast path): each cycle
+    // re-reads the hosted sessions' directories from opencode.db and
+    // releases the ones that moved away, even when no session.moved event
+    // was observed. The closure references verifyHostedDirectories, defined
+    // below with the rest of the location-switch bookkeeping - same TDZ
+    // shape as onSwallowDead above.
+    reverifyDirectories: () => verifyHostedDirectories("poll cycle"),
   });
   // With chat disabled the tools refuse, so the poller would only heartbeat
   // sessions and burn wake budget against a feature the user turned off.
@@ -1209,6 +1216,57 @@ export async function createRuntime(input: {
     if (!ids.includes(sessionID)) db.runtimeStatePut("hosted", directory, [...ids, sessionID], directory);
     debug("runtime:move", `adopted moved-in session ${sessionID}`);
   };
+
+  // Directory re-verification (issue #25 fast path). The session.moved
+  // handler above only releases hosting when its bus event arrives; a
+  // session that moved while the plugin was reloading (or between the move
+  // and the reloaded instance's first event drain) misses the event, and the
+  // rehydrated hosted set then carries it at the OLD directory - the wake
+  // swallow detector's eventual condemnation is the only cleanup, ~3 silent
+  // wakes later. opencode.db holds the ground truth: session_v2.directory is
+  // the session's current project location. Verifying the hosted set against
+  // it releases a moved-away session immediately, at init (rehydration has
+  // restored the journal above by this point) and on every poll cycle after
+  // (wired into the poller as reverifyDirectories).
+  //
+  // This is a release-only cleanup: it never ADOPTS a session whose row
+  // points here - move-in adoption stays with the session.moved handler,
+  // which learns the destination directory from the event. Fail-open: an
+  // unreadable host db verifies nothing, logged at most hourly rather than
+  // once per cycle - the swallow detector remains the backstop. A MISSING
+  // row verifies nothing either: a session the db no longer knows is the
+  // session.deleted path's business.
+  let lastReverifyLog = 0;
+  const verifyHostedDirectories = (reason: string): void => {
+    const hosted = hostedSessionIds({
+      statusKeys: sessionStatus.keys(),
+      resumedSessions: resumedSessions,
+      rehostedSessions: [...rehostedSessions, ...unexpiredGraceRehosts(rehostGrace, Date.now())],
+      movedInSessions: movedInSessions,
+      exclude: childToParent.keys(),
+    });
+    if (hosted.length === 0) return;
+    const currentDirs = sessionDirectories(hosted);
+    if (!currentDirs) {
+      const now = Date.now();
+      if (now - lastReverifyLog > 3_600_000) {
+        lastReverifyLog = now;
+        console.error(`[thatch] chat directory re-verification skipped: opencode.db unreadable (${reason})`);
+      }
+      return;
+    }
+    const instanceDirectory = directory ?? worktree;
+    for (const id of hosted) {
+      const current = currentDirs[id];
+      if (current && current !== instanceDirectory) {
+        releaseSessionHosting(id, `${reason}: session directory moved to ${current}`);
+      }
+    }
+  };
+  // The init check: a reload that happened across a move drops the stale
+  // hosting now, before the poller's first cycle could wake a session this
+  // instance can no longer reach.
+  verifyHostedDirectories("plugin init");
 
   // Dormant watcher recovery (watcher-continuity fast-follow). A restart
   // keeps foreign-pid watcher journal rows instead of pruning them (see the

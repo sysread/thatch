@@ -417,6 +417,12 @@ export const CHAT_MAX_NUDGES_PER_HOUR = 6;
 export const CHAT_SWALLOW_WATCH_MS = 5 * 60_000;
 export const CHAT_SWALLOW_DEAD_COUNT = 3;
 
+// Directory re-verification cadence: run the hosted-set directory check on
+// every Nth poll cycle. Default 1 (every 30s cycle) - the check is one
+// point lookup per hosted session against opencode.db's primary key, so
+// "every cycle" is the cheap option, and a faster catch beats a stale host.
+export const CHAT_DIRECTORY_REVERIFY_CYCLES = envChatInt("THATCH_CHAT_DIRECTORY_REVERIFY_CYCLES", 1, 1, 120);
+
 /** Human-readable age of an ISO timestamp: "45s ago", "5m ago", "3h ago",
  *  "2d ago". Shared by the CLI roster and the chat_list tool so both
  *  surfaces render the same last-check-in wording. */
@@ -2419,6 +2425,18 @@ export interface ChatPollerOptions {
   /** Consecutive no-activity observations that condemn the recipient.
    *  Default CHAT_SWALLOW_DEAD_COUNT (3). */
   swallowDeadCount?: number;
+  /** Periodic directory re-verification, run on poll cycles before
+   *  delivery. The wiring site reads each hosted session's current
+   *  directory from opencode.db and releases the ones that moved away -
+   *  the event-free cleanup for a move the `session.moved` handler never
+   *  saw (a move across a plugin reload). The callback fails open
+   *  internally (an unreadable host db verifies nothing), so the poller
+   *  just invokes it unguarded. */
+  reverifyDirectories?: () => void;
+  /** Run reverifyDirectories on every Nth poll cycle. Default
+   *  CHAT_DIRECTORY_REVERIFY_CYCLES (1 - the check is one point lookup per
+   *  hosted session, cheap enough for every cycle). */
+  reverifyEveryCycles?: number;
 }
 
 /**
@@ -2483,10 +2501,12 @@ export function unexpiredGraceRehosts(grace: Map<string, number>, now: number): 
 }
 
 export class ChatPoller {
-  #opts: ChatPollerOptions & Required<Pick<ChatPollerOptions, "pollIntervalMs" | "renudgeMinutes" | "maxNudgesPerHour" | "swallowWatchMs" | "swallowDeadCount">>;
+  #opts: ChatPollerOptions & Required<Pick<ChatPollerOptions, "pollIntervalMs" | "renudgeMinutes" | "maxNudgesPerHour" | "swallowWatchMs" | "swallowDeadCount" | "reverifyEveryCycles">>;
   #timer: ReturnType<typeof setInterval> | null = null;
   #polling = false;
   #delivering = false;
+  /** Poll cycle counter, for the every-Nth-cycle directory re-verification. */
+  #cycles = 0;
   /** Per-recipient ids this process wake-prompted whose delivered_at stamp
    *  did not land. Their retries are budget-bound re-nudges, not exempt
    *  first deliveries. Cleared by dispose; the DB stamp takes over for
@@ -2521,6 +2541,7 @@ export class ChatPoller {
       maxNudgesPerHour: CHAT_MAX_NUDGES_PER_HOUR,
       swallowWatchMs: CHAT_SWALLOW_WATCH_MS,
       swallowDeadCount: CHAT_SWALLOW_DEAD_COUNT,
+      reverifyEveryCycles: CHAT_DIRECTORY_REVERIFY_CYCLES,
       ...opts,
     };
   }
@@ -2571,6 +2592,14 @@ export class ChatPoller {
     try {
       const hosted = this.#opts.hostedSessions();
       this.#opts.store.heartbeatChatSessions(hosted);
+      this.#cycles += 1;
+      // Directory re-verification runs BEFORE delivery: a hosted session
+      // whose project directory moved away is released first, so this same
+      // cycle cannot spend a wake prompt on a session this instance can no
+      // longer reach. One check per N cycles (default every cycle).
+      if (this.#opts.reverifyDirectories && this.#cycles % this.#opts.reverifyEveryCycles === 0) {
+        this.#opts.reverifyDirectories();
+      }
       await this.deliverPending();
       // Hourly sweep: drop auto-registered rows whose host died more than
       // CHAT_AUTO_TTL_DAYS ago, plus the unread mail addressed to sessions

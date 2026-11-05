@@ -546,6 +546,58 @@ describe("ChatPoller", () => {
     });
   });
 
+  // Directory re-verification (issue #25 fast path): the poller runs the
+  // injected callback on poll cycles, before delivery, so a hosted session
+  // that moved away is released before the same cycle could spend a wake
+  // prompt on it. The callback itself (the db read plus the release) is
+  // wired in runtime.ts and pinned in state-persistence.test.ts.
+  describe("directory re-verification cadence", () => {
+    let calls: string[];
+    let reverifyPoller: ChatPoller;
+
+    const makeReverifyPoller = (everyCycles?: number): ChatPoller =>
+      new ChatPoller({
+        store: db,
+        hostedSessions: () => ["ses_b"],
+        deliver: async () => {
+          calls.push("deliver");
+        },
+        canDeliver: () => true,
+        pollIntervalMs: 60_000,
+        reverifyDirectories: () => {
+          calls.push("reverify");
+        },
+        ...(everyCycles === undefined ? {} : { reverifyEveryCycles: everyCycles }),
+      });
+
+    beforeEach(() => {
+      calls = [];
+      reverifyPoller = makeReverifyPoller();
+    });
+
+    afterEach(() => {
+      reverifyPoller.dispose();
+    });
+
+    test("runs on every cycle, before delivery", async () => {
+      db.sendChatMessage("ses_a", "bob-00001", "wake me");
+      await reverifyPoller.poll();
+      // Fresh mail for the second cycle: poll 1's delivery stamped its row
+      // delivered, and a delivered-but-just-now row is inside the re-nudge
+      // window (15 minutes), so it correctly re-delivers nothing.
+      db.sendChatMessage("ses_a", "bob-00001", "wake me again");
+      await reverifyPoller.poll();
+      expect(calls).toEqual(["reverify", "deliver", "reverify", "deliver"]);
+    });
+
+    test("reverifyEveryCycles=3 runs on every third cycle only", async () => {
+      reverifyPoller.dispose();
+      reverifyPoller = makeReverifyPoller(3);
+      for (let i = 0; i < 5; i++) await reverifyPoller.poll();
+      expect(calls).toEqual(["reverify"]); // cycle 3 only; 6 would be next
+    });
+  });
+
   describe("skipped-wake accounting (DeliverySkippedError)", () => {
     // The guard's dead-directory rejection, fed to the poller through the
     // injected deliver seam (chat.ts cannot import runtime.ts, so the

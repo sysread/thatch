@@ -1248,3 +1248,104 @@ describe("extraction journal sweep", () => {
     }
   }, { timeout: 90_000 });
 });
+
+describe("hosted directory re-verification", () => {
+  // The init re-verification (issue #25 fast path): setup() re-verifies the
+  // rehydrated hosted set against session_v2.directory in opencode.db and
+  // releases sessions that moved away, even when their session.moved event
+  // was missed (a move across a plugin reload). The observable is the
+  // hosted journal row: releaseSessionHosting prunes the released id from
+  // it, so a later reload cannot resurrect the stale hosting.
+  //
+  // OPENCODE_DB isolation is NOT optional: without it the check would read
+  // the developer's real (potentially multi-GB) opencode.db at boot.
+  const OTHER_DIR = "/tmp/thatch-reverify-elsewhere";
+  const makeOpencodeDb = (rows: { id: string; directory: string }[]): string => {
+    const path = join(dbDir, "opencode.db");
+    const raw = new Database(path);
+    raw.exec("CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT)");
+    for (const r of rows) raw.run("INSERT INTO session_v2 (id, directory) VALUES (?, ?)", [r.id, r.directory]);
+    raw.close();
+    return path;
+  };
+
+  const bootServer = async () => {
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevOcDb = process.env.OPENCODE_DB;
+    process.env.THATCH_DB_PATH = dbPath;
+    process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+    const hooks = (await server({
+      client: {
+        session: {
+          prompt: async () => {}, promptAsync: async () => {}, create: async () => ({ data: { id: "c" } }),
+          delete: async () => {}, get: async () => ({ data: { title: "Test session" } }),
+          messages: async () => ({ data: [] }), status: async () => ({ data: {} }), list: async () => ({ data: [] }),
+        },
+        tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
+      },
+      worktree: WORK_DIR,
+      directory: WORK_DIR,
+    } as any)) as any;
+    return {
+      hooks,
+      finally: async () => {
+        await hooks?.dispose?.();
+        if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+        else process.env.THATCH_DB_PATH = prevDbPath;
+        if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+        else process.env.XDG_CONFIG_HOME = prevConfig;
+        if (prevOcDb === undefined) delete process.env.OPENCODE_DB;
+        else process.env.OPENCODE_DB = prevOcDb;
+      },
+    };
+  };
+
+  const hostedRowIds = (): string[] => {
+    const check = new ThatchDB(dbPath);
+    try {
+      const row = check.runtimeStateAll().find((r) => r.kind === "hosted" && r.sessionID === WORK_DIR);
+      return row && Array.isArray(row.value) ? (row.value as string[]) : [];
+    } finally {
+      check.close();
+    }
+  };
+
+  test("a rehydrated hosted session whose directory moved away is released at init", async () => {
+    process.env.OPENCODE_DB = makeOpencodeDb([
+      { id: "ses_moved", directory: OTHER_DIR },
+      { id: "ses_stayed", directory: WORK_DIR },
+    ]);
+    const seed = new ThatchDB(dbPath);
+    // Same pid + same directory: the reload-rehydration partition. Default
+    // pid stamp is process.pid, so this row rehydrates into rehostedSessions.
+    seed.runtimeStatePut("hosted", WORK_DIR, ["ses_moved", "ses_stayed"], WORK_DIR);
+    seed.close();
+
+    const { finally: done } = await bootServer();
+    try {
+      // The moved session is out of the hosted journal (and so out of the
+      // rehydrated set); the stayed session keeps its hosting.
+      expect(hostedRowIds()).toEqual(["ses_stayed"]);
+    } finally {
+      await done();
+    }
+  });
+
+  test("an unreadable opencode db fails open - nothing is released", async () => {
+    // A missing OPENCODE_DB file resolves to null: the check skips rather
+    // than releasing everything it cannot verify. The swallow detector
+    // remains the backstop for a genuinely moved session.
+    process.env.OPENCODE_DB = join(dbDir, "no-such-opencode.db");
+    const seed = new ThatchDB(dbPath);
+    seed.runtimeStatePut("hosted", WORK_DIR, ["ses_any"], WORK_DIR);
+    seed.close();
+
+    const { finally: done } = await bootServer();
+    try {
+      expect(hostedRowIds()).toEqual(["ses_any"]);
+    } finally {
+      await done();
+    }
+  });
+});

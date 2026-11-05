@@ -58,7 +58,11 @@ membership:
 
 The stranded-session sweep's own move path releases hosting eagerly (same
 routine, before the event round-trip) because the sweep performed the move
-itself and needs no event to know.
+itself and needs no event to know. A move whose `session.moved` event was
+never observed (a move across a plugin reload) is caught by the hosted
+directory re-verification: init and each poll cycle compare the hosted
+set's directories against `session_v2` in opencode.db and release
+move-aways (see cross-session-chat.md).
 
 ### session.created without parentID (top-level session)
 

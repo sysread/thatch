@@ -441,7 +441,12 @@ event, the new instance adopts it, and mail delivery resumes from there
 (see [session-lifecycle.md](session-lifecycle.md), "session.moved"). The
 hand-off is what prevents the zombie: without it, the old instance kept
 stamp-delivering mail into a prompt path that no longer reached the
-session.
+session. As a second layer, the poller re-verifies each hosted session's
+current directory against `session_v2` in opencode.db (`reverifyDirectories`
+on the poller, every `THATCH_CHAT_DIRECTORY_REVERIFY_CYCLES` cycles,
+default 1) and releases move-aways the event path missed - a move across a
+plugin reload - failing open to the detector below when the db is
+unreadable; adoption stays event-driven.
 
 The detector is the safety net for the whole "wake accepted, turn never
 ran" class, whatever the cause. The poller arms a watch on every
@@ -693,7 +698,9 @@ per hour, auto-row TTL 7 days, confirmed-close override window two
 staleness windows (`CHAT_TAB_CLOSED_OVERRIDE_MS` in `src/tab-state.ts`).
 Environment overrides: `THATCH_CHAT_SPLIT_PART_LEN`
 (auto-split part budget, default 2000, clamped 500..9000),
-`THATCH_CHAT_MAX_BODY_CHARS` (whole-body acceptance ceiling, default 20000), and
+`THATCH_CHAT_MAX_BODY_CHARS` (whole-body acceptance ceiling, default 20000),
+`THATCH_CHAT_DIRECTORY_REVERIFY_CYCLES` (poll cycles between hosted
+directory re-verifications, default 1, clamped 1..120), and
 `THATCH_OPENCODE_STATE_ROOT` (the open-tab reader's state root, tests and
 QA sandboxes only);
 the split constants are resolved once at module load and sanitized to positive integers
@@ -704,7 +711,8 @@ within their clamps - invalid values silently fall back to the default.
 - `src/chat.ts` - ChatStore (directory + inbox SQL, assigned-name draw:
   pool pick, slugify, counter bump, insert, prune, topic refresh, broadcast
   targeting), ChatPoller
-  (heartbeat, gated delivery, re-nudge, rate cap, hourly prune sweep),
+  (heartbeat, directory re-verification cadence, gated delivery, re-nudge,
+  rate cap, hourly prune sweep),
   staleness helper, chatLiveness (the open/recent/active/idle/stale
   verdicts)
 - `src/tab-state.ts` - the read-only open-tab reader: per-channel
@@ -716,11 +724,15 @@ within their clamps - invalid values silently fall back to the default.
   chat_name_counters and the auto column), the NOCASE collation migration
   and topic column migration, delegated methods
 - `src/tool-defs.ts` - the chat tool definitions
-- `src/runtime.ts` - poller construction, delivery closure, `-s` startup
+- `src/runtime.ts` - poller construction (including the directory
+  re-verification wiring: init check plus per-cycle callback), delivery
+  closure, `-s` startup
   registration (`osProcessArgs`, `startupSessionId` from `src/os-args.ts`), idle
   auto-registration + topic refresh, idle flush,
   session.deleted unregister, dispose, transcript echo in
   tool.execute.after
+- `src/session-db.ts` - the read-only opencode.db access the directory
+  re-verification reads (`sessionDirectories`)
 - `src/debug.ts` - the `THATCH_DEBUG` diagnostic log; `chat:startup` is
   the chat consumer
 - `src/prompts.ts` - `chatNotificationNudge()`, `chatEchoText()` /
