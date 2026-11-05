@@ -1,5 +1,7 @@
 import { createAlerts, isNoWorkTool, alertDelivery, type AlertInput, type RoundShape } from "../alerts";
 import { isMetaToolName } from "../extraction";
+import { appendBatch, consumeQueue, resetMissedCount } from "../extract-queue";
+import { MEMORY_SAVED_MARKER } from "../tool-defs";
 import { alertMode, loadConfig, type Config } from "../config";
 import { sendNotification, defaultSpawner } from "../notify";
 import type { ThatchDB } from "../db";
@@ -51,6 +53,11 @@ export type PluginLifecycleEvent = {
   isAborted?: boolean;
   kind?: "compact" | "exit" | "question" | "permission";
   requestID?: string;
+  /** The tool's input fields (the realwork/buffer event): forwarded to the
+   *  server-side buffer push. */
+  args?: Record<string, unknown>;
+  /** The tool's result text (the buffer event), serialized by the mod. */
+  result?: string;
   /** The turn was started by the mod's own wake submission ($.prompt.submit
    *  after a chat-wake poll hit) - synthetic-trigger provenance for the
    *  alert machine (a wake's round is bookkeeping, never user-waited
@@ -109,15 +116,35 @@ export function createPluginLifecycle(deps: PluginLifecycleDeps) {
           return { text: "" };
 
         case "realwork": {
-          // The server owns the work classification (the mod forwards every
-          // main-conversation tool call): the meta-tool filter is the same
-          // one the extraction buffer uses - here that includes the
-          // mcp__thatch__ prefix (the buffer checks it separately; a tool
-          // named by that spelling is our own bookkeeping, not work) - and
-          // todowrite/question are the alerts-only no-work exclusions. A
-          // realwork event without a tool name is unclassifiable - ignore.
-          if (!event.tool || isMetaToolName(event.tool) || event.tool.startsWith("mcp__thatch__") || isNoWorkTool(event.tool)) return { text: "" };
-          alerts.sessionRealWork(sid);
+          // The buffer push and the alert bookkeeping share this site (the
+          // opencode coupling: the extraction buffer's push is where real
+          // work is marked). The mod forwards every main-conversation tool
+          // call WITH its input and result; the server owns ALL the
+          // filtering:
+          // - the buffer takes every non-meta tool (the extraction buffer's
+          //   own rule: mcp__thatch__* excluded, todowrite/question BUFFERED);
+          // - the WORK mark excludes the no-work tools on top (todowrite/
+          //   question did nothing the user waits for).
+          // Subagent tool calls buffer under the same session key - they
+          // carry extractable facts (issue #22's NOTES: arguably desirable).
+          if (!event.tool || isMetaToolName(event.tool) || event.tool.startsWith("mcp__thatch__")) {
+            // Our OWN tool traffic: the SAVE gate - a memory_remember that
+            // actually saved drains the queue and resets the counter (the
+            // opencode hook's drain semantics, server-side; the fallback
+            // path gets it inside appendBatch's meta branch, which this
+            // skip never reaches).
+            if (event.tool === "mcp__thatch__memory_remember" && (event.result ?? "").includes(MEMORY_SAVED_MARKER)) {
+              resetMissedCount(sid);
+              consumeQueue(sid);
+            }
+            return { text: "" };
+          }
+          appendBatch(sid, [{
+            tool_name: event.tool,
+            tool_input: event.args ?? {},
+            tool_response: event.result ?? "",
+          }]);
+          if (!isNoWorkTool(event.tool)) alerts.sessionRealWork(sid);
           return { text: "" };
         }
 

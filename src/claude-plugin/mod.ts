@@ -241,12 +241,24 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
   on("tool.call", async ($, e, next) => {
     // The wrap-up greenlight tools route to the arm check, not to work
     // bookkeeping. Everything else main-conversation forwards as a
-    // real-work candidate; the server owns the meta/no-work filtering.
+    // real-work candidate - WITH its input and result text: the same
+    // forward is the plugin regime's BUFFER PUSH (the server owns the
+    // buffer's filtering). The result is serialized defensively: the
+    // middleware result's shapes vary per tool (result field, bare
+    // string, deny).
     const result = await next(e);
+    const resultText = typeof result === "string"
+      ? result
+      : ((result as { result?: unknown; text?: unknown })?.result ?? (result as { text?: unknown })?.text ?? "");
     if (e.agentId === undefined) {
       try {
-        await forwardLifecycle($, options, { event: "realwork", tool: e.tool });
-      } catch { /* alerts are best-effort */ }
+        await forwardLifecycle($, options, {
+          event: "realwork",
+          tool: e.tool,
+          args: toolArgsOf(e),
+          result: typeof resultText === "string" ? resultText.slice(0, 2000) : JSON.stringify(resultText).slice(0, 2000),
+        });
+      } catch { /* alerts + buffering are best-effort */ }
     }
     return result;
   });
@@ -393,6 +405,18 @@ async function forwardLifecycle($: ModsApi, options: ThatchModOptions, args: Rec
     arguments: { ...args, session_id: sessionId },
   });
   return readLifecycleResult(res);
+}
+
+/** The tool call event's OWN fields become the buffered interaction's args
+ *  (the mods events carry arguments as top-level fields: e.command for
+ *  Bash, e.file_path for Edit). */
+function toolArgsOf(e: ToolCallEvent): Record<string, unknown> {
+  const args: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(e)) {
+    if (k === "tool" || k === "agentId") continue;
+    args[k] = v;
+  }
+  return args;
 }
 
 async function armWrapup($: ModsApi, options: ThatchModOptions, kind: "compact" | "exit"): Promise<{ text: string }> {

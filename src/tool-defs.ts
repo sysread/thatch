@@ -134,6 +134,8 @@ export interface CoreContext {
     isAborted?: boolean;
     kind?: "compact" | "exit" | "question" | "permission";
     requestID?: string;
+    args?: Record<string, unknown>;
+    result?: string;
   }) => Promise<{ text: string; wrapup?: "compact" | "exit" }>;
   /** The plugin regime's chat wake: the mod polls it on its timer
    *  cadence; a non-empty return is the wake nudge to submit as a turn
@@ -3109,6 +3111,8 @@ const pluginLifecycleDef: ToolDef = {
     is_aborted: z.boolean().optional(),
     kind: z.enum(["compact", "exit", "question", "permission"]).optional(),
     request_id: z.string().optional(),
+    tool_input: z.record(z.string(), z.unknown()).optional(),
+    tool_response: z.string().optional(),
   },
   async execute(args, ctx) {
     if (!ctx.pluginLifecycle) {
@@ -3122,6 +3126,8 @@ const pluginLifecycleDef: ToolDef = {
       isAborted: args.is_aborted as boolean | undefined,
       kind: args.kind as "compact" | undefined,
       requestID: args.request_id as string | undefined,
+      args: args.tool_input as Record<string, unknown> | undefined,
+      result: args.tool_response as string | undefined,
     });
     return JSON.stringify(result);
   },
