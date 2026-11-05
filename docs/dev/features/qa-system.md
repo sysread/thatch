@@ -183,7 +183,9 @@ case has them without a warm-up session.
 
 Each use case gets a per-use-case copy of the master via `createFixture(name)`,
 with isolated `HOME`, `XDG_CONFIG_HOME`, `THATCH_DB_PATH`, and
-`THATCH_QUEUE_DIR` environment variables. The repo is read-only during QA —
+`THATCH_QUEUE_DIR` environment variables, plus `THATCH_NO_NOTIFY=1` so no
+fixture subprocess (opencode included) can fire a real desktop notification
+on the host mid-run. The repo is read-only during QA —
 sessions run inside `/tmp/thatch-qa/<uc-name>/` copies.
 
 The `qa` skill (`.opencode/skills/qa/SKILL.md`) instructs the

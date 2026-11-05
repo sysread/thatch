@@ -171,6 +171,19 @@ async function runStep(label: string, cmd: string[], spawner: Spawner): Promise<
 }
 
 /**
+ * The machine-level kill switch: THATCH_NO_NOTIFY=1 makes every dispatch a
+ * logged no-op. Test and QA runs set it (the tests/clean-env.ts preload and
+ * the QA fixture env) so a runtime path that boots the real dispatcher under
+ * tests cannot fire a banner or speak on the developer's machine - the
+ * injected-spawner mocks only cover the callers that remember to inject. A
+ * user can export it in their shell to silence thatch notifications entirely.
+ * Exact "1": any other value (including "0") leaves dispatch enabled.
+ */
+export function notifySuppressed(env: Record<string, string | undefined> = process.env): boolean {
+  return env.THATCH_NO_NOTIFY === "1";
+}
+
+/**
  * Sends the notification and returns a result line for the tool response.
  * A zero exit proves only that the command ran - macOS focus modes can still
  * suppress the banner silently - so the result never claims the user saw it.
@@ -180,6 +193,10 @@ export async function sendNotification(
   request: NotifyRequest,
   spawner: Spawner = defaultSpawner,
 ): Promise<string> {
+  if (notifySuppressed()) {
+    return "[suppressed] THATCH_NO_NOTIFY is set; no notification was sent.";
+  }
+
   const platform = request.platform ?? process.platform;
   if (platform !== "darwin" && platform !== "linux") {
     return `[unsupported] notifications are not implemented on ${platform} (macOS and Linux only); nothing was sent.`;

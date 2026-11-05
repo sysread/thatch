@@ -37,3 +37,15 @@ for (const key of ["XDG_CONFIG_HOME", "XDG_DATA_HOME"]) {
 for (const [key, value] of Object.entries(defaults)) {
   if (!process.env[key]) process.env[key] = value;
 }
+
+// Machine-level dispatch suppression, observed-live-fire 2026-11-05: QA runs
+// boot the real plugin runtime in fixture subprocesses, and any runtime path
+// that reaches the real notify dispatcher fired actual desktop banners and
+// spoken voice on the developer's machine mid-test-run. The injected-spawner
+// mocks cover only callers that remember to inject; this default covers the
+// rest at the dispatcher (src/notify.ts sendNotification). Forced rather than
+// defaulted: a developer with THATCH_NO_NOTIFY unset in their shell must not
+// opt their test runs back into live banners. Tests exercising the dispatcher
+// composition itself (tests/notify.test.ts) clear the var for the duration of
+// the file and restore it - bun shares one process across all test files.
+process.env.THATCH_NO_NOTIFY = "1";

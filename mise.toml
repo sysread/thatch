@@ -4,6 +4,11 @@
 # strips the `background` parameter from its schema entirely, forcing
 # synchronous sub-agent dispatch. Also set in bashrc for global coverage.
 OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS = "true"
+# Machine-level notification suppression for everything the gates spawn
+# (bun test, QA fixtures and their opencode subprocesses). The bun preload
+# (tests/clean-env.ts) and the QA fixture env set this too; this covers any
+# other child of a mise task.
+THATCH_NO_NOTIFY = "1"
 
 [tools]
 bun = "1.3.14"

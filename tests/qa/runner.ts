@@ -317,6 +317,12 @@ export async function createFixture(name: string): Promise<QaContext> {
     env: {
       THATCH_DB_PATH: join(dir, "thatch.db"),
       THATCH_QUEUE_DIR: join(dir, "queue"),
+      // Machine-level dispatch suppression for the fixture's subprocesses
+      // (opencode run/serve children included): a runtime path that reaches
+      // the real notify dispatcher must not banner or speak on the host
+      // mid-QA-run. The temp-HOME/XDG sandboxing cannot contain osascript,
+      // so the dispatcher-level kill switch is the containment.
+      THATCH_NO_NOTIFY: "1",
       // Full plugin debug log into the fixture (debug.log beside the db):
       // the serve process's stdout/stderr pipes are never drained, so this
       // is the only window into plugin-side failures during a run.

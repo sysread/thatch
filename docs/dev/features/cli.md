@@ -167,6 +167,7 @@ process; the registry itself is `src/env-knobs.ts`.
 | `CURSOR_PROJECT_DIR` | Cursor project dir | falls through |
 | `THATCH_WATCH_DEATH_MINUTES` | Pending-age threshold for watcher death detection | `120` |
 | `THATCH_PROJECT_DIR` | Pinned project dir (written by project-local `thatch setup` MCP configs) | falls through |
+| `THATCH_NO_NOTIFY` | Set to `1` to silence all desktop notifications at the dispatcher; test and QA runs set it | off (notifications send) |
 | `CLAUDE_CONFIG_DIR` | Claude config dir | `~/.claude` |
 | `CURSOR_CONFIG_DIR` | Cursor config dir | `~/.cursor` |
 | `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS` | Enable async extraction | unset |

@@ -246,7 +246,9 @@ Thatch gives your agent:
   -- bookkeeping rounds stay silent. Preferences live in a
   hand-editable config file (`~/.config/thatch/config.json`) that the agent
   manages through `config_get`/`config_set` -- ask it to change your voice,
-  quiet notifications entirely, or tune which alerts fire.
+  quiet notifications entirely, or tune which alerts fire. `THATCH_NO_NOTIFY=1`
+  in your shell silences everything, and thatch's own test and QA runs set it
+  so the suite never notifies on your machine.
 
 Plus **skills** for memory workflows, structured multi-specialist code
 review, review response, plan refinement, separate evidence and consistency

@@ -82,10 +82,12 @@ Key decisions:
 - **Atomic writes.** `saveConfig` writes a temp file then renames, so a crash
   mid-write cannot leave a truncated config and concurrent readers never see a
   partial document.
-- **No env-var overrides for notification prefs.** The config file is the
-  single source of truth; `THATCH_*` env vars remain reserved for
+- **No env-var preference overrides.** The config file is the single source
+  of truth for preferences; `THATCH_*` env vars remain reserved for
   infrastructure (DB path, model, thresholds). Preferences the LLM manages
-  belong in the file the LLM manages.
+  belong in the file the LLM manages. The one exception is the
+  `THATCH_NO_NOTIFY` kill switch, which is infrastructure: it silences
+  dispatch entirely (see below) rather than tuning a preference.
 
 ### The environment section
 
@@ -120,6 +122,18 @@ returns a result string for the tool response:
   `espeak -v` because `spd-say` has no voice flag.
 - **other platforms** (win32 included): `[unsupported]` result, nothing runs.
   Windows support is deliberately not a goal.
+- **The `THATCH_NO_NOTIFY=1` kill switch** is checked at `sendNotification`
+  entry (`notifySuppressed`), before any platform logic: the result is a
+  `[suppressed]` line and no spawner call, so every per-platform command
+  (osascript, say, notify-send, spd-say, espeak) is covered by construction.
+  Test and QA runs set it -- the `tests/clean-env.ts` bun preload forces it
+  for the unit suite, and the QA fixture env (`tests/qa/runner.ts`
+  `createFixture`) passes it to every subprocess -- because the temp-HOME/XDG
+  sandboxing cannot contain osascript: without the guard, a runtime path that
+  boots the real dispatcher under tests fired live banners and voice on the
+  developer's machine. `tests/notify.test.ts` lifts the guard for its own
+  file so the injected-spawner composition tests stay meaningful. A user can
+  export it in their shell to silence thatch notifications entirely.
 
 Details that matter:
 
@@ -278,7 +292,9 @@ rejected for that reason (plus v1 has no TUI plugin surface at all).
   siblings, null deletes the merged field, darwin defaults, `alertVoice`.
 - `tests/notify.test.ts` -- command construction per platform (mock spawner
   records argv), AppleScript escaping, partial vs total failure, unsupported
-  platform, plus tool-level tests (merge-no-wipe, echo, `mode: none` no-op,
+  platform, the `THATCH_NO_NOTIFY` suppression guard (no spawner call, a
+  `[suppressed]` result, exact-`1` matching, passed-env reads), plus
+  tool-level tests (merge-no-wipe, echo, `mode: none` no-op,
   configured voice honored, unset via null deletes the key from the file,
   environment section rendered, environment + null-section refusals, the
   parse-warning refusal (a broken file is never overwritten; the raw file

@@ -178,6 +178,7 @@ process; the registry itself is `src/env-knobs.ts`.
 | `THATCH_RECALL_THRESHOLD` | `0.55` | Cosine threshold for recall nudge |
 | `THATCH_PREDICTION_THRESHOLD` | `0.60` | Cosine threshold for prediction auto-fire |
 | `THATCH_BEHAVIOR_THRESHOLD` | `0.60` | Cosine threshold for behavior auto-fire |
+| `THATCH_NO_NOTIFY` | off | Set to `1` to silence all thatch desktop notifications (banners and voice), regardless of the config file |
 | `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS` | (unset) | Enables async extraction (opencode only) |
 
 ## Setup detection

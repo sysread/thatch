@@ -143,6 +143,12 @@ export const ENV_KNOBS: EnvKnob[] = [
     default: "host project dir or cwd",
   },
   {
+    name: "THATCH_NO_NOTIFY",
+    description:
+      "Kill switch for desktop notifications: set to 1 and every dispatch (banner and voice) becomes a logged no-op. Test and QA runs set this; export it to silence thatch notifications entirely.",
+    default: "off (notifications send)",
+  },
+  {
     name: "THATCH_OPENCODE_STATE_ROOT",
     description: "Overrides the opencode state root used to tell whether an opencode tab is still open (test and QA override).",
     default: "~/.local/state/opencode",
