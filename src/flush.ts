@@ -2,7 +2,7 @@ import { buildExtractionPayload, type ToolInteraction } from "./extraction";
 import { peekQueue, getMissedCount, incrementMissedCount, queueFilePath } from "./extract-queue";
 import { stampModLiveness } from "./version-check";
 import { escalationLevel, extractionNudge, claudeInlineExtraction, claudeWriteNudge, claudeRecallNudge, predictionNudge, behaviorNudge, mcpToolName, chatNotificationNudge } from "./prompts";
-import { ensureMcpChatIdentity, mcpChatHookLine, mcpSessionID, isoMinutesAgo, renderChatParticipant, CHAT_CLI_SENDER, CHAT_RENUDGE_MINUTES } from "./chat";
+import { mcpChatHookLine, mcpSessionID, isoMinutesAgo, renderChatParticipant, CHAT_CLI_SENDER, CHAT_RENUDGE_MINUTES } from "./chat";
 import type { ThatchDB } from "./db";
 
 /**
@@ -117,9 +117,8 @@ export async function computePluginStage(
   // every stage delivery (the model learns who it is without a tool
   // call) - the same line chatHookLine printed in the fallback regime.
   deps.db.recordChatHostPid(process.ppid, mcpSessionID(sessionID));
-  const chatLine = ensureMcpChatIdentity(deps.db, sessionID, deps.repo, transcriptPath)
-    ? mcpChatHookLine(deps.db, sessionID, deps.repo, transcriptPath)
-    : "";
+  // mcpChatHookLine ensures (adopts + registers) internally.
+  const chatLine = mcpChatHookLine(deps.db, sessionID, deps.repo, transcriptPath);
 
   // Tier 1: extraction - peek, escalate, and deliver the inline payload.
   // The missed-nudge increment lives here now (the mod has no file access,

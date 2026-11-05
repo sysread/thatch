@@ -32,7 +32,7 @@ const useCase: UseCase = {
   expected: [
     "- `--skills-only` installs **only** the skill files: the repo's `.claude/skills/`",
     "  (Claude) or `.cursor/skills/` (Cursor) gets the 41 shared skills, reported via",
-    "  the skills dir plus `40 added` on a fresh install and `40 unchanged` on re-run.",
+    "  the skills dir plus `41 added` on a fresh install and `41 unchanged` on re-run.",
     "- No MCP config (`.mcp.json` / `.cursor/mcp.json`), no instructions",
     "  (`CLAUDE.md` written; the repo's own tracked `AGENTS.md` left",
     "  byte-for-byte unchanged), no hooks (`.claude/settings.json` /",
@@ -104,7 +104,7 @@ const useCase: UseCase = {
     // Reporting: skills dir named, fresh-install counts, other-scope note.
     const out1 = r1.stdout.toString();
     if (!out1.includes(claudeSkillsDir) || !out1.includes("41 added")) {
-      console.log("  FAIL: --skills-only stdout does not report the skills dir + '40 added'");
+      console.log("  FAIL: --skills-only stdout does not report the skills dir + '41 added'");
       return "FAIL";
     }
     if (!out1.includes(userSkills)) {

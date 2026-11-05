@@ -29,7 +29,7 @@ const useCase: UseCase = {
   expected: [
     "- Claude Code and Cursor install exactly **41 shared skills** to the scope's",
     "  skills dir (repo `.claude/skills/` and `.cursor/skills/` for project-local",
-    "  setup) — the coordinator (`thatch-code-review`) is **absent** (it needs",
+    "  setup) — the coordinator (`thatch-code-review`) is **present** (it is SHARED - flat dispatch works); it no longer needs",
     "  sub-agents, which those hosts lack).",
     "- opencode installs **42** — the 40 shared plus the two opencode-only skills (coordinator, coordination).",
     "- The locally edited `SKILL.md` is **overwritten** with the canonical content",

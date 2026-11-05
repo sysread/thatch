@@ -109,9 +109,12 @@ export function readModLiveness(dbPath: string): number | null {
  *  (so a plugin-only install reports installed), the standalone server
  *  (warns it should not be configured under the plugin regime), and the
  *  next setup run (detects the orphaned marker when the plugin was
- *  uninstalled). */
+ *  uninstalled). DURABLE LOCATION: beside the DB (the config dir), NOT
+ *  the tmp cache - a reboot wiping tmp would erase the regime story and
+ *  the standalone server's auto-refresh would resurrect the deactivated
+ *  fallback hooks (the regime-warfare failure, defeated by a tmp reaper). */
 export function regimeMarkerPath(dbPath: string): string {
-  return join(cacheDir(dbPath), "regime");
+  return join(dirname(dbPath), "regime");
 }
 
 export function writeRegimeMarker(dbPath: string, regime: "plugin"): void {

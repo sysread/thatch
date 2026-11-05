@@ -40,7 +40,8 @@ function thatchDbPath(homeDir: string): string {
   return process.env.THATCH_DB_PATH ?? join(process.env.XDG_CONFIG_HOME ?? join(homeDir, ".config"), "thatch", "thatch.db");
 }
 
-function resolvePaths(global: boolean, projectDir: string, homeDir: string): SetupPaths {  const configDir = claudeConfigDir(homeDir);
+function resolvePaths(global: boolean, projectDir: string, homeDir: string): SetupPaths {
+  const configDir = claudeConfigDir(homeDir);
 
   if (global) {
     return {
@@ -554,6 +555,8 @@ export function register(on) {
   return thatchRegister(on, {
     instructions: INSTRUCTIONS,
     stageTool: { server: "thatch", tool: "plugin_stage" },
+    lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" },
+    chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" },
   });
 }
 `,
@@ -596,6 +599,13 @@ export function register(on) {
   if (paths.mcpConfigPath && existsSync(paths.mcpConfigPath)) {
     removeMcpServerEntry(paths.mcpConfigPath);
     deactivated.push(`standalone MCP config: ${paths.mcpConfigPath}`);
+  }
+  // The PROJECT .mcp.json is swept on BOTH scopes' runs: a global-run
+  // user can still have a project-local entry from an earlier fallback
+  // install, and both servers delivering means double delivery.
+  if (paths.mcpConfigPath !== join(projectDir, ".mcp.json") && existsSync(join(projectDir, ".mcp.json"))) {
+    removeMcpServerEntry(join(projectDir, ".mcp.json"));
+    deactivated.push(`standalone MCP config: ${join(projectDir, ".mcp.json")}`);
   }
   deactivated.push(
     "global MCP registration (run `claude mcp remove thatch` by hand if `claude mcp get thatch` reports one)",

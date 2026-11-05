@@ -36,7 +36,7 @@ const useCase: UseCase = {
     "- The explicit-directory run installs the 41 shared skills into the given",
     "  directory and nothing else: none of `.mcp.json`, `CLAUDE.md`, `.claude/`,",
     "  or `.cursor/` appears in the project.",
-    "- The output reports the skills dir plus `40 added` (fresh install).",
+    "- The output reports the skills dir plus `41 added` (fresh install).",
     "- Host or scope flags combined with an explicit directory still exit 0 but",
     "  print a note that the flags have no effect.",
     "- `--global` combined with an explicit directory exits 1 with the",
@@ -97,7 +97,7 @@ const useCase: UseCase = {
     if (!setupFilesAbsent()) return "FAIL";
     const out1 = r1.stdout.toString();
     if (!out1.includes(customDir) || !out1.includes("41 added")) {
-      console.log("  FAIL: custom-dir stdout does not report the skills dir + '40 added'");
+      console.log("  FAIL: custom-dir stdout does not report the skills dir + '41 added'");
       return "FAIL";
     }
 
@@ -119,7 +119,7 @@ const useCase: UseCase = {
     }
 
     // The --local arm of the same note: scope flag, same dir, skills now
-    // installed (40 unchanged), note still prints.
+    // installed (41 unchanged), note still prints.
     const r2c = await run(["setup", "--local", "--skills-only", "./custom-skills-2"]);
     if (r2c.exitCode !== 0) {
       console.log("  FAIL: `--local --skills-only ./custom-skills-2` exited non-zero");

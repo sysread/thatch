@@ -31,14 +31,14 @@ const useCase: UseCase = {
     "  appends a thatch block to `CLAUDE.md` bracketed by start/end markers (replaced, not",
     "  duplicated, on re-run), writes `.claude/settings.json` hooks (`SessionStart` -> `thatch reminder`,",
     "  `PostToolBatch` -> `thatch buffer-batch`, `UserPromptSubmit` -> `thatch flush-tools`), and installs",
-    "  **41 shared skills** (no code-review coordinator) to the repo's `.claude/skills/`.",
+    "  **41 shared skills** (the code-review coordinator included - it is SHARED) to the repo's `.claude/skills/`.",
     "- `--cursor` project-local writes `.cursor/mcp.json`, appends to `AGENTS.md`, writes",
     "  `.cursor/hooks.json` in the **flat format** (`{version:1, hooks:{...}}`): `sessionStart` ->",
     "  `thatch reminder --json`, `postToolUse` -> `thatch buffer-tool`, `beforeSubmitPrompt` ->",
     "  `thatch flush-tools --json`; and installs 41 shared skills to the repo's `.cursor/skills/`.",
     "- Setup reports where skills were installed plus per-run counts",
-    "  (added / updated / removed / unchanged). A fresh install prints `40 added`; a re-run",
-    "  prints `40 unchanged` and identical file contents.",
+    "  (added / updated / removed / unchanged). A fresh install prints `41 added`; a re-run",
+    "  prints `41 unchanged` and identical file contents.",
     "- When the opposite scope holds thatch skills (e.g. user-scope copies left over from an",
     "  older setup), setup prints a note naming that directory and leaves the copies alone.",
     "- Re-run is idempotent: instructions are not duplicated, thatch hooks are replaced (not appended),",
@@ -145,7 +145,7 @@ const useCase: UseCase = {
       return "FAIL";
     }
     if (!out1.includes("41 added")) {
-      console.log("  FAIL: setup stdout does not report '40 added' on fresh install");
+      console.log("  FAIL: setup stdout does not report '41 added' on fresh install");
       return "FAIL";
     }
     // A project-local run must not create user-scoped skills.
@@ -235,7 +235,7 @@ const useCase: UseCase = {
       return "FAIL";
     }
     if (!out2.includes("41 added")) {
-      console.log("  FAIL: setup stdout does not report '40 added' on fresh install");
+      console.log("  FAIL: setup stdout does not report '41 added' on fresh install");
       return "FAIL";
     }
     // A project-local run must not create user-scoped skills.

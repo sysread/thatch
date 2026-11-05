@@ -132,6 +132,7 @@ export interface CoreContext {
     tool?: string;
     error?: string;
     isAborted?: boolean;
+    isMain?: boolean;
     kind?: "compact" | "exit" | "question" | "permission";
     requestID?: string;
     args?: Record<string, unknown>;

@@ -5,7 +5,7 @@ import { mcpSessionID } from "./chat";
 import { BgeEmbeddingModel } from "./embeddings";
 import { detectRepo } from "./git";
 import { checkSetup, setupClaudeCode, setupCursor } from "./setup";
-import { TOOL_DEFS, type CoreContext, type ToolDef } from "./tool-defs";
+import { TOOL_DEFS, trimHostContext, type CoreContext, type HostToolContext, type ToolDef } from "./tool-defs";
 import { deepPassthrough } from "./tool-schema";
 import { chatOpenTabs as chatOpenTabsProvider } from "./tab-state";
 import { actionDefs, mcpSpelling, type ActionDef } from "./commands";
@@ -216,8 +216,15 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
   const lifecycle = mode === "bundled"
     ? createPluginLifecycle({ db, model, repo, dbPath })
     : null;
+  // The bundled server's session identity for the MODEL's tool calls: the
+  // host's MCP client supplies no session context, but the mod's stage
+  // call runs per prompt (before the turn's tool calls) and anchors
+  // (server ppid -> the RAW host session id). The dispatcher synthesizes
+  // the host context from it, so session-scoped tools (the watch family)
+  // resolve their owner. In-memory; per-session by construction.
+  const rawSessionByPid = new Map<number, string>();
 
-  // Bundled mode wires the WATCHER REGISTRY: the six watch tools serve
+  // Bundled mode wires the WATCHER REGISTRY: the five watch tools serve
   // here (their opencodeOnly fence named the missing poller/delivery -
   // the mod's timer IS the poller and $.prompt.submit IS the delivery).
   // Registrations are DB-backed via the SAME journal hooks the opencode
@@ -270,8 +277,10 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
     // server-side (the sideband's role, reborn in-process).
     ...(mode === "bundled"
       ? {
-          pluginStage: (prompt: string, sessionID: string, transcriptPath?: string) =>
-            computePluginStage({ db, model, repo, dbPath }, prompt, sessionID, transcriptPath),
+          pluginStage: (prompt: string, sessionID: string, transcriptPath?: string) => {
+            rawSessionByPid.set(process.ppid, sessionID);
+            return computePluginStage({ db, model, repo, dbPath }, prompt, sessionID, transcriptPath);
+          },
           pluginLifecycle: (event) => lifecycle!.handle(event),
           pluginChatWake: (sessionID: string) => computePluginChatWake(db, sessionID),
           ...(watchers ? { watchers } : {}),
@@ -401,22 +410,13 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
     startVersionChecker(dbPath);
   }
 
-  // The disabled-mod warning (bundled mode): when a tools/call arrives and
-  // the mod's liveness ping is stale, the plugin's hooks are probably
-  // silenced (disableAllHooks, managed allowManagedModsOnly) - context
-  // injection and nudges are not reaching the model. Warned once per
-  // session, on the first tools/call response, through the same channel
-  // as the setup warning. The ping is stamped by the stage tool the mod
-  // calls on every prompt.
-  let modSilentWarning: string | null = null;
-  if (mode === "bundled") {
-    const lastPing = readModLiveness(dbPath);
-    if (lastPing !== null && Date.now() - lastPing > MOD_LIVENESS_STALE_MS) {
-      modSilentWarning =
-        "The thatch plugin's mod has not pinged in a while, so its nudges and context injection are probably NOT being delivered (hooks may be disabled by disableAllHooks, --safe-mode, or a managed allowManagedModsOnly setting). Tell the user their thatch plugin is not delivering.";
-      console.error(`[thatch] ${modSilentWarning}`);
-    }
-  }
+  // The disabled-mod warning (bundled mode): RE-EVALUATED PER tools/call,
+  // not once at startup. A stamp fresh at startup can go stale mid-life
+  // (the disableAllHooks case the detector exists for), and a stale stamp
+  // at startup can belong to a PREVIOUS session (a false positive on the
+  // user's return). The read is one cached file stat per call; the
+  // warning surfaces once per session (the delivered flag below).
+  let modWarningDelivered = false;
 
   // Idempotent teardown, shared by the stdin-end path (the host closed the
   // pipe - the normal shutdown) and the signal handlers (SIGINT/SIGTERM/
@@ -464,7 +464,20 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
 
       // Notifications (no id) are fire-and-forget - no response expected.
       const isNotification = req.id === null || req.id === undefined;
-      const res = await dispatch(req, tools, prompts, ctx);
+      // The disabled-mod staleness is measured BEFORE the tool runs: the
+      // stage tool's own liveness stamp would defeat a post-call read.
+      const isToolsCall = req.method === "tools/call";
+      const modSilentAtCall = isToolsCall && mode === "bundled" && !modWarningDelivered && (() => {
+        const lastPing = readModLiveness(dbPath);
+        return lastPing !== null && Date.now() - lastPing > MOD_LIVENESS_STALE_MS;
+      })();
+
+      const res = await dispatch(req, tools, prompts, ctx, mode === "bundled"
+        ? () => {
+            const raw = rawSessionByPid.get(process.ppid);
+            return raw ? trimHostContext({ sessionID: raw, agent: "" }) : undefined;
+          }
+        : undefined);
       if (res === null || isNotification) continue;
 
       // Surface the setup warning on the first tools/call response so the
@@ -482,15 +495,24 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
       // so this is a backup for when hooks are missing or fail. Cleared after
       // one surfacing. In bundled mode the same slot carries the disabled-mod
       // warning instead (the plugin regime has no version-skew surface).
-      if (req.method === "tools/call" && !res.error) {
-        const warning = mode === "standalone" ? versionWarning : modSilentWarning;
+      if (isToolsCall && !res.error) {
+        let warning: string | null;
+        if (mode === "standalone") {
+          warning = versionWarning;
+        } else {
+          // Measured pre-call (above); surfaced once per session.
+          warning = modSilentAtCall
+            ? "The thatch plugin's mod has not pinged in a while, so its nudges and context injection are probably NOT being delivered (hooks may be disabled by disableAllHooks, --safe-mode, or a managed allowManagedModsOnly setting). Tell the user their thatch plugin is not delivering."
+            : null;
+          if (warning) console.error(`[thatch] ${warning}`);
+        }
         if (warning) {
           const content = res.result?.content;
           if (Array.isArray(content) && content[0]?.text != null) {
             content[0].text = `[thatch] ${warning}\n\n${content[0].text}`;
           }
           if (mode === "standalone") versionWarning = null;
-          else modSilentWarning = null;
+          else modWarningDelivered = true;
         }
       }
 
@@ -567,6 +589,7 @@ async function dispatch(
   tools: Map<string, CompiledTool>,
   prompts: Map<string, ActionDef>,
   ctx: CoreContext,
+  hostContextFactory?: (validated: Record<string, unknown>) => HostToolContext | undefined,
 ): Promise<JsonRpcResponse | null> {
   const { id, method } = req;
 
@@ -618,7 +641,7 @@ async function dispatch(
         }
 
         try {
-          const text = await compiled.def.execute(validated, ctx);
+          const text = await compiled.def.execute(validated, ctx, hostContextFactory?.(validated));
           return ok(id, {
             isError: false,
             content: [{ type: "text", text }],

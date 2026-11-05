@@ -61,6 +61,9 @@ export type PluginLifecycleEvent = {
   args?: Record<string, unknown>;
   /** The tool's result text (the buffer event), serialized by the mod. */
   result?: string;
+  /** Main-conversation call (the mod's agentId filter) - gates the WORK
+   * mark; the BUFFER takes every non-meta call either way. */
+  isMain?: boolean;
   /** The turn was started by the mod's own wake submission ($.prompt.submit
    *  after a chat-wake poll hit) - synthetic-trigger provenance for the
    *  alert machine (a wake's round is bookkeeping, never user-waited
@@ -120,15 +123,14 @@ export function createPluginLifecycle(deps: PluginLifecycleDeps) {
         case "realwork": {
           // The buffer push and the alert bookkeeping share this site (the
           // opencode coupling: the extraction buffer's push is where real
-          // work is marked). The mod forwards every main-conversation tool
-          // call WITH its input and result; the server owns ALL the
-          // filtering:
-          // - the buffer takes every non-meta tool (the extraction buffer's
-          //   own rule: mcp__thatch__* excluded, todowrite/question BUFFERED);
-          // - the WORK mark excludes the no-work tools on top (todowrite/
-          //   question did nothing the user waits for).
-          // Subagent tool calls buffer under the same session key - they
-          // carry extractable facts (issue #22's NOTES: arguably desirable).
+          // work is marked). The mod forwards EVERY tool call with its
+          // input and result; the server owns ALL the filtering:
+          // - the buffer takes every non-meta tool under the SESSION key
+          //   (subagent calls included - they carry extractable facts,
+          //   issue #22's NOTES: arguably desirable);
+          // - the WORK mark is main-conversation-only (isMain, the mod's
+          //   agentId filter) and excludes the no-work tools on top
+          //   (todowrite/question did nothing the user waits for).
           if (!event.tool || isMetaToolName(event.tool) || event.tool.startsWith("mcp__thatch__")) {
             // Our OWN tool traffic: the SAVE gate - a memory_remember that
             // actually saved drains the queue and resets the counter (the
@@ -146,7 +148,7 @@ export function createPluginLifecycle(deps: PluginLifecycleDeps) {
             tool_input: event.args ?? {},
             tool_response: event.result ?? "",
           }]);
-          if (!isNoWorkTool(event.tool)) alerts.sessionRealWork(sid);
+          if (event.isMain !== false && !isNoWorkTool(event.tool)) alerts.sessionRealWork(sid);
           return { text: "" };
         }
 
