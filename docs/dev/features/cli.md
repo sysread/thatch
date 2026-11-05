@@ -1,6 +1,6 @@
 # CLI (bin/thatch)
 
-The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection and writing, MCP server startup, hook commands for MCP hosts, the setup installer, session archaeology over the opencode database, and a window on the cross-session chat directory (read-only except `chat broadcast`).
+The thatch CLI entry is `bin/thatch`, a thin dispatcher: it resolves argv against the subcommand registry in `src/cli/registry.ts`, handles the help and version forms, opens the database, and hands off. Every subcommand is a `Subcommand` object (`src/cli/types.ts`: name, one-line summary, `usage()` returning synopsis + flag triplets + notes, and `run(args, ctx)`); the commands live in `src/cli/commands/` grouped by cohesion, and the shared help renderer (`src/cli/help.ts`) turns the registry and each `SubUsage` into uniform, column-aligned pages. The CLI provides memory inspection and writing, MCP server startup, hook commands for MCP hosts, the setup installer, session archaeology over the opencode database, and a window on the cross-session chat directory (read-only except `chat broadcast`).
 
 ## Subcommands
 
@@ -22,22 +22,59 @@ The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection an
 | `flush-predictions [--json]` | none | `--json` | JSON | Standalone prediction-only nudge |
 | `setup --claude [--cursor] [--local\|--global] [--skills-only [dir]] [--mcp-json]` | none | `--claude`, `--cursor`, `--global`, `--local`, `--skills-only [dir]`, `--mcp-json` | none | Install config + instructions + hooks + skills; `--skills-only <dir>` installs into any directory; `--mcp-json` prints the server config as JSON |
 | `session list/get/transcript/search` | per subcommand | `-s/--session`, `--id`, `--after`, `--before`, `--regex`, `--limit` | none | Read-only archaeology on the opencode session database (JSONL output) |
-| `chat list` | none | `--recent`, `--stale [N\|all]` | none | Registered chat sessions: name, human-readable age, status, project, topic |
+| `chat list` | none | `--recent`, `--stale [N\|all]`, `--json`, `--host-id ID` (repeatable) | none | Registered chat sessions: name, human-readable age, status, project, topic |
 | `chat tail` | none | `--once`, `--pretty`, `--limit N\|all`, `--match RE` (repeatable), `--from NAME`, `--to NAME`, `--since DT`, `--until DT` | none | Follow cross-session chat: sent and read events as a JSONL log (`--pretty` for email-style cards instead). Backlog defaults to the last 20 messages; filters apply to follow mode too. |
-| (unknown) | none | none | none | Print usage, exit 1 |
+| (unknown) | none | none | none | Print the global subcommand list, exit 1 |
+
+## Help pages
+
+Help renders from the registry, not from hand-maintained text. The global page lists every subcommand with its one-line summary:
+
+```text
+$ thatch help
+USAGE
+  thatch --version, -v      Print version and exit
+  thatch help [sub]         Print help for thatch or one subcommand
+  ...
+  thatch stores             List all stores
+  ...
+```
+
+A help flag after a subcommand shows that subcommand's page - synopsis, flag triplets, and note paragraphs, all column-aligned by the shared renderer:
+
+```text
+$ thatch show --help
+USAGE
+  thatch show <label> [store]
+
+  Display a memory by label
+```
+
+Namespaces list their children; the deepest resolved command wins for a help flag (`thatch session get -h` shows get's page). Adding a subcommand is adding a `Subcommand` object to the registry - its help page and listing row come for free.
 
 ## Global behavior
 
 - `--version` and `-v` print the package version and exit 0.
-- `-h` and `--help` print usage and exit 0. The check runs before the DB
-  is opened and before any subcommand dispatch, and scans the WHOLE
-  argument list - not just the leading flags - so `thatch chat list -h`
-  and `thatch -h chat list` show usage instead of executing. Explicit
-  help exits 0 where a usage error exits 1.
+- Help is per command. `thatch --help`, `thatch -h`, `thatch help`, and
+  bare `thatch` print the global page: the subcommand list with one-line
+  summaries plus the version and help forms. A help flag BEFORE the
+  subcommand token (`thatch -h chat list`) also prints the global page.
+  A help flag AFTER a subcommand (`thatch chat list -h`) prints that
+  subcommand's own page: its synopsis, flag triplets, and notes. For a
+  namespace, the page names the child commands; the deepest resolved
+  command wins (`thatch session get -h` shows get's page). `thatch help
+  <sub...>` shows any subcommand's page by name, including nested paths
+  (`thatch help chat list`). All help goes to stderr, exits 0, and
+  produces no stdout. The check runs before the DB is opened and before
+  any subcommand dispatch.
 - No other short flags. No subcommand aliases.
-- Unknown command or missing required arg calls `usage()` and exits 1.
-- Args are positional, parsed by hand from `process.argv.slice(2)`. No arg-parsing library.
-- DB opened once at startup, closed at end (except `mcp` which closes early).
+- Unknown command, bare `thatch`, or an unknown `help` target prints the
+  global page and exits 1; a missing required argument prints that
+  subcommand's own page and exits 1.
+- Args are positional, parsed by hand from `process.argv.slice(2)`. No arg-parsing library; the shared value-flag readers are `src/cli/args.ts`.
+- DB opened once by the dispatcher after help handling, closed when
+  `run()` returns (except `mcp` and `chat tail`, which close it
+  themselves).
 - Stores default to git remote detected by `detectRepo()`; "unknown" (no git repo, or a deleted project directory with no cache entry) degrades to "global". "global" is the shared store. "all" (search only) means project + global.
 
 ## remember
@@ -45,9 +82,10 @@ The thatch CLI is a Bun script at `bin/thatch`. It provides memory inspection an
 The CLI's memory write path. The memory_remember tool's `execute()` in
 `src/tool-defs.ts` is the single implementation - store resolution, label
 derivation, the write-time dedup cross-check, and the overwrite rules -
-so the CLI cannot silently differ from the tool. `bin/thatch` is only the
-dispatcher; input parsing lives in `src/memory-write.ts` (in src/ because
-bin/thatch is outside tsconfig, the same split as `src/flush.ts`).
+so the CLI cannot silently differ from the tool. The `remember`
+Subcommand's run body is only the dispatcher; input parsing lives in
+`src/memory-write.ts` (in src/ so bun test can reach it, the same split
+as `src/flush.ts`).
 
 - Content: positional words joined (quoting optional), or piped stdin
   when no positional content is present (no pipe = error naming both
@@ -78,7 +116,8 @@ A window on the cross-session chat directory ([cross-session-chat.md](cross-sess
 
 - `chat list` renders the roster as aligned columns under a header row
   (NAME/SESSION ID/AGE/STATUS/PROJECT/TOPIC), colorized only when stdout
-  is a TTY (`formatChatRoster()` in `bin/thatch`; pipes and QA runners
+  is a TTY (`formatChatRoster()` in `src/cli/commands/chat.ts`; pipes and
+  QA runners
   get plain text). Rows are split into Active, Recent, and Stale
   sections by `splitChatRoster()` (it takes the open-tab set, so fresh
   opencode rows split into open versus recent); the status column is
@@ -174,7 +213,8 @@ process; the registry itself is `src/env-knobs.ts`.
 
 ## Source files
 
-- `bin/thatch` — the CLI (Bun script)
+- `bin/thatch` — the CLI entry: a thin dispatcher (argv resolution, help and version forms, DB lifecycle)
+- `src/cli/` — the registry, the `Subcommand`/`FlagSpec`/`SubUsage` types, the shared help renderer, arg helpers, and the per-group command modules under `src/cli/commands/`
 - `bin/release` — release helper (bash, separate from the main CLI)
 
 ## Interactions with other features
@@ -190,9 +230,10 @@ process; the registry itself is `src/env-knobs.ts`.
 
 ## Key invariants
 
-- No arg-parsing library. Args are positional, parsed by hand from `process.argv.slice(2)`.
-- `--version`/`-v` prints the version; `-h`/`--help` prints usage from anywhere in the argument list (checked upstream of dispatch, before the DB opens) and exits 0. No other short flags. No subcommand aliases.
-- DB opened once at startup, closed at end (except `mcp` which closes early).
+- No arg-parsing library. Args are positional, parsed by hand from `process.argv.slice(2)`; the shared value-flag readers live in `src/cli/args.ts`.
+- `--version`/`-v` prints the version and exits 0. Help is per command: the global page (subcommand list) for help before the subcommand or via `thatch help` with no target; the named subcommand's page for a help flag after it or `thatch help <sub...>`. Help exits 0, goes to stderr, and is checked upstream of dispatch, before the DB opens. No other short flags. No subcommand aliases.
+- Every subcommand is a `Subcommand` in the registry (`src/cli/registry.ts`); the switch-based dispatcher is gone. Help pages render from the `SubUsage` triplet data - no hand-maintained padding.
+- DB opened once after help handling, closed when `run()` returns (except `mcp` and `chat tail`, which close it themselves).
 - Store name auto-detected from git remote. "global" is the shared store. "all" (search only) means project + global.
-- Unknown command or missing required arg calls `usage()` and exits 1.
+- Unknown command, bare `thatch`, or an unknown `help` target prints the global page and exits 1; a missing required argument prints that subcommand's page and exits 1.
 - `prime` searches PATH in order: `opencode`, `agent`, `claude`. Uses the first found.

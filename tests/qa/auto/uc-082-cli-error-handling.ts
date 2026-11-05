@@ -2,14 +2,16 @@ import { $ } from "bun";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 
 /**
- * UC-082: CLI error handling and help flags.
+ * UC-082: CLI error handling and help.
  *
  * Automatable: pure CLI calls testing three error paths (unquoted
  * multi-word query, bogus store name, missing label argument) plus the
- * help flags. Errors exit non-zero with actionable messages, not stack
- * traces. -h/--help print usage and exit 0 from anywhere in the
- * argument list - before or after the subcommand - without executing
- * the subcommand.
+ * help system. Errors exit non-zero with actionable messages, not stack
+ * traces. Help is per command: a help flag BEFORE the subcommand (or as
+ * the whole command, or via `thatch help`) prints the global subcommand
+ * list and exits 0; a help flag AFTER a subcommand prints that
+ * subcommand's own page - its synopsis, flags, and notes - and exits 0.
+ * A bad command prints the global list and exits 1.
  */
 
 const useCase: UseCase = {
@@ -23,17 +25,23 @@ const useCase: UseCase = {
     "2. Run `thatch search \"query\" bogus-store` (valid query, nonexistent store).",
     "3. Run `thatch show` (missing label argument).",
     "4. Run `thatch forget` (missing label argument).",
-    "5. Run `thatch` with no arguments (unknown/no command).",
-    "6. Run `thatch chat list -h` (help flag AFTER the subcommand).",
-    "7. Run `thatch -h chat list` (help flag BEFORE the subcommand).",
-    "8. Run `thatch --help` (help as the whole command).",
+    "5. Run `thatch` with no arguments.",
+    "6. Run `thatch bogus` (unknown subcommand).",
+    "7. Run `thatch --help` and `thatch help` (global help forms).",
+    "8. Run `thatch chat list --help` (per-subcommand help).",
+    "9. Run `thatch session get -h` (per-subcommand help, short form).",
+    "10. Run `thatch help chat list` (help by name, nested path).",
+    "11. Run `thatch -h chat list` (help flag BEFORE the subcommand).",
   ].join("\n"),
   expected: [
     "- Step 1 exits non-zero with an error message telling the user to quote the query.",
     "- Step 2 exits non-zero with an error message listing the stores that do exist.",
-    "- Steps 3-5 call usage() and exit 1.",
-    "- Steps 6-8 print USAGE, exit 0, and produce no stdout (the subcommand",
-    "  does not run; usage goes to stderr).",
+    "- Steps 3-4 print that subcommand's own usage page to stderr and exit 1.",
+    "- Steps 5-6 print the global subcommand list to stderr and exit 1.",
+    "- Steps 7-11 print help to stderr, exit 0, and produce no stdout (help is",
+    "  never stdout data). Steps 8-10 show the named subcommand's page",
+    "  (synopsis contains the command path); steps 7 and 11 show the global",
+    "  list (contains `thatch stores`).",
     "- No command produces a stack trace or silent success on bad input.",
   ].join("\n"),
 
@@ -65,58 +73,55 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // Step 3: missing label for show
-    const r3 = await $`${bin} show`.env(env).quiet().nothrow();
-    if (r3.exitCode === 0) {
-      console.log("  FAIL: `thatch show` with no label should exit non-zero");
-      return "FAIL";
-    }
-    const err3 = r3.stderr.toString();
-    if (!err3.includes("USAGE")) {
-      console.log(`  FAIL: missing label should print usage: ${err3}`);
-      return "FAIL";
-    }
-
-    // Step 4: missing label for forget
-    const r4 = await $`${bin} forget`.env(env).quiet().nothrow();
-    if (r4.exitCode === 0) {
-      console.log("  FAIL: `thatch forget` with no label should exit non-zero");
-      return "FAIL";
-    }
-    const err4 = r4.stderr.toString();
-    if (!err4.includes("USAGE")) {
-      console.log(`  FAIL: missing label should print usage: ${err4}`);
-      return "FAIL";
+    // Steps 3-4: missing label prints THAT subcommand's usage page
+    for (const cmd of ["show", "forget"]) {
+      const r = await $`${bin} ${cmd}`.env(env).quiet().nothrow();
+      if (r.exitCode === 0) {
+        console.log(`  FAIL: \`thatch ${cmd}\` with no label should exit non-zero`);
+        return "FAIL";
+      }
+      const err = r.stderr.toString();
+      if (!err.includes("USAGE") || !err.includes(`thatch ${cmd}`)) {
+        console.log(`  FAIL: missing label should print ${cmd}'s own usage page: ${err}`);
+        return "FAIL";
+      }
     }
 
-    // Step 5: no arguments
-    const r5 = await $`${bin}`.env(env).quiet().nothrow();
-    if (r5.exitCode === 0) {
-      console.log("  FAIL: `thatch` with no args should exit non-zero");
-      return "FAIL";
-    }
-    const err5 = r5.stderr.toString();
-    if (!err5.includes("USAGE")) {
-      console.log(`  FAIL: no args should print usage: ${err5}`);
-      return "FAIL";
+    // Steps 5-6: no arguments and an unknown subcommand print the global
+    // subcommand list, exit 1.
+    for (const probe of [[], ["bogus"]] as string[][]) {
+      const r = await $`${bin} ${probe}`.env(env).quiet().nothrow();
+      if (r.exitCode === 0) {
+        console.log(`  FAIL: \`thatch ${probe.join(" ")}\` should exit non-zero`);
+        return "FAIL";
+      }
+      const err = r.stderr.toString();
+      if (!err.includes("USAGE") || !err.includes("thatch stores")) {
+        console.log(`  FAIL: should print the global subcommand list: ${err}`);
+        return "FAIL";
+      }
     }
 
-    // Steps 6-8: help flags print usage, exit 0, and never execute the
-    // subcommand. Usage goes to stderr, so empty stdout proves the roster
-    // (or any subcommand output) never ran.
-    const helpProbes: Array<[string, string[]]> = [
-      ["thatch chat list -h", ["chat", "list", "-h"]],
-      ["thatch -h chat list", ["-h", "chat", "list"]],
-      ["thatch --help", ["--help"]],
+    // Steps 7-11: help prints to stderr, exits 0, and never executes a
+    // subcommand (empty stdout proves it). The global forms show the
+    // subcommand list; a help flag after a subcommand shows that page.
+    const helpProbes: Array<{ label: string; argv: string[]; page: string }> = [
+      { label: "thatch --help", argv: ["--help"], page: "thatch stores" },
+      { label: "thatch help", argv: ["help"], page: "thatch stores" },
+      { label: "thatch -h chat list", argv: ["-h", "chat", "list"], page: "thatch stores" },
+      { label: "thatch chat list --help", argv: ["chat", "list", "--help"], page: "thatch chat list" },
+      { label: "thatch session get -h", argv: ["session", "get", "-h"], page: "thatch session get" },
+      { label: "thatch help chat list", argv: ["help", "chat", "list"], page: "thatch chat list" },
     ];
-    for (const [label, argv] of helpProbes) {
+    for (const { label, argv, page } of helpProbes) {
       const r = await $`${bin} ${argv}`.env(env).quiet().nothrow();
       if (r.exitCode !== 0) {
         console.log(`  FAIL: \`${label}\` should exit 0, got ${r.exitCode}`);
         return "FAIL";
       }
-      if (!r.stderr.toString().includes("USAGE")) {
-        console.log(`  FAIL: \`${label}\` should print usage to stderr`);
+      const err = r.stderr.toString();
+      if (!err.includes("USAGE") || !err.includes(page)) {
+        console.log(`  FAIL: \`${label}\` should print the ${page} page to stderr: ${err}`);
         return "FAIL";
       }
       if (r.stdout.toString().length > 0) {
