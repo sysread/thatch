@@ -1,60 +1,118 @@
-// chat.message nudge tiers from plugin.test.ts: the recall, prediction,
-// and behavior auto-fires plus the compaction guard, all driven through
-// the shared plugin runtime hooks.
+// chat.message nudge tiers from plugin.test.ts, re-based onto the v2
+// harness (the drop-v1 plan's Phase A-prime): the recall, prediction, and
+// behavior auto-fires plus the compaction guard, driven through the v2
+// prompt + context hook pair. On v2 the prompt hook computes a turn's
+// injections and the context hook injects them into the outbound request's
+// user message; assertions read the injected content parts (v1 read
+// synthetic output.parts). The compaction-part suppression tests are
+// v1-vehicle residue and live in plugin-v1-mechanism.test.ts.
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
+import { setup } from "../src/opencode/v2";
 import {
-  server,
-  setupPluginHarness,
-  teardownPluginHarness,
-} from "./mocks/plugin-harness";
+  addedTools,
+  compactionHook,
+  contextHook,
+  makeContext,
+  promptHook,
+  queueEvent,
+  SESSION_DIR,
+  setupTestEnv,
+  teardownTestEnv,
+  toolAfterHook,
+} from "./mocks/opencode-v2-harness";
 
-let hooks: Awaited<ReturnType<typeof server>>;
+// These tests pump async events through the v2 adapter harness; under a
+// loaded CI runner the pump can lag. Bun's default per-test timeout is 5s
+// with no margin for that (the 2026-11-03 fleet-contention CI reds). 90s =
+// expected (ms-scale pump handling) x ~900 headroom, above the harness
+// waitFor deadline so real hangs report the poll message.
+setDefaultTimeout(90_000);
 
-beforeAll(async () => {
-  hooks = await setupPluginHarness();
+let cleanup: (() => Promise<void>) | undefined;
+
+beforeEach(() => {
+  setupTestEnv();
 });
 
-afterAll(() => {
-  teardownPluginHarness();
+afterEach(async () => {
+  if (cleanup) await cleanup();
+  cleanup = undefined;
+  await teardownTestEnv();
 });
 
-// ---------------------------------------------------------------------------
-// Recall nudge (prompt-aware, via chat.message hook)
-// ---------------------------------------------------------------------------
+// The v2 bus envelope for a session event: payload in `data`, and a
+// location so the pump's directory filter routes it to this instance.
+const sessionEvent = (type: string, data: Record<string, unknown>) => ({
+  type,
+  location: { directory: SESSION_DIR },
+  data: { ...data },
+});
 
-describe("recall nudge via chat.message", () => {
+const toolCtx = (sessionID: string) => ({ sessionID, agent: "general" });
+
+// Seed a prediction via the adapter's own tool so embeddings come from the
+// mocked BgeEmbeddingModel. The matcher text is the raw context; the prompt
+// hook embeds the user's prompt with queryEmbed (QUERY_PREFIX stripped by
+// the mock), so identical text hits cosine ~1.0.
+const seedPrediction = async (matcher: string, prediction: string) => {
+  const update = addedTools.find((t) => t.name === "thatch_prediction_update")!;
+  await update.execute({ matcher, prediction, signal: "create", rationale: "seeded by test", store: "global" }, toolCtx("ses_seeder"));
+};
+
+const seedBehavior = async (situation: string, behavior: string) => {
+  const codify = addedTools.find((t) => t.name === "thatch_behavior_codify")!;
+  await codify.execute({ situation, behavior, rationale: "seeded by test" }, toolCtx("ses_seeder"));
+};
+
+// Seed the recall memory the v1 shared harness seeded at boot: the tool
+// embeds "# {label}\n\n{content}", so a prompt must match that full text
+// for the hash-based mock to produce a matching vector.
+const seedMemory = async () => {
+  const remember = addedTools.find((t) => t.name === "thatch_memory_remember")!;
+  await remember.execute({ label: "test-coverage", content: "test coverage metrics and gaps", store: "global" }, toolCtx("ses_seeder"));
+};
+
+/**
+ * Drives one v2 turn: the prompt hook computes the injections, then the
+ * context hook applies them to a mocked model request whose user message
+ * text matches the prompt (the adapter's binding rule). Returns the
+ * injected content parts - on v2 these are plain {type:"text", text} parts
+ * appended after the user's own prompt part (v1's synthetic output.parts).
+ */
+const runTurn = async (sessionID: string, text: string, messageID?: string) => {
+  await promptHook!({ sessionID, messageID: messageID ?? `msg_${sessionID}`, prompt: { text } });
+  const request = {
+    sessionID,
+    system: [],
+    messages: [{ role: "user", content: [{ type: "text", text }] }],
+  };
+  await contextHook!(request);
+  return (request.messages[0].content as { type: string; text: string }[]).slice(1);
+};
+
+describe("recall nudge via the prompt hook", () => {
   test("surfaces a recall nudge when prompt matches a stored memory", async () => {
-    // The tool embeds "# {label}\n\n{content}", so the prompt must match
-    // that full text for the hash-based mock to produce a matching vector.
-    const output: any = {
-      message: { id: "msg_recall_1" },
-      parts: [{ type: "text", text: "# test-coverage\n\ntest coverage metrics and gaps" }],
-    };
-    await hooks["chat.message"]!({ sessionID: "ses_recall", messageID: "msg_recall_1" } as any, output);
-    expect(output.parts.length).toBe(2);
-    expect(output.parts[1].type).toBe("text");
-    expect(output.parts[1].synthetic).toBe(true);
-    expect(output.parts[1].text).toContain("test-coverage");
-    expect(output.parts[1].text).toContain("thatch_memory_recall");
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await seedMemory();
+    const injections = await runTurn("ses_recall", "# test-coverage\n\ntest coverage metrics and gaps");
+    expect(injections.length).toBe(1);
+    expect(injections[0].type).toBe("text");
+    expect(injections[0].text).toContain("test-coverage");
+    expect(injections[0].text).toContain("thatch_memory_recall");
   });
 
   test("no nudge when prompt does not match any memory", async () => {
-    const output: any = {
-      message: { id: "msg_recall_2" },
-      parts: [{ type: "text", text: "completely unrelated cooking recipe ideas" }],
-    };
-    await hooks["chat.message"]!({ sessionID: "ses_no_match", messageID: "msg_recall_2" } as any, output);
-    expect(output.parts.length).toBe(1);
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const injections = await runTurn("ses_no_match", "completely unrelated cooking recipe ideas");
+    expect(injections.length).toBe(0);
   });
 
   test("no nudge for short prompts even if content would match", async () => {
-    const output: any = {
-      message: { id: "msg_recall_3" },
-      parts: [{ type: "text", text: "ok" }],
-    };
-    await hooks["chat.message"]!({ sessionID: "ses_short", messageID: "msg_recall_3" } as any, output);
-    expect(output.parts.length).toBe(1);
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await seedMemory();
+    const injections = await runTurn("ses_short", "ok");
+    expect(injections.length).toBe(0);
   });
 
   test("task-dispatched sub-agent sessions get no recall nudge", async () => {
@@ -62,106 +120,83 @@ describe("recall nudge via chat.message", () => {
     // extraction pipeline) have restricted tool lists that exclude the
     // thatch tools - nudging them only produces "No tool named" error
     // rounds (opencode DB analysis, Sept 2026).
-    await hooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "ses_subagent_recall", parentID: "ses_subagent_parent" } } } as any,
-    });
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await seedMemory();
+    await queueEvent(sessionEvent("session.created", {
+      sessionID: "ses_subagent_recall",
+      info: { id: "ses_subagent_recall", parentID: "ses_subagent_parent" },
+    }));
 
-    const output: any = {
-      message: { id: "msg_subagent_recall" },
-      parts: [{ type: "text", text: "# test-coverage\n\ntest coverage metrics and gaps" }],
-    };
-    await hooks["chat.message"]!({
-      sessionID: "ses_subagent_recall", messageID: "msg_subagent_recall",
-    } as any, output);
-    expect(output.parts.length).toBe(1);
+    const injections = await runTurn("ses_subagent_recall", "# test-coverage\n\ntest coverage metrics and gaps");
+    expect(injections.length).toBe(0);
   });
 
   test("task-dispatched sub-agent sessions get no extraction nudge", async () => {
-    await hooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_subagent_extract", callID: "sx1", args: { command: "ls" } },
-      { title: "list files", output: "file.txt", metadata: {} },
-    );
-    await hooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "ses_subagent_extract", parentID: "ses_subagent_parent2" } } } as any,
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_subagent_extract",
+      input: { command: "ls" },
+      status: "completed",
+      result: { content: "file.txt" },
     });
+    await queueEvent(sessionEvent("session.created", {
+      sessionID: "ses_subagent_extract",
+      info: { id: "ses_subagent_extract", parentID: "ses_subagent_parent2" },
+    }));
 
-    const output: any = {
-      message: { id: "msg_subagent_extract" },
-      parts: [{ type: "text", text: "next prompt for the sub-agent session" }],
-    };
-    await hooks["chat.message"]!({
-      sessionID: "ses_subagent_extract", messageID: "msg_subagent_extract",
-    } as any, output);
-    expect(output.parts.length).toBe(1);
+    const injections = await runTurn("ses_subagent_extract", "next prompt for the sub-agent session");
+    expect(injections.length).toBe(0);
   });
 
   test("pending extraction does not block the recall nudge (no extraction nudge exists)", async () => {
     // The old extraction nudge took priority and suppressed recall whenever
     // the buffer was non-empty - tool-dense sessions starved recall. With
     // extraction plugin-driven (no nudge), recall fires independently.
-    await hooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_priority", callID: "c1", args: { command: "ls" } },
-      { title: "list files", output: "file.txt", metadata: {} },
-    );
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_priority",
+      input: { command: "ls" },
+      status: "completed",
+      result: { content: "file.txt" },
+    });
 
-    const output: any = {
-      message: { id: "msg_priority" },
-      parts: [{ type: "text", text: "test coverage metrics and gaps" }],
-    };
-    await hooks["chat.message"]!({ sessionID: "ses_priority", messageID: "msg_priority" } as any, output);
-    // No extraction nudge part ever appears...
-    for (const part of output.parts) {
+    const injections = await runTurn("ses_priority", "test coverage metrics and gaps");
+    // No extraction nudge injection ever appears...
+    for (const part of injections) {
       expect(part.text ?? "").not.toContain("thatch-fact-extractor");
     }
     // ...and the buffered interaction is still served for extraction.
-    const served = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+    const payloadTool = addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
+    const served = await payloadTool.execute(
       { session_id: "ses_priority" },
-      { sessionID: "ses_ext_priority" },
+      { sessionID: "ses_ext_priority", agent: "general" },
     );
-    expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("file.txt");
+    expect(String((served as any)?.content ?? "")).toContain("file.txt");
   });
 });
 
-// ---------------------------------------------------------------------------
-// Prediction auto-fire (prompt-aware, via chat.message hook)
-// ---------------------------------------------------------------------------
-
-describe("prediction auto-fire via chat.message", () => {
+describe("prediction auto-fire via the prompt hook", () => {
   test("surfaces a prediction nudge when prompt matches a stored matcher", async () => {
-    // Seed a prediction via the server's own tool so embeddings come from
-    // the mocked BgeEmbeddingModel. The matcher text is the raw context;
-    // the chat.message hook embeds the user's prompt with queryEmbed
-    // (QUERY_PREFIX stripped by the mock), so identical text hits cosine ~1.0.
-    await hooks.tool!.thatch_prediction_update.execute({
-      matcher: "untangling a gnarly database migration plan",
-      prediction: "ask about prod scars and prior migrations before touching the schema",
-      signal: "create",
-      rationale: "user emphasized prod-history checks",
-    } as any, {} as any);
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const matcher = "untangling a gnarly database migration plan";
+    await seedPrediction(matcher, "ask about prod scars and prior migrations before touching the schema");
 
-    const output: any = {
-      message: { id: "msg_pred_1" },
-      parts: [{ type: "text", text: "untangling a gnarly database migration plan" }],
-    };
-    await hooks["chat.message"]!({ sessionID: "ses_pred_1", messageID: "msg_pred_1" } as any, output);
-    expect(output.parts.length).toBeGreaterThanOrEqual(2);
-    const predPart = output.parts.find((p: any) => p.text?.includes("User decision model"));
+    const injections = await runTurn("ses_pred_1", matcher);
+    expect(injections.length).toBeGreaterThanOrEqual(1);
+    const predPart = injections.find((p) => p.text?.includes("User decision model"));
     expect(predPart).toBeDefined();
-    expect(predPart.synthetic).toBe(true);
-    expect(predPart.text).toContain("[thatch]");
-    expect(predPart.text).toContain("you may prefer"); // 0-evidence verb
+    expect(predPart!.text).toContain("[thatch]");
+    expect(predPart!.text).toContain("you may prefer"); // 0-evidence verb
+    // v1 also asserted the part's synthetic flag; v2 injections are plain
+    // request content parts - the flag has no v2 subject.
   });
 
   test("no prediction nudge when prompt matches no matcher above threshold", async () => {
-    const output: any = {
-      message: { id: "msg_pred_2" },
-      parts: [{ type: "text", text: "completely unrelated cooking recipe ideas for dinner" }],
-    };
-    await hooks["chat.message"]!({ sessionID: "ses_pred_2", messageID: "msg_pred_2" } as any, output);
-    const predPart = output.parts.find((p: any) => p.text?.includes("User decision model"));
-    expect(predPart).toBeUndefined();
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const injections = await runTurn("ses_pred_2", "completely unrelated cooking recipe ideas for dinner");
+    expect(injections.find((p) => p.text?.includes("User decision model"))).toBeUndefined();
   });
 
   test("prediction nudge and recall nudge fire independently", async () => {
@@ -170,169 +205,78 @@ describe("prediction auto-fire via chat.message", () => {
     // seeded via the thatch_memory_remember tool (which embeds
     // "# {label}\n\n{content}"). Use that same text as the matcher so
     // findMatchers hits cosine ~1.0 with the same prompt text.
-    await hooks.tool!.thatch_prediction_update.execute({
-      matcher: "# test-coverage\n\ntest coverage metrics and gaps",
-      prediction: "prioritize coverage in CI before merging",
-      signal: "create",
-      rationale: "user said coverage matters",
-    } as any, {} as any);
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const text = "# test-coverage\n\ntest coverage metrics and gaps";
+    await seedMemory();
+    await seedPrediction(text, "prioritize coverage in CI before merging");
 
-    // Use a fresh sessionID so the compaction guard doesn't suppress.
-    const output: any = {
-      message: { id: "msg_pred_combined" },
-      parts: [{ type: "text", text: "# test-coverage\n\ntest coverage metrics and gaps" }],
-    };
-    await hooks["chat.message"]!({ sessionID: "ses_pred_combined", messageID: "msg_pred_combined" } as any, output);
+    const injections = await runTurn("ses_pred_combined", text);
     // Both the recall nudge (memory match) and the prediction nudge
-    // (matcher match) should fire as independent synthetic parts.
-    expect(output.parts.length).toBeGreaterThanOrEqual(3);
-    const recallPart = output.parts.find((p: any) => p.text?.includes("thatch_memory_recall"));
-    const predPart = output.parts.find((p: any) => p.text?.includes("User decision model"));
-    expect(recallPart).toBeDefined();
-    expect(predPart).toBeDefined();
+    // (matcher match) fire as independent injected parts.
+    expect(injections.length).toBeGreaterThanOrEqual(2);
+    expect(injections.find((p) => p.text?.includes("thatch_memory_recall"))).toBeDefined();
+    expect(injections.find((p) => p.text?.includes("User decision model"))).toBeDefined();
   });
 });
 
-describe("behavior auto-fire via chat.message", () => {
+describe("behavior auto-fire via the prompt hook", () => {
   test("surfaces a behavior nudge when prompt matches a stored behavior matcher", async () => {
-    // Seed a behavior via the server's own tool so embeddings come from
-    // the mocked BgeEmbeddingModel. Same pattern as the prediction auto-fire test.
-    await hooks.tool!.thatch_behavior_codify.execute({
-      situation: "about to import a new library into a project",
-      behavior: "check the whole codebase for an existing import of that library first",
-      rationale: "avoiding duplicate dependency imports",
-    } as any, {} as any);
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const situation = "about to import a new library into a project";
+    await seedBehavior(situation, "check the whole codebase for an existing import of that library first");
 
-    const output: any = {
-      message: { id: "msg_behavior_1" },
-      parts: [{ type: "text", text: "about to import a new library into a project" }],
-    };
-    await hooks["chat.message"]!({ sessionID: "ses_behavior_1", messageID: "msg_behavior_1" } as any, output);
-    expect(output.parts.length).toBeGreaterThanOrEqual(2);
-    const behaviorPart = output.parts.find((p: any) => p.text?.includes("Situational behaviors"));
+    const injections = await runTurn("ses_behavior_1", situation);
+    expect(injections.length).toBeGreaterThanOrEqual(1);
+    const behaviorPart = injections.find((p) => p.text?.includes("Situational behaviors"));
     expect(behaviorPart).toBeDefined();
-    expect(behaviorPart.synthetic).toBe(true);
-    expect(behaviorPart.text).toContain("[thatch]");
-    expect(behaviorPart.text).toContain("consider"); // 0-evidence verb
+    expect(behaviorPart!.text).toContain("[thatch]");
+    expect(behaviorPart!.text).toContain("consider"); // 0-evidence verb
+    // v1 also asserted the part's synthetic flag; v2 injections are plain
+    // request content parts - the flag has no v2 subject.
   });
 
   test("no behavior nudge when prompt matches no behavior matcher above threshold", async () => {
-    const output: any = {
-      message: { id: "msg_behavior_2" },
-      parts: [{ type: "text", text: "completely unrelated topic about cooking pasta from scratch" }],
-    };
-    await hooks["chat.message"]!({ sessionID: "ses_behavior_2", messageID: "msg_behavior_2" } as any, output);
-    const behaviorPart = output.parts.find((p: any) => p.text?.includes("Situational behaviors"));
-    expect(behaviorPart).toBeUndefined();
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const injections = await runTurn("ses_behavior_2", "completely unrelated topic about cooking pasta from scratch");
+    expect(injections.find((p) => p.text?.includes("Situational behaviors"))).toBeUndefined();
   });
 });
 
-describe("compaction guard for chat.message", () => {
-  test("chat.message skips nudges while session is compacting", async () => {
-    await hooks["experimental.session.compacting"]!(
-      { sessionID: "ses_guard" } as any,
-      { context: [] as string[] },
-    );
-
-    const output: any = {
-      message: { id: "msg_guard_1" },
-      parts: [{ type: "compaction", auto: true, overflow: false }],
-    };
-    await hooks["chat.message"]!({ sessionID: "ses_guard", messageID: "msg_guard_1" } as any, output);
-    expect(output.parts.length).toBe(1);
-  });
-
-  test("autocontinue clears the flag and nudges resume", async () => {
-    await hooks["experimental.compaction.autocontinue"]!({ sessionID: "ses_guard" } as any, { enabled: true } as any);
-
-    const output: any = {
-      message: { id: "msg_guard_2" },
-      parts: [{ type: "text", text: "untangling a gnarly database migration plan" }],
-    };
-    await hooks["chat.message"]!({ sessionID: "ses_guard", messageID: "msg_guard_2" } as any, output);
-    // The prediction nudge should fire (matcher seeded in earlier test).
-    expect(output.parts.length).toBe(2);
-    expect(output.parts[1].synthetic).toBe(true);
-    expect(output.parts[1].text).toContain("User decision model");
-  });
-
-  test("extraction nudge is also suppressed during compaction", async () => {
-    await hooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_guard_ext", callID: "c1", args: { command: "ls" } },
-      { title: "list files", output: "file.txt", metadata: {} },
-    );
-
-    await hooks["experimental.session.compacting"]!(
-      { sessionID: "ses_guard_ext" } as any,
-      { context: [] as string[] },
-    );
-
-    const output: any = {
-      message: { id: "msg_guard_ext" },
-      parts: [{ type: "compaction", auto: true, overflow: false }],
-    };
-    await hooks["chat.message"]!({ sessionID: "ses_guard_ext", messageID: "msg_guard_ext" } as any, output);
-    expect(output.parts.length).toBe(1);
-
-    // Clean up so the buffer doesn't leak into other tests.
-    await hooks["experimental.compaction.autocontinue"]!({ sessionID: "ses_guard_ext" } as any, { enabled: true } as any);
-  });
+describe("compaction guard on v2", () => {
+  // The v2 vehicle for arming the guard: the adapter's compaction hook
+  // (session.hook("compaction")) calls the runtime's onSessionCompacting.
+  const armCompacting = async (sessionID: string) => {
+    await compactionHook!({ sessionID, system: [] });
+  };
 
   test("session.compacted event clears the compacting flag (belt-and-suspenders)", async () => {
-    await hooks["experimental.session.compacting"]!(
-      { sessionID: "ses_guard_evt" } as any,
-      { context: [] as string[] },
-    );
+    // v2's compaction completion is session.compaction.ended (v1: the
+    // session.compacted event, translated by the adapter's pump).
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const matcher = "untangling a gnarly database migration plan";
+    await seedPrediction(matcher, "ask about prod scars and prior migrations before touching the schema");
+    await armCompacting("ses_guard_evt");
 
-    // Simulate compaction success via the event hook (not autocontinue).
-    await hooks.event!({ event: { type: "session.compacted", properties: { sessionID: "ses_guard_evt" } } } as any);
+    await queueEvent(sessionEvent("session.compaction.ended", { sessionID: "ses_guard_evt" }));
 
-    const output: any = {
-      message: { id: "msg_guard_evt" },
-      parts: [{ type: "text", text: "untangling a gnarly database migration plan" }],
-    };
-    await hooks["chat.message"]!({ sessionID: "ses_guard_evt", messageID: "msg_guard_evt" } as any, output);
+    const injections = await runTurn("ses_guard_evt", matcher);
     // Flag was cleared by the event, so nudges should fire.
-    expect(output.parts.length).toBe(2);
-    expect(output.parts[1].synthetic).toBe(true);
+    expect(injections.find((p) => p.text?.includes("User decision model"))).toBeDefined();
   });
 
-  test("compaction failure: non-compaction chat.message clears stale flag and resumes nudges", async () => {
-    await hooks["experimental.session.compacting"]!(
-      { sessionID: "ses_guard_fail" } as any,
-      { context: [] as string[] },
-    );
+  test("compaction failure: a non-compaction prompt clears stale flag and resumes nudges", async () => {
+    // Simulate compaction failure: no completion event. The next user
+    // message is a regular prompt (v1 detected "not a compaction message"
+    // by the absence of a compaction-type part - a part shape the v2 prompt
+    // hook cannot produce, so the flag simply clears on the next prompt).
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const matcher = "untangling a gnarly database migration plan";
+    await seedPrediction(matcher, "ask about prod scars and prior migrations before touching the schema");
+    await armCompacting("ses_guard_fail");
 
-    // Simulate compaction failure: no autocontinue, no session.compacted event.
-    // The next user message arrives with regular text parts (no compaction part).
-    const output: any = {
-      message: { id: "msg_guard_fail" },
-      parts: [{ type: "text", text: "untangling a gnarly database migration plan" }],
-    };
-    await hooks["chat.message"]!({ sessionID: "ses_guard_fail", messageID: "msg_guard_fail" } as any, output);
+    const injections = await runTurn("ses_guard_fail", matcher);
     // The stale flag was cleared because this is not a compaction message.
     // Nudges should fire (prediction nudge from seeded matcher).
-    expect(output.parts.length).toBe(2);
-    expect(output.parts[1].synthetic).toBe(true);
-    expect(output.parts[1].text).toContain("User decision model");
-  });
-
-  test("compaction summary message still suppresses nudges (has compaction part)", async () => {
-    await hooks["experimental.session.compacting"]!(
-      { sessionID: "ses_guard_sum" } as any,
-      { context: [] as string[] },
-    );
-
-    // A compaction-type part identifies the compaction summary generation message.
-    const output: any = {
-      message: { id: "msg_guard_sum" },
-      parts: [{ type: "compaction", auto: true, overflow: false }],
-    };
-    await hooks["chat.message"]!({ sessionID: "ses_guard_sum", messageID: "msg_guard_sum" } as any, output);
-    // Suppressed — tools are blocked during summary generation.
-    expect(output.parts.length).toBe(1);
-
-    // Clean up.
-    await hooks["experimental.compaction.autocontinue"]!({ sessionID: "ses_guard_sum" } as any, { enabled: true } as any);
+    expect(injections.find((p) => p.text?.includes("User decision model"))).toBeDefined();
   });
 });

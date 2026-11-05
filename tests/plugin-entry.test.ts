@@ -1,50 +1,69 @@
-// The former plugin.test.ts "plugin entry" describe, split by topic. This
-// file holds the hook wiring and shape tests (exports, tool registry, hook
-// presence, transforms, chat-tool transcript echo) and the trailing
-// skill-install / event-handler / delivery-guard wiring. The rest of the
-// block lives in plugin-extraction.test.ts (interaction buffering + payload
+// The former plugin.test.ts "plugin entry" describe, split by topic,
+// re-based onto the v2 harness (the drop-v1 plan's Phase A-prime): this file
+// holds the dual-entry shape tests (exports, tool registry, hook presence,
+// system/context transform, chat-tool transcript echo) and the trailing
+// skill-install / event-pump / delivery-guard wiring. The rest of the block
+// lives in plugin-extraction.test.ts (interaction buffering + payload
 // handshake), plugin-extraction-claims.test.ts (watcher journal reconcile +
 // claim scoping), and plugin-extraction-direct.test.ts (direct-extraction
 // child lifecycle).
 
-import { describe, test, expect, beforeAll, afterAll, setDefaultTimeout } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setup } from "../src/opencode/v2";
+import thatchPlugin, { server } from "../src/index";
 import {
-  promptAsyncCalls,
-  server,
-  setupPluginHarness,
-  teardownPluginHarness,
-} from "./mocks/plugin-harness";
+  addedTools,
+  compactionHook,
+  contextHook,
+  currentHarness,
+  makeContext,
+  queueEvent,
+  rpcEmitted,
+  SESSION_DIR,
+  sessionSyntheticCalls,
+  setupTestEnv,
+  teardownTestEnv,
+  toolAfterHook,
+  waitFor,
+} from "./mocks/opencode-v2-harness";
+import { TOAST_EVENT } from "../src/session-tab-shared";
 
-// This file boots the real plugin server (setup() rehydrates journals,
-// sweeps, and the chat poller - ~2.3s wall on macOS). Bun's default
-// per-test timeout is 5s with no margin for a loaded CI runner (the
-// 2026-11-03 fleet-contention CI reds were exactly this shape). 90s =
-// expected boot x ~40 headroom.
+// These tests pump async events through the v2 adapter harness; under a
+// loaded CI runner the pump can lag. Bun's default per-test timeout is 5s
+// with no margin for that (the 2026-11-03 fleet-contention CI reds). 90s =
+// expected (ms-scale pump handling) x ~900 headroom, above the harness
+// waitFor deadline so real hangs report the poll message.
 setDefaultTimeout(90_000);
 
+let cleanup: (() => Promise<void>) | undefined;
 
-let hooks: Awaited<ReturnType<typeof server>>;
-
-beforeAll(async () => {
-  hooks = await setupPluginHarness();
+beforeEach(() => {
+  setupTestEnv();
 });
 
-afterAll(() => {
-  teardownPluginHarness();
+afterEach(async () => {
+  if (cleanup) await cleanup();
+  cleanup = undefined;
+  await teardownTestEnv();
 });
 
 describe("plugin entry", () => {
-  test("exports a server function", () => {
+  test("exports a server function and the merged v2 default export", () => {
+    // The named v1 export survives Phase A-prime (the shim reads it), and
+    // the merged default export is what a v2 host validates: { id, setup }.
     expect(typeof server).toBe("function");
+    expect(typeof thatchPlugin.setup).toBe("function");
+    expect(typeof thatchPlugin.id).toBe("string");
+    expect(thatchPlugin.id.length).toBeGreaterThan(0);
   });
 
-  test("returns hooks with all expected tools", () => {
-    expect(hooks.tool).toBeDefined();
-    const names = Object.keys(hooks.tool!);
-    expect(names.sort()).toEqual([
+  test("registers all expected tools through the ToolEditor", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const names = addedTools.map((t) => t.name).sort();
+    expect(names).toEqual([
       "thatch_behavior_codify",
       "thatch_behavior_delete",
       "thatch_behavior_feedback",
@@ -78,6 +97,9 @@ describe("plugin entry", () => {
       "thatch_prediction_update",
       "thatch_session_get",
       "thatch_session_search",
+      // v2-only: the session-tab bridge has no v1 surface.
+      "thatch_session_tab",
+      "thatch_session_tab_close",
       "thatch_store_list",
       "thatch_watch_branch_create",
       "thatch_watch_cancel",
@@ -87,103 +109,129 @@ describe("plugin entry", () => {
     ]);
   });
 
-  test("has system transform hook", () => {
-    expect(typeof hooks["experimental.chat.system.transform"]).toBe("function");
+  test("has context (system) hook", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    expect(currentHarness.hooks["context"]).toBeDefined();
   });
 
-  test("has chat.message hook", () => {
-    expect(typeof hooks["chat.message"]).toBe("function");
+  test("has prompt hook", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    expect(currentHarness.hooks["prompt"]).toBeDefined();
   });
 
-  test("has compaction hook", () => {
-    expect(typeof hooks["experimental.session.compacting"]).toBe("function");
+  test("has compaction hook", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    expect(currentHarness.hooks["compaction"]).toBeDefined();
   });
 
-  test("has compaction autocontinue hook", () => {
-    expect(typeof hooks["experimental.compaction.autocontinue"]).toBe("function");
+  test("context hook appends to the request's system array", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const system: unknown[] = [];
+    await contextHook!({ sessionID: "ses_ctx", system, messages: [] });
+    expect(system.length).toBe(1);
+    expect((system[0] as { text: string }).text).toContain("Thatch provides persistent memory");
   });
 
-  test("has event hook", () => {
-    expect(typeof hooks.event).toBe("function");
-  });
-
-  test("system transform appends to system array", async () => {
-    const output = { system: [] as string[] };
-    await hooks["experimental.chat.system.transform"]!({} as any, output);
-    expect(output.system.length).toBe(1);
-    expect(output.system[0]).toContain("Thatch provides persistent memory");
-  });
-
-  test("chat.message prepends nudge when extraction is empty", async () => {
-    const output: any = { parts: [{ type: "text", text: "hello" }] };
-    await hooks["chat.message"]!({} as any, output);
-    expect(output.parts.length).toBe(1); // no nudge, buffer empty
+  test("prompt hook computes no nudge when extraction is empty", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const prompt = { text: "hello" };
+    await (currentHarness.hooks["prompt"]!)({ sessionID: "ses_clean", messageID: "msg_clean", prompt });
+    const request = {
+      sessionID: "ses_clean",
+      system: [],
+      messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+    };
+    await contextHook!(request);
+    // no nudge, buffer empty: the original prompt part is all the message carries
+    expect((request.messages[0].content as unknown[]).length).toBe(1);
   });
 
   test("compaction hook appends context and marks session as compacting", async () => {
-    const output = { context: [] as string[] };
-    await hooks["experimental.session.compacting"]!({ sessionID: "ses_compact_1" } as any, output);
-    expect(output.context.length).toBe(1);
-    expect(output.context[0]).toContain("Thatch persistent memory");
-    expect(output.context[0]).not.toContain("thatch_memory_recall");
+    // Shape delta vs v1: the v2 compaction hook injects the re-familiarization
+    // context through the request's system array (the full system prompt),
+    // not the v1 output.context string; the flag itself is pinned by the
+    // nudge-tiers compaction-guard tests.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const system: unknown[] = [];
+    await compactionHook!({ sessionID: "ses_compact_1", system });
+    expect(system.length).toBe(1);
+    expect((system[0] as { text: string }).text).toContain("Thatch provides persistent memory");
+    // v1 asserted the short re-familiarization string here ("not containing
+    // thatch_memory_recall"); the v2 adapter ships the FULL system prompt on
+    // the compaction request (a deliberate superset that names every tool),
+    // so the negative pin has no v2 subject.
   });
 
-  test("each tool has description and execute", () => {
-    for (const [name, t] of Object.entries(hooks.tool!)) {
-      expect(t.description, `${name} missing description`).toBeTruthy();
+  test("each tool has description and execute", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    for (const t of addedTools) {
+      expect(t.description, `${t.name} missing description`).toBeTruthy();
       expect(typeof t.description).toBe("string");
-      expect(typeof t.execute, `${name} missing execute`).toBe("function");
+      expect(typeof t.execute, `${t.name} missing execute`).toBe("function");
     }
   });
 
-  test("each tool has args schema", () => {
-    for (const [name, t] of Object.entries(hooks.tool!)) {
-      expect(t.args, `${name} missing args`).toBeDefined();
+  test("each tool has an input schema", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    for (const t of addedTools) {
+      expect(t.input, `${t.name} missing input schema`).toBeDefined();
     }
   });
 
-  test("dispose hook is defined", () => {
-    expect(typeof hooks.dispose).toBe("function");
+  test("dispose hook is defined", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    expect(typeof cleanup).toBe("function");
   });
 
-  test("has tool.execute.after hook", () => {
-    expect(typeof hooks["tool.execute.after"]).toBe("function");
+  test("has tool.execute.after hook", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    expect(currentHarness.hooks["execute.after"]).toBeDefined();
   });
 
   test("chat tool calls echo visible parts back into the transcript", async () => {
-    const before = promptAsyncCalls.length;
-    await hooks["tool.execute.after"]!(
-      { tool: "thatch_chat_send", sessionID: "ses_echo", callID: "ce1", args: { to: "Landru", body: "hello there" } },
-      { title: "chat send", output: "[sent] to Landru (ses_f6c9e9a0)\n\nThe recipient is nudged when its session is idle. If its host process is gone (stale in chat_list), the message waits unread - a dead session never reads it.", metadata: {} },
-    );
-    expect(promptAsyncCalls.length).toBe(before + 1);
-    const call = promptAsyncCalls[promptAsyncCalls.length - 1];
-    expect(call.path.id).toBe("ses_echo");
-    // noReply stores the part without starting a model turn; non-synthetic
-    // is what makes the TUI render it.
-    expect(call.body.noReply).toBe(true);
-    expect(call.body.parts[0].type).toBe("text");
-    expect(call.body.parts[0].text).toBe("[chat] to Landru: hello there");
-    expect(call.body.parts[0].synthetic).toBeUndefined();
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await toolAfterHook!({
+      tool: "thatch_chat_send",
+      sessionID: "ses_echo",
+      input: { to: "Landru", body: "hello there" },
+      status: "completed",
+      result: { content: "[sent] to Landru (ses_f6c9e9a0)\n\nThe recipient is nudged when its session is idle. If its host process is gone (stale in chat_list), the message waits unread - a dead session never reads it." },
+    });
+    // The echo is fire-and-forget; poll for the delivery.
+    await waitFor("the chat echo delivery", () => sessionSyntheticCalls.length === 1);
+    const call = sessionSyntheticCalls[0];
+    expect(call.sessionID).toBe("ses_echo");
+    // noReply routes to the resume:false synthetic - a synthetic inbox item
+    // that starts no model turn (the visible-bubble + no-turn contract).
+    expect(call.resume).toBe(false);
+    expect(call.text).toBe("[chat] to Landru: hello there");
   });
 
   test("failed chat sends and non-conversational chat tools do not echo", async () => {
-    const before = promptAsyncCalls.length;
-    await hooks["tool.execute.after"]!(
-      { tool: "thatch_chat_send", sessionID: "ses_echo", callID: "ce2", args: { to: "ghost", body: "hi" } },
-      { title: "chat send", output: `Not sent: No registered session named "ghost". Use chat_list to see who is available.`, metadata: {} },
-    );
-    await hooks["tool.execute.after"]!(
-      { tool: "thatch_chat_list", sessionID: "ses_echo", callID: "ce3", args: {} },
-      { title: "chat list", output: "[chat] 1 session registered", metadata: {} },
-    );
-    expect(promptAsyncCalls.length).toBe(before);
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await toolAfterHook!({
+      tool: "thatch_chat_send",
+      sessionID: "ses_echo",
+      input: { to: "ghost", body: "hi" },
+      status: "completed",
+      result: { content: `Not sent: No registered session named "ghost". Use chat_list to see who is available.` },
+    });
+    await toolAfterHook!({
+      tool: "thatch_chat_list",
+      sessionID: "ses_echo",
+      input: {},
+      status: "completed",
+      result: { content: "[chat] 1 session registered" },
+    });
+    // The echo delivery is fire-and-forget; settle before the negative assert.
+    await new Promise((r) => setTimeout(r, 150));
+    expect(sessionSyntheticCalls.length).toBe(0);
   });
 });
 
 describe("plugin entry", () => {
   test("installs skill files under the redirected config home", async () => {
-    const { readFileSync } = await import("node:fs");
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const skillPath = join(
       process.env.XDG_CONFIG_HOME!,
       "opencode", "skills", "thatch-fact-extractor", "SKILL.md",
@@ -210,40 +258,25 @@ describe("plugin entry", () => {
     expect(readFileSync(coordinatorPath, "utf8")).toContain("thatch-code-review");
   });
 
-  test("event handler calls client.session.prompt on session.created", async () => {
-    let promptCalled = false;
-    let promptArgs: any = null;
-
-    const mockClient = {
-      session: {
-        prompt: async (args: any) => {
-          promptCalled = true;
-          promptArgs = args;
-        },
-      },
-    };
-
-    const testHooks = await server({ client: mockClient, worktree: "/tmp/test" } as any);
-
-    await testHooks.event!({
-      event: {
-        type: "session.created",
-        properties: { info: { id: "test-session-123" } },
-      },
-    } as any);
-
-    expect(promptCalled).toBe(true);
-    expect(promptArgs.path.id).toBe("test-session-123");
-    expect(promptArgs.body.noReply).toBe(true);
-    expect(promptArgs.body.parts[0].type).toBe("text");
-    expect(promptArgs.body.parts[0].text).toContain("thatch");
-
-    testHooks.dispose?.();
+  test("session.created delivers the session-start reminder via the resume:false synthetic", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await queueEvent({
+      type: "session.created",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "test-session-123", info: { id: "test-session-123" } },
+    });
+    await waitFor("the session-start reminder", () =>
+      sessionSyntheticCalls.some((c: any) => c?.sessionID === "test-session-123" && String(c?.text).includes("thatch")),
+    );
+    const reminder = sessionSyntheticCalls.find((c: any) => c?.sessionID === "test-session-123");
+    // The noReply reminder must not wake execution.
+    expect(reminder?.resume).toBe(false);
+    expect(String(reminder?.text)).toContain("thatch");
   });
 
   test("delivery guard wiring: a wake into a deleted directory is skipped with a debug line", async () => {
     // Wiring-level, not a direct guardDelivery call: this drives the
-    // integrated path (server -> createRuntime -> guarded promptSession)
+    // integrated path (setup -> createRuntime -> guarded promptSession)
     // so a guard that is defined but never wired cannot pass here. The
     // function-level behavior lives in tests/delivery-guard.test.ts.
     const wakeDir = mkdtempSync(join(tmpdir(), "thatch-guard-gone-"));
@@ -255,62 +288,47 @@ describe("plugin entry", () => {
     // in the log is the guard's and nothing else's.
     process.env.THATCH_DEBUG = "runtime:delivery";
     try {
-      let promptCalled = false;
-      const guardClient = {
-        session: {
-          prompt: async () => {
-            promptCalled = true;
-          },
-        },
-      };
-      const testHooks = await server({ client: guardClient, worktree: wakeDir } as any);
-      try {
-        rmSync(wakeDir, { recursive: true });
-        await testHooks.event!({
-          event: {
-            type: "session.created",
-            properties: { info: { id: "ses-guard-gone" } },
-          },
-        } as any);
+      const context = makeContext({
+        location: { directory: wakeDir, project: { directory: wakeDir, canonical: wakeDir } },
+      });
+      cleanup = (await setup(context as any)) as () => Promise<void>;
+      rmSync(wakeDir, { recursive: true });
+      await queueEvent({
+        type: "session.created",
+        location: { directory: wakeDir },
+        data: { sessionID: "ses-guard-gone", info: { id: "ses-guard-gone" } },
+      });
+      // The pump's handler is async; give the skipped wake a beat to land
+      // in the debug log before the negative assertion.
+      await new Promise((r) => setTimeout(r, 300));
 
-        // The wake must not run against the deleted directory: no prompt,
-        // no throw, and the debug line names the session and the path.
-        expect(promptCalled).toBe(false);
-        const log = readFileSync(join(guardDb, "debug.log"), "utf8");
-        expect(log).toContain("runtime:delivery");
-        expect(log).toContain("ses-guard-gone");
-        expect(log).toContain(wakeDir);
-      } finally {
-        await testHooks.dispose?.();
-      }
+      // The wake must not run against the deleted directory: no delivery,
+      // no throw, and the debug line names the session and the path.
+      expect(sessionSyntheticCalls.length).toBe(0);
+      const log = readFileSync(join(guardDb, "debug.log"), "utf8");
+      expect(log).toContain("runtime:delivery");
+      expect(log).toContain("ses-guard-gone");
+      expect(log).toContain(wakeDir);
     } finally {
-      process.env.THATCH_DB_PATH = prevDbPath;
-      process.env.THATCH_DEBUG = prevDebug;
+      if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+      else process.env.THATCH_DB_PATH = prevDbPath;
+      if (prevDebug === undefined) delete process.env.THATCH_DEBUG;
+      else process.env.THATCH_DEBUG = prevDebug;
+      rmSync(wakeDir, { recursive: true, force: true });
+      rmSync(guardDb, { recursive: true, force: true });
     }
   });
 
-  test("event handler ignores non-session.created events", async () => {
-    let promptCalled = false;
-
-    const mockClient = {
-      session: {
-        prompt: async () => {
-          promptCalled = true;
-        },
-      },
-    };
-
-    const testHooks = await server({ client: mockClient, worktree: "/tmp/test" } as any);
-
-    await testHooks.event!({
-      event: {
-        type: "session.updated",
-        properties: {},
-      },
-    } as any);
-
-    expect(promptCalled).toBe(false);
-
-    testHooks.dispose?.();
+  test("event pump drops events it does not consume", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await queueEvent({
+      type: "session.updated",
+      location: { directory: SESSION_DIR },
+      data: {},
+    });
+    // The pump's handler is async; settle before the negative assert.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(sessionSyntheticCalls.length).toBe(0);
+    expect(rpcEmitted.some((e) => e.name === TOAST_EVENT)).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import { $ } from "bun";
-import { cpSync, copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -27,8 +27,34 @@ import { tmpdir } from "node:os";
 // delete or corrupt it.
 const RUN_ID = `${process.pid}-${Date.now().toString(36)}`;
 const MASTER_ROOT = join(tmpdir(), `thatch-qa-master-${RUN_ID}`);
-const QA_ROOT = join("/tmp", "thatch-qa", RUN_ID);
+export const QA_ROOT = join("/tmp", "thatch-qa", RUN_ID);
 const QA_ROOT_PARENT = "/tmp/thatch-qa";
+// Per-UC result journal: one JSONL line per use-case completion (name, leg,
+// verdict, timestamp, plus the failure output head on non-PASS). Written
+// because a mid-stream failure is otherwise unidentifiable: results live
+// only in stdout, and a truncated capture (the 2026-11-05 flake chase)
+// loses the failing UC's name while fixture dirs carry no failure markers.
+// Lives in the run-scoped root, so it dies with the run's cleanup and
+// never accumulates across runs.
+export const RESULT_JOURNAL = join(QA_ROOT, "results.jsonl");
+
+export function journalResult(line: {
+  uc: string;
+  leg?: string | null;
+  result: string;
+  output?: string;
+}): void {
+  try {
+    mkdirSync(QA_ROOT, { recursive: true });
+    appendFileSync(
+      RESULT_JOURNAL,
+      JSON.stringify({ at: new Date().toISOString(), ...line, ...(line.output ? { output: line.output.slice(0, 2000) } : {}) }) + "\n",
+    );
+  } catch {
+    // The journal is evidence, not a gate: a write failure must never fail
+    // a use case.
+  }
+}
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 export const MODEL = process.env.QA_MODEL ?? "venice/z-ai-glm-5-3-flash";
 const DRY_RUN = process.env.QA_DRY_RUN === "1";
@@ -515,7 +541,7 @@ Evidence:
   const timeoutMs = 1_190_000; // 19 min 50s — just under the 20-min test timeout
 
   const { args, cwd } = opencodeRunArgs(ctx, prompt);
-  const proc = Bun.spawn(args, {
+  const proc = spawnWatched(args, {
     cwd,
     env: ctx.env,
     stdout: "pipe",
@@ -538,11 +564,15 @@ Evidence:
 
     if (status !== "PASS") {
       console.log(`  ${uc.name}: ${status}\n  Output: ${output.slice(0, 2000)}`);
+      // The evidence line: registerLeg's result line names the failure,
+      // this one carries the session output that explains it.
+      journalResult({ uc: uc.name, result: `output:${status}`, output });
     }
 
     return status;
   } catch (err) {
     console.log(`  ${uc.name}: FAIL (opencode session error: ${err})`);
+    journalResult({ uc: uc.name, result: "output:FAIL", output: `opencode session error: ${err}` });
     return "FAIL";
   } finally {
     clearTimeout(timer);
@@ -627,11 +657,13 @@ function registerLeg(uc: UseCase, leg: MatrixLeg): void {
   test.concurrent(testName, async () => {
     if (DRY_RUN) {
       console.log(`  [DRY RUN] ${testName} — skipped`);
+      journalResult({ uc: uc.name, leg: leg.label, result: "DRY-RUN-SKIPPED" });
       return;
     }
 
     if (uc.manualOnly) {
       console.log(`  [MANUAL] ${testName} — skipped`);
+      journalResult({ uc: uc.name, leg: leg.label, result: "MANUAL-ONLY" });
       return;
     }
 
@@ -641,6 +673,7 @@ function registerLeg(uc: UseCase, leg: MatrixLeg): void {
       const check = await $`command -v opencode`.quiet().nothrow();
       if (check.exitCode !== 0) {
         console.log(`  [MANUAL] ${testName} — skipped (opencode not on PATH)`);
+        journalResult({ uc: uc.name, leg: leg.label, result: "MANUAL-ONLY", output: "opencode not on PATH" });
         return;
       }
     }
@@ -658,6 +691,7 @@ function registerLeg(uc: UseCase, leg: MatrixLeg): void {
     const result = await runFn(ctx);
 
     console.log(`  ${testName}: ${result}`);
+    journalResult({ uc: uc.name, leg: leg.label, result });
 
     if (result === "FAIL" || result === "PARTIAL") {
       throw new Error(`${testName}: ${result}`);
@@ -705,6 +739,69 @@ import { discoverHostBinaries } from "./binaries";
 
 /** Fixed serve credential: v2's serve requires basic auth; v1 ignores it. */
 const SERVE_PASSWORD = "thatch-qa-password";
+
+// --- Orphan reaping ---------------------------------------------------------
+
+/**
+ * A hard-killed runner (pkill, OOM kill, crash) never runs the per-UC
+ * cleanup - those handlers live in the test process - so its opencode
+ * children survive as orphans: full LLM sessions plus serve and MCP
+ * subprocesses grinding through their whole pipeline with no parent to stop
+ * them (the 2026-11-05 OOM incident: four detached UC sessions, one at
+ * 2.8 GB, after a runner kill). Every opencode spawn therefore gets a
+ * WATCHDOG SIBLING: a detached shell that kill-trees the child (deepest
+ * first, so no child re-parents its own subtree while dying) the moment
+ * this runner's pid dies. The watchdog is itself orphaned by the kill but
+ * stays alive to do the reaping; it exits on its own once either side is
+ * gone, so a normally-finished child leaves nothing behind.
+ */
+const spawnedChildren = new Set<{ pid: number; kill: (signal?: number) => void }>();
+
+// Every runner spawn pipes both streams (the two call sites read them);
+// pinning the option shape keeps the returned Subprocess's stderr typed as
+// the ReadableStream the callers construct Response() from.
+type PipeSpawnOptions = {
+  cwd?: string;
+  env: Record<string, string | undefined>;
+  stdout: "pipe";
+  stderr: "pipe";
+};
+
+function spawnWatched(args: string[], opts: PipeSpawnOptions): Bun.Subprocess<"ignore", "pipe", "pipe"> {
+  const proc = Bun.spawn(args, { ...opts, stdin: "ignore" });
+  spawnedChildren.add(proc);
+  const watchdog = Bun.spawn(
+    [
+      "sh",
+      "-c",
+      `runner=$1; child=$2
+kill_tree() {
+  p=$1
+  for c in $(pgrep -P "$p" 2>/dev/null); do kill_tree "$c"; done
+  kill -9 "$p" 2>/dev/null
+}
+while kill -0 "$runner" 2>/dev/null && ps -p "$child" >/dev/null 2>&1; do sleep 2; done
+if ! kill -0 "$runner" 2>/dev/null; then kill_tree "$child"; fi`,
+      "thatch-qa-watchdog",
+      String(process.pid),
+      String(proc.pid),
+    ],
+    { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
+  );
+  (watchdog as unknown as { unref?: () => void }).unref?.();
+  return proc;
+}
+
+// Belt-and-suspenders for the graceful paths: an exit-handler sweep (the
+// watchdog above covers only the hard-kill class). Reap and let the test
+// framework's own shutdown continue - no process.exit here.
+for (const signal of ["exit", "SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    for (const child of spawnedChildren) {
+      try { child.kill(9); } catch { /* already dead */ }
+    }
+  });
+}
 
 /**
  * The serve-mode client, version-matched to the `opencode` binary on PATH:
@@ -770,7 +867,7 @@ export async function startServe(ctx: QaContext): Promise<ServeHandle> {
   // serve takes no project flag: it boots project-free and loads the
   // instance per request via the x-opencode-directory header, which the
   // SDK client below sends from the `directory` option.
-  const proc = Bun.spawn(
+  const proc = spawnWatched(
     ["opencode", "serve", "--hostname", "127.0.0.1", "--port", String(port)],
     { env: ctx.env, stdout: "pipe", stderr: "pipe" },
   );

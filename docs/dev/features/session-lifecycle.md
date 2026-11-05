@@ -197,8 +197,9 @@ What it does, decided by `planStrandActions` (pure, unit-tested):
 - Unresolvable canonical or no move endpoint: skipped and logged
 
 The host supplies the enumeration (v1: `client.session.list`; v2: readonly
-read of opencode.db, since the promise domain has no session list and the
-sweep needs machine-wide rows) plus the move/delete endpoints; every leg
+read of opencode.db - the sweep needs machine-wide rows including
+never-activated directories, which `session.list`'s per-directory filter
+cannot express) plus the move/delete endpoints; every leg
 degrades silently. A summary toast fires only when something was healed. Set
 `THATCH_STRAND_SWEEP=off` to disarm the sweep entirely (tests do, so it can
 never act on a developer's real database through mocks).

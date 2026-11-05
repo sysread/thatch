@@ -87,6 +87,9 @@ export interface V2HarnessOptions {
   context?: (input: any) => Promise<any>;
   /** Override session.move's return (recorded first). */
   move?: (input: any) => Promise<any>;
+  /** Override session.list's return (recorded first). The -c
+   *  continue-target resolution's surface; defaults to an empty page. */
+  list?: (input: any) => Promise<any>;
 }
 
 export interface V2Harness {
@@ -99,6 +102,7 @@ export interface V2Harness {
     synthetic: any[];
     get: any[];
     context: any[];
+    list: any[];
     compact: any[];
     remove: any[];
     move: any[];
@@ -132,6 +136,7 @@ export function makeV2Harness(dir: string, options?: V2HarnessOptions): V2Harnes
     synthetic: [],
     get: [],
     context: [],
+    list: [],
     compact: [],
     remove: [],
     move: [],
@@ -192,6 +197,13 @@ export function makeV2Harness(dir: string, options?: V2HarnessOptions): V2Harnes
         calls.get.push(input);
         if (options?.get) return options.get(input);
         return { title: "some title" };
+      },
+      // Directory-scoped session list (the -c continue-target surface).
+      // Empty page by default.
+      list: async (input: any) => {
+        calls.list.push(input);
+        if (options?.list) return options.list(input);
+        return { data: [], cursor: {} };
       },
       // The wrap-up greenlight check reads the final assistant message
       // through session.context (the only message surface on the promise

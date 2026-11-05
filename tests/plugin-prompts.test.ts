@@ -1,10 +1,9 @@
 // Prompt/nudge unit tests from plugin.test.ts: the pure string builders in
 // src/prompts (session-start reminders, recall nudges, prediction
-// formatting, extraction escalation tiers and direct prompt). The harness
-// boot preserves the fixture env the original file ran these under.
+// formatting, extraction escalation tiers and direct prompt). No harness
+// boot: these builders are pure functions with no runtime or env state.
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { setupPluginHarness, teardownPluginHarness } from "./mocks/plugin-harness";
+import { describe, test, expect } from "bun:test";
 import {
   sessionStartReminder,
   recallNudge,
@@ -16,14 +15,6 @@ import {
   chatNotificationNudge,
   type NudgeMatch,
 } from "../src/prompts";
-
-beforeAll(async () => {
-  await setupPluginHarness();
-});
-
-afterAll(() => {
-  teardownPluginHarness();
-});
 
 // ---------------------------------------------------------------------------
 // sessionStartReminder

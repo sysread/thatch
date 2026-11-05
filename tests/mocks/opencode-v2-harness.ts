@@ -23,6 +23,9 @@ export let dbDir: string;
 export let promptHook: HookFn | undefined;
 export let contextHook: HookFn | undefined;
 export let toolAfterHook: HookFn | undefined;
+// The v2 compaction hook (session.hook("compaction")): marks the session
+// compacting AND injects the re-familiarization system context.
+export let compactionHook: HookFn | undefined;
 export let addedCommands: { name: string; execute: (input: any) => Promise<void> }[];
 export let addedTools: {
   name: string;
@@ -34,6 +37,7 @@ export let sessionPromptCalls: any[];
 export let sessionSyntheticCalls: any[];
 export let sessionCreateCalls: any[];
 export let sessionGetCalls: any[];
+export let sessionListCalls: any[];
 export let sessionCompactCalls: any[];
 export let sessionRemoveCalls: any[];
 export let sessionMoveCalls: any[];
@@ -54,6 +58,9 @@ export function makeContext(options?: {
   context?: (input: any) => Promise<any>;
   location?: { directory: string; project: { directory: string; canonical: string } };
   move?: (input: any) => Promise<any>;
+  // A session.list override (the -c continue-target surface). Defaults to
+  // an empty page; the recorded calls live in sessionListCalls.
+  list?: (input: any) => Promise<any>;
   // A session.compact member (upstream #52385). Absent by default so the
   // default context models the older SDK floor the adapter must guard.
   compact?: boolean;
@@ -76,12 +83,14 @@ export function makeContext(options?: {
   promptHook = (input: any) => currentHarness.hooks["prompt"]!(input);
   contextHook = (input: any) => currentHarness.hooks["context"]!(input);
   toolAfterHook = (input: any) => currentHarness.hooks["execute.after"]!(input);
+  compactionHook = (input: any) => currentHarness.hooks["compaction"]!(input);
   addedCommands = currentHarness.commands;
   addedTools = currentHarness.addedTools;
   sessionPromptCalls = currentHarness.calls.prompt;
   sessionSyntheticCalls = currentHarness.calls.synthetic;
   sessionCreateCalls = currentHarness.calls.create;
   sessionGetCalls = currentHarness.calls.get;
+  sessionListCalls = currentHarness.calls.list;
   sessionCompactCalls = currentHarness.calls.compact;
   sessionRemoveCalls = currentHarness.calls.remove;
   sessionMoveCalls = currentHarness.calls.move;

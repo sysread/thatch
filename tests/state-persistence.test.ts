@@ -7,16 +7,26 @@ import { ThatchDB } from "../src/db";
 import { ExtractionPipeline, planJournalPrune, EXTRACTION_JOURNAL_KINDS, RUNTIME_STATE_TTL_MS, type ToolInteraction } from "../src/extraction";
 import { WatcherRegistry } from "../src/watchers";
 import { SharedModelPool } from "../src/embeddings";
-import { server } from "../src/index";
+import { setup } from "../src/opencode/v2";
 import { hostedSessionIds, unexpiredGraceRehosts } from "../src/chat";
+import { EXIT_TAB_CLOSED_EVENT } from "../src/session-tab-shared";
+import type { V2Harness } from "./mocks/v2-harness";
+import {
+  currentHarness,
+  makeContext,
+  queueEvent,
+  rpcEmitted,
+  sessionCompactCalls,
+  sessionRemoveCalls,
+  sessionSyntheticCalls,
+  toolAfterHook,
+} from "./mocks/opencode-v2-harness";
 
-// This file boots the real plugin server (setup() rehydrates journals,
-// sweeps, and the chat poller - ~2.3s wall on macOS). Bun's default
-// per-test timeout is 5s with no margin for a loaded CI runner (the
-// 2026-11-03 fleet-contention CI reds were exactly this shape). 90s =
-// expected boot x ~40 headroom.
+// This file boots the real plugin runtime (setup() rehydrates journals,
+// sweeps, and the chat poller). Bun's default per-test timeout is 5s with
+// no margin for a loaded CI runner (the 2026-11-03 fleet-contention CI
+// reds were exactly this shape). 90s = expected boot x ~40 headroom.
 setDefaultTimeout(90_000);
-
 
 // Persistence of volatile plugin-runtime state across v2 plugin reloads and
 // process restarts (docs/dev/features/opencode-plugin.md, the dispose row of
@@ -41,13 +51,19 @@ beforeEach(() => {
   dbPath = join(dbDir, "test.db");
   // The rehydrate tests here drive the restart-branch finalize directly;
   // the boot-time strand sweep stays off so it can never act on the
-  // developer's real opencode.db through the mock clients.
+  // developer's real opencode.db through the mock contexts.
   process.env.THATCH_STRAND_SWEEP = "off";
+  // The v2 strand sweep would enumerate opencode.db from XDG_DATA_HOME;
+  // isolate it (the sweep is off anyway - belt and braces for any future
+  // db-reading boot path).
+  process.env.XDG_DATA_HOME = join(dbDir, "home", ".local", "share");
+  mkdirSync(process.env.XDG_DATA_HOME, { recursive: true });
 });
 
 afterEach(() => {
   rmSync(dbDir, { recursive: true, force: true });
   delete process.env.THATCH_STRAND_SWEEP;
+  delete process.env.XDG_DATA_HOME;
 });
 
 const ix = (sessionID: string, tool = "bash"): ToolInteraction => ({
@@ -60,10 +76,10 @@ const ix = (sessionID: string, tool = "bash"): ToolInteraction => ({
 
 /**
  * Poll helper for the boot/restart wiring tests. The async work is
- * fire-and-forget inside server() setup, so the tests poll; the deadline
+ * fire-and-forget inside setup(), so the tests poll; the deadline
  * is expected x 100+ headroom so a loaded CI runner cannot flake it. The
  * tests using it set an explicit per-test timeout ABOVE this deadline
- * (bun's default is 5s, which these server-booting tests can exceed under
+ * (bun's default is 5s, which these booting tests can exceed under
  * load) so a genuine failure reports the poll message, not "(timeout)".
  */
 async function waitForWiring(cond: () => boolean, message: string): Promise<void> {
@@ -72,6 +88,30 @@ async function waitForWiring(cond: () => boolean, message: string): Promise<void
     if (Date.now() > end) throw new Error(message);
     await new Promise((r) => setTimeout(r, 25));
   }
+}
+
+// Boots the v2 adapter against a per-test db (the caller sets
+// THATCH_DB_PATH first) bound to the given instance/worktree directories.
+// Returns the harness (its recorders and registered hooks/tools) and the
+// adapter's dispose handle.
+async function bootV2(opts?: {
+  dir?: string;
+  worktree?: string;
+  remove?: boolean;
+  compact?: boolean;
+  get?: (input: any) => Promise<any>;
+}): Promise<{ harness: V2Harness; dispose: () => Promise<void> }> {
+  const dir = opts?.dir ?? WORK_DIR;
+  const worktree = opts?.worktree ?? dir;
+  const context = makeContext({
+    location: { directory: dir, project: { directory: worktree, canonical: worktree } },
+    ...(opts?.remove ? { remove: true } : {}),
+    ...(opts?.compact ? { compact: true } : {}),
+    ...(opts?.get ? { get: opts.get } : {}),
+  });
+  const harness = currentHarness;
+  const dispose = (await setup(context as any)) as () => Promise<void>;
+  return { harness, dispose };
 }
 
 describe("runtime_state db API", () => {
@@ -175,7 +215,7 @@ describe("SharedModelPool refcount", () => {
   });
 });
 
-describe("runtime rehydration through server()", () => {
+describe("runtime rehydration through setup()", () => {
   test("a foreign-pid extraction-child row is finalized through the host on restart, not just pruned", async () => {
     // The restart-window leak: the child's opencode session row is global
     // and outlives the journaled bookkeeping, so pruning alone left the
@@ -199,40 +239,19 @@ describe("runtime rehydration through server()", () => {
     );
     db.close();
 
-    const deleteCalls: string[] = [];
-    const mockClient = {
-      session: {
-        prompt: async () => {},
-        promptAsync: async () => {},
-        create: async () => ({ data: { id: "test-child" } }),
-        delete: async (opts: any) => {
-          deleteCalls.push(opts?.path?.id);
-        },
-        get: async () => ({ data: { title: "Test session" } }),
-        messages: async () => ({ data: [] }),
-        status: async () => ({ data: {} }),
-        list: async () => ({ data: [] }),
-      },
-      tui: {
-        showToast: async () => {},
-        executeCommand: async () => ({ data: true }),
-        publish: async () => ({ data: true }),
-      },
-    };
-
-    let hooks: { dispose?: () => Promise<void> } | undefined;
     const prevConfig = process.env.XDG_CONFIG_HOME;
     const prevDbPath = process.env.THATCH_DB_PATH;
+    let dispose: (() => Promise<void>) | undefined;
     try {
       process.env.THATCH_DB_PATH = dbPath;
       process.env.XDG_CONFIG_HOME = join(dbDir, "config");
-      hooks = (await server({ client: mockClient, worktree: WORK_DIR, directory: WORK_DIR } as any)) as any;
+      ({ dispose } = await bootV2({ remove: true }));
 
-      // The finalize is fire-and-forget; poll for the delete call.
-      await waitForWiring(() => deleteCalls.includes("ses_corpse_child"), "restart finalize never deleted the extraction child");
+      // The finalize is fire-and-forget; poll for the remove call.
+      await waitForWiring(() => sessionRemoveCalls.some((c: any) => c?.sessionID === "ses_corpse_child"), "restart finalize never deleted the extraction child");
       // A task-dispatched sub-agent is opencode's own record of subagent
       // work - the finalize must never touch it.
-      expect(deleteCalls).toEqual(["ses_corpse_child"]);
+      expect(sessionRemoveCalls.map((c: any) => c?.sessionID)).toEqual(["ses_corpse_child"]);
       // Both journal rows are pruned either way (the pre-existing behavior).
       const check = new ThatchDB(dbPath);
       const ids = check.runtimeStateAll().map((r) => r.sessionID);
@@ -240,7 +259,7 @@ describe("runtime rehydration through server()", () => {
       expect(ids).not.toContain("ses_task_child");
       check.close();
     } finally {
-      await hooks?.dispose?.();
+      await dispose?.();
       if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
       else process.env.XDG_CONFIG_HOME = prevConfig;
       if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
@@ -262,34 +281,18 @@ describe("runtime rehydration through server()", () => {
     db.runtimeStatePut("hosted", WORK_DIR, ["ses_dead"], WORK_DIR, process.pid + 999);
     db.close();
 
-    let hooks: { dispose?: () => Promise<void> } | undefined;
     const prevConfig = process.env.XDG_CONFIG_HOME;
     const prevDbPath = process.env.THATCH_DB_PATH;
+    let harness: V2Harness | undefined;
+    let dispose: (() => Promise<void>) | undefined;
     try {
       process.env.THATCH_DB_PATH = dbPath;
       process.env.XDG_CONFIG_HOME = join(dbDir, "config");
-      const mockClient = {
-        session: {
-          prompt: async () => {},
-          promptAsync: async () => {},
-          create: async () => ({ data: { id: "test-child" } }),
-          delete: async () => {},
-          get: async () => ({ data: { title: "Test session" } }),
-          messages: async () => ({ data: [] }),
-          status: async () => ({ data: {} }),
-          list: async () => ({ data: [] }),
-        },
-        tui: {
-          showToast: async () => {},
-          executeCommand: async () => ({ data: true }),
-          publish: async () => ({ data: true }),
-        },
-      };
-      hooks = (await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree", directory: WORK_DIR } as any)) as any;
-      const toolMap = (hooks as any)?.tool as Record<string, { execute: (input: unknown, host?: unknown) => Promise<unknown> }>;
+      ({ harness, dispose } = await bootV2());
 
       // Reload row rehydrated: the payload tool serves the buffered entry.
-      const payload = await toolMap.thatch_get_extraction_payload.execute({ limit: 20 }, { sessionID: "ses_reload" });
+      const payloadTool = harness!.addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
+      const payload = await payloadTool.execute({ limit: 20 }, { sessionID: "ses_reload", agent: "build" });
       const text = typeof payload === "string" ? payload : JSON.stringify(payload);
       expect(text).toContain("echo hi");
 
@@ -303,7 +306,7 @@ describe("runtime rehydration through server()", () => {
       expect(sessions).toContain(WORK_DIR);
       check.close();
     } finally {
-      await hooks?.dispose?.();
+      await dispose?.();
       if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
       else process.env.XDG_CONFIG_HOME = prevConfig;
       if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
@@ -328,26 +331,14 @@ describe("runtime rehydration through server()", () => {
     db.runtimeStatePut("wrapup", "ses_wrap_dead_c", { kind: "compact" }, WORK_DIR, process.pid + 999);
     db.close();
 
-    let hooks: { dispose?: () => Promise<void>; event?: (arg: unknown) => Promise<void>; tool?: Record<string, { execute: (input: unknown, host?: unknown) => Promise<unknown> }> } | undefined;
     const prevConfig = process.env.XDG_CONFIG_HOME;
     const prevDbPath = process.env.THATCH_DB_PATH;
+    let harness: V2Harness | undefined;
+    let dispose: (() => Promise<void>) | undefined;
     try {
       process.env.THATCH_DB_PATH = dbPath;
       process.env.XDG_CONFIG_HOME = join(dbDir, "config");
-      const mockClient = {
-        session: {
-          prompt: async () => {},
-          promptAsync: async () => {},
-          create: async () => ({ data: { id: "test-child" } }),
-          delete: async () => {},
-          get: async () => ({ data: { title: "Test session" } }),
-          messages: async () => ({ data: [] }),
-          status: async () => ({ data: {} }),
-          list: async () => ({ data: [] }),
-        },
-        tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
-      };
-      hooks = (await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree", directory: WORK_DIR } as any)) as any;
+      ({ harness, dispose } = await bootV2());
 
       // Foreign-pid rows pruned at setup; same-pid rows kept (rehydrated).
       const check = new ThatchDB(dbPath);
@@ -358,8 +349,15 @@ describe("runtime rehydration through server()", () => {
       // The rehydrated un-greenlit arm survives the session's first idle:
       // a mid-exit wait must not consume the arm (the fix this branch
       // pins). Pinned for both kinds.
-      await hooks!.event!({ event: { type: "session.status", properties: { sessionID: "ses_wrap_reload", status: { type: "idle" } } } });
-      await hooks!.event!({ event: { type: "session.status", properties: { sessionID: "ses_wrap_reload_c", status: { type: "idle" } } } });
+      const idle = (sessionID: string) =>
+        queueEvent({
+          type: "session.execution.succeeded",
+          location: { directory: WORK_DIR },
+          data: { sessionID },
+        });
+      await idle("ses_wrap_reload");
+      await idle("ses_wrap_reload_c");
+      await new Promise((r) => setTimeout(r, 300));
       const mid = new ThatchDB(dbPath);
       expect(mid.runtimeStateAll().some((r) => r.kind === "wrapup" && r.sessionID === "ses_wrap_reload")).toBe(true);
       expect(mid.runtimeStateAll().some((r) => r.kind === "wrapup" && r.sessionID === "ses_wrap_reload_c")).toBe(true);
@@ -367,8 +365,10 @@ describe("runtime rehydration through server()", () => {
 
       // The arm is live in the map: the kind's tool greenlights it and the
       // journal row is rewritten with the flag (reload preserves greenlit).
-      await hooks!.tool!.thatch_exit.execute({}, { sessionID: "ses_wrap_reload", agent: "build" } as any);
-      await hooks!.tool!.thatch_compact.execute({}, { sessionID: "ses_wrap_reload_c", agent: "build" } as any);
+      const exitTool = harness!.addedTools.find((t) => t.name === "thatch_exit")!;
+      const compactTool = harness!.addedTools.find((t) => t.name === "thatch_compact")!;
+      await exitTool.execute({}, { sessionID: "ses_wrap_reload", agent: "build" } as any);
+      await compactTool.execute({}, { sessionID: "ses_wrap_reload_c", agent: "build" } as any);
       const after = new ThatchDB(dbPath);
       const arm = after.runtimeStateAll().find((r) => r.kind === "wrapup" && r.sessionID === "ses_wrap_reload");
       const armC = after.runtimeStateAll().find((r) => r.kind === "wrapup" && r.sessionID === "ses_wrap_reload_c");
@@ -376,7 +376,7 @@ describe("runtime rehydration through server()", () => {
       expect((arm?.value as any)?.greenlit).toBe(true);
       expect((armC?.value as any)?.greenlit).toBe(true);
     } finally {
-      await hooks?.dispose?.();
+      await dispose?.();
       if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
       else process.env.XDG_CONFIG_HOME = prevConfig;
       if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
@@ -392,41 +392,37 @@ describe("runtime rehydration through server()", () => {
     db.runtimeStatePut("wrapup", "ses_wrap_green_c", { kind: "compact", greenlit: true }, WORK_DIR);
     db.close();
 
-    const published: any[] = [];
-    const executed: any[] = [];
-    let hooks: { dispose?: () => Promise<void>; event?: (arg: unknown) => Promise<void> } | undefined;
     const prevConfig = process.env.XDG_CONFIG_HOME;
     const prevDbPath = process.env.THATCH_DB_PATH;
+    let dispose: (() => Promise<void>) | undefined;
     try {
       process.env.THATCH_DB_PATH = dbPath;
       process.env.XDG_CONFIG_HOME = join(dbDir, "config");
-      const mockClient = {
-        session: {
-          prompt: async () => {},
-          promptAsync: async () => {},
-          create: async () => ({ data: { id: "test-child" } }),
-          delete: async () => {},
-          get: async () => ({ data: { title: "Test session" } }),
-          messages: async () => ({ data: [] }),
-          status: async () => ({ data: {} }),
-          list: async () => ({ data: [] }),
-        },
-        tui: { showToast: async () => {}, executeCommand: async (opts: any) => { executed.push(opts); return { data: true }; }, publish: async (opts: any) => { published.push(opts); return { data: true }; } },
-      };
-      hooks = (await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree", directory: WORK_DIR } as any)) as any;
+      ({ dispose } = await bootV2({ compact: true }));
 
-      await hooks!.event!({ event: { type: "session.status", properties: { sessionID: "ses_wrap_green", status: { type: "idle" } } } });
-      // The close executor ran: the v1 exit host action (app.exit publish).
-      expect(published).toHaveLength(1);
-      await hooks!.event!({ event: { type: "session.status", properties: { sessionID: "ses_wrap_green_c", status: { type: "idle" } } } });
-      // The compact executor ran: the v1 host action (the legacy alias).
-      expect(executed).toEqual([{ body: { command: "session_compact" } }]);
+      const idle = (sessionID: string) =>
+        queueEvent({
+          type: "session.execution.succeeded",
+          location: { directory: WORK_DIR },
+          data: { sessionID },
+        });
+      await idle("ses_wrap_green");
+      // The close executor ran: the v2 exit host action (the
+      // exit-tab-closed rpc event for the session's own tab).
+      await waitForWiring(
+        () => rpcEmitted.some((e) => e.name === EXIT_TAB_CLOSED_EVENT && e.data?.sessionID === "ses_wrap_green"),
+        "the greenlit exit arm never closed on idle",
+      );
+      await idle("ses_wrap_green_c");
+      // The compact executor ran: the v2 host action (session.compact).
+      await waitForWiring(() => sessionCompactCalls.length === 1, "the greenlit compact arm never fired on idle");
+      expect(sessionCompactCalls[0]).toEqual({ sessionID: "ses_wrap_green_c" });
       // The resolved arms' journal rows are gone.
       const after = new ThatchDB(dbPath);
       expect(after.runtimeStateAll().some((r) => r.kind === "wrapup" && (r.sessionID === "ses_wrap_green" || r.sessionID === "ses_wrap_green_c"))).toBe(false);
       after.close();
     } finally {
-      await hooks?.dispose?.();
+      await dispose?.();
       if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
       else process.env.XDG_CONFIG_HOME = prevConfig;
       if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
@@ -437,7 +433,7 @@ describe("runtime rehydration through server()", () => {
   test("a same-pid reload restores journaled watcher pending events to the live registry", async () => {
     // Regression wiring test for the reload-loss incident (watch_qn449jio):
     // pending events journaled while the session was busy must come back
-    // through the REAL rehydrate path in server() setup - the wiring was
+    // through the REAL rehydrate path in setup() - the wiring was
     // missing once and a hand-called hydratePending unit test hid it.
     const db = new ThatchDB(dbPath);
     db.runtimeStatePut("watcher_pending", "ses_reload", [
@@ -448,42 +444,32 @@ describe("runtime rehydration through server()", () => {
     ], WORK_DIR);
     db.close();
 
-    const prompts: Array<{ path?: { id?: string }; body?: { parts?: Array<{ text?: string }> } }> = [];
-    let hooks: { dispose?: () => Promise<void>; event?: (arg: unknown) => Promise<void> } | undefined;
     const prevConfig = process.env.XDG_CONFIG_HOME;
     const prevDbPath = process.env.THATCH_DB_PATH;
+    let dispose: (() => Promise<void>) | undefined;
     try {
       process.env.THATCH_DB_PATH = dbPath;
       process.env.XDG_CONFIG_HOME = join(dbDir, "config");
-      const mockClient = {
-        session: {
-          prompt: async () => {},
-          promptAsync: async (call: { path: { id: string }; body: { parts: Array<{ text: string }> } }) => { prompts.push(call); },
-          create: async () => ({ data: { id: "test-child" } }),
-          delete: async () => {},
-          get: async () => ({ data: { title: "Test session" } }),
-          messages: async () => ({ data: [] }),
-          status: async () => ({ data: {} }),
-          list: async () => ({ data: [] }),
-        },
-        tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
-      };
-      const started = (await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree", directory: WORK_DIR } as any)) as any;
-      hooks = started;
+      ({ dispose } = await bootV2());
 
       // The rehydrated queue delivers on the session's next idle event
       // (deliverPending on idle) - the same trigger the live poller uses.
-      await started.event({ event: { type: "session.status", properties: { sessionID: "ses_reload", status: { type: "idle" } } } });
-      const nudge = prompts.find((p) => p.body?.parts?.some((pt) => pt.text?.includes("sysread/thatch#16")));
-      expect(nudge).toBeTruthy();
-      expect(nudge?.path?.id).toBe("ses_reload");
+      await queueEvent({
+        type: "session.execution.succeeded",
+        location: { directory: WORK_DIR },
+        data: { sessionID: "ses_reload" },
+      });
+      await waitForWiring(
+        () => sessionSyntheticCalls.some((c: any) => c?.sessionID === "ses_reload" && String(c?.text).includes("sysread/thatch#16")),
+        "the rehydrated watcher pending queue never delivered on idle",
+      );
 
       // Delivered events consume the durable row.
       const check = new ThatchDB(dbPath);
       expect(check.runtimeStateAll().some((r) => r.kind === "watcher_pending" && r.sessionID === "ses_reload")).toBe(false);
       check.close();
     } finally {
-      await hooks?.dispose?.();
+      await dispose?.();
       if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
       else process.env.XDG_CONFIG_HOME = prevConfig;
       if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
@@ -505,29 +491,28 @@ describe("runtime rehydration through server()", () => {
     process.env.THATCH_DB_PATH = dbPath;
     const prevConfig = process.env.XDG_CONFIG_HOME;
     const prevDbPath = process.env.THATCH_DB_PATH;
-    let hooksA: { dispose?: () => Promise<void> } | undefined;
-    let hooksB: { dispose?: () => Promise<void> } | undefined;
+    let disposeA: (() => Promise<void>) | undefined;
+    let disposeB: (() => Promise<void>) | undefined;
     try {
       process.env.XDG_CONFIG_HOME = join(dbDir, "config");
-      const mockClient = {
-        session: {
-          prompt: async () => {}, promptAsync: async () => {}, create: async () => ({ data: { id: "c" } }),
-          delete: async () => {}, get: async () => ({ data: { title: "Test session" } }),
-          messages: async () => ({ data: [] }), status: async () => ({ data: {} }), list: async () => ({ data: [] }),
-        },
-        tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
-      };
-      hooksA = (await server({ client: mockClient, worktree: dirA, directory: dirA } as any)) as any;
-      hooksB = (await server({ client: mockClient, worktree: dirB, directory: dirB } as any)) as any;
+      // Two live runtimes: capture each harness (the wrapper's exported
+      // recorders rebind to the LAST makeContext, so per-instance
+      // assertions go through the captured objects).
+      makeContext({ location: { directory: dirA, project: { directory: dirA, canonical: dirA } } });
+      const harnessA = currentHarness;
+      makeContext({ location: { directory: dirB, project: { directory: dirB, canonical: dirB } } });
+      const harnessB = currentHarness;
+      disposeA = (await setup(harnessA.context as any)) as () => Promise<void>;
+      disposeB = (await setup(harnessB.context as any)) as () => Promise<void>;
 
       // Instance A rehydrated its watcher (same pid, same directory).
       // Instance B must not see it in its own runtime. Observable: B's
       // tool-level watcher list is empty. Drive through B's watch_list tool.
-      const listB = await (hooksB as any).tool.thatch_watch_list.execute({}, { sessionID: "ses_b1", agent: "build" });
+      const listB = await harnessB.addedTools.find((t) => t.name === "thatch_watch_list")!.execute({}, { sessionID: "ses_b1", agent: "build" });
       const textB = typeof listB === "string" ? listB : JSON.stringify(listB);
       expect(textB).not.toContain("watch_a");
       // A still lists it.
-      const listA = await (hooksA as any).tool.thatch_watch_list.execute({}, { sessionID: "ses_a1", agent: "build" });
+      const listA = await harnessA.addedTools.find((t) => t.name === "thatch_watch_list")!.execute({}, { sessionID: "ses_a1", agent: "build" });
       const textA = typeof listA === "string" ? listA : JSON.stringify(listA);
       expect(textA).toContain("watch_a");
 
@@ -537,8 +522,8 @@ describe("runtime rehydration through server()", () => {
       expect(rows.some((r) => r.kind === "watchers" && r.sessionID === "ses_a1")).toBe(true);
       check.close();
     } finally {
-      await hooksA?.dispose?.();
-      await hooksB?.dispose?.();
+      await disposeA?.();
+      await disposeB?.();
       if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
       else process.env.XDG_CONFIG_HOME = prevConfig;
       if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
@@ -700,7 +685,7 @@ describe("unexpiredGraceRehosts (restart grace re-hosting)", () => {
   });
 });
 
-describe("dormant watcher recovery through server()", () => {
+describe("dormant watcher recovery through setup()", () => {
   const prDef = (id: string, sessionID: string, overrides: Record<string, unknown> = {}): any => ({
     id,
     source: "pr",
@@ -714,27 +699,16 @@ describe("dormant watcher recovery through server()", () => {
     state: { headSha: "aaaa1111" },
     ...overrides,
   });
-  // The notify pipeline's mock: the death banner and other user-facing
-  // toasts land here (the capabilities layer wraps them in { body }).
-  const toasts: { body: { message: string; variant: string } }[] = [];
-  const mockClient = {
-    session: {
-      prompt: async () => {}, promptAsync: async () => {}, create: async () => ({ data: { id: "c" } }),
-      delete: async () => {}, get: async () => ({ data: { title: "Test session" } }),
-      messages: async () => ({ data: [] }), status: async () => ({ data: {} }), list: async () => ({ data: [] }),
-    },
-    tui: { showToast: async (t: any) => { toasts.push(t); }, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
-  };
-  const startServer = async () => {
+  const startServer = async (opts?: { remove?: boolean }) => {
     const prevConfig = process.env.XDG_CONFIG_HOME;
     const prevDbPath = process.env.THATCH_DB_PATH;
     process.env.THATCH_DB_PATH = dbPath;
     process.env.XDG_CONFIG_HOME = join(dbDir, "config");
-    const hooks = (await server({ client: mockClient, worktree: "/tmp/thatch-test-worktree", directory: WORK_DIR } as any)) as any;
+    const { harness, dispose } = await bootV2(opts);
     return {
-      hooks,
+      harness,
       finally: async () => {
-        await hooks?.dispose?.();
+        await dispose();
         if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
         else process.env.XDG_CONFIG_HOME = prevConfig;
         if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
@@ -743,16 +717,20 @@ describe("dormant watcher recovery through server()", () => {
     };
   };
   // Short prompt (< MIN_PROMPT_LEN): the recall nudge's embedding-model path
-  // stays untouched, keeping the test hermetic.
-  const sendMessage = async (hooks: any, sessionID: string): Promise<any[]> => {
-    const output: any = { parts: [{ type: "text", text: "hi" }], message: { id: `msg_${sessionID}` } };
-    await hooks["chat.message"]({ sessionID, messageID: output.message.id }, output);
-    return output.parts;
+  // stays untouched, keeping the test hermetic. Returns the turn's INJECTED
+  // parts (v2's prompt + context hook pair; v1 read synthetic output.parts).
+  const sendMessage = async (harness: V2Harness, sessionID: string): Promise<any[]> => {
+    const text = "hi";
+    await harness.hooks["prompt"]!({ sessionID, messageID: `msg_${sessionID}`, prompt: { text } });
+    const request = { sessionID, system: [], messages: [{ role: "user", content: [{ type: "text", text }] }] };
+    await harness.hooks["context"]!(request);
+    return (request.messages[0].content as any[]).slice(1);
   };
+  const harnessToasts = () => rpcEmitted.filter((e) => e.name === "toast");
 
   test("a restarted session's dormant watchers re-arm on its first message", async () => {
     // Seeded as a COMMAND watcher: rearm() revalidates pr/branch baselines
-    // through the registry's real gh runner (network!), so a server()-level
+    // through the registry's real gh runner (network!), so a setup()-level
     // test must use the command source - it skips revalidation by design
     // and keeps the test hermetic. CI has no gh CLI; a pr-def rearm would
     // fail the fetch and re-arm nothing.
@@ -772,15 +750,15 @@ describe("dormant watcher recovery through server()", () => {
     );
     db.close();
 
-    const { hooks, finally: done } = await startServer();
+    const { harness, finally: done } = await startServer();
     try {
-      const parts = await sendMessage(hooks, "ses_w");
-      const rearm = parts.find((p: any) => p.synthetic && p.text.includes("re-armed"));
+      const injections = await sendMessage(harness, "ses_w");
+      const rearm = injections.find((p: any) => p.text.includes("re-armed"));
       expect(rearm).toBeTruthy();
       expect(rearm.text).toContain("mise run ci-green");
 
       // The watcher is live in the registry: watch_list shows it.
-      const list = await hooks.tool.thatch_watch_list.execute({}, { sessionID: "ses_w" });
+      const list = await harness.addedTools.find((t) => t.name === "thatch_watch_list")!.execute({}, { sessionID: "ses_w", agent: "build" });
       expect(typeof list === "string" ? list : JSON.stringify(list)).toContain("watch_w");
 
       // The journal row now belongs to this process, so the next reload
@@ -801,15 +779,14 @@ describe("dormant watcher recovery through server()", () => {
     db.runtimeStatePut("watchers", "ses_d1", [prDef("watch_d1", "ses_d1")], WORK_DIR, deadPid);
     db.close();
 
-    toasts.length = 0;
-    const { hooks, finally: done } = await startServer();
+    const { harness, finally: done } = await startServer();
     try {
-      const p1 = await sendMessage(hooks, "ses_live1");
+      const p1 = await sendMessage(harness, "ses_live1");
       // Care-based routing: the user gets the source-labeled banner (the
-      // notify pipeline), and NO synthetic death-notice part lands in any
+      // notify pipeline's toast), and NO death-notice part lands in any
       // session - an arbitrary peer is never prompted.
-      expect(toasts.some((t) => String(t.body?.message).includes("watcher died"))).toBe(true);
-      expect(p1.some((p: any) => p.synthetic && p.text.includes("no longer running"))).toBe(false);
+      expect(harnessToasts().some((e) => String(e.data?.message).includes("watcher died"))).toBe(true);
+      expect(p1.some((p: any) => p.text.includes("no longer running"))).toBe(false);
       // The dormant row survives the banner - its session may still be
       // resumed, and resuming re-arms it.
       const mid = new ThatchDB(dbPath);
@@ -818,15 +795,15 @@ describe("dormant watcher recovery through server()", () => {
 
       // No session ever hears a death notice about another: the next
       // session's scan produces no notice part either.
-      const p2 = await sendMessage(hooks, "ses_live2");
-      expect(p2.some((p: any) => p.synthetic && p.text.includes("no longer running"))).toBe(false);
+      const p2 = await sendMessage(harness, "ses_live2");
+      expect(p2.some((p: any) => p.text.includes("no longer running"))).toBe(false);
     } finally {
       await done();
     }
   });
 
   test("a live sibling process's watcher rows are never reported dead", async () => {
-    // A v1 sibling TUI window: its own process, same project db, alive for
+    // A sibling TUI window: its own process, same project db, alive for
     // the duration of the test.
     const sibling = Bun.spawn(["sleep", "5"]);
     try {
@@ -834,14 +811,13 @@ describe("dormant watcher recovery through server()", () => {
       db.runtimeStatePut("watchers", "ses_sib", [prDef("watch_s", "ses_sib")], WORK_DIR, sibling.pid);
       db.close();
 
-      toasts.length = 0;
-      const { hooks, finally: done } = await startServer();
+      const { harness, finally: done } = await startServer();
       try {
-        const parts = await sendMessage(hooks, "ses_live");
-        expect(parts.some((p: any) => p.synthetic && p.text.includes("no longer running"))).toBe(false);
+        const injections = await sendMessage(harness, "ses_live");
+        expect(injections.some((p: any) => p.text.includes("no longer running"))).toBe(false);
         // The pid-liveness gate covers the banner too: a live sibling's
         // watchers must not banner the user as dead.
-        expect(toasts.some((t) => String(t.body?.message).includes("watcher died"))).toBe(false);
+        expect(harnessToasts().some((e) => String(e.data?.message).includes("watcher died"))).toBe(false);
       } finally {
         await done();
       }
@@ -900,19 +876,19 @@ describe("dormant watcher recovery through server()", () => {
     );
     db.close();
 
-    const { hooks, finally: done } = await startServer();
+    const { harness, finally: done } = await startServer();
     try {
       // An unrelated session's prompt leaves the row alone: the misroute
       // this change fixes never happens.
-      const pOther = await sendMessage(hooks, "ses_bystander");
-      expect(pOther.some((p: any) => p.synthetic && p.text.includes("no longer running"))).toBe(false);
+      const pOther = await sendMessage(harness, "ses_bystander");
+      expect(pOther.some((p: any) => p.text.includes("no longer running"))).toBe(false);
       const mid = new ThatchDB(dbPath);
       expect(mid.runtimeStateAll().some((r) => r.kind === "watcher_death" && r.sessionID === "ses_dead_sub")).toBe(true);
       mid.close();
 
       // The coordinator's own next message picks the row up and deletes it.
-      const pCoord = await sendMessage(hooks, "ses_coord");
-      const notice = pCoord.find((p: any) => p.synthetic && p.text.includes("no longer running"));
+      const pCoord = await sendMessage(harness, "ses_coord");
+      const notice = pCoord.find((p: any) => p.text.includes("no longer running"));
       expect(notice).toBeTruthy();
       expect(notice.text).toContain("sysread/thatch#16");
       expect(notice.text).toContain("grep-goblin-00004");
@@ -946,7 +922,7 @@ describe("dormant watcher recovery through server()", () => {
   });
 
   test("a restart prunes only its own directory's rows - other locations' rows survive", async () => {
-    // Two v1 TUI windows on different projects share one thatch db: this
+    // Two TUI windows on different projects share one thatch db: this
     // instance's restart prune must not sweep the other location's rows -
     // they belong to a live sibling instance's lifecycle, and deleting them
     // destroyed its crash-recovery state. The foreign directory must exist
@@ -989,11 +965,12 @@ describe("dormant watcher recovery through server()", () => {
 
     const prevWindow = process.env.THATCH_CHILD_RECONCILE_MS;
     process.env.THATCH_CHILD_RECONCILE_MS = "50";
-    const { finally: done } = await startServer();
+    const { finally: done } = await startServer({ remove: true });
     try {
       // Finalization journals the child row gone (the maps are cleared, and
-      // journalChild journals a delete for a parentless child). Poll for it
-      // - the reconciler waits out the (shortened) reload window first.
+      // journalChild journals a delete for a parentless child), then deletes
+      // the session through the host's remove endpoint. Poll for it - the
+      // reconciler waits out the (shortened) reload window first.
       // ONE connection held across the polls: reopen-per-poll churn makes
       // every close checkpoint the WAL under the running server's feet.
       const pollDb = new ThatchDB(dbPath);
@@ -1005,6 +982,10 @@ describe("dormant watcher recovery through server()", () => {
       const check = new ThatchDB(dbPath);
       expect(check.runtimeStateAll().some((r) => r.sessionID === "ses_child_r")).toBe(false);
       check.close();
+      await waitForWiring(
+        () => sessionRemoveCalls.some((c: any) => c?.sessionID === "ses_child_r"),
+        "restart finalize never deleted the child session through the host",
+      );
     } finally {
       await done();
       if (prevWindow === undefined) delete process.env.THATCH_CHILD_RECONCILE_MS;
@@ -1027,19 +1008,20 @@ describe("dormant watcher recovery through server()", () => {
     db.runtimeStatePut("buffer", "ses_parent_t", [ix("ses_parent_t")], WORK_DIR);
     db.close();
 
-    const { hooks, finally: done } = await startServer();
+    const { harness, finally: done } = await startServer();
     try {
-      const parts = await sendMessage(hooks, "ses_parent_t");
+      const injections = await sendMessage(harness, "ses_parent_t");
       // There is no model-facing extraction nudge on opencode any more -
       // chat.message stays clean even with pending entries.
-      expect(parts.some((pt: any) => pt.text?.includes("fact-extractor"))).toBe(false);
+      expect(injections.some((p: any) => p.text?.includes("fact-extractor"))).toBe(false);
       // The buffered entries survive the reload and are still served for
       // extraction by the plugin.
-      const served = await hooks.tool.thatch_get_extraction_payload.execute(
+      const payloadTool = harness.addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
+      const served = await payloadTool.execute(
         { session_id: "ses_parent_t" },
-        { sessionID: "ses_ext_t" },
+        { sessionID: "ses_ext_t", agent: "general" },
       );
-      expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("hi");
+      expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("echo hi");
       // The task child's row survives - its idle event, not the reconciler,
       // owns its cleanup.
       const check = new ThatchDB(dbPath);
@@ -1062,34 +1044,47 @@ describe("dormant watcher recovery through server()", () => {
     db.runtimeStatePut("buffer", "ses_parent_l", [ix("ses_parent_l")], WORK_DIR);
     db.close();
 
-    const { hooks, finally: done } = await startServer();
+    const { harness, finally: done } = await startServer();
     try {
-      const parts = await sendMessage(hooks, "ses_parent_l");
-      expect(parts.some((pt: any) => pt.text?.includes("fact-extractor"))).toBe(false);
+      const injections = await sendMessage(harness, "ses_parent_l");
+      expect(injections.some((p: any) => p.text?.includes("fact-extractor"))).toBe(false);
     } finally {
       await done();
     }
   }, 30_000);
 
   test("journalChild records the child kind from the live sets", async () => {
-    const { hooks, finally: done } = await startServer();
+    const { finally: done } = await startServer();
     try {
       // A task-dispatched sub-agent: session.created with a parentID, no
       // extraction machinery - journaled as kind "task".
-      await hooks.event({ event: { type: "session.created", properties: { info: { id: "ses_j_task", parentID: "ses_j_parent" } } } });
+      await queueEvent({
+        type: "session.created",
+        location: { directory: WORK_DIR },
+        data: { sessionID: "ses_j_task", info: { id: "ses_j_task", parentID: "ses_j_parent" } },
+      });
       // An extraction child: buffered parent work + idle triggers the
-      // direct-extraction child (the mock client creates session "c").
-      await hooks["tool.execute.after"]!(
-        { tool: "bash", sessionID: "ses_j_parent", callID: "j1", args: { command: "echo hi" } },
-        { title: "echo hi", output: "hi", metadata: {} },
-      );
-      await hooks.event({ event: { type: "session.status", properties: { sessionID: "ses_j_parent", status: { type: "idle" } } } });
+      // direct-extraction child (the harness's session.create returns
+      // "v2-test-child").
+      await toolAfterHook!({
+        tool: "bash",
+        sessionID: "ses_j_parent",
+        input: { command: "echo hi" },
+        status: "completed",
+        result: { content: "hi" },
+      });
+      await queueEvent({
+        type: "session.execution.succeeded",
+        location: { directory: WORK_DIR },
+        data: { sessionID: "ses_j_parent" },
+      });
+      await waitForWiring(() => new ThatchDB(dbPath).runtimeStateAll().some((r) => r.kind === "child" && r.sessionID === "v2-test-child"), "the extraction child was never journaled");
 
       const check = new ThatchDB(dbPath);
       const rows = check.runtimeStateAll().filter((r) => r.kind === "child");
       check.close();
       const taskRow = rows.find((r) => r.sessionID === "ses_j_task");
-      const extractionRow = rows.find((r) => r.sessionID === "c");
+      const extractionRow = rows.find((r) => r.sessionID === "v2-test-child");
       expect(taskRow?.value ? (taskRow.value as any).kind : undefined).toBe("task");
       expect(extractionRow?.value ? (extractionRow.value as any).kind : undefined).toBe("extraction");
     } finally {
@@ -1099,32 +1094,20 @@ describe("dormant watcher recovery through server()", () => {
 });
 
 describe("extraction journal sweep", () => {
-  // Minimal boot harness: same shape as the startServer helper in the
-  // dormant-watcher describe (which scopes that helper to itself). Env
-  // isolation is NOT optional: without THATCH_DB_PATH/XDG_CONFIG_HOME the
-  // server boots against the developer's real ~/.config/thatch/thatch.db
-  // and the boot sweep acts on it.
+  // Minimal boot harness: env isolation is NOT optional - without
+  // THATCH_DB_PATH/XDG_CONFIG_HOME the runtime boots against the
+  // developer's real ~/.config/thatch/thatch.db and the boot sweep acts on
+  // it. (bootV2 rebinds the wrapper's shared recorders; the sweep tests
+  // read rows through ThatchDB directly.)
   const bootServer = async () => {
     const prevDbPath = process.env.THATCH_DB_PATH;
     const prevConfig = process.env.XDG_CONFIG_HOME;
     process.env.THATCH_DB_PATH = dbPath;
     process.env.XDG_CONFIG_HOME = join(dbDir, "config");
-    const hooks = (await server({
-      client: {
-        session: {
-          prompt: async () => {}, promptAsync: async () => {}, create: async () => ({ data: { id: "c" } }),
-          delete: async () => {}, get: async () => ({ data: { title: "Test session" } }),
-          messages: async () => ({ data: [] }), status: async () => ({ data: {} }), list: async () => ({ data: [] }),
-        },
-        tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
-      },
-      worktree: "/tmp/thatch-test-worktree",
-      directory: WORK_DIR,
-    } as any)) as any;
+    const { dispose } = await bootV2();
     return {
-      hooks,
       finally: async () => {
-        await hooks?.dispose?.();
+        await dispose();
         if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
         else process.env.THATCH_DB_PATH = prevDbPath;
         if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
@@ -1166,18 +1149,29 @@ describe("extraction journal sweep", () => {
   });
 
   test("session.deleted drops the session's buffer journal row", async () => {
-    const { hooks, finally: done } = await bootServer();
+    const { finally: done } = await bootServer();
     try {
-      await hooks["tool.execute.after"]!(
-        { tool: "bash", sessionID: "ses_delrow", callID: "dr1", args: { command: "ls" } },
-        { title: "list", output: "file.txt", metadata: {} },
-      );
+      await toolAfterHook!({
+        tool: "bash",
+        sessionID: "ses_delrow",
+        input: { command: "ls" },
+        status: "completed",
+        result: { content: "file.txt" },
+      });
       // The row exists while the session lives...
       const before = new ThatchDB(dbPath);
       expect(before.runtimeStateAll().some((r) => r.kind === "buffer" && r.sessionID === "ses_delrow")).toBe(true);
       before.close();
 
-      await hooks.event({ event: { type: "session.deleted", properties: { info: { id: "ses_delrow" } } } });
+      await queueEvent({
+        type: "session.deleted",
+        location: { directory: WORK_DIR },
+        data: { sessionID: "ses_delrow" },
+      });
+      await waitForWiring(
+        () => !new ThatchDB(dbPath).runtimeStateAll().some((r) => r.kind === "buffer" && r.sessionID === "ses_delrow"),
+        "session.deleted never dropped the buffer journal row",
+      );
 
       // ...and the journal row dies with the session - no future prompt can
       // nudge it, so the row would otherwise strand until a restart.
@@ -1275,22 +1269,10 @@ describe("hosted directory re-verification", () => {
     const prevOcDb = process.env.OPENCODE_DB;
     process.env.THATCH_DB_PATH = dbPath;
     process.env.XDG_CONFIG_HOME = join(dbDir, "config");
-    const hooks = (await server({
-      client: {
-        session: {
-          prompt: async () => {}, promptAsync: async () => {}, create: async () => ({ data: { id: "c" } }),
-          delete: async () => {}, get: async () => ({ data: { title: "Test session" } }),
-          messages: async () => ({ data: [] }), status: async () => ({ data: {} }), list: async () => ({ data: [] }),
-        },
-        tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
-      },
-      worktree: WORK_DIR,
-      directory: WORK_DIR,
-    } as any)) as any;
+    const { dispose } = await bootV2();
     return {
-      hooks,
       finally: async () => {
-        await hooks?.dispose?.();
+        await dispose();
         if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
         else process.env.THATCH_DB_PATH = prevDbPath;
         if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;

@@ -133,7 +133,7 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     emitExitTabClose?: ExitTabCloseEmitter;
     emitToast?: (toast: ToastInput) => Promise<unknown>;
   } = {};
-  const capabilities = buildCapabilities(context, worktree, childSessions, tuiBridge);
+  const capabilities = buildCapabilities(context, directory, worktree, childSessions, tuiBridge);
   const runtime = await createRuntime({ capabilities, directory, worktree, v2Tools: true });
   // Seed the forwarding set from rehydrated child bookkeeping: after a
   // reload, an in-flight extraction child's maps come back from the journal,
@@ -894,6 +894,7 @@ export function optionalDomainMethod(
 // runtime's callers treat those results as best-effort and log, never crash.
 function buildCapabilities(
   context: V2Context,
+  directory: string,
   worktree: string,
   childSessions: Set<string>,
   tuiBridge: {
@@ -995,7 +996,20 @@ function buildCapabilities(
       // the SessionInfo directly (the envelope is unwrapped).
       return (await session.get({ sessionID: id })) ?? null;
     },
-    sessionList: async () => null,
+    // Directory-scoped list, matching v1's client.list semantics (the v1
+    // client was constructed with the session's directory): the -c
+    // continue-target resolution wants "most recent top-level session in
+    // THIS directory". Live-probed 2026-11-05 against a real v2 binary:
+    // unfiltered list is cross-directory; the {directory} filter scopes
+    // correctly; rows carry parentID and time.updated (epoch ms), which is
+    // the shape continuesLastSessionId sorts and filters on.
+    sessionList: async () => {
+      const result = await session.list({ directory });
+      return (
+        result?.data?.map((s: any) => ({ id: s.id, parentID: s.parentID, time: { updated: s.time?.updated } })) ??
+        null
+      );
+    },
     enumerateSessions: async () => {
       // The promise domain has no session list, and the strand sweep needs
       // machine-wide rows (dead-worktree sessions belong to no live
