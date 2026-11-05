@@ -31,11 +31,11 @@ const useCase: UseCase = {
     "  appends a thatch block to `CLAUDE.md` bracketed by start/end markers (replaced, not",
     "  duplicated, on re-run), writes `.claude/settings.json` hooks (`SessionStart` -> `thatch reminder`,",
     "  `PostToolBatch` -> `thatch buffer-batch`, `UserPromptSubmit` -> `thatch flush-tools`), and installs",
-    "  **40 shared skills** (no code-review coordinator) to the repo's `.claude/skills/`.",
+    "  **41 shared skills** (no code-review coordinator) to the repo's `.claude/skills/`.",
     "- `--cursor` project-local writes `.cursor/mcp.json`, appends to `AGENTS.md`, writes",
     "  `.cursor/hooks.json` in the **flat format** (`{version:1, hooks:{...}}`): `sessionStart` ->",
     "  `thatch reminder --json`, `postToolUse` -> `thatch buffer-tool`, `beforeSubmitPrompt` ->",
-    "  `thatch flush-tools --json`; and installs 40 shared skills to the repo's `.cursor/skills/`.",
+    "  `thatch flush-tools --json`; and installs 41 shared skills to the repo's `.cursor/skills/`.",
     "- Setup reports where skills were installed plus per-run counts",
     "  (added / updated / removed / unchanged). A fresh install prints `40 added`; a re-run",
     "  prints `40 unchanged` and identical file contents.",
@@ -129,12 +129,12 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (claudeSkillNames.length !== 40) {
-      console.log(`  FAIL: Claude skills count is ${claudeSkillNames.length}, expected 40`);
+    if (claudeSkillNames.length !== 41) {
+      console.log(`  FAIL: Claude skills count is ${claudeSkillNames.length}, expected 41`);
       return "FAIL";
     }
-    if (claudeSkillNames.includes("thatch-code-review")) {
-      console.log("  FAIL: thatch-code-review coordinator should NOT be installed for Claude");
+    if (!claudeSkillNames.includes("thatch-code-review")) {
+      console.log("  FAIL: thatch-code-review coordinator should be installed for Claude (it is SHARED - flat dispatch works)");
       return "FAIL";
     }
 
@@ -144,7 +144,7 @@ const useCase: UseCase = {
       console.log("  FAIL: setup stdout does not name the Claude skills dir");
       return "FAIL";
     }
-    if (!out1.includes("40 added")) {
+    if (!out1.includes("41 added")) {
       console.log("  FAIL: setup stdout does not report '40 added' on fresh install");
       return "FAIL";
     }
@@ -221,12 +221,12 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (cursorSkillNames.length !== 40) {
-      console.log(`  FAIL: Cursor skills count is ${cursorSkillNames.length}, expected 40`);
+    if (cursorSkillNames.length !== 41) {
+      console.log(`  FAIL: Cursor skills count is ${cursorSkillNames.length}, expected 41`);
       return "FAIL";
     }
-    if (cursorSkillNames.includes("thatch-code-review")) {
-      console.log("  FAIL: thatch-code-review coordinator should NOT be installed for Cursor");
+    if (!cursorSkillNames.includes("thatch-code-review")) {
+      console.log("  FAIL: thatch-code-review coordinator should be installed for Cursor (it is SHARED - flat dispatch works)");
       return "FAIL";
     }
     const out2 = r2.stdout.toString();
@@ -234,7 +234,7 @@ const useCase: UseCase = {
       console.log("  FAIL: setup stdout does not name the Cursor skills dir");
       return "FAIL";
     }
-    if (!out2.includes("40 added")) {
+    if (!out2.includes("41 added")) {
       console.log("  FAIL: setup stdout does not report '40 added' on fresh install");
       return "FAIL";
     }
@@ -272,12 +272,12 @@ const useCase: UseCase = {
     }
 
     // Reporting: a no-op re-run reports every skill as unchanged.
-    if (!r3c.stdout.toString().includes("40 unchanged")) {
-      console.log("  FAIL: re-run stdout does not report '40 unchanged' for Claude");
+    if (!r3c.stdout.toString().includes("41 unchanged")) {
+      console.log("  FAIL: re-run stdout does not report '41 unchanged' for Claude");
       return "FAIL";
     }
-    if (!r3x.stdout.toString().includes("40 unchanged")) {
-      console.log("  FAIL: re-run stdout does not report '40 unchanged' for Cursor");
+    if (!r3x.stdout.toString().includes("41 unchanged")) {
+      console.log("  FAIL: re-run stdout does not report '41 unchanged' for Cursor");
       return "FAIL";
     }
 

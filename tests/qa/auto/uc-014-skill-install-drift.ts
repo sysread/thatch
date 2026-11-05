@@ -27,7 +27,7 @@ const useCase: UseCase = {
     "5. Check whether the `thatch-code-review` coordinator skill is present.",
   ].join("\n"),
   expected: [
-    "- Claude Code and Cursor install exactly **40 shared skills** to the scope's",
+    "- Claude Code and Cursor install exactly **41 shared skills** to the scope's",
     "  skills dir (repo `.claude/skills/` and `.cursor/skills/` for project-local",
     "  setup) — the coordinator (`thatch-code-review`) is **absent** (it needs",
     "  sub-agents, which those hosts lack).",
@@ -71,12 +71,12 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (claudeSkills.length !== 40) {
-      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 40`);
+    if (claudeSkills.length !== 41) {
+      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 41`);
       return "FAIL";
     }
-    if (claudeSkills.includes("thatch-code-review")) {
-      console.log("  FAIL: thatch-code-review coordinator should NOT be installed for Claude");
+    if (!claudeSkills.includes("thatch-code-review")) {
+      console.log("  FAIL: thatch-code-review coordinator should be installed for Claude (it is SHARED - flat dispatch works)");
       return "FAIL";
     }
 
@@ -90,12 +90,12 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (cursorSkills.length !== 40) {
-      console.log(`  FAIL: Cursor skills count is ${cursorSkills.length}, expected 40`);
+    if (cursorSkills.length !== 41) {
+      console.log(`  FAIL: Cursor skills count is ${cursorSkills.length}, expected 41`);
       return "FAIL";
     }
-    if (cursorSkills.includes("thatch-code-review")) {
-      console.log("  FAIL: thatch-code-review coordinator should NOT be installed for Cursor");
+    if (!cursorSkills.includes("thatch-code-review")) {
+      console.log("  FAIL: thatch-code-review coordinator should be installed for Cursor (it is SHARED - flat dispatch works)");
       return "FAIL";
     }
 

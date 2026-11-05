@@ -33,7 +33,7 @@ const useCase: UseCase = {
     "7. `thatch setup --claude --skills-only --mcp-json` (host + json)",
   ].join("\n"),
   expected: [
-    "- The explicit-directory run installs the 40 shared skills into the given",
+    "- The explicit-directory run installs the 41 shared skills into the given",
     "  directory and nothing else: none of `.mcp.json`, `CLAUDE.md`, `.claude/`,",
     "  or `.cursor/` appears in the project.",
     "- The output reports the skills dir plus `40 added` (fresh install).",
@@ -58,7 +58,7 @@ const useCase: UseCase = {
     const dir = ctx.dir;
     const run = (args: string[]) => $`${bin} ${args}`.env(env).cwd(dir).quiet().nothrow();
     // 40 is the shared-skill roster size, asserted as a literal because the
-    // CLI prints the count in prose ("40 added"). Bump it here when
+    // CLI prints the count in prose ("41 added"). Bump it here when
     // SHARED_SKILLS grows.
     const countThatchSkills = (skillsDir: string): number =>
       readdirSync(skillsDir, { withFileTypes: true })
@@ -90,13 +90,13 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const installed = existsSync(customDir) ? countThatchSkills(customDir) : -1;
-    if (installed !== 40) {
-      console.log(`  FAIL: custom-dir skills count is ${installed === -1 ? "missing" : installed}, expected 40`);
+    if (installed !== 41) {
+      console.log(`  FAIL: custom-dir skills count is ${installed === -1 ? "missing" : installed}, expected 41`);
       return "FAIL";
     }
     if (!setupFilesAbsent()) return "FAIL";
     const out1 = r1.stdout.toString();
-    if (!out1.includes(customDir) || !out1.includes("40 added")) {
+    if (!out1.includes(customDir) || !out1.includes("41 added")) {
       console.log("  FAIL: custom-dir stdout does not report the skills dir + '40 added'");
       return "FAIL";
     }
@@ -108,7 +108,7 @@ const useCase: UseCase = {
       console.log("  FAIL: `thatch setup --claude --skills-only ./custom-skills-2` exited non-zero");
       return "FAIL";
     }
-    if (countThatchSkills(join(dir, "custom-skills-2")) !== 40) {
+    if (countThatchSkills(join(dir, "custom-skills-2")) !== 41) {
       console.log("  FAIL: host-flag run did not install 40 skills to the explicit dir");
       return "FAIL";
     }
@@ -125,7 +125,7 @@ const useCase: UseCase = {
       console.log("  FAIL: `--local --skills-only ./custom-skills-2` exited non-zero");
       return "FAIL";
     }
-    if (!r2c.stdout.toString().includes("have no effect") || !r2c.stdout.toString().includes("40 unchanged")) {
+    if (!r2c.stdout.toString().includes("have no effect") || !r2c.stdout.toString().includes("41 unchanged")) {
       console.log("  FAIL: --local + explicit-dir run does not print the no-effect note with skills unchanged");
       return "FAIL";
     }
@@ -181,11 +181,11 @@ const useCase: UseCase = {
       console.log("  FAIL: combined `--skills-only ./custom-skills-3 --mcp-json` exited non-zero");
       return "FAIL";
     }
-    if (countThatchSkills(join(dir, "custom-skills-3")) !== 40) {
+    if (countThatchSkills(join(dir, "custom-skills-3")) !== 41) {
       console.log("  FAIL: combined run did not install 40 skills to the explicit dir");
       return "FAIL";
     }
-    if (!r5.stderr.toString().includes("40 added") || !r5.stderr.toString().includes("custom-skills-3")) {
+    if (!r5.stderr.toString().includes("41 added") || !r5.stderr.toString().includes("custom-skills-3")) {
       console.log("  FAIL: combined run does not report the install on stderr");
       return "FAIL";
     }
@@ -203,7 +203,7 @@ const useCase: UseCase = {
       console.log(`  stderr: ${r6.stderr.toString()}`);
       return "FAIL";
     }
-    if (countThatchSkills(join(dir, "custom-skills-4")) !== 40) {
+    if (countThatchSkills(join(dir, "custom-skills-4")) !== 41) {
       console.log("  FAIL: = form did not install 40 skills to the directory after the equals sign");
       return "FAIL";
     }
@@ -221,7 +221,7 @@ const useCase: UseCase = {
       console.log("  FAIL: host-flag combined run JSON is not the expected mcpServers.thatch entry");
       return "FAIL";
     }
-    if (!r7.stderr.toString().includes("40 added")) {
+    if (!r7.stderr.toString().includes("41 added")) {
       console.log("  FAIL: host-flag combined run does not report the install on stderr");
       return "FAIL";
     }
