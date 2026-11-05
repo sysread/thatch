@@ -26,7 +26,7 @@ Each section has one job:
 - PURPOSE: state the premise (the defect, or the pivot the change serves) and teach the feature-level mechanism that makes the diff legible.
 - DESCRIPTION: teach the system's current behavior and how this change alters it; end with a NEXT STEPS subsection when a follow-up ticket continues the work.
 - WALK-THROUGH (when needed): walk the reviewer through the new workflow step by step.
-- NOTES: flag scope limits, intentional regressions, and things AI reviewers will misread.
+- NOTES: opt-in; include only when a review comment or a genuine reviewer trap calls for it. Code comments are the first resort for explanations.
 - robots.txt (when needed): dense, machine-addressed context that heads off recurring false positives from automated reviewers.
 
 Each section builds on the previous one. The reader should never encounter a concept in section N that was not introduced in section N-1.
@@ -144,14 +144,17 @@ Rules:
 
 ### NOTES
 
-Always a `## NOTES` markdown header. Never a bare `Notes:` line ending a section.
+Opt-in, not default. Most PRs have no NOTES section. Include one only when a specific trigger calls for it:
 
-Use NOTES for:
-- Intentional behavior changes that look like regressions.
-- Scope disclaimers (what this PR does NOT do) - max two sentences, no hedging.
-- Deferred follow-up items (`Remaining work:` bullet list) - planned forward work with its own ticket goes in a DESCRIPTION `### NEXT STEPS` subsection instead.
-- Ticket scope mismatches (when the PR partially addresses the ticket).
-- Anything AI reviewers (Cursor BugBot, CodeRabbit) will misread.
+- A review comment asked for clarification the description did not carry (the reviewer needs the answer in the body).
+- A genuine reviewer trap: an intentional behavior change that looks like a regression, a scope disclaimer that prevents a wrong assumption, a deployment hazard.
+- A known coverage gap or deferred follow-up item the reviewer should not discover on their own.
+
+When something needs explaining, the **code comment is the right place first**. If a reviewer misread or stumbled on something, add a comment in the code at the spot that caused the confusion. The PR NOTES section is the fallback only when a code comment cannot reach the concern (a cross-cutting scope note, a deployment sequencing fact, a summary of a review exchange).
+
+Never reach to fill NOTES. A bullet that is technically correct but that no reviewer holding only the diff would trip on is filler; cut it. An absent NOTES section is the honest outcome.
+
+Always a `## NOTES` markdown header. Never a bare `Notes:` line ending a section.
 
 One bullet per item. Bold the **leading noun** in each bullet as the scan anchor.
 
