@@ -34,11 +34,22 @@ export interface ModsHarness {
   /** Script the lifecycle tool's next responseS (queued per call; an
    *  empty queue answers { text: "" }). */
   setLifecycleResponse(...res: unknown[]): void;
+  /** Script the chat-wake poll's next responseS (queued per poll; an
+   *  empty queue answers ""). */
+  setChatWakeResponse(...res: unknown[]): void;
   sessionId: string;
   readonly compacted: number;
   notified: string[];
   registeredCommands: string[];
   registeredTools: string[];
+  /** The timer callbacks the mod scheduled ($.clock.every) - tick them by
+   *  hand to drive the chat-wake poller. */
+  clockTicks: (() => void | Promise<void>)[];
+  /** The texts submitted via $.prompt.submit (the wake turns). */
+  submittedPrompts: string[];
+  /** When true, the next $.prompt.submit resolves as held/dropped (the
+   *  interrupt-refusal case). */
+  heldRefusal: boolean;
 }
 
 export function installModsHarness(options: { instructions: string; stageResponse?: unknown; stageError?: Error }): ModsHarness {
@@ -50,9 +61,13 @@ export function installModsHarness(options: { instructions: string; stageRespons
   let stageResponse: unknown = options.stageResponse ?? "";
   let stageError: Error | undefined = options.stageError;
   const lifecycleResponses: unknown[] = [];
+  const chatWakeResponses: unknown[] = [];
   const sessionId = "ses_mod_under_test";
   const registeredCommands: string[] = [];
   const registeredTools: string[] = [];
+  const clockTicks: (() => void | Promise<void>)[] = [];
+  const submittedPrompts: string[] = [];
+  let heldRefusal = false;
 
   const register = ((event: string, second: unknown, third?: unknown) => {
     // The docs' two shapes: on(event, handler) and on(event, matcher,
@@ -91,6 +106,20 @@ export function installModsHarness(options: { instructions: string; stageRespons
         return def;
       },
     },
+    clock: {
+      every: (_ms, fn) => {
+        clockTicks.push(fn);
+        return { cancel() {} };
+      },
+    },
+    prompt: {
+      submit: async (args) => {
+        // A refusal means the host queued nothing - not recorded.
+        if (heldRefusal) return { drop: "the prompt was removed from the queue before it ran" };
+        submittedPrompts.push(args.text);
+        return {};
+      },
+    },
     mcp: {
       call: async (call) => {
         if (call.tool === "plugin_stage") {
@@ -101,6 +130,9 @@ export function installModsHarness(options: { instructions: string; stageRespons
         if (call.tool === "plugin_lifecycle") {
           lifecycleCalls.push({ ...call.arguments });
           return lifecycleResponses.length > 0 ? lifecycleResponses.shift() : { text: "" };
+        }
+        if (call.tool === "plugin_chat_wake") {
+          return chatWakeResponses.length > 0 ? chatWakeResponses.shift() : "";
         }
         throw new Error(`unexpected tool call: ${call.server}/${call.tool}`);
       },
@@ -115,6 +147,14 @@ export function installModsHarness(options: { instructions: string; stageRespons
     notified,
     registeredCommands,
     registeredTools,
+    clockTicks,
+    submittedPrompts,
+    get heldRefusal() {
+      return heldRefusal;
+    },
+    set heldRefusal(v: boolean) {
+      heldRefusal = v;
+    },
     get compacted() {
       return compacted;
     },
@@ -125,6 +165,9 @@ export function installModsHarness(options: { instructions: string; stageRespons
     },
     setLifecycleResponse: (...res: unknown[]) => {
       lifecycleResponses.push(...res);
+    },
+    setChatWakeResponse: (...res: unknown[]) => {
+      chatWakeResponses.push(...res);
     },
     sessionId,
     runPromptSubmit: async (e) => {

@@ -12,14 +12,14 @@ import { installModsHarness } from "./mocks/mods-harness";
 describe("plugin mod: prompt.compose", () => {
   test("injects the instructions as a new section, preserving existing ones", async () => {
     const harness = installModsHarness({ instructions: "THATCH INSTRUCTIONS BLOCK" });
-    registerMod(harness.register, { instructions: "THATCH INSTRUCTIONS BLOCK", stageTool: { server: "thatch", tool: "plugin_stage" }, lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" } });
+    registerMod(harness.register, { instructions: "THATCH INSTRUCTIONS BLOCK", stageTool: { server: "thatch", tool: "plugin_stage" }, lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" }, chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" } });
     const out = await harness.runPromptCompose({ sections: ["existing section"] });
     expect(out.sections).toEqual(["existing section", "THATCH INSTRUCTIONS BLOCK"]);
   });
 });
 
 describe("plugin mod: prompt.submit", () => {
-  const options = { instructions: "I", stageTool: { server: "thatch", tool: "plugin_stage" }, lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" } };
+  const options = { instructions: "I", stageTool: { server: "thatch", tool: "plugin_stage" }, lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" }, chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" } };
 
   test("injects the stage text as context, tagged with the session id and prompt", async () => {
     const harness = installModsHarness({ instructions: "I", stageResponse: { text: "[thatch] nudge text" } });
@@ -91,10 +91,11 @@ test("the mod's import graph is Node-free (the mods runtime gives hooks no Node 
 });
 
 describe("plugin mod: lifecycle forwarding (Step B)", () => {
-  const options = {
+const options = {
     instructions: "I",
     stageTool: { server: "thatch", tool: "plugin_stage" },
     lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" },
+    chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" },
   };
 
   test("turn.start forwards busy for MAIN-conversation turns only", async () => {
@@ -158,5 +159,58 @@ describe("plugin mod: lifecycle forwarding (Step B)", () => {
     expect(harness.lifecycleCalls.at(-1)).toMatchObject({ event: "ask", kind: "permission", requestID: "toolu_1" });
     await harness.run("classic.PermissionDenied", { tool_use_id: "toolu_1" });
     expect(harness.lifecycleCalls.at(-1)).toMatchObject({ event: "resolved", requestID: "toolu_1" });
+  });
+});
+
+describe("plugin mod: chat wake (Step C)", () => {
+  const options = {
+    instructions: "I",
+    stageTool: { server: "thatch", tool: "plugin_stage" },
+    lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" },
+    chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" },
+  };
+
+  test("session.start schedules the poll cadence and registers the wrap-up surface", async () => {
+    const harness = installModsHarness({ instructions: "I" });
+    registerMod(harness.register, options);
+    await harness.run("session.start", {});
+    expect(harness.clockTicks.length).toBe(1);
+    expect(harness.registeredCommands.sort()).toEqual(["thatch_compact", "thatch_exit"]);
+  });
+
+  test("a poll hit submits the wake text as a turn and marks wake provenance", async () => {
+    const harness = installModsHarness({ instructions: "I", stageResponse: "" });
+    registerMod(harness.register, options);
+    await harness.run("session.start", {});
+    harness.setStageResponse("nudge-for-the-prompt-hook");
+    harness.setChatWakeResponse("[thatch] chat: unread message for you");
+    await harness.clockTicks[0]!();
+    expect(harness.submittedPrompts).toEqual(["[thatch] chat: unread message for you"]);
+    // The wake turn begins: turn.start forwards busy with the wake
+    // provenance (the machine classifies the round synthetic).
+    await harness.run("turn.start", { agentId: undefined });
+    expect(harness.lifecycleCalls.find((c) => c.event === "busy")?.wake).toBe(true);
+  });
+
+  test("a refused submission is held and retried from turn.complete", async () => {
+    const harness = installModsHarness({ instructions: "I", stageResponse: "" });
+    registerMod(harness.register, options);
+    await harness.run("session.start", {});
+    harness.heldRefusal = true;
+    harness.setChatWakeResponse("wake nudge");
+    await harness.clockTicks[0]!();
+    expect(harness.submittedPrompts).toEqual([]); // refused - held, not lost
+    // The user's next input un-holds the session; the turn.end retry lands.
+    harness.heldRefusal = false;
+    await harness.run("turn.complete", { agentId: undefined, isAborted: false });
+    expect(harness.submittedPrompts).toEqual(["wake nudge"]); // retried
+  });
+
+  test("a quiet poll submits nothing", async () => {
+    const harness = installModsHarness({ instructions: "I", stageResponse: "" });
+    registerMod(harness.register, options);
+    await harness.run("session.start", {});
+    await harness.clockTicks[0]!(); // lifecycle default: { text: "" }
+    expect(harness.submittedPrompts).toEqual([]);
   });
 });

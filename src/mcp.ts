@@ -12,7 +12,7 @@ import { actionDefs, mcpSpelling, type ActionDef } from "./commands";
 import { SidebandServer, sidebandSocketPath } from "./sideband";
 import { peekQueue, consumeQueue, resetMissedCount } from "./extract-queue";
 import { buildExtractionPayload } from "./extraction";
-import { computePluginStage } from "./flush";
+import { computePluginStage, computePluginChatWake } from "./flush";
 import { createPluginLifecycle } from "./claude-plugin/lifecycle";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { writeVersionFile, removeVersionFile, startVersionChecker, stopVersionChecker, getVersionChecker, readModLiveness, readRegimeMarker } from "./version-check";
@@ -225,9 +225,10 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
     // server-side (the sideband's role, reborn in-process).
     ...(mode === "bundled"
       ? {
-          pluginStage: (prompt: string, sessionID: string) =>
-            computePluginStage({ db, model, repo, dbPath }, prompt, sessionID),
+          pluginStage: (prompt: string, sessionID: string, transcriptPath?: string) =>
+            computePluginStage({ db, model, repo, dbPath }, prompt, sessionID, transcriptPath),
           pluginLifecycle: (event) => lifecycle!.handle(event),
+          pluginChatWake: (sessionID: string) => computePluginChatWake(db, sessionID),
         }
       : {}),    // Same-machine tab reader: the MCP server can read the local opencode
     // state tree, so its roster renders the same open/recent split.

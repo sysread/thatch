@@ -54,6 +54,18 @@ export interface ModsApi {
      *  mcp__<plugin>__<name>). */
     register(def: { name: string; description: string; inputSchema: Record<string, unknown>; isDeferred?: boolean }): Promise<unknown>;
   };
+  clock: {
+    /** PIN: the mods runtime's timer (the setInterval stand-in); the
+     *  callback runs outside any event's time budget and stops on module
+     *  reload. */
+    every(ms: number, fn: () => void | Promise<void>): { cancel(): void };
+  };
+  prompt: {
+    /** PIN: starts a turn from a background job (the proactive wake
+     *  channel). Refuses after a user interrupt - the docs' retry
+     *  pattern resubmits from turn.complete. */
+    submit(args: { text: string }): Promise<{ drop?: string } | unknown>;
+  };
 }
 
 /** The `on` registrar's handler shape, narrowed to what the mod registers. */
@@ -67,6 +79,7 @@ export interface ModRegistrar {
   (event: "classic.PermissionRequest", handler: ($: ModsApi, e: Record<string, unknown>, next: (e?: Record<string, unknown>) => Promise<unknown>) => Promise<unknown>): unknown;
   (event: "classic.PermissionDenied", handler: ($: ModsApi, e: Record<string, unknown>, next: (e?: Record<string, unknown>) => Promise<unknown>) => Promise<unknown>): unknown;
   (event: "session.start", handler: ($: ModsApi, e: Record<string, unknown>, next: (e?: Record<string, unknown>) => Promise<unknown>) => Promise<unknown>): unknown;
+  (event: "turn.complete", matcher: Record<string, unknown>, handler: ($: ModsApi, e: TurnCompleteEvent, next: (e?: TurnCompleteEvent) => Promise<unknown>) => Promise<unknown>): unknown;
   // The matcher form (the docs' second argument): an object whose fields
   // narrow which events reach the handler.
   (event: string, matcher: Record<string, unknown>, handler: ($: ModsApi, e: Record<string, unknown>, next: (e?: unknown) => Promise<unknown>) => Promise<unknown>): unknown;
@@ -115,6 +128,10 @@ export interface ThatchModOptions {
   stageTool: { server: string; tool: string };
   /** The bundled server's lifecycle tool coordinates. */
   lifecycleTool: { server: string; tool: string };
+  /** The bundled server's chat-wake poll coordinates. */
+  chatWakeTool: { server: string; tool: string };
+  /** The chat-wake poll cadence, ms (the opencode poller's beat, 30s). */
+  wakePollMs?: number;
 }
 
 /** The wrap-up kinds the mod registers as command + greenlight-tool pairs. */
@@ -173,6 +190,14 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
     return next({ ...e, sections: [...(e.sections ?? []), options.instructions] } as PromptComposeEvent);
   });
 
+  // Mod state (module scope - wiped on reload, which only costs one poll
+  // beat): the wake-in-flight flag marks turns THIS mod started, so the
+  // alert machine classifies them synthetic (a wake's round is
+  // bookkeeping, not user-waited work); pendingWake holds a refused
+  // submission for the turn.complete retry (the docs' pattern).
+  let wakeInFlight = false;
+  let pendingWake: string | null = null;
+
   // prompt.submit: liveness + stage. The stage tool call stamps the mod
   // liveness file (the disabled-mod detector) and returns the nudge text
   // for this prompt; empty text injects nothing. Fail-open everywhere: a
@@ -186,7 +211,7 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
       const res = await $.mcp.call({
         server: options.stageTool.server,
         tool: options.stageTool.tool,
-        arguments: { prompt: e.text ?? "", session_id: sessionId },
+        arguments: { prompt: e.text ?? "", session_id: sessionId, ...(e.transcript_path ? { transcript_path: e.transcript_path } : {}) },
       });
       stageText = readStageText(res);
     } catch {
@@ -199,12 +224,16 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
   // --- alerts: the mod forwards, the server classifies and delivers ---
 
   // Main conversation only (e.agentId set = a subagent's turn): subagent
-  // rounds are not the user's waiting-on work.
+  // rounds are not the user's waiting-on work. The busy event carries the
+  // wake provenance (a turn this mod submitted via $.prompt.submit is
+  // bookkeeping, not user-waited work - the machine stays silent on it).
   on("turn.start", async ($, e, next) => {
     if (e.agentId === undefined) {
       try {
-        await forwardLifecycle($, options, { event: "busy" });
-      } catch { /* alerts are best-effort */ }
+        await forwardLifecycle($, options, { event: "busy", wake: wakeInFlight });
+      } catch { /* alerts are best-effort */ } finally {
+        wakeInFlight = false;
+      }
     }
     return next(e);
   });
@@ -225,6 +254,17 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
   on("turn.complete", async ($, e, next) => {
     try {
       if (e.agentId === undefined) {
+        // The wake retry first: a submission refused at the interrupt
+        // resubmits here (the docs' pattern) - before the verdict, so the
+        // retried turn is not swallowed by this turn's classification.
+        if (pendingWake !== null) {
+          const text = pendingWake;
+          pendingWake = null;
+          try {
+            await $.prompt.submit({ text });
+            wakeInFlight = true;
+          } catch { /* still held - the next turn end retries again */ }
+        }
         const res = await forwardLifecycle($, options, { event: "complete", isAborted: e.isAborted === true });
         // The wrap-up resolution fires at idle, exactly the opencode
         // contract: compact = the host action; exit has no host close API,
@@ -265,10 +305,9 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
 
   // Wrap-up commands + their zero-arg greenlight tools: the opencode
   // protocol (arm on command, the model greenlights with the tool, the
-  // action fires at turn end), ported. Registration goes in
-  // session.start - wait for Step B's commit for the command names'
-  // rationale; register COMMANDS LAST (a taken name throws and a throw
-  // skips the rest of the hook).
+  // action fires at turn end), ported. Register COMMANDS LAST in the
+  // session.start hook (a taken name throws and a throw skips the rest
+  // of the hook).
   on("session.start", async ($, e, next) => {
     try {
       for (const kind of WRAPUP_KINDS) {
@@ -287,6 +326,49 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
         });
       }
     } catch { /* a taken name skips the rest - the catch keeps the session start alive */ }
+
+    // The chat-wake poller: the proactive delivery the settings-hook
+    // regime could never do. The poll asks the bundled server for pending
+    // mail (the re-nudge window bounds repeats server-side); a non-empty
+    // answer is submitted as a turn. Refused submissions (a user
+    // interrupt holds plugins' input) retry from turn.complete - the
+    // docs' pattern. The timer dies on module reload; the next reload
+    // re-arms it.
+    let wakeTimerActive = true;
+    const pollWake = async () => {
+      if (!wakeTimerActive) return;
+      let text = "";
+      try {
+        const sessionId = await $.session.id();
+        const res = await $.mcp.call({
+          server: options.chatWakeTool.server,
+          tool: options.chatWakeTool.tool,
+          arguments: { session_id: sessionId },
+        });
+        text = readStageText(res);
+      } catch {
+        return; // server unreachable - the next beat retries
+      }
+      if (!text.trim()) return;
+      try {
+        // A refused submission RESOLVES with { drop } ($.prompt.submit's
+        // contract); other refusal shapes reject. Both mean "held for the
+        // user's next input" - keep the text for the turn.end retry.
+        const res = await $.prompt.submit({ text }) as { drop?: string };
+        const reason = res?.drop ?? "";
+        if (/stopped and nobody has sent input|removed from the queue/.test(reason)) {
+          pendingWake = text;
+        } else {
+          pendingWake = null;
+          wakeInFlight = true;
+        }
+      } catch (err) {
+        const reason = String((err as Error)?.message ?? "");
+        if (/stopped and nobody has sent input|removed from the queue/.test(reason)) pendingWake = text;
+      }
+    };
+    $.clock.every(options.wakePollMs ?? 30_000, pollWake);
+
     return next(e);
   });
   on("command.run", { command: "thatch_compact" }, async ($) => {

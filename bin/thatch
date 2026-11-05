@@ -12,7 +12,7 @@ import { setupClaudeCode, setupCursor, setupSkillsOnly, registerClaudeMcpServer,
 import { installSkills, type InstallReport } from "../src/skills";
 import { installCommandsToDir, opencodeCommandDefs } from "../src/commands";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
-import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, createChatTailPretty, markdownBodyLines, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, CHAT_MAX_BODY_CHARS, CHAT_CLI_SENDER, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, resolveRegisteredPredecessor, cliBroadcastFrame, sanitizeCliSenderName, matchesHostSessionID, buildChatRosterJsonRow, type ChatSessionRow, type ChatTailFilter, type ChatTailEvent } from "../src/chat";
+import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, createChatTailPretty, markdownBodyLines, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, CHAT_MAX_BODY_CHARS, CHAT_CLI_SENDER, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, cliBroadcastFrame, sanitizeCliSenderName, matchesHostSessionID, buildChatRosterJsonRow, mcpChatHookLine, mcpChatPendingLine, type ChatSessionRow, type ChatTailFilter, type ChatTailEvent } from "../src/chat";
 import { writeRegimeMarker } from "../src/version-check";
 import { chatEnabled, loadConfig } from "../src/config";
 import { chatNotificationNudge } from "../src/prompts";
@@ -175,60 +175,12 @@ async function chatHookLine(hookSessionID?: string, transcriptPath?: string): Pr
   } catch {
     return "";
   }
-
-  if (hookSessionID) {
-    // Ensure-register: idempotent, so every prompt re-touches liveness and
-    // the first prompt of a conversation mints the assigned name. This is
-    // the MCP identity anchor - the session ID is stable per conversation,
-    // so re-registering finds the same row and name.
-    const sessionID = mcpSessionID(hookSessionID);
-    // Continuation adoption: Claude Code forks the session id on resume
-    // (and has been observed to fork spontaneously), stranding the old
-    // identity and mailbox. When this session is unknown, look for a
-    // predecessor transcript handing off to it; adopting keeps the name
-    // and mail following the human-level conversation. Runs before the
-    // ensure so the migrated row is the one re-registered.
-    if (!db.findChatSession(sessionID) && transcriptPath) {
-      try {
-        const pred = resolveRegisteredPredecessor(transcriptPath, hookSessionID, (raw) =>
-          db.findChatSession(mcpSessionID(raw))?.session_id ?? null,
-        );
-        if (pred) {
-          db.continueChatSession(pred, sessionID);
-          hookDebug("hook:adoption", `continued chat identity: ${pred} -> ${sessionID}`);
-        }
-      } catch (err) {
-        console.error(`[thatch] chat continuation adoption failed: ${err}`);
-      }
-    }
-    // The leave tombstone blocks this ensure: chat_unregister must outlive
-    // the turn that issued it, on MCP hosts as on opencode. The line is
-    // the standing signal - it repeats every prompt until the model
-    // rejoins, and it says plainly that rejoining mints a fresh identity,
-    // because the old one is closed for good (assigned names are never
-    // reused, so a tombstoned identity cannot be resurrected by a later
-    // register).
-    if (db.hasChatLeaveTombstone(sessionID) && !db.chatLeaveSuperseded(sessionID, repo)) {
-      return `[thatch] chat: this conversation left the chat directory (chat_unregister) and will not receive mail. If the user asks to rejoin, call thatch_chat_register with no arguments - that mints a fresh identity; the old one stays closed.`;
-    }
-    db.registerChatSession(sessionID, repo, null, "mcp");
-    const me = db.findChatSession(sessionID);
-    if (!me) return "";
-    const mine = db.unreadChatCount(sessionID);
-    const pendingOthers = db
-      .chatPendingByProject(repo)
-      .filter((p) => p.name !== me.name);
-    const others = pendingOthers.length > 0
-      ? ` Others in this project with unread mail: ${pendingOthers.map((p) => `${p.name} (${p.pending})`).join(", ")}.`
-      : "";
-    const mailbox = mine > 0 ? `${mine} unread message(s) for you` : "no unread mail for you";
-    return `[thatch] chat: you are ${me.name} (${mailbox}).${others}`;
-  }
-
-  const pending = db.chatPendingByProject(repo);
-  if (pending.length === 0) return "";
-  const parts = pending.map((p) => `${p.name} (${p.pending})`);
-  return `[thatch] chat: unread message(s) for ${parts.join(", ")} - the addressee should call chat_read`;
+  // The line's logic (adoption, tombstone, ensure, rendering) lives in
+  // src/chat.ts, shared with the plugin regime's stage tool - this hook
+  // keeps only the gates (chat enabled, repo detection).
+  return hookSessionID
+    ? mcpChatHookLine(db, hookSessionID, repo, transcriptPath)
+    : mcpChatPendingLine(db, repo);
 }
 
 /**

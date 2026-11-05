@@ -11,7 +11,7 @@ setupToolDefsHarness();
 
 describe("TOOL_DEFS", () => {
   test("exports the full tool catalog", () => {
-    expect(TOOL_DEFS.length).toBe(43);
+    expect(TOOL_DEFS.length).toBe(44);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -26,6 +26,7 @@ describe("TOOL_DEFS", () => {
       "get_extraction_payload",
       "plugin_stage",
       "plugin_lifecycle",
+      "plugin_chat_wake",
       "prediction_query",
       "prediction_update",
       "prediction_list",

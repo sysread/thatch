@@ -117,8 +117,10 @@ export interface CoreContext {
    *  from the mod (via $.mcp.call), returning the nudge text to inject into
    *  the turn's context - the sideband's role, reborn as an in-process
    *  MCP tool call (the mod has no Node APIs and cannot reach a socket).
-   *  Also stamps the mod liveness file. Absent on the standalone server. */
-  pluginStage?: (prompt: string, sessionID: string) => Promise<string>;
+   *  Also stamps the mod liveness file and anchors the chat identity
+   *  (ppid map + ensure/adoption; the transcript path enables adoption).
+   *  Absent on the standalone server. */
+  pluginStage?: (prompt: string, sessionID: string, transcriptPath?: string) => Promise<string>;
   /** The plugin regime's lifecycle dispatcher: the mod forwards host
    *  events (turn start/complete, tool calls, permission asks) and the
    *  bundled server classifies alerts and resolves wrap-up arms
@@ -133,6 +135,12 @@ export interface CoreContext {
     kind?: "compact" | "exit" | "question" | "permission";
     requestID?: string;
   }) => Promise<{ text: string; wrapup?: "compact" | "exit" }>;
+  /** The plugin regime's chat wake: the mod polls it on its timer
+   *  cadence; a non-empty return is the wake nudge to submit as a turn
+   *  ($.prompt.submit) - the proactive delivery settings hooks never
+   *  had. Same re-nudge window and delivered stamps as the fallback
+   *  regime's chat-notify. Absent on the standalone server. */
+  pluginChatWake?: (sessionID: string) => string;
   /** Drains a session's extraction queue. On the MCP path this deletes the
    *  file-backed queue and resets the missed-nudge counter. On the opencode
    *  path this is unused (the tool.execute.after hook handles drain via
@@ -3066,12 +3074,15 @@ const pluginStageDef: ToolDef = {
   args: {
     prompt: z.string().describe("The user's prompt text, as submitted."),
     session_id: z.string().describe("The session id the mod read from its own host context."),
+    transcript_path: z.string().optional().describe(
+      "The transcript file path when the mod's event carries one - enables continuation adoption (Claude Code forks session ids on resume).",
+    ),
   },
   async execute(args, ctx) {
     if (!ctx.pluginStage) {
       return "Plugin stage delivery is not available on this server.";
     }
-    return ctx.pluginStage(args.prompt as string, args.session_id as string);
+    return ctx.pluginStage(args.prompt as string, args.session_id as string, args.transcript_path as string | undefined);
   },
 };
 
@@ -3116,6 +3127,27 @@ const pluginLifecycleDef: ToolDef = {
   },
 };
 
+/**
+ * The plugin regime's chat-wake poll: the mod's timer calls it; a
+ * non-empty return is the wake nudge to submit as a turn. bundledOnly.
+ */
+const pluginChatWakeDef: ToolDef = {
+  name: "plugin_chat_wake",
+  description:
+    "Chat-wake polling for the thatch Claude Code plugin's mod. Not for " +
+    "the model to call.",
+  bundledOnly: true,
+  args: {
+    session_id: z.string(),
+  },
+  async execute(args, ctx) {
+    if (!ctx.pluginChatWake) {
+      return "Plugin chat wake is not available on this server.";
+    }
+    return ctx.pluginChatWake(args.session_id as string);
+  },
+};
+
 export const TOOL_DEFS: ToolDef[] = [
   rememberDef,
   recallDef,
@@ -3129,6 +3161,7 @@ export const TOOL_DEFS: ToolDef[] = [
   getExtractionPayloadDef,
   pluginStageDef,
   pluginLifecycleDef,
+  pluginChatWakeDef,
   predictionQueryDef,
   predictionUpdateDef,
   predictionListDef,
@@ -3167,6 +3200,8 @@ export interface CoreContextExtensions {
   extractionPayloadProvider?: CoreContext["extractionPayloadProvider"];
   drainExtractionQueue?: CoreContext["drainExtractionQueue"];
   pluginStage?: CoreContext["pluginStage"];
+  pluginLifecycle?: CoreContext["pluginLifecycle"];
+  pluginChatWake?: CoreContext["pluginChatWake"];
   watcherRegistry?: WatcherRegistry;
   projectDir?: string;
   openTabs?: CoreContext["openTabs"];
@@ -3198,6 +3233,8 @@ export function buildCoreContext(
     extractionPayloadProvider: extensions?.extractionPayloadProvider,
     drainExtractionQueue: extensions?.drainExtractionQueue,
     pluginStage: extensions?.pluginStage,
+    pluginLifecycle: extensions?.pluginLifecycle,
+    pluginChatWake: extensions?.pluginChatWake,
     watchers: extensions?.watcherRegistry,
     projectDir: extensions?.projectDir,
     openTabs: extensions?.openTabs,

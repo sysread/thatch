@@ -51,6 +51,11 @@ export type PluginLifecycleEvent = {
   isAborted?: boolean;
   kind?: "compact" | "exit" | "question" | "permission";
   requestID?: string;
+  /** The turn was started by the mod's own wake submission ($.prompt.submit
+   *  after a chat-wake poll hit) - synthetic-trigger provenance for the
+   *  alert machine (a wake's round is bookkeeping, never user-waited
+   *  work). */
+  wake?: boolean;
 };
 
 export interface PluginLifecycleResult {
@@ -73,6 +78,9 @@ export function createPluginLifecycle(deps: PluginLifecycleDeps) {
   // its reload case.
   const armed = new Map<string, true>();
   const greenlit = new Map<string, "compact" | "exit">();
+  // The wake provenance: the busy event carries it (the mod knows which
+  // turns it started); the complete event consumes it.
+  const wakeBySession = new Map<string, boolean>();
 
   const alerts = createAlerts({
     config: (): Config => deps.config ?? loadConfig().config,
@@ -96,6 +104,7 @@ export function createPluginLifecycle(deps: PluginLifecycleDeps) {
       const sid = event.sessionID;
       switch (event.event) {
         case "busy":
+          wakeBySession.set(sid, event.wake === true);
           alerts.sessionBusy(sid);
           return { text: "" };
 
@@ -127,7 +136,8 @@ export function createPluginLifecycle(deps: PluginLifecycleDeps) {
             greenlit.delete(`${sid}:wrapup`);
             wrapup = kind;
           }
-          reportedShape.set(sid, { syntheticTrigger: false, roundError: null });
+          reportedShape.set(sid, { syntheticTrigger: wakeBySession.get(sid) === true, roundError: null });
+          wakeBySession.delete(sid);
           await alerts.sessionIdle(sid);
           reportedShape.delete(sid);
           return { text: "", ...(wrapup ? { wrapup } : {}) };

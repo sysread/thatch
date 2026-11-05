@@ -4,6 +4,7 @@ import { openSync, readSync, closeSync, readdirSync, statSync, mkdtempSync, writ
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { CHAT_NAME_POOL } from "./chat-names";
+import type { ThatchDB } from "./db";
 import { withDidYouMean } from "./fuzzy";
 
 /**
@@ -443,6 +444,75 @@ export function chatLiveness(row: ChatSessionRow, now = Date.now(), openTabs?: R
   if (row.host_kind === "mcp") return stale ? "idle" : "active";
   if (stale) return "stale";
   return openTabs?.has(row.session_id) ? "open" : "recent";
+}
+
+/**
+ * The MCP identity anchor: continuation adoption + ensure-register for a
+ * host session id, shared by every MCP-path caller of a chat line (the
+ * fallback hooks' chatHookLine AND the plugin regime's stage tool). With a
+ * transcript path and an unknown session, looks for a predecessor
+ * transcript handing off to it (Claude Code forks session ids on resume
+ * and has been observed to fork spontaneously) and adopts - the name and
+ * mailbox follow the human-level conversation. The ensure is idempotent:
+ * every prompt re-touches liveness; the first prompt of a conversation
+ * mints the assigned name.
+ */
+export function ensureMcpChatIdentity(db: ThatchDB, hostSessionID: string, repo: string, transcriptPath?: string): ChatSessionRow | null {
+  const sessionID = mcpSessionID(hostSessionID);
+  if (!db.findChatSession(sessionID) && transcriptPath) {
+    try {
+      const pred = resolveRegisteredPredecessor(transcriptPath, hostSessionID, (raw) =>
+        db.findChatSession(mcpSessionID(raw))?.session_id ?? null,
+      );
+      if (pred) {
+        db.continueChatSession(pred, sessionID);
+      }
+    } catch {
+      // Adoption is best-effort: a failed walk registers fresh.
+    }
+  }
+  // The leave tombstone is NOT cleared here: chat_unregister must outlive
+  // the turn that issued it, on MCP hosts as on opencode (a tombstoned
+  // identity cannot be resurrected by a later register - assigned names
+  // are never reused).
+  db.registerChatSession(sessionID, repo, null, "mcp");
+  return db.findChatSession(sessionID);
+}
+
+/**
+ * The session-known chat hook line: the caller's identity plus its own
+ * unread count (the model learns who it is on every prompt without a
+ * tool call), plus the other project sessions' pending counts. Tombstoned
+ * identities render the closed-door line instead. Shared by the fallback
+ * hooks' chatHookLine and the plugin regime's stage tool.
+ */
+export function mcpChatHookLine(db: ThatchDB, hostSessionID: string, repo: string, transcriptPath?: string): string {
+  const sessionID = mcpSessionID(hostSessionID);
+  if (db.hasChatLeaveTombstone(sessionID) && !db.chatLeaveSuperseded(sessionID, repo)) {
+    return `[thatch] chat: this conversation left the chat directory (chat_unregister) and will not receive mail. If the user asks to rejoin, call thatch_chat_register with no arguments - that mints a fresh identity; the old one stays closed.`;
+  }
+  const me = ensureMcpChatIdentity(db, hostSessionID, repo, transcriptPath);
+  if (!me) return "";
+  const mine = db.unreadChatCount(sessionID);
+  const pendingOthers = db
+    .chatPendingByProject(repo)
+    .filter((p) => p.name !== me.name);
+  const others = pendingOthers.length > 0
+    ? ` Others in this project with unread mail: ${pendingOthers.map((p) => `${p.name} (${p.pending})`).join(", ")}.`
+    : "";
+  const mailbox = mine > 0 ? `${mine} unread message(s) for you` : "no unread mail for you";
+  return `[thatch] chat: you are ${me.name} (${mailbox}).${others}`;
+}
+
+/**
+ * The no-session chat line (a payload with no session id): pending mail
+ * for registered sessions in the project, naming the addressees.
+ */
+export function mcpChatPendingLine(db: ThatchDB, repo: string): string {
+  const pending = db.chatPendingByProject(repo);
+  if (pending.length === 0) return "";
+  const parts = pending.map((p) => `${p.name} (${p.pending})`);
+  return `[thatch] chat: unread message(s) for ${parts.join(", ")} - the addressee should call chat_read`;
 }
 
 /**
