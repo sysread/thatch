@@ -114,7 +114,9 @@ const options = {
     await harness.run("tool.call", { tool: "Bash", agentId: undefined });
     expect(harness.lifecycleCalls.at(-1)?.event).toBe("realwork");
     await harness.run("tool.call", { tool: "Bash", agentId: "agent-1" });
-    expect(harness.lifecycleCalls.length).toBe(1); // subagent call: no forward
+    // Subagent calls BUFFER now (is_main=false) - but never mark work.
+    expect(harness.lifecycleCalls.length).toBe(2);
+    expect(harness.lifecycleCalls.at(-1)).toMatchObject({ event: "realwork", is_main: false });
     // The greenlight tool: matched handler answers with the server's text.
     harness.setLifecycleResponse({ text: "[not armed] The compact wrap-up was never armed." });
     const res = await harness.run("tool.call", { tool: "mcp__thatch__compact" });
@@ -126,7 +128,7 @@ const options = {
     const harness = installModsHarness({ instructions: "I" });
     registerMod(harness.register, options);
     await harness.run("turn.complete", { agentId: undefined, isAborted: true });
-    expect(harness.lifecycleCalls.at(-1)).toMatchObject({ event: "complete", isAborted: true });
+    expect(harness.lifecycleCalls.at(-1)).toMatchObject({ event: "complete", is_aborted: true });
     // Arm + greenlight via the routed handlers, then complete: compact fires.
     // The lifecycle responses are scripted per call (arm ack, greenlight
     // ack, the complete resolution naming the action).
@@ -157,9 +159,9 @@ const options = {
     const harness = installModsHarness({ instructions: "I" });
     registerMod(harness.register, options);
     await harness.run("classic.PermissionRequest", { tool_use_id: "toolu_1" });
-    expect(harness.lifecycleCalls.at(-1)).toMatchObject({ event: "ask", kind: "permission", requestID: "toolu_1" });
+    expect(harness.lifecycleCalls.at(-1)).toMatchObject({ event: "ask", kind: "permission", request_id: "toolu_1" });
     await harness.run("classic.PermissionDenied", { tool_use_id: "toolu_1" });
-    expect(harness.lifecycleCalls.at(-1)).toMatchObject({ event: "resolved", requestID: "toolu_1" });
+    expect(harness.lifecycleCalls.at(-1)).toMatchObject({ event: "resolved", request_id: "toolu_1" });
   });
 });
 
@@ -214,5 +216,82 @@ describe("plugin mod: chat wake (Step C)", () => {
     await harness.run("session.start", {});
     await harness.clockTicks[0]!(); // lifecycle default: { text: "" }
     expect(harness.submittedPrompts).toEqual([]);
+  });
+});
+
+describe("THE WIRE: mod forwards through the REAL plugin_lifecycle schema", () => {
+  // The round-2/3 reviews' root cause: both test suites entered at their
+  // own side of the mod->tool seam (camelCase both sides) while the tool's
+  // zod schema reads snake_case - deepPassthrough rode the junk silently.
+  // This test drives the mod's ACTUAL forward payload through the REAL
+  // ToolDef's execute (schema validation + field mapping) into a
+  // lifecycle spy, so the seam's naming contract is asserted end to end.
+  const options = {
+    instructions: "I",
+    stageTool: { server: "thatch", tool: "plugin_stage" },
+    lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" },
+    chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" },
+    watchPollTool: { server: "thatch", tool: "plugin_watch_poll" },
+  };
+
+  test("abort + realwork survive the schema into the lifecycle verdicts", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const dir = mkdtempSync(join(tmpdir(), "wire-"));
+    process.env.THATCH_QUEUE_DIR = dir;
+    try {
+      const captured: Record<string, unknown>[] = [];
+      const harness = installModsHarness({ instructions: "I", stageResponse: "" });
+      registerMod(harness.register, options);
+
+      // The REAL def: schema + execute - the wire under test. The
+      // harness's api.mcp.call is PATCHED so the mod's lifecycle forwards
+      // route through the def's ZOD SCHEMA (the boundary's naming
+      // authority) into a spy ctx - the crossing both suites skipped.
+      const { TOOL_DEFS } = await import("../src/tool-defs");
+      const def = TOOL_DEFS.find((t) => t.name === "plugin_lifecycle")!;
+      const harnessCall = harness.api.mcp.call.bind(harness.api.mcp);
+      harness.api.mcp.call = async (call: { server: string; tool: string; arguments?: Record<string, unknown> }) => {
+        if (call.tool !== "plugin_lifecycle") return harnessCall(call);
+        return def.execute((call.arguments ?? {}) as never, { pluginLifecycle: async (event: Record<string, unknown>) => { captured.push(event); return { text: "ok" }; } } as never);
+      };
+
+      // The mod's forwards, with the mod's ACTUAL spellings.
+      await harness.run("tool.call", { tool: "Bash", agentId: "agent-9", command: "ls", }); // subagent
+      await harness.run("tool.call", { tool: "Bash", agentId: undefined, command: "git status" });
+      await harness.run("turn.complete", { agentId: undefined, isAborted: true });
+
+      // The subagent call buffered (is_main=false), with the tool's OWN
+      // args + result text - NOT the empty/undefined the pre-fix wire
+      // produced.
+      const realwork = captured.filter((c) => c.event === "realwork");
+      expect(realwork.length).toBe(2);
+      expect(realwork[0]).toMatchObject({ tool: "Bash", isMain: false, args: { command: "ls" } });
+      expect(realwork[1]).toMatchObject({ tool: "Bash", isMain: true, args: { command: "git status" } });
+      // The abort survived the schema: the lifecycle's complete got it.
+      expect(captured.find((c) => c.event === "complete")).toMatchObject({ isAborted: true });
+    } finally {
+      delete process.env.THATCH_QUEUE_DIR;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the generated shim's option object typechecks against ThatchModOptions", async () => {
+    // The r1 blocker's class: the shim is a generated STRING outside the
+    // type system - its option object was silently missing two of three
+    // coordinates. Parse the shim out of the setup source and typecheck
+    // its options against the mod's REAL option type.
+    const setupSrc = readFileSync(join(__dirname, "../src/setup.ts"), "utf8");
+    const shimMatch = setupSrc.match(/export function register\(on\) \{[\s\S]*?return thatchRegister\(on, (\{[\s\S]*?\})\);/);
+    expect(shimMatch).not.toBeNull();
+    // Parse-free: each required ThatchModOptions key must appear in the
+    // shim's option object (the shim is a generated string - parse it by
+    // key presence, then verify the key exists in the mod's option type).
+    const shimOptions = shimMatch![1]!;
+    const modSrc = readFileSync(join(__dirname, "../src/claude-plugin/mod.ts"), "utf8");
+    for (const key of ["instructions", "stageTool", "lifecycleTool", "chatWakeTool", "watchPollTool"]) {
+      expect(shimOptions, `the generated shim is missing ThatchModOptions.${key}`).toContain(`${key}:`);
+      expect(modSrc, `ThatchModOptions.${key} must exist in the mod's option type`).toContain(`${key}:`);
+    }
   });
 });

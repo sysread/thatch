@@ -3160,7 +3160,7 @@ const pluginLifecycleDef: ToolDef = {
       isAborted: args.is_aborted as boolean | undefined,
       isMain: args.is_main as boolean | undefined,
       wake: args.wake as boolean | undefined,
-      kind: args.kind as "compact" | undefined,
+      kind: args.kind as "compact" | "exit" | "question" | "permission" | undefined,
       requestID: args.request_id as string | undefined,
       args: args.tool_input as Record<string, unknown> | undefined,
       result: args.tool_response as string | undefined,

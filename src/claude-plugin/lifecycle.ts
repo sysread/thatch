@@ -215,10 +215,12 @@ export function createPluginLifecycle(deps: PluginLifecycleDeps) {
         case "session-end": {
           // A REAL session end (the mod branches on session.end's e.reason:
           // not /clear, /resume, /branch). The watcher registry declares
-          // the death (its watchers' death notices + journal cleanup);
-          // this session's own bookkeeping clears. The mod calls this
-          // inside session.end's 1.5-second budget - the forward is one
-          // in-process call.
+          // the death: registry + journal CLEANUP only - the opencode
+          // path's CARE-BASED death notices ride the dead session's spawn
+          // metadata (thatch.coordinatorSessionID), which Claude Code
+          // sessions do not have; routing them is a named gap, not wired
+          // here. The mod calls this inside session.end's 1.5-second
+          // budget - the forward is one in-process call.
           deps.watchers?.sessionDied(sid);
           for (const kind of ["compact", "exit"] as const) armed.delete(`${sid}:${kind}`);
           greenlit.delete(`${sid}:wrapup`);

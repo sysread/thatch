@@ -35,7 +35,8 @@ function claudeConfigDir(homeDir: string): string {
 
 /** The thatch DB path, resolved the same way bin/thatch and the MCP server
  *  do (THATCH_DB_PATH override, else under the config home). The regime
- *  marker derives from it (version-check's cacheDir chain). */
+ *  marker is BESIDE the db (dirname) - deliberately not version-check's
+ *  tmp cacheDir (a reboot must not erase the regime story). */
 function thatchDbPath(homeDir: string): string {
   return process.env.THATCH_DB_PATH ?? join(process.env.XDG_CONFIG_HOME ?? join(homeDir, ".config"), "thatch", "thatch.db");
 }
@@ -149,6 +150,9 @@ function removeThatchHooks(settingsPath: string): void {
   for (const event of Object.keys(hooks)) {
     const groups = hooks[event];
     if (!Array.isArray(groups)) continue;
+    // The match is BROAD (the writer's twin rule - legacy shapes must
+    // match too); the accepted cost: a user hook whose command mentions
+    // "thatch" is treated as ours and removed.
     const kept = groups.filter((g: any) => !g?.hooks?.some((h: any) => h?.command?.includes("thatch")));
     if (kept.length === 0) delete hooks[event];
     else hooks[event] = kept;
@@ -359,6 +363,9 @@ function replaceThatchHooks(
   command: string,
 ): { hooks: HookEntry[] }[] {
   // Remove existing thatch hook groups, then add ours.
+  // BROAD match (the remover's twin rule - legacy shapes must match too);
+  // the accepted cost: a user hook whose command merely mentions "thatch"
+  // is treated as ours and replaced.
   const filtered = groups.filter(
     (g) => !g.hooks.some((h) => h.command?.includes("thatch")),
   );
@@ -557,6 +564,7 @@ export function register(on) {
     stageTool: { server: "thatch", tool: "plugin_stage" },
     lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" },
     chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" },
+    watchPollTool: { server: "thatch", tool: "plugin_watch_poll" },
   });
 }
 `,

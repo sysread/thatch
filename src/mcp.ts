@@ -242,6 +242,11 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
           if (pending === undefined) db.runtimeStateDelete("watcher_pending", sessionID);
           else db.runtimeStatePut("watcher_pending", sessionID, pending, projectDir);
         },
+        onSessionDeath: () => {
+          // Cleanup-only death handling (see the lifecycle's session-end):
+          // the care-based death notices need the opencode spawn-metadata
+          // coordinator link - a named gap on Claude Code.
+        },
         deliver: async () => {
           // Unreachable: canDeliver is false - the mod's pull drains.
         },
@@ -250,17 +255,32 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
       })
     : null;
   if (watchers) {
-    // Rehydrate: re-arm every journaled registration (cross-session - a
-    // watcher any CC session registered comes alive for this one; the
-    // 480h TTL bounds the undead).
-    for (const row of db.runtimeStateAll()) {
-      if (row.kind !== "watchers" || !Array.isArray(row.value)) continue;
-      try {
-        await watchers.rearm(row.sessionID, row.value as never);
-      } catch (err) {
-        console.error(`[thatch] watcher rehydrate failed for ${row.sessionID}: ${err}`);
+    // Rehydrate, NON-BLOCKING: the rearm's baseline refetches (gh) must
+    // not delay the MCP handshake - fire and continue; failures surface
+    // in the log. The registrations are DB-BACKED (the runtime_state
+    // journal rows: durable across sessions, mod reloads, and server
+    // restarts); the watcher_pending rows restore too (the pending queue
+    // survives a server death - hydratePending re-journals immediately).
+    // COST NOTE: N concurrent sessions each re-arm every journaled
+    // watcher (gh polls x N) - correct delivery (pending is per-owner),
+    // linear gh load; acceptable at QA scale, revisit if fleet-wide.
+    void (async () => {
+      for (const row of db.runtimeStateAll()) {
+        if (row.kind === "watchers" && Array.isArray(row.value)) {
+          try {
+            await watchers.rearm(row.sessionID, row.value as never);
+          } catch (err) {
+            console.error(`[thatch] watcher rehydrate failed for ${row.sessionID}: ${err}`);
+          }
+        } else if (row.kind === "watcher_pending" && Array.isArray(row.value)) {
+          try {
+            watchers.hydratePending(row.sessionID, row.value as never);
+          } catch (err) {
+            console.error(`[thatch] watcher pending restore failed for ${row.sessionID}: ${err}`);
+          }
+        }
       }
-    }
+    })();
     watchers.start();
   }
 
@@ -319,7 +339,12 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
   // plugin regime a standalone server should not be configured at all
   // (double delivery), so it warns instead of auto-refreshing (auto-
   // refresh would resurrect the deactivated fallback hooks and markers).
-  const regimeMarker = mode === "standalone" ? readRegimeMarker(dbPath) : null;
+  const regimeMarker = mode === "standalone"
+    // HOST-SCOPED: a mixed-host machine runs Cursor's standalone server
+    // beside Claude's plugin regime - Cursor's marker absence must not
+    // inherit Claude's (wrong advice + dead auto-refresh).
+    ? readRegimeMarker(dbPath, process.env.CURSOR_PROJECT_DIR ? "cursor" : "claude")
+    : null;
   if (mode === "standalone") {
     const setupStatus = checkSetup(projectDir);
     if (regimeMarker === "plugin") {

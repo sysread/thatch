@@ -252,27 +252,29 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
 
   on("tool.call", async ($, e, next) => {
     // The wrap-up greenlight tools route to the arm check, not to work
-    // bookkeeping. Everything else main-conversation forwards as a
-    // real-work candidate - WITH its input and result text: the same
-    // forward is the plugin regime's BUFFER PUSH (the server owns the
-    // buffer's filtering). The result is serialized defensively: the
-    // middleware result's shapes vary per tool (result field, bare
-    // string, deny).
+    // bookkeeping. Everything else forwards as a real-work candidate -
+    // WITH its input and result text: the same forward is the plugin
+    // regime's BUFFER PUSH (the server owns the buffer's filtering). The
+    // result is serialized defensively: the middleware result's shapes
+    // vary per tool (result field, bare string, deny).
     const result = await next(e);
     const resultText = typeof result === "string"
       ? result
       : ((result as { result?: unknown; text?: unknown })?.result ?? (result as { text?: unknown })?.text ?? "");
-    if (e.agentId === undefined) {
-      try {
-        await forwardLifecycle($, options, {
-          event: "realwork",
-          tool: e.tool,
-          args: toolArgsOf(e),
-          result: typeof resultText === "string" ? resultText.slice(0, 2000) : JSON.stringify(resultText).slice(0, 2000),
-          isMain: e.agentId === undefined,
-        });
-      } catch { /* alerts + buffering are best-effort */ }
-    }
+    try {
+      await forwardLifecycle($, options, {
+        event: "realwork",
+        tool: e.tool,
+        // THE WIRE SPELLING: the tool's zod schema reads snake_case
+        // (tool_input/tool_response/is_main/...). The schema is the
+        // boundary's single naming authority - the mod spells THIS way,
+        // never camelCase (deepPassthrough would silently drop the
+        // camel keys and hollow out buffering + the verdicts).
+        tool_input: toolArgsOf(e),
+        tool_response: typeof resultText === "string" ? resultText.slice(0, 2000) : JSON.stringify(resultText).slice(0, 2000),
+        is_main: e.agentId === undefined,
+      });
+    } catch { /* alerts + buffering are best-effort */ }
     return result;
   });
 
@@ -284,13 +286,22 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
         // retried turn is not swallowed by this turn's classification.
         if (pendingWake !== null) {
           const text = pendingWake;
-          pendingWake = null;
           try {
-            await $.prompt.submit({ text });
-            wakeInFlight = true;
-          } catch { /* still held - the next turn end retries again */ }
+            // Same contract as the poll's submit: a drop (ANY wording) or
+            // a throw means still-held - the text SURVIVES for the next
+            // turn end; only a clean result consumes it.
+            const res = await $.prompt.submit({ text }) as { drop?: string };
+            if (res?.drop) {
+              pendingWake = text;
+            } else {
+              pendingWake = null;
+              wakeInFlight = true;
+            }
+          } catch {
+            pendingWake = text;
+          }
         }
-        const res = await forwardLifecycle($, options, { event: "complete", isAborted: e.isAborted === true });
+        const res = await forwardLifecycle($, options, { event: "complete", is_aborted: e.isAborted === true });
         // The wrap-up resolution fires at idle, exactly the opencode
         // contract: compact = the host action; exit has no host close API,
         // so it degrades to a user notification (the plan's documented
@@ -313,7 +324,7 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
       await forwardLifecycle($, options, {
         event: "ask",
         kind: "permission",
-        requestID: typeof e.tool_use_id === "string" ? e.tool_use_id : undefined,
+        request_id: typeof e.tool_use_id === "string" ? e.tool_use_id : undefined,
       });
     } catch { /* alerts are best-effort */ }
     return next(e);
@@ -322,7 +333,7 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
     try {
       await forwardLifecycle($, options, {
         event: "resolved",
-        requestID: typeof e.tool_use_id === "string" ? e.tool_use_id : undefined,
+        request_id: typeof e.tool_use_id === "string" ? e.tool_use_id : undefined,
       });
     } catch { /* alerts are best-effort */ }
     return next(e);
@@ -410,7 +421,7 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
         let watchRes = "";
         try {
           watchRes = readStageText(await $.mcp.call({
-            server: options.chatWakeTool.server,
+            server: options.watchPollTool.server,
             tool: options.watchPollTool.tool,
             arguments: { session_id: sessionId },
           }));
