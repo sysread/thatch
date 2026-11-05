@@ -293,5 +293,12 @@ describe("THE WIRE: mod forwards through the REAL plugin_lifecycle schema", () =
       expect(shimOptions, `the generated shim is missing ThatchModOptions.${key}`).toContain(`${key}:`);
       expect(modSrc, `ThatchModOptions.${key} must exist in the mod's option type`).toContain(`${key}:`);
     }
+    // The shim's IMPORTED NAME must be a real mod.ts export (the F1
+    // blocker's class: `import { register }` linked nothing - registerMod
+    // is the export - and the whole regime delivered nothing). Asserts
+    // the import's source name against mod.ts's export list.
+    const importMatch = setupSrc.match(/import \{ (\w+)(?: as \w+)? \} from "\.\/mod\.js"/);
+    expect(importMatch, "the shim does not import from ./mod.js").not.toBeNull();
+    expect(modSrc, `mod.ts must export ${importMatch![1]} (the shim imports it)`).toMatch(new RegExp(`export (function|const) ${importMatch![1]}\\b`));
   });
 });
