@@ -81,7 +81,8 @@ export function compileTools(opts?: { bundled?: boolean }): Map<string, Compiled
     // no delivery channel. bundledOnly tools are wired through the
     // PLUGIN-regime bundled server's CoreContext only.
     if (def.v2Only || def.opencodeDbOnly) continue;
-    if ((def.opencodeOnly || def.bundledOnly) && !opts?.bundled) continue;
+    if (def.bundledOnly && !opts?.bundled) continue;
+    if (def.opencodeOnly && !(opts?.bundled && def.bundledServable)) continue;
     const schema = z.object(def.args);
     // The validator deep-passthroughs so typo'd keys survive into the
     // tool's accept-then-teach guards at EVERY object level ("you passed
@@ -213,9 +214,6 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
     consumeQueue(sessionID);
   };
 
-  const lifecycle = mode === "bundled"
-    ? createPluginLifecycle({ db, model, repo, dbPath })
-    : null;
   // The bundled server's session identity for the MODEL's tool calls: the
   // host's MCP client supplies no session context, but the mod's stage
   // call runs per prompt (before the turn's tool calls) and anchors
@@ -266,6 +264,9 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
     watchers.start();
   }
 
+  const lifecycle = mode === "bundled"
+    ? createPluginLifecycle({ db, model, repo, dbPath, watchers: watchers ?? undefined })
+    : null;
   const ctx: CoreContext = {
     db,
     model,

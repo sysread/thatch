@@ -22,11 +22,14 @@ constraints, not historical hosts:
 
 - `opencodeOnly` - needs opencode host surfaces (the session concept, the
   event bus, the poller). The STANDALONE MCP server filters these out.
-  The watch tools (`watch_create`/`watch_branch_create`/`watch_command_create`/
-  `watch_list`/`watch_cancel`) are the bounded exception: the PLUGIN
-  regime's bundled server un-fences them, because it wires
-  `ctx.watchers` (the registry) and the mod's timer is both poller and
-  delivery.
+  ONE bounded exception: the five watch tools
+  (`watch_create`/`watch_branch_create`/`watch_command_create`/
+  `watch_list`/`watch_cancel`, flagged `bundledServable`) un-fence on the
+  PLUGIN regime's bundled server, because it wires `ctx.watchers` (the
+  registry) and the mod's timer is both poller and delivery. The other
+  opencodeOnly tools - the archaeology trio (`opencodeDbOnly`) and
+  `exit`/`compact` (they need opencode's wrapUpGreenlight host-action
+  state) - stay fenced on every MCP server.
 - `opencodeDbOnly` - reads opencode.db (`get_session_info`,
   `session_search`, `session_get`): wrong corpus on ANY Claude Code
   server, bundled included. Never serves outside opencode.

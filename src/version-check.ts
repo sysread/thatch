@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import pkg from "../package.json";
@@ -113,12 +113,12 @@ export function readModLiveness(dbPath: string): number | null {
  *  the tmp cache - a reboot wiping tmp would erase the regime story and
  *  the standalone server's auto-refresh would resurrect the deactivated
  *  fallback hooks (the regime-warfare failure, defeated by a tmp reaper). */
-export function regimeMarkerPath(dbPath: string): string {
-  return join(dirname(dbPath), "regime");
+export function regimeMarkerPath(dbPath: string, host: "claude" | "cursor" = "claude"): string {
+  return join(dirname(dbPath), `regime-${host}`);
 }
 
-export function writeRegimeMarker(dbPath: string, regime: "plugin"): void {
-  const path = regimeMarkerPath(dbPath);
+export function writeRegimeMarker(dbPath: string, regime: "plugin", host: "claude" | "cursor" = "claude"): void {
+  const path = regimeMarkerPath(dbPath, host);
   try {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, regime, "utf-8");
@@ -128,9 +128,20 @@ export function writeRegimeMarker(dbPath: string, regime: "plugin"): void {
   }
 }
 
-export function readRegimeMarker(dbPath: string): "plugin" | null {
+/** The HOST-SCOPED marker read: a plugin-regime install is Claude-Code-only;
+ * a machine can also run Cursor's standalone server - its marker absence
+ * must not inherit Claude's. */
+export function clearRegimeMarker(dbPath: string, host: "claude" | "cursor" = "claude"): void {
   try {
-    const path = regimeMarkerPath(dbPath);
+    rmSync(regimeMarkerPath(dbPath, host));
+  } catch {
+    // Absent is fine.
+  }
+}
+
+export function readRegimeMarker(dbPath: string, host: "claude" | "cursor" = "claude"): "plugin" | null {
+  try {
+    const path = regimeMarkerPath(dbPath, host);
     if (!existsSync(path)) return null;
     const v = readFileSync(path, "utf-8").trim();
     return v === "plugin" ? "plugin" : null;

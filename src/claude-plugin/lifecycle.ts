@@ -161,7 +161,10 @@ export function createPluginLifecycle(deps: PluginLifecycleDeps) {
           // stop (isSilentError's class - never notifies), recorded as the
           // round error so the idle verdict routes silent.
           if (event.isAborted) alerts.sessionError(sid, "MessageAbortedError");
-          const kind = greenlit.get(`${sid}:wrapup`);
+          // An aborted turn does NOT resolve the wrap-up: the user's ESC
+          // after greenlight means not-now - the arm survives for the
+          // next turn end.
+          const kind = event.isAborted ? undefined : greenlit.get(`${sid}:wrapup`);
           let wrapup: PluginLifecycleResult["wrapup"];
           if (kind) {
             greenlit.delete(`${sid}:wrapup`);

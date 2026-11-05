@@ -102,7 +102,8 @@ registration prints as a manual removal step). Opt-in must DELETE: the
 fallback's auto-refresh would otherwise resurrect the removed hooks, and
 both regimes would deliver every prompt.
 
-The regime marker (cache dir, beside the version file) makes `checkSetup`
+The regime marker (beside the DB in the config dir - DURABLE, not the tmp
+cache: a reboot must not erase the regime story) makes `checkSetup`
 report the plugin install and makes a leftover STANDALONE server warn
 instead of auto-refresh. The mod stamps a liveness file per prompt; a
 stale stamp prepends a one-time plugin-not-delivering warning to the

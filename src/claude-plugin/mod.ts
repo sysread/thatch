@@ -132,6 +132,8 @@ export interface ThatchModOptions {
   lifecycleTool: { server: string; tool: string };
   /** The bundled server's chat-wake poll coordinates. */
   chatWakeTool: { server: string; tool: string };
+  /** The bundled server's watcher-poll drain coordinates. */
+  watchPollTool: { server: string; tool: string };
   /** The chat-wake poll cadence, ms (the opencode poller's beat, 30s). */
   wakePollMs?: number;
 }
@@ -180,7 +182,8 @@ export function readStageText(res: unknown): string {
 /**
  * Registers the mod's hooks. Registers COMMANDS LAST when commands exist
  * (a taken name throws and a throw skips the rest of the session.start
- * hook - Step B's commands will follow this rule; Step A registers none).
+ * hook - so the GREENLIGHT TOOLS register first and the command names,
+ * which can collide, last).
  */
 export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
   // prompt.compose: inject the ONE-TEMPLATE instructions as a new section.
@@ -356,24 +359,28 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
 
   // Wrap-up commands + their zero-arg greenlight tools: the opencode
   // protocol (arm on command, the model greenlights with the tool, the
-  // action fires at turn end), ported. Register COMMANDS LAST in the
-  // session.start hook (a taken name throws and a throw skips the rest
-  // of the hook).
+  // action fires at turn end), ported. TOOLS register first, COMMANDS
+  // last (see the registerMod comment for the throw-skips-the-rest
+  // ordering rule).
   on("session.start", async ($, e, next) => {
     try {
+      // TOOLS first, COMMANDS last: a taken name throws and a throw skips
+      // the REST of the hook - the greenlight tools are the wrap-up's
+      // load-bearing surface, so they register before the command names
+      // that can collide.
+      for (const kind of WRAPUP_KINDS) {
+        await $.tool.register({
+          name: kind,
+          description: `Greenlight the ${kind} wrap-up (the user armed it with /thatch_${kind}). Call when the checklist is done.`,
+          inputSchema: { type: "object", properties: {} },
+        });
+      }
       for (const kind of WRAPUP_KINDS) {
         await $.command.register({
           name: `thatch_${kind}`,
           description: kind === "compact"
             ? "Arm the compact wrap-up: run your closing checklist, then call the compact tool."
             : "Arm the exit wrap-up: run your closing checklist, then call the exit tool.",
-        });
-      }
-      for (const kind of WRAPUP_KINDS) {
-        await $.tool.register({
-          name: kind,
-          description: `Greenlight the ${kind} wrap-up (the user armed it with /thatch_${kind}). Call when the checklist is done.`,
-          inputSchema: { type: "object", properties: {} },
         });
       }
     } catch { /* a taken name skips the rest - the catch keeps the session start alive */ }
@@ -392,12 +399,23 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
       let text = "";
       try {
         const sessionId = await $.session.id();
-        const res = await $.mcp.call({
+        // ONE beat, TWO polls: the chat wake AND the watcher-event drain -
+        // both ride the accumulate-poll-submit pattern, and the combined
+        // text submits as ONE turn.
+        const wakeRes = await $.mcp.call({
           server: options.chatWakeTool.server,
           tool: options.chatWakeTool.tool,
           arguments: { session_id: sessionId },
         });
-        text = readStageText(res);
+        let watchRes = "";
+        try {
+          watchRes = readStageText(await $.mcp.call({
+            server: options.chatWakeTool.server,
+            tool: options.watchPollTool.tool,
+            arguments: { session_id: sessionId },
+          }));
+        } catch { /* watcher events are best-effort per beat */ }
+        text = [readStageText(wakeRes), watchRes].filter((t) => t.trim()).join("\n\n");
       } catch {
         return; // server unreachable - the next beat retries
       }

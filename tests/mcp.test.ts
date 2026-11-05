@@ -107,6 +107,11 @@ describe("MCP compileTools", () => {
       expect(standalone.has(def.name)).toBe(false);
       expect(bundled.has(def.name)).toBe(true);
     }
+    // The opencode HOST-ACTION pair: exit/compact need opencode's
+    // wrapUpGreenlight state - fenced on every MCP server, bundled
+    // included (the mod registers its OWN greenlight surface).
+    expect(bundled.has("exit")).toBe(false);
+    expect(bundled.has("compact")).toBe(false);
   });
 
   test("filters out opencode-only tools", () => {

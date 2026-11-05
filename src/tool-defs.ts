@@ -133,6 +133,7 @@ export interface CoreContext {
     error?: string;
     isAborted?: boolean;
     isMain?: boolean;
+    wake?: boolean;
     kind?: "compact" | "exit" | "question" | "permission";
     requestID?: string;
     args?: Record<string, unknown>;
@@ -303,6 +304,15 @@ export interface ToolDef {
    * excludes them).
    */
   opencodeDbOnly?: boolean;
+  /**
+   * When true (the five watch tools), the opencodeOnly fence UN-FENCES on
+   * the plugin regime's bundled server: the registry is wired there and
+   * the mod's timer is both poller and delivery. The other opencodeOnly
+   * tools (the archaeology trio, exit/compact) stay fenced on every MCP
+   * server: they need opencode.db or opencode's wrapUpGreenlight
+   * host-action state, which no MCP surface has.
+   */
+  bundledServable?: boolean;
   /**
    * When true, the tool exists only on the opencode v2 adapter path: the v1
    * adapter's createTools and the MCP server filter it out. Used for tools
@@ -1999,6 +2009,7 @@ const sessionGetDef: ToolDef = {
  */
 const watchCreateDef: ToolDef = {
   name: "watch_create",
+  bundledServable: true,
   description:
     "Watch a GitHub PR for events and get notified in this session when they " +
     "happen: new top-level comments, inline review comments and replies, " +
@@ -2066,6 +2077,7 @@ const watchCreateDef: ToolDef = {
  */
 const watchListDef: ToolDef = {
   name: "watch_list",
+  bundledServable: true,
   description:
     "List this session's active watchers with their ids, targets, watched " +
     "event types, and remaining time, plus any detected events that are " +
@@ -2118,6 +2130,7 @@ const watchListDef: ToolDef = {
  */
 const watchBranchCreateDef: ToolDef = {
   name: "watch_branch_create",
+  bundledServable: true,
   description:
     "Watch a GitHub branch (typically main) and get notified in this session " +
     "when things happen on it: branch_commit when new commits land (e.g. a " +
@@ -2206,6 +2219,7 @@ const watchBranchCreateDef: ToolDef = {
  */
 const watchCommandCreateDef: ToolDef = {
   name: "watch_command_create",
+  bundledServable: true,
   description:
     "Register a local shell command as a background condition and get " +
     "notified in this session when it first exits a watched exit code " +
@@ -2301,6 +2315,7 @@ const watchCommandCreateDef: ToolDef = {
  */
 const watchCancelDef: ToolDef = {
   name: "watch_cancel",
+  bundledServable: true,
   description: "Cancel one of this session's watchers by id. opencode-only.",
   args: {
     id: z.string().describe("The watcher id from watch_create, watch_branch_create, watch_command_create, or watch_list."),
@@ -3126,6 +3141,8 @@ const pluginLifecycleDef: ToolDef = {
     tool: z.string().optional(),
     error: z.string().optional(),
     is_aborted: z.boolean().optional(),
+    is_main: z.boolean().optional(),
+    wake: z.boolean().optional(),
     kind: z.enum(["compact", "exit", "question", "permission"]).optional(),
     request_id: z.string().optional(),
     tool_input: z.record(z.string(), z.unknown()).optional(),
@@ -3141,6 +3158,8 @@ const pluginLifecycleDef: ToolDef = {
       tool: args.tool as string | undefined,
       error: args.error as string | undefined,
       isAborted: args.is_aborted as boolean | undefined,
+      isMain: args.is_main as boolean | undefined,
+      wake: args.wake as boolean | undefined,
       kind: args.kind as "compact" | undefined,
       requestID: args.request_id as string | undefined,
       args: args.tool_input as Record<string, unknown> | undefined,

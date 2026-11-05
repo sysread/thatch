@@ -13,7 +13,7 @@ import { installSkills, type InstallReport } from "../src/skills";
 import { installCommandsToDir, opencodeCommandDefs } from "../src/commands";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
 import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, createChatTailPretty, markdownBodyLines, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, CHAT_MAX_BODY_CHARS, CHAT_CLI_SENDER, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, cliBroadcastFrame, sanitizeCliSenderName, matchesHostSessionID, buildChatRosterJsonRow, mcpChatHookLine, mcpChatPendingLine, type ChatSessionRow, type ChatTailFilter, type ChatTailEvent } from "../src/chat";
-import { writeRegimeMarker } from "../src/version-check";
+import { writeRegimeMarker, readRegimeMarker, clearRegimeMarker } from "../src/version-check";
 import { chatEnabled, loadConfig } from "../src/config";
 import { chatNotificationNudge } from "../src/prompts";
 import { chatOpenTabs as chatOpenTabsProvider } from "../src/tab-state";
@@ -1341,6 +1341,15 @@ switch (command) {
         say("");
         say("Restart Claude Code for the changes to take effect.");
       } else {
+        // The DOWNGRADE path: a fallback --claude setup under a stale
+        // plugin-regime marker would leave contradictory state (the
+        // marker says plugin, the fallback hooks just installed, the
+        // standalone server says remove the entry setup wrote). Clear
+        // the marker + tell the user to uninstall the plugin.
+        if (readRegimeMarker(dbPath) === "plugin") {
+          clearRegimeMarker(dbPath);
+          say("  Note: the plugin-regime marker was present and is now cleared. Uninstall the thatch plugin (or stop loading it with --plugin-dir) - running both it and the hook regime delivers every prompt twice.");
+        }
         const result = setupClaudeCode(thatchBin, isGlobal, dir);
 
         say(`Thatch setup complete for Claude Code (${isGlobal ? "global" : "project-local"}).`);
