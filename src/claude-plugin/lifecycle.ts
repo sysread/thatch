@@ -4,6 +4,7 @@ import { appendBatch, consumeQueue, resetMissedCount } from "../extract-queue";
 import { MEMORY_SAVED_MARKER } from "../tool-defs";
 import { alertMode, loadConfig, type Config } from "../config";
 import { sendNotification, defaultSpawner } from "../notify";
+import type { WatcherRegistry } from "../watchers";
 import type { ThatchDB } from "../db";
 import type { EmbeddingModel } from "../embeddings";
 
@@ -39,6 +40,8 @@ export interface PluginLifecycleDeps {
    *  per-platform dispatcher (sendNotification), the same channel
    *  notify_user uses. */
   notify?: (input: AlertInput) => Promise<void>;
+  /** The watcher registry (bundled mode): session.end deaths route here. */
+  watchers?: WatcherRegistry;
 }
 
 /** The lifecycle events the mod forwards, one per host event. The wide
@@ -46,7 +49,7 @@ export interface PluginLifecycleDeps {
  *  CoreContext seam passes the mod's parsed tool arguments as one object,
  *  and the discriminated narrowing happens in handle(). */
 export type PluginLifecycleEvent = {
-  event: "busy" | "realwork" | "error" | "complete" | "arm" | "greenlight" | "ask" | "resolved";
+  event: "busy" | "realwork" | "error" | "complete" | "arm" | "greenlight" | "ask" | "resolved" | "session-end";
   sessionID: string;
   tool?: string;
   error?: string;
@@ -64,7 +67,6 @@ export type PluginLifecycleEvent = {
    *  work). */
   wake?: boolean;
 };
-
 export interface PluginLifecycleResult {
   /** The nudge-free response text the mod shows or acts on. */
   text: string;
@@ -204,6 +206,20 @@ export function createPluginLifecycle(deps: PluginLifecycleDeps) {
           alerts.questionResolved(sid, event.requestID);
           alerts.permissionResolved(sid, event.requestID);
           return { text: "" };
+
+        case "session-end": {
+          // A REAL session end (the mod branches on session.end's e.reason:
+          // not /clear, /resume, /branch). The watcher registry declares
+          // the death (its watchers' death notices + journal cleanup);
+          // this session's own bookkeeping clears. The mod calls this
+          // inside session.end's 1.5-second budget - the forward is one
+          // in-process call.
+          deps.watchers?.sessionDied(sid);
+          for (const kind of ["compact", "exit"] as const) armed.delete(`${sid}:${kind}`);
+          greenlit.delete(`${sid}:wrapup`);
+          wakeBySession.delete(sid);
+          return { text: "" };
+        }
       }
     },
   };

@@ -77,6 +77,7 @@ export interface ModRegistrar {
   (event: "turn.complete", handler: ($: ModsApi, e: TurnCompleteEvent, next: (e?: TurnCompleteEvent) => Promise<unknown>) => Promise<unknown>): unknown;
   (event: "command.run", handler: ($: ModsApi, e: CommandRunEvent, next: (e?: CommandRunEvent) => Promise<unknown>) => Promise<unknown>): unknown;
   (event: "classic.PermissionRequest", handler: ($: ModsApi, e: Record<string, unknown>, next: (e?: Record<string, unknown>) => Promise<unknown>) => Promise<unknown>): unknown;
+  (event: "session.end", handler: ($: ModsApi, e: { reason?: string }, next: (e?: { reason?: string }) => Promise<unknown>) => Promise<unknown>): unknown;
   (event: "classic.PermissionDenied", handler: ($: ModsApi, e: Record<string, unknown>, next: (e?: Record<string, unknown>) => Promise<unknown>) => Promise<unknown>): unknown;
   (event: "session.start", handler: ($: ModsApi, e: Record<string, unknown>, next: (e?: Record<string, unknown>) => Promise<unknown>) => Promise<unknown>): unknown;
   (event: "turn.complete", matcher: Record<string, unknown>, handler: ($: ModsApi, e: TurnCompleteEvent, next: (e?: TurnCompleteEvent) => Promise<unknown>) => Promise<unknown>): unknown;
@@ -312,6 +313,21 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
         requestID: typeof e.tool_use_id === "string" ? e.tool_use_id : undefined,
       });
     } catch { /* alerts are best-effort */ }
+    return next(e);
+  });
+
+  // Session end: a REAL end (branch on e.reason - /clear, /resume, and
+  // /branch also fire this event) reports the death to the registry
+  // (watcher death notices + journal cleanup) inside the event's
+  // 1.5-second budget. Fail-open: a failed forward must not delay the
+  // host's teardown.
+  on("session.end", async ($, e, next) => {
+    const reason = String(e?.reason ?? "other");
+    if (reason !== "clear" && reason !== "resume" && reason !== "branch") {
+      try {
+        await forwardLifecycle($, options, { event: "session-end" });
+      } catch { /* death routing is best-effort */ }
+    }
     return next(e);
   });
 

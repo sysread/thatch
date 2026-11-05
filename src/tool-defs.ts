@@ -127,7 +127,7 @@ export interface CoreContext {
    *  server-side (the mod cannot shell out to the notification
    *  dispatcher). Absent on the standalone server. */
   pluginLifecycle?: (event: {
-    event: "busy" | "realwork" | "error" | "complete" | "arm" | "greenlight" | "ask" | "resolved";
+    event: "busy" | "realwork" | "error" | "complete" | "arm" | "greenlight" | "ask" | "resolved" | "session-end";
     sessionID: string;
     tool?: string;
     error?: string;
@@ -289,6 +289,19 @@ export interface ToolDef {
    * opencodeOnly.
    */
   bundledOnly?: boolean;
+  /**
+   * When true, the tool reads opencode.db (the session-archaeology trio:
+   * get_session_info, session_search, session_get) - it can NEVER serve on
+   * a Claude Code server (wrong corpus: the CC transcripts are not in
+   * that database), not even the plugin regime's bundled one. This is the
+   * REAL constraint the opencodeOnly flag approximated for the watch
+   * tools: those need the WATCHER REGISTRY (which the bundled server
+   * wires), so they serve on the bundled server while the db readers
+   * never do. The def carries opencodeDbOnly only - never also
+   * bundledOnly (the standalone server's opencodeOnly filter already
+   * excludes them).
+   */
+  opencodeDbOnly?: boolean;
   /**
    * When true, the tool exists only on the opencode v2 adapter path: the v1
    * adapter's createTools and the MCP server filter it out. Used for tools
@@ -1768,6 +1781,7 @@ const notifyUserDef: ToolDef = {
  */
 const getSessionInfoDef: ToolDef = {
   name: "get_session_info",
+  opencodeDbOnly: true,
   description:
     "Return the current session's identity: the host session ID and the " +
     "agent name running this turn (e.g. build, plan, or a sub-agent type). " +
@@ -1869,6 +1883,7 @@ const compactDef: ToolDef = {
  */
 const sessionSearchDef: ToolDef = {
   name: "session_search",
+  opencodeDbOnly: true,
   description:
     "Search past opencode session conversations by substring (or regex with " +
     "regex: true). Matches decoded message text, tool outputs, and reasoning " +
@@ -1938,6 +1953,7 @@ const sessionSearchDef: ToolDef = {
  */
 const sessionGetDef: ToolDef = {
   name: "session_get",
+  opencodeDbOnly: true,
   description:
     "Retrieve the full content of one conversation item by id. Pass a " +
     "part_id (from session_search or session list) for one content piece, " +
@@ -3104,7 +3120,7 @@ const pluginLifecycleDef: ToolDef = {
     "mod. Not for the model to call.",
   bundledOnly: true,
   args: {
-    event: z.enum(["busy", "realwork", "error", "complete", "arm", "greenlight", "ask", "resolved"]),
+    event: z.enum(["busy", "realwork", "error", "complete", "arm", "greenlight", "ask", "resolved", "session-end"]),
     session_id: z.string(),
     tool: z.string().optional(),
     error: z.string().optional(),
@@ -3154,6 +3170,31 @@ const pluginChatWakeDef: ToolDef = {
   },
 };
 
+/**
+ * The plugin regime's watcher-poll drain: the mod's clock tick calls it
+ * (the same beat as the chat wake); a non-empty return is the watcher
+ * notification to submit as a turn. bundledOnly.
+ */
+const pluginWatchPollDef: ToolDef = {
+  name: "plugin_watch_poll",
+  description:
+    "Watcher-event polling for the thatch Claude Code plugin's mod. Not " +
+    "for the model to call.",
+  bundledOnly: true,
+  args: {
+    session_id: z.string(),
+  },
+  async execute(args, ctx) {
+    if (!ctx.watchers) {
+      return "";
+    }
+    const events = ctx.watchers.consumePending(args.session_id as string);
+    if (events.length === 0) return "";
+    const { watcherNotificationNudge } = await import("./prompts");
+    return watcherNotificationNudge(events[0]?.target ?? "watched target", events, ctx.watchers.pollSeconds);
+  },
+};
+
 export const TOOL_DEFS: ToolDef[] = [
   rememberDef,
   recallDef,
@@ -3168,6 +3209,7 @@ export const TOOL_DEFS: ToolDef[] = [
   pluginStageDef,
   pluginLifecycleDef,
   pluginChatWakeDef,
+  pluginWatchPollDef,
   predictionQueryDef,
   predictionUpdateDef,
   predictionListDef,

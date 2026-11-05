@@ -12,6 +12,7 @@ import { actionDefs, mcpSpelling, type ActionDef } from "./commands";
 import { SidebandServer, sidebandSocketPath } from "./sideband";
 import { peekQueue, consumeQueue, resetMissedCount } from "./extract-queue";
 import { buildExtractionPayload } from "./extraction";
+import { WatcherRegistry, ghApiRun } from "./watchers";
 import { computePluginStage, computePluginChatWake } from "./flush";
 import { createPluginLifecycle } from "./claude-plugin/lifecycle";
 import { seedDefaultBehaviors } from "./seed-behaviors";
@@ -71,15 +72,16 @@ interface CompiledTool {
 export function compileTools(opts?: { bundled?: boolean }): Map<string, CompiledTool> {
   const map = new Map<string, CompiledTool>();
   for (const def of TOOL_DEFS) {
-    // opencode-only tools depend on host capabilities MCP servers don't
-    // have (e.g. session identity via HostToolContext) - never expose them.
     // v2-only tools ride v2 plugin surfaces (session move, rpc emit) with
-    // no MCP equivalent - same rule. bundledOnly tools are wired through
-    // the PLUGIN-regime bundled server's CoreContext only (src/mcp.ts
-    // builds it with mode: "bundled") - the standalone server would
-    // advertise a tool that answers "not available".
-    if (def.opencodeOnly || def.v2Only) continue;
-    if (def.bundledOnly && !opts?.bundled) continue;
+    // no MCP equivalent - never expose them. opencodeDbOnly tools read
+    // opencode.db - wrong corpus on ANY Claude Code server (bundled
+    // included). opencodeOnly tools (the watch registry family) serve on
+    // the BUNDLED server only: it wires ctx.watchers and the mod's timer
+    // is its poller/delivery; the standalone server has no registry and
+    // no delivery channel. bundledOnly tools are wired through the
+    // PLUGIN-regime bundled server's CoreContext only.
+    if (def.v2Only || def.opencodeDbOnly) continue;
+    if ((def.opencodeOnly || def.bundledOnly) && !opts?.bundled) continue;
     const schema = z.object(def.args);
     // The validator deep-passthroughs so typo'd keys survive into the
     // tool's accept-then-teach guards at EVERY object level ("you passed
@@ -214,6 +216,49 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
   const lifecycle = mode === "bundled"
     ? createPluginLifecycle({ db, model, repo, dbPath })
     : null;
+
+  // Bundled mode wires the WATCHER REGISTRY: the six watch tools serve
+  // here (their opencodeOnly fence named the missing poller/delivery -
+  // the mod's timer IS the poller and $.prompt.submit IS the delivery).
+  // Registrations are DB-backed via the SAME journal hooks the opencode
+  // runtime uses (runtime_state rows: durable across sessions, mod
+  // reloads, and server restarts; the rehydrate re-arms every row at
+  // startup). canDeliver is FALSE - events accumulate in the registry's
+  // pending queue and the mod PULLS them on its clock beat
+  // (plugin_watch_poll), the accumulate-poll-submit pattern.
+  const watchers = mode === "bundled"
+    ? new WatcherRegistry({
+        directory: projectDir,
+        journal: (sessionID, sessionWatchers) => {
+          if (sessionWatchers.length === 0) db.runtimeStateDelete("watchers", sessionID);
+          else db.runtimeStatePut("watchers", sessionID, sessionWatchers, projectDir);
+        },
+        journalPending: (sessionID, pending) => {
+          if (pending === undefined) db.runtimeStateDelete("watcher_pending", sessionID);
+          else db.runtimeStatePut("watcher_pending", sessionID, pending, projectDir);
+        },
+        deliver: async () => {
+          // Unreachable: canDeliver is false - the mod's pull drains.
+        },
+        canDeliver: () => false,
+        ghRunner: ghApiRun,
+      })
+    : null;
+  if (watchers) {
+    // Rehydrate: re-arm every journaled registration (cross-session - a
+    // watcher any CC session registered comes alive for this one; the
+    // 480h TTL bounds the undead).
+    for (const row of db.runtimeStateAll()) {
+      if (row.kind !== "watchers" || !Array.isArray(row.value)) continue;
+      try {
+        await watchers.rearm(row.sessionID, row.value as never);
+      } catch (err) {
+        console.error(`[thatch] watcher rehydrate failed for ${row.sessionID}: ${err}`);
+      }
+    }
+    watchers.start();
+  }
+
   const ctx: CoreContext = {
     db,
     model,
@@ -229,6 +274,7 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
             computePluginStage({ db, model, repo, dbPath }, prompt, sessionID, transcriptPath),
           pluginLifecycle: (event) => lifecycle!.handle(event),
           pluginChatWake: (sessionID: string) => computePluginChatWake(db, sessionID),
+          ...(watchers ? { watchers } : {}),
         }
       : {}),    // Same-machine tab reader: the MCP server can read the local opencode
     // state tree, so its roster renders the same open/recent split.

@@ -95,6 +95,18 @@ describe("MCP compileTools", () => {
     const bundled = compileTools({ bundled: true });
     expect(standalone.has("plugin_stage")).toBe(false);
     expect(bundled.has("plugin_stage")).toBe(true);
+    // The opencodeDbOnly trio: NEVER on any Claude Code server - the
+    // bundled one included (wrong corpus: they read opencode.db).
+    for (const def of TOOL_DEFS.filter((d) => d.opencodeDbOnly)) {
+      expect(standalone.has(def.name)).toBe(false);
+      expect(bundled.has(def.name)).toBe(false);
+    }
+    // The WATCH tools: the bundled server un-fences them (its registry is
+    // wired) while the standalone stays fenced.
+    for (const def of TOOL_DEFS.filter((d) => d.name.startsWith("watch_"))) {
+      expect(standalone.has(def.name)).toBe(false);
+      expect(bundled.has(def.name)).toBe(true);
+    }
   });
 
   test("filters out opencode-only tools", () => {
