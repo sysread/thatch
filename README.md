@@ -2,299 +2,86 @@
 
 [![CI](https://github.com/sysread/thatch/actions/workflows/ci.yml/badge.svg)](https://github.com/sysread/thatch/actions/workflows/ci.yml) [![Ask DeepWiki](https://raw.githubusercontent.com/sysread/thatch/main/docs/assets/deepwiki-badge.svg)](https://deepwiki.com/sysread/thatch)
 
-<!-- Experiment (Oct 2026): deepwiki.com/badge.svg 429-challenges non-browser
-     fetchers, so the hotlinked badge rendered broken. The wiki indexed us
-     anyway ("featured in the repository"), so this vendored copy tests
-     whether DeepWiki keeps reindexing without any request to their domain.
-     If freshness holds, the hotlink never mattered; if the wiki goes stale,
-     restore https://deepwiki.com/badge.svg when their challenge lifts. -->
+<!-- DeepWiki badge is vendored (see git history for the experiment note). -->
 
-Persistent memory and operational methodology for AI coding agents. Works with
-**OpenCode** (as a plugin), **Claude Code** (as a local MCP server), and
-**Cursor** (as a local MCP server).
-
-Each session inherits the accumulated knowledge of every session before it:
+Persistent memory and operational methodology for AI coding agents. Each
+session inherits the accumulated knowledge of every session before it:
 project architecture, conventions, gotchas, user preferences. Your agent
-starts with context instead of a blank slate. No API keys, no cloud services;
-everything runs on your machine.
+starts with context instead of a blank slate. No API keys, no cloud
+services; everything runs on your machine.
 
-## Quick start
+## Install
 
-### OpenCode
+**OpenCode** - add the plugin to `opencode.jsonc`; it installs on next start:
 
 ```jsonc
-// opencode.jsonc
 { "plugin": ["@jeffober/thatch"] }
 ```
 
-On next start, OpenCode npm-installs thatch and its tools are available
-immediately. Works with both opencode 1.x and 2.x (the same package supports
-both plugin APIs). Until the next release ships, npm's `latest` still
-targets 1.x only. For async extraction (child sessions run in the
-background):
+**Claude Code** - paste into a session:
 
-```bash
-export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
+```text
+/plugin marketplace add sysread/thatch
+/plugin install thatch
 ```
 
-Without this env var, extraction still works - the child session runs
-synchronously (fire-and-forget) instead of asynchronously.
+Older Claude Code versions or enterprise policies that disable mods:
+`npm install -g @jeffober/thatch && thatch setup --claude --hooks-regime`.
+Requires [Bun](https://bun.sh) on PATH.
 
-### What works in opencode 2.x
-
-The v2 plugin API is missing a few surfaces the v1 API had. On 2.x:
-
-- **Toasts ride the session-tab bridge.** Every plugin toast (extraction
-  metrics, alerts, chat registration, blocked wrap-ups) travels the
-  session-tab rpc bridge to the TUI plugin's `ui.toast.show`. A TUI-less
-  environment (headless run, still connecting) shows nothing - toasts are
-  best-effort by design.
-- **Plugin state survives reloads.** Editing the plugin (or `opencode
-  plugin update`) reloads it, but extraction buffers, watcher
-  registrations, and armed wrap-ups are journaled and restored; a process
-  restart restores the state of a resumed (`-c`/`-s`) session. Other
-  sessions' watcher registrations survive as dormant definitions: resuming
-  such a session re-arms its watches on the first message (expired ones
-  are dropped and reported), and a live session in the same project gets a
-  one-line notice that a dead session's watch will re-arm if resumed.
-- **Extraction children are visible on older 2.x builds.** Upstream exposed
-  `session.remove` on the plugin API (v2.0.22), so the fact-extractor
-  child sessions are deleted when they finish - the session picker stays
-  clean. On an older 2.x build (pre-`session.remove`) the deletion
-  degrades silently: children accumulate in the session picker, and
-  "continue last session" (`-c`) can land in one after any session that
-  triggered extraction.
-- **Wrap-up actions need a new host (compact) or an open tab (exit).** The
-  compaction trigger rides `session.compact` on the plugin API (upstream
-  added it in v2.0.22); on an older 2.x build the checklist and memory
-  flush run but the compaction itself is skipped - run `/compact` yourself
-  there. `/thatch/exit` closes the session's own tab over the session-tab
-  bridge; with no tab open (headless run, tabs off) nothing visible happens,
-  but the session still unregisters from chat and its watches are
-  cancelled - on either host, and reopening or resuming the session does
-  not re-arm them. Re-create watches you still want with
-  `thatch_watch_create`.
-- **No `-c` session listing.** The chat resume listing degrades.
-
-Everything else - tools, memory, nudges, chat, watchers - behaves the
-same on both versions, with one caveat: v2 has no turn-free delivery
-(noReply), so the features that lean on it - the chat transcript echo
-bubble, the session-start reminder, and the post-reload re-attach
-notice - do not render on 2.x. Their model-facing content still
-arrives; only the bubble rendering is lost.
-
-Then **prime your project memory** by running `thatch prime` in your project directory.
-This launches an `opencode` session to build an initial map of the code base
-and seed the memory.
-
-### Claude Code and Cursor
-
-Install globally, then run setup in your project:
+**Cursor**:
 
 ```bash
 npm install -g @jeffober/thatch
-cd /path/to/your/project
-thatch setup --claude    # or --cursor
-
-# set up in your global config for all projects
-thatch setup --claude --global  # or --cursor --global
+thatch setup --cursor            # or --global
 ```
 
-`setup` installs the MCP server config, hooks, instructions, and skills.
-Restart your editor and thatch's tools are available as `mcp__thatch__*`.
-Requires [Bun] on PATH.
-
-The embedding model downloads once at first use. It is cached in the
-platform's per-user cache dir: `~/Library/Caches/thatch/models` on macOS (or
-`$XDG_CACHE_HOME/thatch/models` when `XDG_CACHE_HOME` is set),
-`$XDG_CACHE_HOME/thatch/models` (default `~/.cache/thatch/models`) elsewhere.
-Set `THATCH_MODEL_CACHE` to override the location. The cache survives
-upgrades and works from read-only installs.
-
-### NixOS / Nix
-
-This repo is a flake. The package bundles Bun and the native embedding
-runtime, so you need no global `npm install` and no `bun` on PATH.
-
-Try it without installing:
+**NixOS / Nix** - the flake bundles Bun and the embedding runtime (no global
+install, no bun on PATH):
 
 ```bash
-nix run github:sysread/thatch -- --version
+nix run github:sysread/thatch -- --version   # try it
 ```
 
-Install options:
+Then either import `inputs.thatch.nixosModules.default` and set
+`programs.thatch.enable = true`, add the overlay and `pkgs.thatch`, or add
+`inputs.thatch.packages.${system}.default` to your packages. Wire it into
+your editor with the setup commands above.
 
-- **NixOS module** (system-wide, all users):
-
-  ```nix
-  {
-    inputs.thatch.url = "github:sysread/thatch";
-
-    # in your NixOS system's modules:
-    imports = [ inputs.thatch.nixosModules.default ];
-    programs.thatch.enable = true;   # puts `thatch` on PATH for every user
-  }
-  ```
-
-- **Overlay**: add `nixpkgs.overlays = [ inputs.thatch.overlays.default ];`,
-  then `environment.systemPackages = [ pkgs.thatch ];`
-- **Package directly**: add `inputs.thatch.packages.${system}.default` to a
-  `home.packages` or `environment.systemPackages` list
-
-Once `thatch` is on PATH, wire it into your editor as usual:
-
-```bash
-cd /path/to/your/project
-thatch setup --claude --global   # or --cursor
-```
-
-The embedding model still downloads once at first use. Its cache lives in the
-per-user cache dir described above, outside the read-only Nix store, so it
-survives upgrades. `THATCH_MODEL_CACHE` overrides the location.
-
-### Other MCP-compatible harnesses
-
-Thatch wires itself up for Claude Code and Cursor. For any other MCP
-harness, print the server config, paste it into your harness's config,
-and install the skills where that harness reads them:
+**Any other MCP harness**:
 
 ```bash
 thatch setup --mcp-json               # print the server config as JSON
 thatch setup --skills-only <dir>      # install skills into any directory
 ```
 
-`--mcp-json` prints the `mcpServers` shape (a stdio server that runs
-`thatch mcp`) that Claude Code, Cursor, Gemini CLI, and many other MCP
-clients use. Some harnesses use a different key or format; check your
-harness's docs.
-Include thatch's instructions in your agent's system prompt manually; see
-[MCP parity](https://github.com/sysread/thatch/wiki/Mcp-Parity) for the prompt text.
+Then **prime your project memory**: run `thatch prime` in your project
+directory to build an initial map of the code base and seed the memory.
+The embedding model downloads once at first use and is cached per user
+(see the [user guide](https://github.com/sysread/thatch/wiki/Guide%3A-Overview)).
 
-## What's inside
+## What you get
 
-Thatch gives your agent:
+- **Memory** -- save, search, and recall knowledge across sessions with local embeddings and SQLite; one store per project plus a shared global store.
+- **Prediction engine** -- a statistical model of your decision-making preferences; strong predictions apply silently, ambiguous ones surface.
+- **Behavior engine** -- the agent codifies its own operational rules ("when X, I do Y") that auto-fire in similar situations.
+- **Extraction** -- durable facts are pulled from the session's tool activity automatically; nobody has to remember to save.
+- **Cross-session chat** -- your agent sessions message each other under assigned, never-reused names; idle sessions get woken; mail is framed as untrusted content.
+- **Watchers** -- the agent watches a GitHub PR, a branch, or a local command and gets prompted when something happens; notifications carry pointers, never external content.
+- **Slash commands** -- `/thatch/defrag`, `/thatch/extract`, `/thatch/hygiene`, `/thatch/reflect`, `/thatch/refine`, `/thatch/self-review`, `/thatch/peer-review`, `/thatch/whois`, and the wrap-ups `/thatch/compact` and `/thatch/exit` (a pre-flight checklist before compaction or exit); see the [user guide](https://github.com/sysread/thatch/wiki/Guide%3A-Overview).
+- **Notifications** -- desktop banner and spoken voice on macOS and Linux, plus automatic alerts when the LLM pauses for your input or finishes real work; tune it all in a hand-editable config file the agent manages for you.
+- **Skills** -- memory workflows, multi-specialist code review, plan refinement with evidence and consistency audits, bug-report intake, walkthroughs, knowledge export, and writing tasks.
 
-- **Memory** -- save, search, and recall knowledge across sessions with
-  local embeddings (bge-small-en-v1.5) and SQLite. Every project gets its
-  own store; a shared global store holds cross-project knowledge. The agent
-  writes and reads memories through tools -- thatch never saves anything on
-  its own.
-- **Prediction engine** -- a statistical model of the user's decision-making
-  preferences. When a prompt matches learned contexts, predictions fire
-  alongside the recall nudge. Confidence is graded (Bayesian posterior) and
-  reinforced or weakened by user feedback. The agent follows strong
-  predictions silently and surfaces ambiguous ones to the user.
-- **Behavior engine** -- a self-discipline model where the agent codifies
-  its own operational rules ("when X, I do Y"). Rules auto-fire when similar
-  situations arise. The agent ham/spams each surfaced rule to train the
-  classifier. Confidence adjusts the same way as predictions. An anti-laziness
-  guard in the prompt prevents the agent from codifying shortcuts.
-- **Conversation search** -- the agent can search its own past opencode
-  conversations by substring or regex and retrieve full messages, including
-  complete tool inputs and outputs. Available as tools (`session_search`,
-  `session_get`, opencode only) and as CLI subcommands (`thatch session
-  list/get/transcript/search`, JSONL output designed for piping to `jq`).
-- **Watchers** -- event-driven notifications from external sources (opencode
-  only). The agent registers a watch on a GitHub PR, a branch (main), or a
-  local shell command; thatch polls it in the
-  background and prompts the session when comments, commits, CI results, status changes, or a
-  watched command's exit condition arrive (exit 0 by default;
-  `exit_codes` widens the set so terminal failures notify too).
-  Notifications carry pointer
-  data plus machine status (check conclusions, exit codes), never external
-  content.
-- **Cross-session chat** -- your agent sessions can message each other
-  (opencode, Claude Code, and Cursor; same machine). opencode sessions
-  join the directory automatically under an assigned, never-reused name
-  (a slug of the session title plus a counter); others see the roster, and
-  messages land in inboxes -- idle opencode sessions get woken with a
-  prompt, and Cursor and Claude Code wake when a turn ends with unread
-  mail (Cursor also at prompt time; Claude Code also at startup and
-  resume). Loop-safe:
-  messages are informational to the receiving agent, and wake prompts are
-  rate-capped. Delivered messages are framed as untrusted content so a
-  hostile message cannot impersonate your instructions. Disable the whole
-  feature with `chat.enabled: false` in the thatch config (or just the
-  auto-joining with `chat.autoRegister: false`).
-- **Slash commands** -- `/thatch/defrag` (consolidate duplicate memories),
-  `/thatch/extract` (drain the extraction queue now), `/thatch/hygiene`
-  (tend stale and orphaned memories), `/thatch/reflect` (persist what
-  the session learned), `/thatch/refine` (refine a plan under the
-  project type's requirements, classifying the project first),
-  `/thatch/self-review` (review your own completed work before
-  submitting it, weighted for reputation and simplicity),
-  `/thatch/peer-review` (review another author's change, weighted for
-  org velocity and sharing the project's persistent memory), and
-  `/thatch/whois` (report the session's chat identity) run on demand.
-  The nudge-backed actions (`defrag`, `extract`, `hygiene`, `reflect`)
-  mirror the same behaviors the nudges run on their own schedule; the
-  rest stand alone. Plus the opencode-only wrap-ups: `/thatch/compact` and
-  `/thatch/exit` run a pre-flight checklist before a compaction or an exit:
-  the agent flushes pending fact extraction, finishes promised memory
-  writes, and surfaces todos or follow-ups it never addressed. When the
-  checklist is clean it greenlights by calling the zero-arg tool for that
-  command (`thatch_compact` or `thatch_exit`) -- and thatch
-  then triggers the compaction or closes the session (its tab on opencode
-  2, the whole app on opencode 1 - either way its watches are cancelled).
-  With items outstanding, the agent lists them and nothing fires -- you
-  decide when to retry.
-- **Notifications + user config** -- the agent can ping you out-of-band when a
-  long-running outcome lands: a desktop banner, a spoken voice
-  announcement, or both (macOS and Linux). On opencode, thatch also watches
-  the session and alerts you automatically when the LLM pauses for your
-  input (a question or permission prompt) or finishes a round of real work
-  -- bookkeeping rounds stay silent. Preferences live in a
-  hand-editable config file (`~/.config/thatch/config.json`) that the agent
-  manages through `config_get`/`config_set` -- ask it to change your voice,
-  quiet notifications entirely, or tune which alerts fire.
-
-Plus **skills** for memory workflows, structured multi-specialist code
-review, review response, plan refinement, separate evidence and consistency
-audits for plans, bug-report intake, change and feature walkthroughs, memory
-verification, knowledge export, and writing tasks (PR descriptions,
-tickets, PR splitting).
-
-See the [user guide](https://github.com/sysread/thatch/wiki/Guide%3A-Overview) for the full tool list, CLI
-commands, configuration, environment variables, and detailed setup for each
-host.
-
-## What works in Claude Code
-
-The memory tools, prediction and behavior engines, conversation search via
-the `thatch session` CLI, cross-session chat (with stop-hook wake), skills,
-and the on-demand actions `/thatch/bug-intake`, `/thatch/defrag`,
-`/thatch/hygiene`, `/thatch/reflect`, `/thatch/refine`,
-`/thatch/self-review`, and `/thatch/peer-review` (synced by
-`thatch setup --claude`; the review-mode
-commands run the specialist sequence inline, since the coordinator skill is
-opencode-only). Not available: the
-wrap-up commands (they need the plugin's host action routes),
-`/thatch/extract` and `/thatch/whois` (they need the opencode plugin's
-session identity), live recall/prediction nudges
-beyond the hook-based flow, and toast notifications.
-
-## What works in Cursor
-
-The same core set as Claude Code (memory, predictions, behaviors, chat with
-stop-hook wake, skills, and the `bug-intake`/`defrag`/`hygiene`/`reflect`/
-`refine`/`self-review`/`peer-review` actions). Cursor
-has no file-based slash commands, so the actions surface through MCP prompts
-instead. Not available: the wrap-up commands, `/thatch/extract`,
-`/thatch/whois`, and toast notifications.
+Feature differences by host are tracked in the
+[MCP parity doc](https://github.com/sysread/thatch/wiki/Mcp-Parity).
 
 ## Privacy
 
-Everything is local. The embedding model downloads once from Hugging Face Hub
-and is cached. No data leaves your machine.
-
-One exception: PR and branch watchers (opencode only) call the GitHub API
-through the `gh` CLI to poll targets you explicitly asked to watch, using
-your existing gh authentication; command watchers run local shell commands
-in the project directory, reading only their exit codes. Thatch never sees
-or stores the gh token, and notifications
-carry pointer data plus machine status (check conclusions, exit codes),
-never external content - GitHub comment text never enters your context
-unless the agent fetches it.
+Everything is local. The embedding model downloads once from Hugging Face
+Hub and is cached; no data leaves your machine. One exception: PR and
+branch watchers call the GitHub API through your existing `gh`
+authentication to poll targets you explicitly asked to watch; notifications
+carry pointer data and machine status, never external content.
 
 ## Development
 
@@ -303,22 +90,18 @@ bun install
 mise run check     # typecheck + bun test + markdownlint (the CI gate)
 ```
 
-On Nix, `nix develop` drops you into a shell with bun, mise, and node already
-on PATH -- no system install needed.
-
-Tests never reach outside the sandbox: temp-directory SQLite files, mock
-embeddings, no network.
+On Nix, `nix develop` drops you into a shell with bun, mise, and node
+already on PATH. Tests never reach outside the sandbox: temp-directory
+SQLite files, mock embeddings, no network.
 
 ## Docs
 
 - [User guide](https://github.com/sysread/thatch/wiki/Guide%3A-Overview) -- setup, tools, configuration, CLI
 - [Development](https://github.com/sysread/thatch/wiki/Developer-Guide) -- architecture, module responsibilities
-- [MCP parity](https://github.com/sysread/thatch/wiki/Mcp-Parity) -- OpenCode plugin vs MCP feature comparison
-- [QA tests](https://github.com/sysread/thatch/tree/main/tests/qa) -- executable use cases (auto/ and live/ subdirs)
+- [MCP parity](https://github.com/sysread/thatch/wiki/Mcp-Parity) -- feature differences by host
+- [QA tests](https://github.com/sysread/thatch/tree/main/tests/qa) -- executable use cases (auto/ and live/ legs)
 - [Design docs](https://github.com/sysread/thatch/tree/main/docs/plans) -- design-decision snapshots and in-progress plans
 
 ## License
 
 [MIT](LICENSE)
-
-[Bun]: https://bun.sh
