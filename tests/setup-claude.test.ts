@@ -164,10 +164,10 @@ describe("setupClaudeCode (project-local)", () => {
   test("installs skills to the repo's .claude/skills/ (project-local)", () => {
     const result = setupClaudeCode("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
-    // Shared skills only — opencode-only skills (thatch-code-review) are not
-    // installed for Claude Code because they require sub-agent support.
+    // Shared skills only — thatch-coordination (the one opencode-only
+    // skill) is not installed: it drives the session-tab rpc bridge.
     expect(result.skills.dir).toBe(join(projectDir, ".claude", "skills"));
-    expect(result.skills.added.length).toBe(40);
+    expect(result.skills.added.length).toBe(41);
     expect(result.skills.updated).toEqual([]);
     expect(result.skills.unchanged).toEqual([]);
     expect(result.skills.removed).toEqual([]);
@@ -206,7 +206,10 @@ describe("setupClaudeCode (project-local)", () => {
     expect(skillNames).toContain("thatch-refine-spike");
     expect(skillNames).toContain("thatch-refine-infra");
     expect(skillNames).toContain("thatch-refine-oss-contribution");
-    expect(skillNames).not.toContain("thatch-code-review");
+    // The coordinator is SHARED now (flat dispatch works here); the one
+    // opencode-only skill is thatch-coordination.
+    expect(skillNames).toContain("thatch-code-review");
+    expect(skillNames).not.toContain("thatch-coordination");
 
     for (const skill of result.skills.added) {
       expect(existsSync(skill.path)).toBe(true);
@@ -332,7 +335,7 @@ describe("CLAUDE_CONFIG_DIR override", () => {
       expect(result.settings).toBe(join(customDir, "settings.json"));
       // skills are installed under the custom dir
       expect(result.skills.dir).toBe(join(customDir, "skills"));
-      expect(result.skills.added.length).toBe(40);
+      expect(result.skills.added.length).toBe(41);
       for (const skill of result.skills.added) {
         expect(skill.path.startsWith(customDir + "/")).toBe(true);
       }
@@ -362,7 +365,7 @@ describe("CLAUDE_CONFIG_DIR override", () => {
       expect(existsSync(join(projectDir, ".claude", "settings.json"))).toBe(true);
 
       expect(result.skills.dir).toBe(join(projectDir, ".claude", "skills"));
-      expect(result.skills.added.length).toBe(40);
+      expect(result.skills.added.length).toBe(41);
       for (const skill of result.skills.added) {
         expect(skill.path.startsWith(projectDir + "/")).toBe(true);
       }

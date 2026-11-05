@@ -16,17 +16,28 @@ Thatch supports three host agents from a single codebase:
 - **Cursor MCP**---same stdio MCP server, `--json` hook output format,
   `mcp__thatch__` tool prefix, system prompt in AGENTS.md
 
-All three paths share the tool definitions from `src/tool-defs.ts`: the
-host-agnostic tools plus the opencode-only tools, which the MCP server
-filters out. The opencode-only set covers host-session capabilities MCP
-hosts lack: `get_session_info`, `session_search`/`session_get` (no session
-concept or session database), the `watch_create`/`watch_branch_create`/
-`watch_command_create`/`watch_list`/`watch_cancel` watcher tools (no
-poller or proactive-prompt
-channel), and the `chat_register`/`chat_list`/`chat_send`/`chat_read`/
-`chat_unregister`/`chat_broadcast` chat tools (no session identity or
-wake-up channel). The
-shared tools take args and a `CoreContext`
+All paths share the tool definitions from `src/tool-defs.ts`: the
+host-agnostic tools plus the per-host fenced sets. The fences name REAL
+constraints, not historical hosts:
+
+- `opencodeOnly` - needs opencode host surfaces (the session concept, the
+  event bus, the poller). The STANDALONE MCP server filters these out.
+  The watch tools (`watch_create`/`watch_branch_create`/`watch_command_create`/
+  `watch_list`/`watch_cancel`) are the bounded exception: the PLUGIN
+  regime's bundled server un-fences them, because it wires
+  `ctx.watchers` (the registry) and the mod's timer is both poller and
+  delivery.
+- `opencodeDbOnly` - reads opencode.db (`get_session_info`,
+  `session_search`, `session_get`): wrong corpus on ANY Claude Code
+  server, bundled included. Never serves outside opencode.
+- `v2Only` - rides opencode v2 plugin surfaces (session move, the rpc
+  event bridge).
+- `bundledOnly` - wired through the PLUGIN regime's bundled server's
+  CoreContext only (`plugin_stage`, `plugin_lifecycle`,
+  `plugin_chat_wake`, `plugin_watch_poll`); the standalone server would
+  advertise a tool that answers "not available".
+
+The shared tools take args and a `CoreContext`
 (`{ db, model, defaultStore }`) and return a string. The host-specific
 wrapping---prefixing, transport, session hooks---lives outside the core.
 
@@ -84,8 +95,12 @@ this prefix.
 
 **Skills**: installed to the scope's skills dir (repo `.claude/skills/` for
 project-local setup, `$CLAUDE_CONFIG_DIR/skills/` for `--global`)---shared
-skills only. The code-review coordinator skill is opencode-only because it
-requires sub-agent dispatch, which Claude Code does not support.
+skills only. `thatch-coordination` is opencode-v2-only (it drives the
+session-tab rpc bridge - the named documented gap on other hosts); the
+code-review coordinator is SHARED (it dispatches sub-agents flat, depth 1 -
+the earlier "requires sub-agent dispatch, which Claude Code does not
+support" claim was stale: Claude Code's Agent tool renames Task and allows
+three layers of nesting).
 
 **Session behavior**: driven by external CLI hook processes (`bin/thatch`).
 The hooks are registered in `.claude/settings.json` during setup. Each hook
@@ -221,8 +236,11 @@ installation. opencode auto-installs skills and injects the system prompt at
 plugin init---no setup command is needed.
 
 **Skills** (see [../skills.md](../skills.md)) install both the shared and
-opencode-only arrays for opencode. MCP hosts receive shared skills only, since
-the opencode-only skills require sub-agent dispatch or in-process hooks.
+opencode-only arrays for opencode. MCP hosts receive shared skills only:
+`thatch-coordination` is the one opencode-only skill left, and for a named
+reason - it drives the session-tab rpc bridge (a documented gap on other
+hosts). The code-review coordinator is SHARED (flat sub-agent dispatch
+works on Claude Code and Cursor).
 
 ## Source files
 

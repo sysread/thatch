@@ -51,7 +51,7 @@ If context is sparse (no PR description, no ticket references, no relevant memor
 
 ## Step 3: Research affected workflows
 
-Dispatch a sub-agent using the Task tool to research the code workflows affected by this change. Pass the sub-agent:
+Dispatch a sub-agent using the Task tool (named `Agent` on Claude Code since v2.1.63, which keeps `Task` as a working alias) to research the code workflows affected by this change. Pass the sub-agent:
 - The git range and changed files (from Step 1)
 - The project context brief (from Step 2)
 - Instructions to load the thatch-code-archaeology skill and follow its methodology
@@ -90,7 +90,7 @@ For changes estimated at 3 points or fewer, skip partitioning — dispatch one s
 
 ## Step 6: Dispatch specialist sub-agents
 
-For each review unit, dispatch sub-agents using the Task tool. Each sub-agent runs one specialist lens on one review unit. The ten specialists are:
+For each review unit, dispatch sub-agents using the Task tool (named `Agent` on Claude Code since v2.1.63, which keeps `Task` as a working alias). Each sub-agent runs one specialist lens on one review unit. The ten specialists are:
 
 1. **Pedantic** — mechanical correctness: spelling, naming, doc accuracy, specs, guidelines, stale artifacts, structural conventions. Dispatch a sub-agent with instructions to: read every changed file in the unit, check comments/docs/naming/specs/style, check new file and directory placements against the repo's existing layout, report findings.
 
