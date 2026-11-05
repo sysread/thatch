@@ -13,7 +13,7 @@ import { installSkills, type InstallReport } from "../src/skills";
 import { installCommandsToDir, opencodeCommandDefs } from "../src/commands";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
 import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, createChatTailPretty, markdownBodyLines, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, CHAT_MAX_BODY_CHARS, CHAT_CLI_SENDER, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, cliBroadcastFrame, sanitizeCliSenderName, matchesHostSessionID, buildChatRosterJsonRow, mcpChatHookLine, mcpChatPendingLine, type ChatSessionRow, type ChatTailFilter, type ChatTailEvent } from "../src/chat";
-import { writeRegimeMarker, readRegimeMarker, clearRegimeMarker } from "../src/version-check";
+import { writeRegimeMarker, readRegimeMarker, clearRegimeMarker, pluginRegimeSilent } from "../src/version-check";
 import { chatEnabled, loadConfig } from "../src/config";
 import { chatNotificationNudge } from "../src/prompts";
 import { chatOpenTabs as chatOpenTabsProvider } from "../src/tab-state";
@@ -34,6 +34,16 @@ if (argv.includes("-h") || argv.includes("--help")) usage(0);
 const [command, ...args] = argv;
 
 const db: ThatchDB = new ThatchDB(dbPath, { chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()) });
+
+// The plugin-never-loaded notice (issue: the --plugin-dir-forgotten hole).
+// Under the plugin regime the fallback hooks are gone, so if the plugin
+// was never loaded no thatch surface runs at all - except the user's own
+// CLI calls, which are exactly where the silence gets noticed. setup and
+// mcp are exempt (setup manages the regime; mcp IS the regime).
+if (command !== "setup" && command !== "mcp" && command !== "--version" && command !== "-v" && pluginRegimeSilent(dbPath)) {
+  console.error("[thatch] The plugin regime is installed (the hook setup was deactivated), but the plugin has not loaded or pinged. If you expected thatch to work in a Claude Code session, load it: claude --plugin-dir ~/.claude/thatch-plugin (or re-run thatch setup --claude --plugin-regime).");
+}
+
 
 function usage(exitCode = 1): never {
   console.error(`USAGE

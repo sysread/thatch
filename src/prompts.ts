@@ -540,9 +540,12 @@ When convenient this session (not before addressing the user's request), tend th
 /**
  * Shared MCP host instructions. Claude Code and Cursor use the same prompt
  * body; only the host name and config file reference differ - plus the
- * extraction contract, which is host-keyed (see extractionSection below).
+ * extraction contract (host-keyed, see extractionSection) and the
+ * availability claims (regime-keyed, see availabilitySection: the PLUGIN
+ * regime serves the watch tools and delivers chat wakes, so teaching them
+ * as absent would hide the features that regime exists to deliver).
  */
-function mcpInstructions(host: string, configFile: string): string {
+function mcpInstructions(host: string, configFile: string, regime: "hooks" | "plugin" = "hooks"): string {
   // The extraction contracts genuinely differ per host: Claude Code's
   // UserPromptSubmit hook prints the queued payload inline (no fetch tool,
   // no sub-agent - the dispatched handshake's exhaust class re-opens the
@@ -564,6 +567,36 @@ finished, even if nothing was worth saving. This is system nudge traffic,
 not user input: process it, then stop.
 `
     : "";
+  // The availability claims are regime-keyed: the HOOKS regime (fallback +
+  // Cursor) lacks the watch family, wake delivery, and the host-action
+  // pair; the PLUGIN regime serves the watch tools and delivers chat
+  // wakes (the mod's timer + $.prompt.submit), so teaching them as absent
+  // would hide exactly the features the regime exists to deliver. The
+  // archaeology trio, exit/compact, and the session-tab pair are absent on
+  // BOTH MCP regimes (opencode.db corpus / host-action state / v2 rpc
+  // bridge) - that half of the story never changes.
+  const availabilitySection = regime === "plugin"
+    ? `The watch tools (watch_create, watch_branch_create,
+watch_command_create, watch_list, watch_cancel) ARE available here: the
+plugin regime polls and delivers their events as turns. Chat wake-up
+delivery also works: unread mail reaches you as a system-submitted turn,
+no polling needed. get_session_info, session_search, session_get, exit,
+compact, session_tab, and session_tab_close are intentionally absent
+(they read opencode's session database, need opencode's host-action
+state, or ride opencode v2's TUI tabs) - do not expect them here.
+Cross-session chat works with the identity your thatch hook assigned
+(pass its printed name as \`as\`).`
+    : `get_session_info, session_search,
+session_get, watch_create, watch_branch_create, watch_command_create,
+watch_list, watch_cancel, exit, compact, session_tab, and
+session_tab_close are intentionally absent:
+they are opencode-only (MCP hosts
+have no session concept, session database, or proactive-prompt channel),
+so do not expect them here. session_tab and session_tab_close
+additionally require opencode
+v2 (TUI session tabs). On MCP hosts, cross-session chat works with
+the identity your thatch hook assigned (pass its printed name as \`as\`);
+wake-up delivery is opencode-only, so check chat_status or your inbox each turn.`;
   return `# Persistence
 
 Thatch provides persistent memory across ${host} sessions. Use it to persist
@@ -584,18 +617,7 @@ Tools are prefixed in ${host}: \`mcp__thatch__memory_remember\`,
 \`mcp__thatch__chat_list\`, \`mcp__thatch__chat_send\`,
 \`mcp__thatch__chat_read\`, \`mcp__thatch__chat_unregister\`,
 \`mcp__thatch__chat_broadcast\`, \`mcp__thatch__chat_status\`. Bare names
-used below for readability. get_session_info, session_search,
-session_get, watch_create, watch_branch_create, watch_command_create,
-watch_list, watch_cancel, exit, compact, session_tab, and
-session_tab_close are intentionally absent:
-they are opencode-only (MCP hosts
-have no session concept, session database, or proactive-prompt channel),
-so do not expect them here. session_tab and session_tab_close
-additionally require opencode
-v2 (TUI session tabs). On MCP hosts, cross-session chat works with
-the identity your thatch hook assigned (pass its printed name as \`as\`);
-wake-up delivery is opencode-only, so check chat_status or your inbox each turn.
-
+used below for readability. ${availabilitySection}
 Argument shapes (one JSON object argument, never a bare positional string):
 - \`memory_remember\` with \`{"content": "..."}\` - content carries the information; label is optional (derived from the content's first heading or line)
 - \`memory_recall\` with \`{"query": "..."}\`
@@ -850,8 +872,8 @@ and the tool returns an error. Pass \`archived: true\` to keep it archived,
 "Forget X" - \`memory_recall\` to find it, then \`memory_forget\`.`;
 }
 
-export function claudeInstructions(): string {
-  return mcpInstructions("Claude Code", "CLAUDE.md");
+export function claudeInstructions(regime: "hooks" | "plugin" = "hooks"): string {
+  return mcpInstructions("Claude Code", "CLAUDE.md", regime);
 }
 
 /**

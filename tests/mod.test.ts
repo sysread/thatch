@@ -302,3 +302,155 @@ describe("THE WIRE: mod forwards through the REAL plugin_lifecycle schema", () =
     expect(modSrc, `mod.ts must export ${importMatch![1]} (the shim imports it)`).toMatch(new RegExp(`export (function|const) ${importMatch![1]}\\b`));
   });
 });
+
+describe("THE WIRE: all four crossings through the REAL tool defs", () => {
+  const options = {
+    instructions: "I",
+    stageTool: { server: "thatch", tool: "plugin_stage" },
+    lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" },
+    chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" },
+    watchPollTool: { server: "thatch", tool: "plugin_watch_poll" },
+  };
+
+  /** Routes the harness's mcp.call for ONE tool through the tool's REAL
+   *  def execute (schema validation + field mapping) into a spy ctx - the
+   *  F3 pattern: no crossing may be tested with the harness's own
+   *  re-encoded naming. */
+  const wire = async (toolName: string, spyCtx: Record<string, unknown>) => {
+    const { TOOL_DEFS } = await import("../src/tool-defs");
+    const def = TOOL_DEFS.find((t) => t.name === toolName)!;
+    const harness = installModsHarness({ instructions: "I", stageResponse: "" });
+    const orig = harness.api.mcp.call.bind(harness.api.mcp);
+    harness.api.mcp.call = async (call: { server: string; tool: string; arguments?: Record<string, unknown> }) => {
+      if (call.tool !== toolName) return orig(call);
+      return def.execute((call.arguments ?? {}) as never, spyCtx as never);
+    };
+    registerMod(harness.register, options);
+    return harness;
+  };
+
+  test("plugin_stage: the mod's prompt/session/transcript arrive through the schema", async () => {
+    const calls: { prompt: string; sessionID: string; transcriptPath?: string }[] = [];
+    const harness = await wire("plugin_stage", {
+      pluginStage: async (prompt: string, sessionID: string, transcriptPath?: string) => {
+        calls.push({ prompt, sessionID, transcriptPath });
+        return "";
+      },
+    });
+    await harness.runPromptSubmit({ text: "the user prompt", transcript_path: "/t/x.jsonl" });
+    expect(calls).toEqual([{ prompt: "the user prompt", sessionID: harness.sessionId, transcriptPath: "/t/x.jsonl" }]);
+  });
+
+  test("plugin_chat_wake + plugin_watch_poll: the mod's session id arrives; their text submits", async () => {
+    const wakeCalls: string[] = [];
+    const pollCalls: string[] = [];
+    const harness = installModsHarness({ instructions: "I", stageResponse: "" });
+    // Route BOTH poll tools through their real defs (the F3 pattern: no
+    // crossing tested with the harness's own naming).
+    const { TOOL_DEFS } = await import("../src/tool-defs");
+    const wakeDef = TOOL_DEFS.find((t) => t.name === "plugin_chat_wake")!;
+    const pollDef = TOOL_DEFS.find((t) => t.name === "plugin_watch_poll")!;
+    const orig = harness.api.mcp.call.bind(harness.api.mcp);
+    harness.api.mcp.call = async (call: { server: string; tool: string; arguments?: Record<string, unknown> }) => {
+      if (call.tool === "plugin_chat_wake") {
+        return wakeDef.execute((call.arguments ?? {}) as never, {
+          pluginChatWake: (sid: string) => {
+            wakeCalls.push(sid);
+            return "";
+          },
+        } as never);
+      }
+      if (call.tool === "plugin_watch_poll") {
+        return pollDef.execute((call.arguments ?? {}) as never, {
+          watchers: {
+            consumePending: (sid: string) => {
+              pollCalls.push(sid);
+              return [];
+            },
+          },
+        } as never);
+      }
+      return orig(call);
+    };
+    registerMod(harness.register, options);
+    // One beat, two polls - both session ids arrive schema-validated.
+    await harness.run("session.start", {});
+    await harness.clockTicks[0]!();
+    expect(wakeCalls).toEqual([harness.sessionId]);
+    expect(pollCalls).toEqual([harness.sessionId]);
+    expect(harness.submittedPrompts).toEqual([]);
+  });
+
+  test("F7: the lifecycle execute forwards EVERY schema field (no silent drops)", async () => {
+    // Reflects def.args against the execute() mapping: each schema key
+    // must land in the captured event under its mapped name. A future
+    // field addition that forgets the mapping fails here instead of
+    // passing silently through deepPassthrough.
+    const { TOOL_DEFS } = await import("../src/tool-defs");
+    const def = TOOL_DEFS.find((t) => t.name === "plugin_lifecycle")!;
+    // The FULL-arg payload (every field present, all distinct values).
+    const full = {
+      event: "realwork",
+      session_id: "S",
+      tool: "T",
+      error: "E",
+      is_aborted: true,
+      is_main: true,
+      wake: true,
+      kind: "compact",
+      request_id: "R",
+      tool_input: { ti: 1 },
+      tool_response: "TR",
+    };
+    // Capture via the real execute.
+    const captured: Record<string, unknown>[] = [];
+    await ((def as { execute: (a: unknown, c: unknown) => Promise<string> }).execute)(full, {
+      pluginLifecycle: async (event: Record<string, unknown>) => {
+        captured.push(event);
+        return { text: "" };
+      },
+    } as never);
+    {
+      const ev = captured[0]!;
+      // Every schema key maps to the event under the boundary contract:
+      // snake_case in, the documented camelCase (or same-name) field out.
+      const expected: Record<string, unknown> = {
+        event: full.event,
+        sessionID: full.session_id,
+        tool: full.tool,
+        error: full.error,
+        isAborted: full.is_aborted,
+        isMain: full.is_main,
+        wake: full.wake,
+        kind: full.kind,
+        requestID: full.request_id,
+        args: full.tool_input,
+        result: full.tool_response,
+      };
+      for (const [k, v] of Object.entries(expected)) {
+        expect(ev[k], `schema field ${k} must forward to the lifecycle event`).toEqual(v);
+      }
+      // And nothing unexplained rides along.
+      expect(Object.keys(ev).sort()).toEqual(Object.keys(expected).sort());
+    }
+  });
+});
+
+test("F2: the plugin-regime instructions variant teaches watch+wake as available", async () => {
+  // The regime renders a VARIANT: the hooks wording teaches the watch
+  // tools and wake delivery as opencode-only, while the plugin regime
+  // serves exactly those features - teaching absence would hide them.
+  // (Whitespace collapsed: the template wraps lines.)
+  const { claudeInstructions } = await import("../src/prompts");
+  const hooks = claudeInstructions();
+  const plugin = claudeInstructions("plugin").replace(/\s+/g, " ");
+  // The hooks variant keeps the absence claims (the fallback regime).
+  expect(hooks).toContain("wake-up delivery is opencode-only");
+  expect(hooks).toContain("watch_create");
+  // The plugin variant flips BOTH claims and keeps the never-serves trio.
+  expect(plugin).toContain("plugin regime polls and delivers");
+  expect(plugin).toContain("Chat wake-up delivery also works");
+  expect(plugin).not.toContain("wake-up delivery is opencode-only");
+  expect(plugin).toContain("session_search"); // the trio stays absent-teached
+  expect(plugin).not.toContain("watch_create, watch_branch_create, watch_command_create, watch_list, watch_cancel, exit"); // not in the absent list
+});

@@ -143,21 +143,51 @@ const WRAPUP_KINDS = ["compact", "exit"] as const;
 
 /**
  * Tolerant reader for the lifecycle tool's response: the wrap-up action
- * rides as JSON {text, wrapup?}; the envelope shape is a QA pin.
+ * rides as JSON {text, wrapup?}. The $.mcp.call envelope is one pin shared
+ * by all four tools, so every envelope shape stage/wake tolerate must
+ * unwrap here too - but UNLIKE readStageText, the wrapup field must
+ * survive: a lifecycle response degraded to empty text silently drops the
+ * compact/exit host actions and the arm/greenlight acks.
+ *
+ * The ambiguity this navigates: {text: "..."} is BOTH a plausible envelope
+ * (text = a JSON string of the result) and a parsed result without a
+ * wrapup. Disambiguated by parse: when the text parses to an object
+ * carrying its own text, that inner object is the result.
  */
 function readLifecycleResult(res: unknown): { text: string; wrapup?: "compact" | "exit" } {
+  const asResult = (obj: Record<string, unknown>): { text: string; wrapup?: "compact" | "exit" } | null => {
+    if (typeof obj?.text !== "string") return null;
+    const w = obj.wrapup;
+    if (w === "compact" || w === "exit") return { text: obj.text, wrapup: w };
+    // No wrapup: if the text is itself a JSON result object, THAT is the
+    // payload (an envelope); otherwise this object IS the result (a
+    // plain-text ack).
+    try {
+      const inner = JSON.parse(obj.text) as Record<string, unknown>;
+      const innerResult = asResult(inner);
+      if (innerResult) return innerResult;
+    } catch { /* plain text ack - not JSON */ }
+    return { text: obj.text };
+  };
+  // Content-block array: unwrap to the joined text, then parse.
+  if (Array.isArray(res)) {
+    try {
+      return asResult(JSON.parse(readStageText(res))) ?? { text: readStageText(res) };
+    } catch {
+      return { text: readStageText(res) };
+    }
+  }
   if (typeof res === "string") {
     try {
-      return JSON.parse(res) as { text: string; wrapup?: "compact" | "exit" };
+      return asResult(JSON.parse(res)) ?? { text: res };
     } catch {
       return { text: res };
     }
   }
+  // { result: X } envelope: recurse. A direct result object: asResult.
   const obj = (res ?? {}) as Record<string, unknown>;
-  const inner = typeof obj.text === "string" ? obj : ((obj.result ?? {}) as Record<string, unknown>);
-  const text = typeof inner.text === "string" ? inner.text : "";
-  const wrapup = inner.wrapup === "compact" || inner.wrapup === "exit" ? inner.wrapup : undefined;
-  return { text, wrapup };
+  if (obj.result !== undefined) return readLifecycleResult(obj.result);
+  return asResult(obj) ?? { text: "" };
 }
 
 /**
@@ -407,29 +437,33 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
     // null every load).
     wakeTimer?.cancel();
     const pollWake = async () => {
-      let text = "";
+      // ONE beat, TWO polls, INDEPENDENT catches: a persistently failing
+      // chat-wake must not starve watcher delivery (each poll fails
+      // alone; only a shared failure - $.session.id down - skips the
+      // beat).
+      let sessionId: string;
       try {
-        const sessionId = await $.session.id();
-        // ONE beat, TWO polls: the chat wake AND the watcher-event drain -
-        // both ride the accumulate-poll-submit pattern, and the combined
-        // text submits as ONE turn.
-        const wakeRes = await $.mcp.call({
+        sessionId = await $.session.id();
+      } catch {
+        return; // identity unavailable - the next beat retries
+      }
+      let wakeText = "";
+      try {
+        wakeText = readStageText(await $.mcp.call({
           server: options.chatWakeTool.server,
           tool: options.chatWakeTool.tool,
           arguments: { session_id: sessionId },
-        });
-        let watchRes = "";
-        try {
-          watchRes = readStageText(await $.mcp.call({
-            server: options.watchPollTool.server,
-            tool: options.watchPollTool.tool,
-            arguments: { session_id: sessionId },
-          }));
-        } catch { /* watcher events are best-effort per beat */ }
-        text = [readStageText(wakeRes), watchRes].filter((t) => t.trim()).join("\n\n");
-      } catch {
-        return; // server unreachable - the next beat retries
-      }
+        }));
+      } catch { /* chat wake fails alone */ }
+      let watchRes = "";
+      try {
+        watchRes = readStageText(await $.mcp.call({
+          server: options.watchPollTool.server,
+          tool: options.watchPollTool.tool,
+          arguments: { session_id: sessionId },
+        }));
+      } catch { /* watcher events fail alone */ }
+      const text = [wakeText, watchRes].filter((t) => t.trim()).join("\n\n");
       if (!text.trim()) return;
       // A drop of ANY wording means "not delivered" - the conservative
       // branch holds the text for the turn.end retry; only a CLEAN result

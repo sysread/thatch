@@ -37,6 +37,9 @@ export interface ModsHarness {
   /** Script the chat-wake poll's next responseS (queued per poll; an
    *  empty queue answers ""). */
   setChatWakeResponse(...res: unknown[]): void;
+  /** Script the watcher-poll drain's next responseS (queued per poll; an
+   *  empty queue answers ""). */
+  setWatchPollResponse(...res: unknown[]): void;
   sessionId: string;
   readonly compacted: number;
   notified: string[];
@@ -62,6 +65,7 @@ export function installModsHarness(options: { instructions: string; stageRespons
   let stageError: Error | undefined = options.stageError;
   const lifecycleResponses: unknown[] = [];
   const chatWakeResponses: unknown[] = [];
+  const watchPollResponses: unknown[] = [];
   const sessionId = "ses_mod_under_test";
   const registeredCommands: string[] = [];
   const registeredTools: string[] = [];
@@ -134,6 +138,9 @@ export function installModsHarness(options: { instructions: string; stageRespons
         if (call.tool === "plugin_chat_wake") {
           return chatWakeResponses.length > 0 ? chatWakeResponses.shift() : "";
         }
+        if (call.tool === "plugin_watch_poll") {
+          return watchPollResponses.length > 0 ? watchPollResponses.shift() : "";
+        }
         throw new Error(`unexpected tool call: ${call.server}/${call.tool}`);
       },
     },
@@ -168,6 +175,9 @@ export function installModsHarness(options: { instructions: string; stageRespons
     },
     setChatWakeResponse: (...res: unknown[]) => {
       chatWakeResponses.push(...res);
+    },
+    setWatchPollResponse: (...res: unknown[]) => {
+      watchPollResponses.push(...res);
     },
     sessionId,
     runPromptSubmit: async (e) => {

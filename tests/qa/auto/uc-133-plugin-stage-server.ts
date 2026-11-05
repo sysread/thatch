@@ -149,12 +149,12 @@ const useCase: UseCase = {
       await c2.request("initialize", {});
       const first = await c2.request("tools/call", { name: "plugin_stage", arguments: { prompt: "What is the meaning of life?", session_id: "uc133-empty" } });
       const firstText = first.result?.content?.[0]?.text ?? "";
-      if (!firstText.includes("not delivering")) {
+      if (!firstText.includes("may not be delivering")) {
         failures.push(`stale-liveness warning missing on the first call: ${firstText.slice(0, 160)}`);
       }
       const second = await c2.request("tools/call", { name: "plugin_stage", arguments: { prompt: "again", session_id: "uc133-empty" } });
       const secondText = second.result?.content?.[0]?.text ?? "";
-      if (secondText.includes("not delivering")) {
+      if (secondText.includes("may not be delivering")) {
         failures.push("the disabled-mod warning must surface once, not on every call");
       }
     } finally {

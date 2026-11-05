@@ -5,6 +5,7 @@ import { MEMORY_SAVED_MARKER } from "../tool-defs";
 import { alertMode, loadConfig, type Config } from "../config";
 import { sendNotification, defaultSpawner } from "../notify";
 import type { WatcherRegistry } from "../watchers";
+import { stampModLiveness } from "../version-check";
 import type { ThatchDB } from "../db";
 import type { EmbeddingModel } from "../embeddings";
 
@@ -116,6 +117,10 @@ export function createPluginLifecycle(deps: PluginLifecycleDeps) {
       const sid = event.sessionID;
       switch (event.event) {
         case "busy":
+          // The liveness stamp rides the lifecycle too: a 30+ minute turn
+          // would otherwise self-trip the disabled-mod warning (the stage
+          // only stamps at prompt time).
+          stampModLiveness(deps.dbPath);
           wakeBySession.set(sid, event.wake === true);
           alerts.sessionBusy(sid);
           return { text: "" };
@@ -131,6 +136,7 @@ export function createPluginLifecycle(deps: PluginLifecycleDeps) {
           // - the WORK mark is main-conversation-only (isMain, the mod's
           //   agentId filter) and excludes the no-work tools on top
           //   (todowrite/question did nothing the user waits for).
+          stampModLiveness(deps.dbPath);
           if (!event.tool || isMetaToolName(event.tool) || event.tool.startsWith("mcp__thatch__")) {
             // Our OWN tool traffic: the SAVE gate - a memory_remember that
             // actually saved drains the queue and resets the counter (the

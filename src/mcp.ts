@@ -528,7 +528,7 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
         } else {
           // Measured pre-call (above); surfaced once per session.
           warning = modSilentAtCall
-            ? "The thatch plugin's mod has not pinged in a while, so its nudges and context injection are probably NOT being delivered (hooks may be disabled by disableAllHooks, --safe-mode, or a managed allowManagedModsOnly setting). Tell the user their thatch plugin is not delivering."
+            ? "The thatch plugin's mod may not be delivering right now: its liveness ping is stale, so nudges and context injection may not reach the model (hooks may be disabled by disableAllHooks, --safe-mode, or a managed allowManagedModsOnly setting). If this session has been idle for a long time this warning may be spurious; otherwise tell the user their thatch plugin may not be delivering."
             : null;
           if (warning) console.error(`[thatch] ${warning}`);
         }

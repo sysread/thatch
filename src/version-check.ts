@@ -131,6 +131,21 @@ export function writeRegimeMarker(dbPath: string, regime: "plugin", host: "claud
 /** The HOST-SCOPED marker read: a plugin-regime install is Claude-Code-only;
  * a machine can also run Cursor's standalone server - its marker absence
  * must not inherit Claude's. */
+/**
+ * The plugin-never-loaded detector: the regime marker says the plugin
+ * regime owns the install (the fallback hooks were DEACTIVATED) but the
+ * mod's liveness stamp is absent or older than the stale window - meaning
+ * no bundled server has served and no mod has pinged. That is the
+ * --plugin-dir-forgotten hole: NEITHER regime delivers, silently. The CLI
+ * surfaces it; the threshold mirrors the bundled server's 30-minute
+ * warning window.
+ */
+export function pluginRegimeSilent(dbPath: string, host: "claude" | "cursor" = "claude"): boolean {
+  if (readRegimeMarker(dbPath, host) !== "plugin") return false;
+  const lastPing = readModLiveness(dbPath);
+  return lastPing === null || Date.now() - lastPing > 30 * 60 * 1000;
+}
+
 export function clearRegimeMarker(dbPath: string, host: "claude" | "cursor" = "claude"): void {
   try {
     rmSync(regimeMarkerPath(dbPath, host));
