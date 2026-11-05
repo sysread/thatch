@@ -10,10 +10,19 @@ set -euo pipefail
 mode="${1:-auto}"
 shift
 
+# Auto-suite concurrency, overridable with QA_CONCURRENCY=N. Default 2:
+# each concurrent use case that spawns opencode (docker mode wraps every
+# spawn in its own container) loads a private plugin instance and
+# embedding model - fixture db paths do not share the model pool - so
+# 5-way runs spike host memory hard enough to OOM the opencode service
+# hosting live sessions. 2 keeps most of the parallel speed without the
+# spike; QA_CONCURRENCY=1 serializes completely.
+conc="${QA_CONCURRENCY:-2}"
+
 if [ "$#" -eq 0 ]; then
   # No args: run all
   if [ "$mode" = "auto" ]; then
-    exec bun test tests/qa/auto/index.test.ts --concurrent --max-concurrency 5
+    exec bun test tests/qa/auto/index.test.ts --concurrent --max-concurrency "$conc"
   else
     exec bun test tests/qa/live/index.test.ts
   fi
@@ -32,7 +41,7 @@ for arg in "$@"; do
 done
 
 if [ "$mode" = "auto" ]; then
-  exec bun test tests/qa/auto/index.test.ts --concurrent --max-concurrency 5 --test-name-pattern "^(${pattern})"
+  exec bun test tests/qa/auto/index.test.ts --concurrent --max-concurrency "$conc" --test-name-pattern "^(${pattern})"
 else
   exec bun test tests/qa/live/index.test.ts --test-name-pattern "^(${pattern})"
 fi
