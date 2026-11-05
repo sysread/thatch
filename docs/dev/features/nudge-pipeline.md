@@ -259,8 +259,10 @@ No-save runs produce no toast to avoid notification fatigue.
 
 ## Synthetic nudge parts (opencode only)
 
-Nudges are injected via `client.session.prompt` with `noReply: true` and
-`synthetic: true`. The `synthetic` flag is a TUI-visibility marker, not a
+Nudges are injected as turn-free noReply deliveries (v1: `client.session.prompt`
+with `noReply: true`; v2: `session.synthetic({ resume: false })` - the
+adapter's `promptSession` dispatches per host). The `synthetic` flag is a
+TUI-visibility marker, not a
 model-routing flag. The model sees the nudge text in the conversation. The
 user does not see it in the TUI transcript. This asymmetry is what makes the
 nudge-injection pattern work: the model can act on the nudge without

@@ -1142,12 +1142,10 @@ export async function createRuntime(input: {
     debug("runtime:rehydrate", `restored ${counts}`);
     // Ping the restored sessions directly: the reload/restart happened
     // outside their event stream, so without this the sessions would not
-    // know the plugin is back. Synthetic + noReply on v1 renders a visible
-    // bubble and starts no model turn. On v2 there is no turn-free delivery
-    // (a noReply body falls through to session.prompt: a real message and a
-    // model turn in every restored session on every file save), so v2 skips
-    // the notice entirely - the re-hosted poller's mail delivery is the
-    // wake there.
+    // know the plugin is back. noReply delivery starts no model turn: v1
+    // renders the bubble via promptAsync noReply; v2 enqueues a
+    // resume:false synthetic (materializes at the next turn's inbox
+    // delivery - no wake; live-probed 2026-11-05).
     if (chatOn && caps.noReplyDelivery) {
       for (const sessionID of rehydratedSessions) {
         void caps
@@ -1997,22 +1995,24 @@ export async function createRuntime(input: {
       // message parts. Plugin tools render as muted one-line entries with
       // the output hidden behind a default-off TUI toggle, so without this
       // the human watching a session never sees the conversation happen.
-      // Delivery is a non-synthetic noReply promptAsync: the part renders
-      // as a visible bubble and starts no model turn (the server's prompt
-      // path returns before the completion loop). Non-synthetic also means
-      // later turns see the echo in context - a small duplication of the
-      // tool call it mirrors, accepted for visibility. Fire-and-forget: an
-      // echo failure must never fail the tool call it follows.
+      // Delivery is a noReply prompt: the part renders as a visible bubble
+      // and starts no model turn (v1: promptAsync noReply; v2: a
+      // resume:false synthetic). Non-synthetic also means later turns see
+      // the echo in context - a small duplication of the tool call it
+      // mirrors, accepted for visibility. Fire-and-forget: an echo failure
+      // must never fail the tool call it follows.
       if (input.tool.startsWith("thatch_chat_")) {
         const echo = chatEchoText(
           input.tool,
           (input.args ?? {}) as Record<string, unknown>,
           typeof output.output === "string" ? output.output : "",
         );
-        // noReply hosts only: on a host whose prompt endpoint starts a real
+        // noReply-only: on a host whose prompt endpoint starts a real
         // model turn, delivering the echo would create a turn that calls
         // chat tools, which echoes again - the loop the noReply flag exists
-        // to prevent.
+        // to prevent. Both current hosts deliver turn-free (v2 via the
+        // resume:false synthetic), so the flag is a guard against future
+        // hosts, not a v2 gap.
         if (echo && caps.noReplyDelivery) {
           void caps
             .promptSession(
@@ -2119,11 +2119,10 @@ export async function createRuntime(input: {
     },
 
     onChatMessage: async (input, output) => {
-      // Chat transcript echoes are non-synthetic noReply parts, so they
-      // arrive here like any user message - but no model turn ever reads
-      // them, and the nudge machinery would embed and scan their text for
-      // nothing (and fire spurious toasts when thresholds cross). Skip
-      // them entirely.
+      // Chat transcript echoes arrive here like any user message - but no
+      // model turn ever reads them, and the nudge machinery would embed
+      // and scan their text for nothing (and fire spurious toasts when
+      // thresholds cross). Skip them entirely.
       if (isChatEchoParts(output.parts)) return;
 
       // Dormant watcher recovery: a resumed session's first message re-arms
@@ -2803,10 +2802,12 @@ export async function createRuntime(input: {
       const id = event.properties.info.id;
 
       // noReply hosts only: a host without noReply delivery would turn the
-      // reminder into a real model turn replying to itself. The system
-      // prompt (onSystemTransform) still carries the essentials everywhere.
-      // The gate precedes the hygiene scan so v2 sessions (and any other
-      // noReply-less host) do not pay a DB + repo scan for a skipped report.
+      // reminder into a real model turn replying to itself. Both current
+      // hosts deliver turn-free (v2 via the resume:false synthetic); the
+      // gate stays for future hosts. The system prompt (onSystemTransform)
+      // still carries the essentials everywhere. The gate precedes the
+      // hygiene scan so a noReply-less host does not pay a DB + repo scan
+      // for a skipped report.
       if (!caps.noReplyDelivery) return;
 
       let hygiene: string | null = null;

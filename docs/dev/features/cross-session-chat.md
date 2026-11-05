@@ -473,9 +473,10 @@ with the output block behind a default-off toggle - so without help, a chat
 exchange is invisible to the human watching the session. The plugin's
 `tool.execute.after` hook builds a short echo for the conversational events
 (`chatEchoText()` in `src/prompts.ts`: register, send, read, broadcast) and
-delivers it as a non-synthetic, `noReply` promptAsync part: rendered as a
-visible bubble in the transcript, no model turn started (the server's
-prompt path returns before the completion loop). Failed calls never echo;
+delivers it as a turn-free `noReply` prompt: rendered as a visible bubble in
+the transcript, no model turn started (v1: promptAsync noReply; v2: the
+resume:false synthetic - the bubble materializes at the session's next
+turn's inbox delivery). Failed calls never echo;
 `chat_list` and `chat_unregister` stay on the muted tool line. Broadcasts
 echo their fan-out count with the clipped body.
 
@@ -485,8 +486,8 @@ tool call it mirrors, accepted for visibility. Echo bodies are clipped
 (send: the body; read: the formatted inbox; broadcast: the body) so a
 bubble stays cheap. Echo delivery is fire-and-forget: a failure must never
 fail the tool call it follows. Because the opencode server fires the
-`chat.message` hook for every prompt part before the `noReply`
-early-return, the plugin's `chat.message` handler skips messages whose
+`chat.message` hook (v1) or the prompt hook (v2) for every real prompt, the
+plugin's message handler skips messages whose
 visible text is entirely `[chat]`-prefixed bubbles (`isChatEchoParts`) -
 otherwise every echo would run the nudge machinery for a message no model
 turn reads. The accepted edge: a real user message whose every visible

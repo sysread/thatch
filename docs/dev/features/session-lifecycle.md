@@ -66,7 +66,7 @@ move-aways (see cross-session-chat.md).
 
 ### session.created without parentID (top-level session)
 
-- Send session-start reminder via `client.session.prompt` with `noReply: true` and `synthetic: true`
+- Send session-start reminder as a turn-free `noReply` delivery (v1: `client.session.prompt` with `noReply: true`; v2: `session.synthetic({ resume: false })` - the adapter's `promptSession` dispatches per host)
 - The reminder includes the hygiene heartbeat (pending dedup pairs, stale count, orphaned branch memories) when any signal is non-zero
 - See [hygiene.md](hygiene.md)
 

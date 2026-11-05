@@ -47,12 +47,11 @@ export class DeliverySkippedError extends Error {
 export interface HostCapabilities {
   /**
    * Whether promptSession honors noReply (deliver without starting a model
-   * turn). v1: true (promptAsync with noReply renders a visible bubble and
-   * starts nothing). v2: false - the prompt endpoint has no noReply
-   * semantics, so a noReply delivery would start a real model turn. The
-   * runtime gates its noReply callers (chat echoes, session-start
-   * reminder) on this; turning it on for a host without support creates a
-   * model-turn feedback loop.
+   * turn). True on both hosts: v1 uses promptAsync with noReply; v2 routes
+   * to session.synthetic({ resume: false }) - a synthetic inbox item that
+   * does not wake execution (live-probed 2026-11-05). The flag stays until
+   * the v1 drop deletes it (Phase B of the drop-v1 plan): turning it on
+   * for a host without support would create a model-turn feedback loop.
    */
   readonly noReplyDelivery: boolean;
   /**

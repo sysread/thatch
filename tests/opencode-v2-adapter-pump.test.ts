@@ -201,9 +201,12 @@ describe("opencode v2 adapter", () => {
     // ...and the death row carries the targets for the coordinator pickup.
     const death = check.runtimeStateAll().find((r) => r.kind === "watcher_death" && r.sessionID === "ses_sub_close");
     expect((death?.value as any)?.targets).toContain("acme/widgets#7");
-    // No delivery of any kind went to a session: the busy coordinator's
-    // closed gate means no push, and no arbitrary peer is ever consulted.
-    expect(sessionSyntheticCalls).toEqual([]);
+    // No DEATH delivery of any kind went to a session: the busy
+    // coordinator's closed gate means no push, and no arbitrary peer is
+    // ever consulted. (The synthetic recorder also carries the re-attach
+    // notices the noReply fix restored for rehydrated sessions - those are
+    // not death traffic, so the assertion scopes to the death text.)
+    expect(sessionSyntheticCalls.filter((c: any) => String(c?.text).includes("acme/widgets#7"))).toEqual([]);
     expect(sessionPromptCalls).toEqual([]);
     // The user's banner still fired (source-labeled toast).
     expect(rpcEmitted.some((e) => e.name === TOAST_EVENT && String(e.data?.message).includes("watcher died"))).toBe(true);
@@ -252,8 +255,14 @@ describe("opencode v2 adapter", () => {
     await waitFor("the death push to the coordinator", () =>
       sessionSyntheticCalls.some((c: any) => c?.sessionID === "ses_coord" && String(c?.text).includes("acme/widgets#9")),
     );
-    // The push went ONLY to the coordinator.
-    expect(sessionSyntheticCalls.length).toBe(1);
+    // The push went ONLY to the coordinator: exactly one death push, and
+    // no death traffic to anyone else (the other synthetic calls are the
+    // re-attach notices the noReply fix restored for rehydrated sessions).
+    const push = sessionSyntheticCalls.filter((c: any) => String(c?.text).includes("acme/widgets#9"));
+    expect(push.length).toBe(1);
+    // The death push is a WAKING synthetic (the coordinator must run a
+    // turn to act) - no resume:false on it.
+    expect(push[0]?.resume).toBeUndefined();
     expect(sessionPromptCalls).toEqual([]);
     await waitFor("death row deleted after the successful push", () => {
       const check = new ThatchDB(join(dbDir, "test.db"));
@@ -297,8 +306,11 @@ describe("opencode v2 adapter", () => {
     await waitFor("the death banner", () =>
       rpcEmitted.some((e) => e.name === TOAST_EVENT && String(e.data?.message).includes("watcher died")),
     );
-    // No prompt of any kind: an arbitrary peer is never the recipient.
-    expect(sessionSyntheticCalls).toEqual([]);
+    // No DEATH prompt of any kind: an arbitrary peer is never the
+    // recipient. (The synthetic recorder also carries the re-attach
+    // notices the noReply fix restored - not death traffic; scope to the
+    // death text.)
+    expect(sessionSyntheticCalls.filter((c: any) => String(c?.text).includes("acme/widgets#10"))).toEqual([]);
     expect(sessionPromptCalls).toEqual([]);
     await waitFor("death row deleted after the banner-only attempt", () => {
       const check = new ThatchDB(join(dbDir, "test.db"));

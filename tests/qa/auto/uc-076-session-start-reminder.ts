@@ -23,19 +23,19 @@ const useCase: UseCase = {
   ].join("\n"),
   steps: [
     "1. Simulate a session.created event with no parentID (top-level session).",
-    "2. Verify client.session.prompt is called with the correct session ID, noReply: true, and synthetic: true.",
+    "2. Verify the reminder delivery carries noReply (turn-free): client.session.prompt with noReply: true on v1; session.synthetic({ resume: false }) on v2.",
     "3. Verify the prompt text includes the store name and recall instructions.",
     "4. With non-zero hygiene signals, verify the hygiene heartbeat block is appended.",
     "5. With all-zero hygiene signals, verify the hygiene block is omitted.",
     "6. Simulate a session.created event with a parentID (child session).",
-    "7. Verify client.session.prompt is NOT called for the child.",
+    "7. Verify no reminder delivery for the child.",
   ].join("\n"),
   expected: [
-    "- Top-level sessions receive the session-start reminder via client.session.prompt.",
+    "- Top-level sessions receive the session-start reminder as a turn-free noReply delivery (v1: client.session.prompt; v2: session.synthetic({ resume: false })).",
     "- The reminder includes the store name and recall instructions.",
     "- The hygiene heartbeat is appended only when at least one signal is non-zero.",
     "- Child sessions (with parentID) do not receive the reminder.",
-    "- The noReply and synthetic flags are set so the reminder does not trigger a model turn.",
+    "- The noReply routing is turn-free on both hosts (no model turn).",
   ].join("\n"),
 
   async run(ctx: QaContext) {

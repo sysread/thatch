@@ -380,9 +380,14 @@ export async function createFixture(name: string): Promise<QaContext> {
       XDG_CACHE_HOME: join(dir, "home", ".cache"),
       HOME: join(dir, "home"),
       OPENCODE_TEST_HOME: join(dir, "home"),
+      // v2 still honors this one (server-process.ts). The v1-only pair
+      // _EXTERNAL_SKILLS / _DEFAULT_PLUGINS was removed: v2 dropped both
+      // flags, and the isolation they provided on v1 is structural here -
+      // the fixture-scoped HOME/XDG dirs above are the only skills/plugins
+      // source v2 discovery sees (v2's default plugins are compiled-in
+      // built-ins no env var disables; coexisting with them is the
+      // realistic coverage).
       OPENCODE_DISABLE_CLAUDE_CODE: "1",
-      OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
-      OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
       // opencode v2's serve always runs password-protected (random when
       // unset); a fixed one lets the runner's client authenticate. v1
       // ignores both the env var and the header.

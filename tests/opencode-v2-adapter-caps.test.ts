@@ -50,6 +50,58 @@ afterEach(async () => {
 });
 
 describe("opencode v2 adapter", () => {
+  test("noReply deliveries route to the resume:false synthetic (the live-probed no-wake path)", async () => {
+    // Pins the noReply fix (Phase A of the drop-v1 plan): the re-attach
+    // notice is the runtime's noReply delivery on setup, so it must ride
+    // session.synthetic({ resume: false }) - enqueue WITHOUT waking
+    // execution (live-probed 2026-11-05: no execution events, prompt hook
+    // never fires for the item, history materializes at the next turn's
+    // inbox delivery). A noReply body reaching session.prompt would start
+    // a real model turn in every restored session on every reload.
+    const { ThatchDB } = await import("../src/db");
+    const db = new ThatchDB(join(dbDir, "test.db"));
+    db.runtimeStatePut(
+      "watchers",
+      "ses_reattach_target",
+      [{
+        id: "watch_reattach", source: "pr", sessionID: "ses_reattach_target", repo: "acme/widgets", pr: 11,
+        events: ["pr_commit"], once: false, expiresAt: Date.now() + 600_000,
+        createdAt: Date.now(), state: { headSha: "aaaa1111" },
+      }],
+      SESSION_DIR,
+    );
+    db.close();
+
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await waitFor("the re-attach notice to the restored session", () =>
+      sessionSyntheticCalls.some((c: any) => c?.sessionID === "ses_reattach_target" && String(c?.text).includes("plugin reloaded")),
+    );
+    const notice = sessionSyntheticCalls.find((c: any) => c?.sessionID === "ses_reattach_target" && String(c?.text).includes("plugin reloaded"));
+    // The no-wake contract itself: resume is exactly false.
+    expect(notice?.resume).toBe(false);
+    // And nothing went through the real-prompt path - a prompt delivery
+    // would be a model turn (the feedback loop noReply exists to prevent).
+    expect(sessionPromptCalls.filter((c: any) => String(c?.text).includes("plugin reloaded"))).toEqual([]);
+  });
+
+  test("session-start reminder delivers on v2 via the resume:false synthetic", async () => {
+    // The second noReply fix site: the reminder was gated off on v2
+    // entirely (noReplyDelivery false); with the flag true it flows through
+    // the same no-wake synthetic path as the re-attach notice.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await queueEvent({
+      type: "session.created",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_new_session", info: { id: "ses_new_session", parentID: null } },
+    });
+    await waitFor("the session-start reminder", () =>
+      sessionSyntheticCalls.some((c: any) => c?.sessionID === "ses_new_session" && String(c?.text).includes("thatch")),
+    );
+    const reminder = sessionSyntheticCalls.find((c: any) => c?.sessionID === "ses_new_session");
+    expect(reminder?.resume).toBe(false);
+    expect(sessionPromptCalls.filter((c: any) => c?.sessionID === "ses_new_session")).toEqual([]);
+  });
+
   test("setup registers every TOOL_DEF through the ToolEditor with thatch_ names", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const names = addedTools.map((t) => t.name);

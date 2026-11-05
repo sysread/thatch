@@ -34,9 +34,10 @@ import { deepPassthrough } from "../tool-schema";
 //   the context hook appends them to the outbound request's user message
 //   that matches the entry's prompt text (v2 wire Messages have no
 //   `parts` field). Injections stay out of the stored prompt text.
-// - noReply deliveries (chat echoes, session-start reminder): v2's prompt
-//   endpoint cannot suppress the model turn, so the runtime gates them off
-//   via capabilities.noReplyDelivery.
+// - noReply deliveries (chat echoes, session-start reminder, re-attach
+//   notice): routed to session.synthetic({ resume: false }) - a synthetic
+//   inbox item that does NOT wake execution (live-probed 2026-11-05; the
+//   message materializes in history at the next turn's inbox delivery).
 // - compaction: session.hook("compaction") marks the session AND injects
 //   the re-familiarization system context - the compaction request carries
 //   the same mutable `system` array the context hook mutates (v1 parity:
@@ -910,7 +911,11 @@ function buildCapabilities(
   const session = context.session;
 
   return {
-    noReplyDelivery: false,
+    // Live-probed 2026-11-05 (see the promptSession comment): noReply
+    // deliveries route to session.synthetic({ resume: false }), which does
+    // not wake execution. The v1 caveat (promptAsync noReply) and this are
+    // now behavior-equivalent at the runtime's contract level.
+    noReplyDelivery: true,
     nativeCommands: true,
     // The wake gate treats an unknown session as idle; the runtime's
     // event-fed status map does the busy/retry gating on v2.
@@ -949,14 +954,36 @@ function buildCapabilities(
       // v2's prompt endpoint takes text, not parts, and has no synthetic /
       // noReply semantics. Nudge injections ride the prompt hook.
       //
-      // Synthetic deliveries (watcher + chat wake nudges) route to v2's
-      // session.synthetic endpoint: a TUI-hidden message, matching v1's
-      // synthetic part. mode is v1-only (async = promptAsync vs sync =
-      // prompt); v2's prompt enqueues the message and returns while the
-      // model turn runs asynchronously, so the extraction background flag
-      // degrades: both modes enqueue the same way.
+      // noReply deliveries (chat echoes, session-start reminder, re-attach
+      // notice) route to v2's session.synthetic with resume: false - the
+      // synthetic inbox item enqueues WITHOUT waking execution (live-probed
+      // 2026-11-05 against a real v2 binary: no execution events, message
+      // materializes in history at the next turn's inbox delivery, prompt
+      // hook never fires for it). The visibility defers to the session's
+      // next turn - v1's noReply rendered a bubble immediately; the README
+      // documents the delta.
+      //
+      // Synthetic deliveries WITH a wake (watcher + chat wake nudges) keep
+      // the waking synthetic (resume defaults true). mode is v1-only (async
+      // = promptAsync vs sync = prompt); v2's prompt enqueues the message
+      // and returns while the model turn runs asynchronously, so the
+      // extraction background flag degrades: both modes enqueue the same
+      // way.
       const text = joinTextParts(body.parts);
-      if (!body.noReply && body.parts.length > 0 && body.parts.every((part) => part.synthetic)) {
+      // noReply deliveries route to the resume:false synthetic REGARDLESS
+      // of the parts' synthetic flags - the chat echo's part is
+      // deliberately non-synthetic (visible bubble + later turns see it in
+      // context), and routing it by flag would fall through to
+      // session.prompt: a real model turn that calls chat tools, which
+      // echoes again - the feedback loop the noReply flag exists to
+      // prevent.
+      if (body.noReply) {
+        await session.synthetic({ sessionID, text, resume: false });
+        return;
+      }
+      if (body.parts.length > 0 && body.parts.every((part) => part.synthetic)) {
+        // Waking synthetic (watcher + chat wake nudges): the inbox item
+        // wakes execution, matching v1's promptAsync.
         await session.synthetic({ sessionID, text });
         return;
       }
