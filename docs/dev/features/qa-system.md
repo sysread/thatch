@@ -22,7 +22,7 @@ model tokens).
 ### Use case structure
 
 Each use case file (`tests/qa/auto/uc-NNN-name.ts` or
-`tests/qa/live/uc-NNN-name.ts`) imports `registerUseCase` and `UseCase` from
+`tests/qa/live/<leg>/uc-NNN-name.ts`) imports `registerUseCase` and `UseCase` from
 `../runner`, defines the scenario with `preconditions`, `steps`, and `expected`
 as string arrays joined by newlines, then calls `registerUseCase(useCase)`.
 
@@ -241,9 +241,11 @@ includes all of `tests/`), just not executed during `check`. See
 |------|------|
 | `tests/qa/runner.ts` | `registerUseCase`, `UseCase` type, `ensureMaster`, `createFixture`, `runViaOpencode`, execution logic |
 | `tests/qa/auto/index.test.ts` | Automatable use case barrel — imports all auto use case modules |
-| `tests/qa/live/index.test.ts` | Live use case barrel — imports all live use case modules |
+| `tests/qa/live/index.test.ts` | Live QA entry — the DEFAULT leg only (opencode) |
+| `tests/qa/live/opencode/` | The opencode leg's use cases + barrel |
+| `tests/qa/live/claude/` | The CLAUDE leg (real `claude -p` sessions with the plugin; OPT-IN per run - never a default gate; assertions read only plugin-written surfaces) |
 | `tests/qa/auto/uc-NNN-*.ts` | Automatable use case files, one per use case |
-| `tests/qa/live/uc-NNN-*.ts` | Live use case files, one per use case |
+| `tests/qa/live/<leg>/uc-NNN-*.ts` | Live use case files, one per use case, per leg |
 
 No separate QA docs directory exists. QA use cases live in `tests/qa/` as executable tests, not docs.
 

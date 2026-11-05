@@ -1,4 +1,4 @@
-import { registerUseCase, type UseCase } from "../runner";
+import { registerUseCase, type UseCase } from "../../runner";
 
 /**
  * UC-119: the session-tab spawn flow end to end.

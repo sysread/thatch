@@ -1,4 +1,4 @@
-import { registerUseCase, type UseCase } from "../runner";
+import { registerUseCase, type UseCase } from "../../runner";
 
 /**
  * UC-122: Review-mode commands (/thatch/self-review, /thatch/peer-review).

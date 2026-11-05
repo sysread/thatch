@@ -1,4 +1,4 @@
-import { registerUseCase, type UseCase } from "../runner";
+import { registerUseCase, type UseCase } from "../../runner";
 
 /**
  * UC-129: the /s redo command's TUI smoke.

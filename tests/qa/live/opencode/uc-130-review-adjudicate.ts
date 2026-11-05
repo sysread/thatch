@@ -1,4 +1,4 @@
-import { registerUseCase } from "../runner";
+import { registerUseCase } from "../../runner";
 
 // UC-130: the thatch-review-adjudicate skill's verdict loop, exercised as a
 // user working through a completed peer review of another author's branch.

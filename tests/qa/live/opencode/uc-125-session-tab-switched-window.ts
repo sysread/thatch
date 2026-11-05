@@ -1,4 +1,4 @@
-import { registerUseCase, type UseCase } from "../runner";
+import { registerUseCase, type UseCase } from "../../runner";
 
 /**
  * UC-125: the coordinator-anchored tab routing (the 2026-10-20 fix).

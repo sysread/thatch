@@ -14,7 +14,9 @@ tests/qa/
   auto/              Automatable use cases — no LLM, no model tokens, ~90 seconds
     index.test.ts    Barrel file that imports all auto use cases (for parallel execution)
     uc-NNN-name.ts   Individual use case definitions
-  live/              Live-session use cases — spawn opencode run, cost tokens, up to 10 min each
+  live/              Live-session use cases — spawn agent runs, cost tokens, up to 10 min each
+    opencode/          The default leg: real opencode sessions (the docker sandbox or host binary)
+    claude/            The CLAUDE leg: real `claude -p` sessions with the thatch plugin loaded - OPT-IN per run (never a default gate; model tokens + the host's logged-in claude CLI). Asserts only plugin-written surfaces (db/queue/logs), never the model's prose - see .claude/skills/thatch-plugin-qa/SKILL.md
     index.test.ts    Barrel file that imports all live use cases (for parallel execution)
     uc-NNN-name.ts   Individual use case definitions
 ```
@@ -114,7 +116,7 @@ the v1-binary recipe). Details:
 ## Adding a use case
 
 1. Create `tests/qa/auto/uc-NNN-name.ts` or
-   `tests/qa/live/uc-NNN-name.ts` (no `.test.ts` extension — only the
+   `tests/qa/live/<leg>/uc-NNN-name.ts` (no `.test.ts` extension — only the
    barrel file uses that).
 2. Import `registerUseCase` and `UseCase` (and `QaContext` if automatable)
    from `../runner`. If the use case spawns opencode itself (custom `run`

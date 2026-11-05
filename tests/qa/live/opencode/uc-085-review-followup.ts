@@ -1,4 +1,4 @@
-import { registerUseCase, type UseCase } from "../runner";
+import { registerUseCase, type UseCase } from "../../runner";
 
 /**
  * UC-085: Review followup.

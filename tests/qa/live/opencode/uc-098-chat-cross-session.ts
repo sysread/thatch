@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { registerUseCase, opencodeRunArgs, type UseCase, type QaContext, type UseCaseResult } from "../runner";
+import { registerUseCase, opencodeRunArgs, type UseCase, type QaContext, type UseCaseResult } from "../../runner";
 
 /**
  * UC-098: Cross-session chat between two real opencode sessions.
