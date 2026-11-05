@@ -67,6 +67,7 @@ function loadSharedSkills(): SkillDef[] {
     "thatch-code-walkthrough",
     "thatch-session-reflection",
     "thatch-coding-workflow",
+    "thatch-code-review",
     "thatch-plan-refinement",
     "thatch-plan-evidence",
     "thatch-plan-consistency",
@@ -90,8 +91,13 @@ function loadSharedSkills(): SkillDef[] {
 }
 
 function loadOpencodeOnlySkills(): SkillDef[] {
+  // thatch-coordination is the ONLY opencode-only skill left, and for a
+  // NAMED reason, not a missing port: it drives the session-tab surface
+  // (opencode v2's rpc-event TUI bridge) - no other host has anything to
+  // drive. The code-review coordinator MOVED to shared (Claude Code
+  // dispatches sub-agents flat - the old "no sub-agent dispatch" claim
+  // was stale; see the Task/Agent alias note in the skill).
   return [
-    { name: "thatch-code-review", content: loadSkillFile("thatch-code-review") },
     { name: "thatch-coordination", content: loadSkillFile("thatch-coordination") },
   ];
 }

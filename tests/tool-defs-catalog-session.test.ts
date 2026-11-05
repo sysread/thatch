@@ -11,7 +11,7 @@ setupToolDefsHarness();
 
 describe("TOOL_DEFS", () => {
   test("exports the full tool catalog", () => {
-    expect(TOOL_DEFS.length).toBe(41);
+    expect(TOOL_DEFS.length).toBe(45);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -24,6 +24,10 @@ describe("TOOL_DEFS", () => {
       "dedup_mark_checked",
       "extraction_done",
       "get_extraction_payload",
+      "plugin_stage",
+      "plugin_lifecycle",
+      "plugin_chat_wake",
+      "plugin_watch_poll",
       "prediction_query",
       "prediction_update",
       "prediction_list",
@@ -84,23 +88,29 @@ describe("TOOL_DEFS", () => {
     // tool is the first-call-mistake class).
     const base = systemPrompt("test/repo");
     for (const def of TOOL_DEFS) {
-      if (def.v2Only) {
+      if (def.v2Only || def.bundledOnly) {
         expect(toolsSection(base)).not.toContain(`thatch_${def.name}`);
       } else {
         expect(toolsSection(base)).toContain(`thatch_${def.name}`);
       }
     }
-    // The v2 adapter sets v2Tools: the full list appears.
+    // The v2 adapter sets v2Tools: the full list appears - EXCEPT
+    // bundledOnly tools, which are never opencode prompt surface (they
+    // belong to the plugin regime's bundled server only).
     const v2 = systemPrompt("test/repo", true, true);
     for (const def of TOOL_DEFS) {
-      expect(toolsSection(v2)).toContain(`thatch_${def.name}`);
+      if (def.bundledOnly) {
+        expect(toolsSection(v2)).not.toContain(`thatch_${def.name}`);
+      } else {
+        expect(toolsSection(v2)).toContain(`thatch_${def.name}`);
+      }
     }
   });
 
   test("MCP prompts list shared tools but not opencode-only or v2-only ones", () => {
     const prompt = claudeInstructions();
     for (const def of TOOL_DEFS) {
-      if (def.opencodeOnly || def.v2Only) {
+      if (def.opencodeOnly || def.v2Only || def.bundledOnly) {
         expect(prompt).not.toContain(`mcp__thatch__${def.name}`);
       } else {
         expect(prompt).toContain(`mcp__thatch__${def.name}`);

@@ -80,9 +80,39 @@ Four artifacts, all idempotent:
    `{hooks:{Event:{hooks:[{type,command}]}}}`.
 4. **Skills** --- installs to the scope's skills dir: the repo's
    `.claude/skills/` for project-local, `$CLAUDE_CONFIG_DIR/skills/` for
-   `--global`. `SHARED_SKILLS` only --- the
-   code-review coordinator requires sub-agent dispatch, which Claude Code
-   does not support.
+   `--global`. `SHARED_SKILLS` - the code-review coordinator moved to
+   shared: it dispatches sub-agents FLAT from the session that loaded it
+   (depth 1), which every sub-agent-capable host supports; the old "Claude
+   Code does not support sub-agent dispatch" claim was stale (the Agent
+   tool, renamed from Task in v2.1.63, allows three layers of nesting).
+   `thatch-coordination` stays opencode-v2-only (it drives the
+   session-tab rpc bridge - a named documented gap on other hosts).
+
+### The plugin regime (`--plugin-regime`, QA-only)
+
+`thatch setup --claude --plugin-regime` installs the IN-PROCESS plugin
+regime instead (docs/plans/claude-code-holistic-integration.md): it
+generates the plugin directory (`$CLAUDE_CONFIG_DIR/thatch-plugin/` for
+global, `<projectDir>/.claude/thatch-plugin/` for local) - the manifest
+bundling the MCP server as `thatch mcp --bundled`, the hooks module shim,
+the rendered one-template instructions, and the bundled mod logic - and
+DEACTIVATES the fallback writers above (the settings hooks, the CLAUDE.md
+block, the `.mcp.json` server entry; the global `claude mcp add`
+registration prints as a manual removal step). Opt-in must DELETE: the
+fallback's auto-refresh would otherwise resurrect the removed hooks, and
+both regimes would deliver every prompt.
+
+The regime marker (beside the DB in the config dir - DURABLE, not the tmp
+cache: a reboot must not erase the regime story) makes `checkSetup`
+report the plugin install and makes a leftover STANDALONE server warn
+instead of auto-refresh. The mod stamps a liveness file per prompt; a
+stale stamp prepends a one-time plugin-not-delivering warning to the
+bundled server's first tools/call (the disabled-mod hole: `disableAllHooks`
+and managed `allowManagedModsOnly` silence the mod but leave its server).
+
+The skills install is unchanged in this regime (Claude Code discovers the
+scope's skills dir the same way); skills are NOT bundled in the generated
+plugin directory.
 
 ### Cursor setup (`setupCursor` in `src/setup.ts`)
 

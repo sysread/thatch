@@ -46,8 +46,12 @@ describe("opencode v2 adapter", () => {
   test("setup registers every TOOL_DEF through the ToolEditor with thatch_ names", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const names = addedTools.map((t) => t.name);
-    expect(addedTools.length).toBe(TOOL_DEFS.length);
-    for (const def of TOOL_DEFS) expect(names).toContain(`thatch_${def.name}`);
+    // bundledOnly tools are the plugin regime's bundled-server components -
+    // the v2 registration skips them (the fence contract).
+    const registerable = TOOL_DEFS.filter((d) => !d.bundledOnly);
+    expect(addedTools.length).toBe(registerable.length);
+    for (const def of registerable) expect(names).toContain(`thatch_${def.name}`);
+    for (const def of TOOL_DEFS.filter((d) => d.bundledOnly)) expect(names).not.toContain(`thatch_${def.name}`);
     for (const tool of addedTools) expect(tool.description).toBeTruthy();
   });
 

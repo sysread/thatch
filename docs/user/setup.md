@@ -94,6 +94,21 @@ user-message section, body) that work without thatch managing them:
 thatch setup --commands-only <dir>   # writes <dir>/thatch/<name>.md
 ```
 
+### The plugin regime (QA)
+
+```bash
+thatch setup --claude --plugin-regime   # the in-process plugin (QA)
+```
+
+The plugin regime installs thatch as a Claude Code PLUGIN instead of
+hooks: an in-process mod (context injection at each prompt, alerts, the
+chat wake poller, the wrap-up commands) plus the MCP server bundled in
+the plugin. It generates the plugin directory, DEACTIVATES the hook
+regime's writers (the settings hooks, the CLAUDE.md block, the `.mcp.json`
+entry - so nothing delivers twice), and prints the load command
+(`claude --plugin-dir <dir>`). Re-running it refreshes the plugin in
+place. This regime is in QA; the hook regime above stays the default.
+
 The `thatch/` subdirectory preserves the `/thatch/` invocation
 namespace. On Claude Code and Cursor, run a full `--claude`/`--cursor`
 setup instead - it installs commands with the host's tool spelling.

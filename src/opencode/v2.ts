@@ -210,6 +210,10 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   const GUARD_TOOLS = new Set(["memory_remember", "memory_show", "memory_forget", "config_set"]);
   const registerTools = await context.tool.transform((editor) => {
     for (const def of TOOL_DEFS) {
+      // bundledOnly tools are the plugin regime's bundled-server
+      // components - no CoreContext wiring exists here, so registering
+      // them would advertise tools that answer "not available".
+      if (def.bundledOnly) continue;
       const objectSchema = z.object(def.args);
       editor.add({
         name: `thatch_${def.name}`,

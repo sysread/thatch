@@ -95,11 +95,16 @@ const useCase: UseCase = {
       if (mcpEcho.unread !== 1) failures.push("lookup row should carry the unread count");
     }
 
-    // Step 3a: the text table is byte-identical with the new flags absent.
+    // Step 3a: the text table with the new flags absent. The AGE column
+    // ages between runs (time passes), so byte-equality is not the pin -
+    // STRUCTURE is: same line count across runs, and no machine-contract
+    // wording.
     const textDefault = await run(["chat", "list", "--stale", "all"]);
     const textDefault2 = await run(["chat", "list", "--stale", "all"]);
-    if (textDefault.stdout.toString() !== textDefault2.stdout.toString()) {
-      failures.push("text output is not deterministic across runs");
+    const lines1 = textDefault.stdout.toString().split("\n").filter((l) => l.trim()).length;
+    const lines2 = textDefault2.stdout.toString().split("\n").filter((l) => l.trim()).length;
+    if (lines1 !== lines2) {
+      failures.push(`text output structure changed across runs (${lines1} vs ${lines2} lines)`);
     }
     if (textDefault.stdout.toString().includes("--json") || textDefault.stdout.toString().includes("host_id")) {
       failures.push("text output should not advertise the machine contract");

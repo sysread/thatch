@@ -81,6 +81,10 @@ const useCase: UseCase = {
       "chat_status",
       "session_tab",
       "session_tab_close",
+      "plugin_stage",
+      "plugin_lifecycle",
+      "plugin_chat_wake",
+      "plugin_watch_poll",
     ];
 
     for (const name of expected) {

@@ -113,6 +113,38 @@ export interface CoreContext {
    *  fetches the payload as a tool response instead of receiving it
    *  inline in the nudge text. */
   extractionPayloadProvider?: (sessionID: string, fetcherID?: string) => string | null;
+  /** The Claude Code plugin regime's stage tool: one call per user prompt
+   *  from the mod (via $.mcp.call), returning the nudge text to inject into
+   *  the turn's context - the sideband's role, reborn as an in-process
+   *  MCP tool call (the mod has no Node APIs and cannot reach a socket).
+   *  Also stamps the mod liveness file and anchors the chat identity
+   *  (ppid map + ensure/adoption; the transcript path enables adoption).
+   *  Absent on the standalone server. */
+  pluginStage?: (prompt: string, sessionID: string, transcriptPath?: string) => Promise<string>;
+  /** The plugin regime's lifecycle dispatcher: the mod forwards host
+   *  events (turn start/complete, tool calls, permission asks) and the
+   *  bundled server classifies alerts and resolves wrap-up arms
+   *  server-side (the mod cannot shell out to the notification
+   *  dispatcher). Absent on the standalone server. */
+  pluginLifecycle?: (event: {
+    event: "busy" | "realwork" | "error" | "complete" | "arm" | "greenlight" | "ask" | "resolved" | "session-end";
+    sessionID: string;
+    tool?: string;
+    error?: string;
+    isAborted?: boolean;
+    isMain?: boolean;
+    wake?: boolean;
+    kind?: "compact" | "exit" | "question" | "permission";
+    requestID?: string;
+    args?: Record<string, unknown>;
+    result?: string;
+  }) => Promise<{ text: string; wrapup?: "compact" | "exit" }>;
+  /** The plugin regime's chat wake: the mod polls it on its timer
+   *  cadence; a non-empty return is the wake nudge to submit as a turn
+   *  ($.prompt.submit) - the proactive delivery settings hooks never
+   *  had. Same re-nudge window and delivered stamps as the fallback
+   *  regime's chat-notify. Absent on the standalone server. */
+  pluginChatWake?: (sessionID: string) => string;
   /** Drains a session's extraction queue. On the MCP path this deletes the
    *  file-backed queue and resets the missed-nudge counter. On the opencode
    *  path this is unused (the tool.execute.after hook handles drain via
@@ -249,6 +281,38 @@ export interface ToolDef {
    * capabilities MCP hosts lack (e.g. session identity).
    */
   opencodeOnly?: boolean;
+  /**
+   * When true, the tool exists only on the PLUGIN-regime bundled server
+   * (the Claude Code plugin's own MCP component): compileTools filters it
+   * out for the standalone server and the opencode adapters, because its
+   * behavior is wired through the bundled server's CoreContext only and
+   * exposing it on other servers would advertise a tool that answers
+   * "not available". The def carries bundledOnly only - never also
+   * opencodeOnly.
+   */
+  bundledOnly?: boolean;
+  /**
+   * When true, the tool reads opencode.db (the session-archaeology trio:
+   * get_session_info, session_search, session_get) - it can NEVER serve on
+   * a Claude Code server (wrong corpus: the CC transcripts are not in
+   * that database), not even the plugin regime's bundled one. This is the
+   * REAL constraint the opencodeOnly flag approximated for the watch
+   * tools: those need the WATCHER REGISTRY (which the bundled server
+   * wires), so they serve on the bundled server while the db readers
+   * never do. The def carries opencodeDbOnly only - never also
+   * bundledOnly (the standalone server's opencodeOnly filter already
+   * excludes them).
+   */
+  opencodeDbOnly?: boolean;
+  /**
+   * When true (the five watch tools), the opencodeOnly fence UN-FENCES on
+   * the plugin regime's bundled server: the registry is wired there and
+   * the mod's timer is both poller and delivery. The other opencodeOnly
+   * tools (the archaeology trio, exit/compact) stay fenced on every MCP
+   * server: they need opencode.db or opencode's wrapUpGreenlight
+   * host-action state, which no MCP surface has.
+   */
+  bundledServable?: boolean;
   /**
    * When true, the tool exists only on the opencode v2 adapter path: the v1
    * adapter's createTools and the MCP server filter it out. Used for tools
@@ -1728,6 +1792,7 @@ const notifyUserDef: ToolDef = {
  */
 const getSessionInfoDef: ToolDef = {
   name: "get_session_info",
+  opencodeDbOnly: true,
   description:
     "Return the current session's identity: the host session ID and the " +
     "agent name running this turn (e.g. build, plan, or a sub-agent type). " +
@@ -1829,6 +1894,7 @@ const compactDef: ToolDef = {
  */
 const sessionSearchDef: ToolDef = {
   name: "session_search",
+  opencodeDbOnly: true,
   description:
     "Search past opencode session conversations by substring (or regex with " +
     "regex: true). Matches decoded message text, tool outputs, and reasoning " +
@@ -1898,6 +1964,7 @@ const sessionSearchDef: ToolDef = {
  */
 const sessionGetDef: ToolDef = {
   name: "session_get",
+  opencodeDbOnly: true,
   description:
     "Retrieve the full content of one conversation item by id. Pass a " +
     "part_id (from session_search or session list) for one content piece, " +
@@ -1942,6 +2009,7 @@ const sessionGetDef: ToolDef = {
  */
 const watchCreateDef: ToolDef = {
   name: "watch_create",
+  bundledServable: true,
   description:
     "Watch a GitHub PR for events and get notified in this session when they " +
     "happen: new top-level comments, inline review comments and replies, " +
@@ -2009,6 +2077,7 @@ const watchCreateDef: ToolDef = {
  */
 const watchListDef: ToolDef = {
   name: "watch_list",
+  bundledServable: true,
   description:
     "List this session's active watchers with their ids, targets, watched " +
     "event types, and remaining time, plus any detected events that are " +
@@ -2061,6 +2130,7 @@ const watchListDef: ToolDef = {
  */
 const watchBranchCreateDef: ToolDef = {
   name: "watch_branch_create",
+  bundledServable: true,
   description:
     "Watch a GitHub branch (typically main) and get notified in this session " +
     "when things happen on it: branch_commit when new commits land (e.g. a " +
@@ -2149,6 +2219,7 @@ const watchBranchCreateDef: ToolDef = {
  */
 const watchCommandCreateDef: ToolDef = {
   name: "watch_command_create",
+  bundledServable: true,
   description:
     "Register a local shell command as a background condition and get " +
     "notified in this session when it first exits a watched exit code " +
@@ -2244,6 +2315,7 @@ const watchCommandCreateDef: ToolDef = {
  */
 const watchCancelDef: ToolDef = {
   name: "watch_cancel",
+  bundledServable: true,
   description: "Cancel one of this session's watchers by id. opencode-only.",
   args: {
     id: z.string().describe("The watcher id from watch_create, watch_branch_create, watch_command_create, or watch_list."),
@@ -3013,6 +3085,136 @@ const sessionTabCloseDef: ToolDef = {
  * non-opencodeOnly ones via `tools/list` and dispatches `tools/call` to
  * their execute functions.
  */
+/**
+ * The plugin regime's per-prompt stage tool: the Claude Code mod calls it
+ * once per prompt.submit (via $.mcp.call), and the bundled server runs the
+ * flush tiers server-side (extraction peek/escalation, recall, prediction,
+ * behavior, write fallback) and stamps the mod liveness file. The tool's
+ * text return value is what the mod injects into the turn's context -
+ * replacing the one-shot flush-tools hook process and its sideband
+ * round-trip entirely on the plugin regime. bundledOnly: the standalone
+ * server has no plugin-stage wiring, so advertising it there would
+ * advertise a tool that answers "not available".
+ */
+const pluginStageDef: ToolDef = {
+  name: "plugin_stage",
+  description:
+    "Per-prompt nudge staging for the thatch Claude Code plugin's mod. " +
+    "Returns the nudge text (extraction payload, recall matches, " +
+    "predictions, behaviors, or the write fallback) to inject into the " +
+    "turn's context, and stamps the mod liveness file. Not for the model " +
+    "to call.",
+  bundledOnly: true,
+  args: {
+    prompt: z.string().describe("The user's prompt text, as submitted."),
+    session_id: z.string().describe("The session id the mod read from its own host context."),
+    transcript_path: z.string().optional().describe(
+      "The transcript file path when the mod's event carries one - enables continuation adoption (Claude Code forks session ids on resume).",
+    ),
+  },
+  async execute(args, ctx) {
+    if (!ctx.pluginStage) {
+      return "Plugin stage delivery is not available on this server.";
+    }
+    return ctx.pluginStage(args.prompt as string, args.session_id as string, args.transcript_path as string | undefined);
+  },
+};
+
+/**
+ * The plugin regime's lifecycle dispatcher: the Claude Code mod forwards
+ * host events (turn.start -> busy, tool.call -> realwork, turn.complete ->
+ * complete, classic.StopFailure -> error, classic.PermissionRequest ->
+ * ask, the wrap-up command/tool pair -> arm/greenlight) and this tool
+ * classifies alerts server-side (the same machine the opencode path uses;
+ * delivery rides the per-platform dispatcher notify_user uses - the mod
+ * cannot shell out). bundledOnly, like plugin_stage.
+ */
+const pluginLifecycleDef: ToolDef = {
+  name: "plugin_lifecycle",
+  description:
+    "Per-event lifecycle staging for the thatch Claude Code plugin's " +
+    "mod. Not for the model to call.",
+  bundledOnly: true,
+  args: {
+    event: z.enum(["busy", "realwork", "error", "complete", "arm", "greenlight", "ask", "resolved", "session-end"]),
+    session_id: z.string(),
+    tool: z.string().optional(),
+    error: z.string().optional(),
+    is_aborted: z.boolean().optional(),
+    is_main: z.boolean().optional(),
+    wake: z.boolean().optional(),
+    kind: z.enum(["compact", "exit", "question", "permission"]).optional(),
+    request_id: z.string().optional(),
+    tool_input: z.record(z.string(), z.unknown()).optional(),
+    tool_response: z.string().optional(),
+  },
+  async execute(args, ctx) {
+    if (!ctx.pluginLifecycle) {
+      return "Plugin lifecycle delivery is not available on this server.";
+    }
+    const result = await ctx.pluginLifecycle({
+      event: args.event as "busy",
+      sessionID: args.session_id as string,
+      tool: args.tool as string | undefined,
+      error: args.error as string | undefined,
+      isAborted: args.is_aborted as boolean | undefined,
+      isMain: args.is_main as boolean | undefined,
+      wake: args.wake as boolean | undefined,
+      kind: args.kind as "compact" | "exit" | "question" | "permission" | undefined,
+      requestID: args.request_id as string | undefined,
+      args: args.tool_input as Record<string, unknown> | undefined,
+      result: args.tool_response as string | undefined,
+    });
+    return JSON.stringify(result);
+  },
+};
+
+/**
+ * The plugin regime's chat-wake poll: the mod's timer calls it; a
+ * non-empty return is the wake nudge to submit as a turn. bundledOnly.
+ */
+const pluginChatWakeDef: ToolDef = {
+  name: "plugin_chat_wake",
+  description:
+    "Chat-wake polling for the thatch Claude Code plugin's mod. Not for " +
+    "the model to call.",
+  bundledOnly: true,
+  args: {
+    session_id: z.string(),
+  },
+  async execute(args, ctx) {
+    if (!ctx.pluginChatWake) {
+      return "Plugin chat wake is not available on this server.";
+    }
+    return ctx.pluginChatWake(args.session_id as string);
+  },
+};
+
+/**
+ * The plugin regime's watcher-poll drain: the mod's clock tick calls it
+ * (the same beat as the chat wake); a non-empty return is the watcher
+ * notification to submit as a turn. bundledOnly.
+ */
+const pluginWatchPollDef: ToolDef = {
+  name: "plugin_watch_poll",
+  description:
+    "Watcher-event polling for the thatch Claude Code plugin's mod. Not " +
+    "for the model to call.",
+  bundledOnly: true,
+  args: {
+    session_id: z.string(),
+  },
+  async execute(args, ctx) {
+    if (!ctx.watchers) {
+      return "";
+    }
+    const events = ctx.watchers.consumePending(args.session_id as string);
+    if (events.length === 0) return "";
+    const { watcherNotificationNudge } = await import("./prompts");
+    return watcherNotificationNudge(events[0]?.target ?? "watched target", events, ctx.watchers.pollSeconds);
+  },
+};
+
 export const TOOL_DEFS: ToolDef[] = [
   rememberDef,
   recallDef,
@@ -3024,6 +3226,10 @@ export const TOOL_DEFS: ToolDef[] = [
   markCheckedDef,
   extractionDoneDef,
   getExtractionPayloadDef,
+  pluginStageDef,
+  pluginLifecycleDef,
+  pluginChatWakeDef,
+  pluginWatchPollDef,
   predictionQueryDef,
   predictionUpdateDef,
   predictionListDef,
@@ -3061,6 +3267,9 @@ export const TOOL_DEFS: ToolDef[] = [
 export interface CoreContextExtensions {
   extractionPayloadProvider?: CoreContext["extractionPayloadProvider"];
   drainExtractionQueue?: CoreContext["drainExtractionQueue"];
+  pluginStage?: CoreContext["pluginStage"];
+  pluginLifecycle?: CoreContext["pluginLifecycle"];
+  pluginChatWake?: CoreContext["pluginChatWake"];
   watcherRegistry?: WatcherRegistry;
   projectDir?: string;
   openTabs?: CoreContext["openTabs"];
@@ -3091,6 +3300,9 @@ export function buildCoreContext(
     defaultStore,
     extractionPayloadProvider: extensions?.extractionPayloadProvider,
     drainExtractionQueue: extensions?.drainExtractionQueue,
+    pluginStage: extensions?.pluginStage,
+    pluginLifecycle: extensions?.pluginLifecycle,
+    pluginChatWake: extensions?.pluginChatWake,
     watchers: extensions?.watcherRegistry,
     projectDir: extensions?.projectDir,
     openTabs: extensions?.openTabs,

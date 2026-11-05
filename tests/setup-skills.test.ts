@@ -301,7 +301,9 @@ describe("skill artifact registry parity", () => {
     // a roster beyond twelve specialists is not a real scenario.)
     const COUNT_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
     const countPhrase = `${COUNT_WORDS[REVIEW_SPECIALISTS.length]} specialist`;
-    const coordinator = OPENCODE_ONLY_SKILLS.find((s) => s.name === "thatch-code-review")!;
+    // The coordinator moved to SHARED (flat dispatch works on every
+    // sub-agent-capable host); the roster pins follow it there.
+    const coordinator = SHARED_SKILLS.find((s) => s.name === "thatch-code-review")!;
     expect(coordinator.content).toContain(`The ${countPhrase}s are:`);
     expect(coordinator.content).toContain(countPhrase);
     const followup = SHARED_SKILLS.find((s) => s.name === "thatch-review-followup")!;

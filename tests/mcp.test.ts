@@ -85,9 +85,33 @@ describe("MCP teardown", () => {
 describe("MCP compileTools", () => {
   test("exposes every shared tool under its bare name", () => {
     const tools = compileTools();
-    for (const def of TOOL_DEFS.filter((d) => !d.opencodeOnly && !d.v2Only)) {
+    for (const def of TOOL_DEFS.filter((d) => !d.opencodeOnly && !d.v2Only && !d.bundledOnly)) {
       expect(tools.has(def.name), `missing ${def.name}`).toBe(true);
     }
+  });
+
+  test("bundledOnly tools surface only on the plugin regime's bundled server", () => {
+    const standalone = compileTools();
+    const bundled = compileTools({ bundled: true });
+    expect(standalone.has("plugin_stage")).toBe(false);
+    expect(bundled.has("plugin_stage")).toBe(true);
+    // The opencodeDbOnly trio: NEVER on any Claude Code server - the
+    // bundled one included (wrong corpus: they read opencode.db).
+    for (const def of TOOL_DEFS.filter((d) => d.opencodeDbOnly)) {
+      expect(standalone.has(def.name)).toBe(false);
+      expect(bundled.has(def.name)).toBe(false);
+    }
+    // The WATCH tools: the bundled server un-fences them (its registry is
+    // wired) while the standalone stays fenced.
+    for (const def of TOOL_DEFS.filter((d) => d.name.startsWith("watch_"))) {
+      expect(standalone.has(def.name)).toBe(false);
+      expect(bundled.has(def.name)).toBe(true);
+    }
+    // The opencode HOST-ACTION pair: exit/compact need opencode's
+    // wrapUpGreenlight state - fenced on every MCP server, bundled
+    // included (the mod registers its OWN greenlight surface).
+    expect(bundled.has("exit")).toBe(false);
+    expect(bundled.has("compact")).toBe(false);
   });
 
   test("filters out opencode-only tools", () => {

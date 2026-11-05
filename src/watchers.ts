@@ -1578,6 +1578,22 @@ export class WatcherRegistry {
     return [...(this.#pending.get(sessionID) ?? [])];
   }
 
+  /** The PULL-delivery drain: returns the session's pending events and
+   *  clears the queue (journal included). The plugin regime's poll uses
+   *  this - the mod pulls on its timer beat and delivers by starting a
+   *  turn ($.prompt.submit), the in-process pattern; canDeliver stays
+   *  false so the push path never double-delivers. */
+  consumePending(sessionID: string): WatcherEvent[] {
+    const events = this.pendingEvents(sessionID);
+    if (events.length > 0) {
+      this.#pending.delete(sessionID);
+      this.#firstPendingAt.delete(sessionID);
+      this.#consecutiveDeliveryThrows.delete(sessionID);
+      this.#journalPending?.(sessionID, undefined);
+    }
+    return events;
+  }
+
   /** Diagnostic: number of events waiting for a session. */
   pendingCount(sessionID: string): number {
     return this.pendingEvents(sessionID).length;

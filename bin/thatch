@@ -12,7 +12,8 @@ import { setupClaudeCode, setupCursor, setupSkillsOnly, registerClaudeMcpServer,
 import { installSkills, type InstallReport } from "../src/skills";
 import { installCommandsToDir, opencodeCommandDefs } from "../src/commands";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToTranscriptEntries, partToFullJson, messageToFullJson, type SessionPart } from "../src/session-db";
-import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, createChatTailPretty, markdownBodyLines, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, CHAT_MAX_BODY_CHARS, CHAT_CLI_SENDER, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, resolveRegisteredPredecessor, cliBroadcastFrame, sanitizeCliSenderName, matchesHostSessionID, buildChatRosterJsonRow, type ChatSessionRow, type ChatTailFilter, type ChatTailEvent } from "../src/chat";
+import { chatTailDiff, chatTailBacklog, filterChatTailRows, formatChatTailJsonl, createChatTailPretty, markdownBodyLines, CHAT_TAIL_DEFAULT_LIMIT, parseChatTimeBound, CHAT_STALE_MS, CHAT_RENUDGE_MINUTES, CHAT_MAX_BODY_CHARS, CHAT_CLI_SENDER, chatLiveness, humanAge, splitChatRoster, sortChatRoster, mcpSessionID, isoMinutesAgo, renderChatParticipant, cliBroadcastFrame, sanitizeCliSenderName, matchesHostSessionID, buildChatRosterJsonRow, mcpChatHookLine, mcpChatPendingLine, type ChatSessionRow, type ChatTailFilter, type ChatTailEvent } from "../src/chat";
+import { writeRegimeMarker, readRegimeMarker, clearRegimeMarker, pluginRegimeSilent } from "../src/version-check";
 import { chatEnabled, loadConfig } from "../src/config";
 import { chatNotificationNudge } from "../src/prompts";
 import { chatOpenTabs as chatOpenTabsProvider } from "../src/tab-state";
@@ -33,6 +34,16 @@ if (argv.includes("-h") || argv.includes("--help")) usage(0);
 const [command, ...args] = argv;
 
 const db: ThatchDB = new ThatchDB(dbPath, { chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()) });
+
+// The plugin-never-loaded notice (issue: the --plugin-dir-forgotten hole).
+// Under the plugin regime the fallback hooks are gone, so if the plugin
+// was never loaded no thatch surface runs at all - except the user's own
+// CLI calls, which are exactly where the silence gets noticed. setup and
+// mcp are exempt (setup manages the regime; mcp IS the regime).
+if (command !== "setup" && command !== "mcp" && command !== "--version" && command !== "-v" && pluginRegimeSilent(dbPath)) {
+  console.error("[thatch] The plugin regime is installed (the hook setup was deactivated), but the plugin has not loaded or pinged. If you expected thatch to work in a Claude Code session, load it: claude --plugin-dir ~/.claude/thatch-plugin (or re-run thatch setup --claude --plugin-regime).");
+}
+
 
 function usage(exitCode = 1): never {
   console.error(`USAGE
@@ -174,60 +185,12 @@ async function chatHookLine(hookSessionID?: string, transcriptPath?: string): Pr
   } catch {
     return "";
   }
-
-  if (hookSessionID) {
-    // Ensure-register: idempotent, so every prompt re-touches liveness and
-    // the first prompt of a conversation mints the assigned name. This is
-    // the MCP identity anchor - the session ID is stable per conversation,
-    // so re-registering finds the same row and name.
-    const sessionID = mcpSessionID(hookSessionID);
-    // Continuation adoption: Claude Code forks the session id on resume
-    // (and has been observed to fork spontaneously), stranding the old
-    // identity and mailbox. When this session is unknown, look for a
-    // predecessor transcript handing off to it; adopting keeps the name
-    // and mail following the human-level conversation. Runs before the
-    // ensure so the migrated row is the one re-registered.
-    if (!db.findChatSession(sessionID) && transcriptPath) {
-      try {
-        const pred = resolveRegisteredPredecessor(transcriptPath, hookSessionID, (raw) =>
-          db.findChatSession(mcpSessionID(raw))?.session_id ?? null,
-        );
-        if (pred) {
-          db.continueChatSession(pred, sessionID);
-          hookDebug("hook:adoption", `continued chat identity: ${pred} -> ${sessionID}`);
-        }
-      } catch (err) {
-        console.error(`[thatch] chat continuation adoption failed: ${err}`);
-      }
-    }
-    // The leave tombstone blocks this ensure: chat_unregister must outlive
-    // the turn that issued it, on MCP hosts as on opencode. The line is
-    // the standing signal - it repeats every prompt until the model
-    // rejoins, and it says plainly that rejoining mints a fresh identity,
-    // because the old one is closed for good (assigned names are never
-    // reused, so a tombstoned identity cannot be resurrected by a later
-    // register).
-    if (db.hasChatLeaveTombstone(sessionID) && !db.chatLeaveSuperseded(sessionID, repo)) {
-      return `[thatch] chat: this conversation left the chat directory (chat_unregister) and will not receive mail. If the user asks to rejoin, call thatch_chat_register with no arguments - that mints a fresh identity; the old one stays closed.`;
-    }
-    db.registerChatSession(sessionID, repo, null, "mcp");
-    const me = db.findChatSession(sessionID);
-    if (!me) return "";
-    const mine = db.unreadChatCount(sessionID);
-    const pendingOthers = db
-      .chatPendingByProject(repo)
-      .filter((p) => p.name !== me.name);
-    const others = pendingOthers.length > 0
-      ? ` Others in this project with unread mail: ${pendingOthers.map((p) => `${p.name} (${p.pending})`).join(", ")}.`
-      : "";
-    const mailbox = mine > 0 ? `${mine} unread message(s) for you` : "no unread mail for you";
-    return `[thatch] chat: you are ${me.name} (${mailbox}).${others}`;
-  }
-
-  const pending = db.chatPendingByProject(repo);
-  if (pending.length === 0) return "";
-  const parts = pending.map((p) => `${p.name} (${p.pending})`);
-  return `[thatch] chat: unread message(s) for ${parts.join(", ")} - the addressee should call chat_read`;
+  // The line's logic (adoption, tombstone, ensure, rendering) lives in
+  // src/chat.ts, shared with the plugin regime's stage tool - this hook
+  // keeps only the gates (chat enabled, repo detection).
+  return hookSessionID
+    ? mcpChatHookLine(db, hookSessionID, repo, transcriptPath)
+    : mcpChatPendingLine(db, repo);
 }
 
 /**
@@ -1092,9 +1055,13 @@ switch (command) {
 
   case "mcp": {
     // The MCP server manages its own DB connection; close this one first.
+    // --bundled runs it as the PLUGIN regime's component: no sideband, no
+    // version file, no auto-refresh, no behavior seeding (see
+    // McpServerMode in src/mcp.ts). The fallback regime's `thatch mcp`
+    // (no flag) stays byte-identical.
     db.close();
     const { runMcpServer } = await import("../src/mcp");
-    await runMcpServer();
+    await runMcpServer(args.includes("--bundled") ? "bundled" : "standalone");
     // runMcpServer blocks until stdin closes; don't fall through to db.close().
     process.exit(0);
   }
@@ -1256,6 +1223,21 @@ switch (command) {
       console.error("Usage: thatch setup --claude [--cursor] [--local|--global] [--skills-only [dir]] [--mcp-json]");
       process.exit(1);
     }
+    // --plugin-regime: the Claude Code PLUGIN regime (Track 2, QA-only).
+    // Generates the plugin (mod + bundled MCP server) and DEACTIVATES the
+    // fallback regime's writers (settings hooks, CLAUDE.md block, the
+    // standalone MCP config entry) - opt-in must delete, or both regimes
+    // deliver every prompt. Requires --claude: the mod's surfaces are
+    // Claude Code's; Cursor has no mods.
+    const pluginRegime = args.includes("--plugin-regime");
+    if (pluginRegime && !isClaude) {
+      console.error("--plugin-regime requires --claude (the plugin regime is Claude Code-only; Cursor has no mods).");
+      process.exit(1);
+    }
+    if (pluginRegime && (skillsOnly || mcpJson || customCommandsDir)) {
+      console.error("--plugin-regime is a full-install mode and cannot combine with --skills-only, --mcp-json, or --commands-only.");
+      process.exit(1);
+    }
 
     // Resolve the thatch binary path for hooks and MCP config.
     // If `thatch` is on PATH (npm global install, opencode plugin install),
@@ -1338,6 +1320,28 @@ switch (command) {
     }
 
     if (isClaude && !customSkillsDir) {
+      if (pluginRegime) {
+        // The plugin regime's full install: generate the plugin, deactivate
+        // the fallback writers, stamp the regime marker (checked by
+        // checkSetup and the standalone server), and print the load
+        // instruction. Skills still install (Claude Code discovers them
+        // from the config-dir skills path the same as before).
+        const { setupClaudePluginRegime } = await import("../src/setup");
+        const result = await setupClaudePluginRegime(thatchBin, isGlobal, dir);
+        writeRegimeMarker(dbPath, "plugin");
+
+        say(`Thatch plugin regime installed for Claude Code (${isGlobal ? "global" : "project-local"}).`);
+        say("");
+        say(`  Plugin dir:    ${result.pluginDir}`);
+        printSkills(setupSkillsOnly("claude", isGlobal, dir));
+        say("");
+        for (const d of result.deactivated) say(`  Deactivated:   ${d}`);
+        say("");
+        say("Load it once (QA):  claude --plugin-dir " + result.pluginDir);
+        say("The plugin bundles the MCP server - no `claude mcp add` / .mcp.json entry is needed or wanted in this regime.");
+        say("Re-run this command any time to refresh the generated plugin in place.");
+        break;
+      }
       if (skillsOnly) {
         const result = setupSkillsOnly("claude", isGlobal, dir);
 
@@ -1347,6 +1351,15 @@ switch (command) {
         say("");
         say("Restart Claude Code for the changes to take effect.");
       } else {
+        // The DOWNGRADE path: a fallback --claude setup under a stale
+        // plugin-regime marker would leave contradictory state (the
+        // marker says plugin, the fallback hooks just installed, the
+        // standalone server says remove the entry setup wrote). Clear
+        // the marker + tell the user to uninstall the plugin.
+        if (readRegimeMarker(dbPath) === "plugin") {
+          clearRegimeMarker(dbPath);
+          say("  Note: the plugin-regime marker was present and is now cleared. Uninstall the thatch plugin (or stop loading it with --plugin-dir) - running both it and the hook regime delivers every prompt twice.");
+        }
         const result = setupClaudeCode(thatchBin, isGlobal, dir);
 
         say(`Thatch setup complete for Claude Code (${isGlobal ? "global" : "project-local"}).`);
