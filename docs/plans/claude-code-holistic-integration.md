@@ -149,11 +149,11 @@ Three options weighed:
 For fresh installs on a current Claude Code, **`thatch setup` is not involved at all**. The README carries the install, parallel to the opencode.jsonc line:
 
 ```
-/plugin marketplace add jeffober/thatch
+/plugin marketplace add sysread/thatch
 /plugin install thatch
 ```
 
-The npm-sourced entry makes this the natural front door: one install command pulls the mod, the bundled server, and the skills from the existing npm release - one version, one release train, no setup binary in the loop. (The marketplace source is the GitHub repo. What must be `thatch` is the PLUGIN ENTRY's name in marketplace.json - that is what `/plugin install thatch` resolves; the marketplace's own `name` is only the after-`@` suffix, irrelevant to the bare form the README prints.)
+The npm-sourced entry makes this the natural front door: one install command pulls the mod, the bundled server, and the skills from the existing npm release - one version, one release train, no setup binary in the loop. (CORRECTED 2026-11-05: the marketplace source is the THATCH REPO ITSELF - GitHub owner `sysread`, where repo and marketplace.json live; the npm scope `@jeffober/thatch` is the PLUGIN ENTRY's package source inside that marketplace and NEVER appears in user-facing install commands. What must be `thatch` is the plugin entry's name in marketplace.json - that is what `/plugin install thatch` resolves; the marketplace's own `name` field is only the after-`@` suffix, irrelevant to the bare form the README prints.)
 
 **What survives of `thatch setup --claude` is the exception handler**, and the doc scopes it that way - five cases, each with a reason setup (not the README) is the right surface:
 
@@ -183,7 +183,7 @@ The default-flip decision is already queued for the ship gate: when QA passes an
 
 - **THE GATING PRECONDITION: the published npm package ships a supported lockfile** (npm-shrinkwrap.json preferred per the docs). WITHOUT it the npm-sourced install lands no node_modules, the bundled server cannot start, and the README front door is a dead end - every criterion below depends on it (the evidence audit's finding).
 - The marketplace.json ships in the thatch repo with the npm-sourced entry; `claude plugin validate` passes; install from it lands a working bundled server (resolved via `${CLAUDE_PLUGIN_ROOT}`, bun on PATH).
-- **The README front door works**: the two-line install (`/plugin marketplace add jeffober/thatch` + `/plugin install thatch`) lands a working plugin on a fresh machine with NO `thatch setup` involvement.
+- **The README front door works**: the two-line install (`/plugin marketplace add sysread/thatch` + `/plugin install thatch`) lands a working plugin on a fresh machine with NO `thatch setup` involvement.
 - `thatch setup --claude --plugin-regime` offers the marketplace handoff (print + opt-in run of the two commands); the generated-dir QA path survives; the five exception cases (migration, pre-2.1.287, enterprise-locked, --skills-only, QA generation) all keep working.
 - **At the ship gate**: setup's default inverts to the plugin path for current-CC detection, and the README's front door is the Claude Code section's head - the flip is this addendum's migration step 1, executed then.
 - Bundled mode warns update-available on first tools/call (no version file, no skew); auto-update-off users get the same notice the settings-hook regime gives.
