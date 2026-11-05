@@ -88,9 +88,9 @@ Four artifacts, all idempotent:
    `thatch-coordination` stays opencode-v2-only (it drives the
    session-tab rpc bridge - a named documented gap on other hosts).
 
-### The plugin regime (`--plugin-regime`, QA-only)
+### The plugin regime (`--plugin`, QA-only)
 
-`thatch setup --claude --plugin-regime` installs the IN-PROCESS plugin
+`thatch setup --claude --plugin` installs the IN-PROCESS plugin
 regime instead (docs/plans/claude-code-holistic-integration.md): it
 generates the plugin directory (`$CLAUDE_CONFIG_DIR/thatch-plugin/` for
 global, `<projectDir>/.claude/thatch-plugin/` for local) - the manifest

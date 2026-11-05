@@ -97,7 +97,7 @@ thatch setup --commands-only <dir>   # writes <dir>/thatch/<name>.md
 ### The plugin regime (QA)
 
 ```bash
-thatch setup --claude --plugin-regime   # the in-process plugin (QA)
+thatch setup --claude --plugin   # the in-process plugin (QA)
 ```
 
 The plugin regime installs thatch as a Claude Code PLUGIN instead of

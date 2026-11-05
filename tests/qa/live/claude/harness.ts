@@ -87,7 +87,7 @@ export async function makeClaudeCtx(base: string): Promise<ClaudeLegCtx> {
 
   // Generate the plugin via the real setup (the thing under test), global
   // scope so --plugin-dir resolves inside the fixture home.
-  const setup = Bun.spawnSync(["bun", bin, "setup", "--claude", "--plugin-regime", "--global"], {
+  const setup = Bun.spawnSync(["bun", bin, "setup", "--claude", "--plugin", "--global"], {
     cwd: dir,
     env,
     stdout: "pipe",

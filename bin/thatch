@@ -41,7 +41,7 @@ const db: ThatchDB = new ThatchDB(dbPath, { chatOpenTabs: chatOpenTabsProvider((
 // CLI calls, which are exactly where the silence gets noticed. setup and
 // mcp are exempt (setup manages the regime; mcp IS the regime).
 if (command !== "setup" && command !== "mcp" && command !== "--version" && command !== "-v" && pluginRegimeSilent(dbPath)) {
-  console.error("[thatch] The plugin regime is installed (the hook setup was deactivated), but the plugin has not loaded or pinged. If you expected thatch to work in a Claude Code session, load it: claude --plugin-dir ~/.claude/thatch-plugin (or re-run thatch setup --claude --plugin-regime).");
+  console.error("[thatch] The plugin regime is installed (the hook setup was deactivated), but the plugin has not loaded or pinged. If you expected thatch to work in a Claude Code session, load it: claude --plugin-dir ~/.claude/thatch-plugin (or re-run thatch setup --claude --plugin).");
 }
 
 
@@ -1223,19 +1223,19 @@ switch (command) {
       console.error("Usage: thatch setup --claude [--cursor] [--local|--global] [--skills-only [dir]] [--mcp-json]");
       process.exit(1);
     }
-    // --plugin-regime: the Claude Code PLUGIN regime (Track 2, QA-only).
+    // --plugin: the Claude Code PLUGIN regime (Track 2, QA-only).
     // Generates the plugin (mod + bundled MCP server) and DEACTIVATES the
     // fallback regime's writers (settings hooks, CLAUDE.md block, the
     // standalone MCP config entry) - opt-in must delete, or both regimes
     // deliver every prompt. Requires --claude: the mod's surfaces are
     // Claude Code's; Cursor has no mods.
-    const pluginRegime = args.includes("--plugin-regime");
+    const pluginRegime = args.includes("--plugin");
     if (pluginRegime && !isClaude) {
-      console.error("--plugin-regime requires --claude (the plugin regime is Claude Code-only; Cursor has no mods).");
+      console.error("--plugin requires --claude (the plugin regime is Claude Code-only; Cursor has no mods).");
       process.exit(1);
     }
     if (pluginRegime && (skillsOnly || mcpJson || customCommandsDir)) {
-      console.error("--plugin-regime is a full-install mode and cannot combine with --skills-only, --mcp-json, or --commands-only.");
+      console.error("--plugin is a full-install mode and cannot combine with --skills-only, --mcp-json, or --commands-only.");
       process.exit(1);
     }
 

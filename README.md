@@ -26,7 +26,7 @@ services; everything runs on your machine.
 ```
 
 Older Claude Code versions or enterprise policies that disable mods:
-`npm install -g @jeffober/thatch && thatch setup --claude --hooks-regime`.
+`npm install -g @jeffober/thatch && thatch setup --claude --hooks`.
 Requires [Bun](https://bun.sh) on PATH.
 
 **Cursor**:

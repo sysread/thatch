@@ -169,7 +169,7 @@ The regime marker + deactivation logic are identical under every route (the plug
 
 The default-flip decision is already queued for the ship gate: when QA passes and Jeff calls the merge, setup's default inverts to the plugin path and the README carries the front door. The flip is a designed step, not an afterthought:
 
-1. **At the ship gate** (QA green + Jeff's call): README gains the two-line install as the Claude Code section's head; setup's `--plugin-regime` flag becomes the default for current-CC detection (version floor pinned at implementation), with the five exceptions above keeping the flags/hooks path opt-out.
+1. **At the ship gate** (QA green + Jeff's call): README gains the two-line install as the Claude Code section's head; setup's `--plugin` flag becomes the default for current-CC detection (version floor pinned at implementation), with the five exceptions above keeping the flags/hooks path opt-out.
 2. **The marketplace handoff lands before the flip** (this addendum's acceptance criteria): `thatch setup --claude` prints + offers the two commands for existing users; the shrinkwrap precondition is met in the npm release process.
 3. **The fallback regime is never removed** - it is the (b)/(c) story, and the addendum's per-regime update-nudges mapping (above) governs which update machinery each regime keeps; the body's regime-coexistence rules govern the rest.
 
@@ -184,7 +184,7 @@ The default-flip decision is already queued for the ship gate: when QA passes an
 - **THE GATING PRECONDITION: the published npm package ships a supported lockfile** (npm-shrinkwrap.json preferred per the docs). WITHOUT it the npm-sourced install lands no node_modules, the bundled server cannot start, and the README front door is a dead end - every criterion below depends on it (the evidence audit's finding).
 - The marketplace.json ships in the thatch repo with the npm-sourced entry; `claude plugin validate` passes; install from it lands a working bundled server (resolved via `${CLAUDE_PLUGIN_ROOT}`, bun on PATH).
 - **The README front door works**: the two-line install (`/plugin marketplace add sysread/thatch` + `/plugin install thatch`) lands a working plugin on a fresh machine with NO `thatch setup` involvement.
-- `thatch setup --claude --plugin-regime` offers the marketplace handoff (print + opt-in run of the two commands); the generated-dir QA path survives; the five exception cases (migration, pre-2.1.287, enterprise-locked, --skills-only, QA generation) all keep working.
+- `thatch setup --claude --plugin` offers the marketplace handoff (print + opt-in run of the two commands); the generated-dir QA path survives; the five exception cases (migration, pre-2.1.287, enterprise-locked, --skills-only, QA generation) all keep working.
 - **At the ship gate**: setup's default inverts to the plugin path for current-CC detection, and the README's front door is the Claude Code section's head - the flip is this addendum's migration step 1, executed then.
 - Bundled mode warns update-available on first tools/call (no version file, no skew); auto-update-off users get the same notice the settings-hook regime gives.
 - Renames: the plugin name is permanent from first publish; any later rename goes through the marketplace `renames` map.
