@@ -502,3 +502,36 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   hardening belongs upstream: re-run plugin setups on `server.connected`.
   Diagnose with the file-append trick above - the daemon log cannot see
   this layer. (2026-10-20, session-tab guard investigation)
+
+## A resolved deliver() is not a delivered wake: the guard skip stamps delivered
+
+- **Symptom**: chat mail stamped `delivered_at` in `chat_messages`, wake
+  rows in `chat_wakes`, and ZERO session_message rows for the wake - the
+  recipient never turned and never will (a zombie session: alive in the
+  roster, dead in practice).
+- **Cause**: `guardDelivery` (src/runtime.ts) skips the prompt when the
+  runtime instance's own directory no longer exists, and it resolves
+  successfully when it skips. The chat poller's `deliverPending` treats
+  any resolved `deliver()` as sent: `recordChatWake` +
+  `markChatDelivered` both run. The mail is now stamped delivered and
+  never retried - the prompt never left the process. Observed live
+  2026-11-05: a session moved between worktrees of one project kept
+  being "delivered" by its old instance, whose directory had been
+  deleted; four wake stamps, no prompt, no turn (issue #25).
+- **Diagnosis recipe**: stamped mail + no session_message rows + a
+  recipient whose last real activity predates the stamps = a swallowed
+  wake. Check whether the poller's instance directory still exists
+  (guard skip) and whether the recipient's session row has a different
+  `location.directory` than the instance that hosted it.
+- **Fix shape**: release hosting when a hosted session moves
+  (`session.moved` event, strand-sweep move), so the old instance stops
+  delivering for it; the wake-swallow detector surfaces the residual
+  class loudly. The guard's skip is now a typed rejection
+  (`DeliverySkippedError`, src/capabilities.ts): the chat delivery loop
+  keeps the mail pending and logs each failed cycle, and consecutive
+  skips advance the detector's watch to condemnation (which releases the
+  hosting - closing the reload-across-a-move gap where the
+  `session.moved` event was missed). A wedged-not-dead recipient recovers
+  through the same shape: pending mail retries and lands on the cycle
+  after the session consumes prompts again. (2026-11-05, location-switch
+  fix)

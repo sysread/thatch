@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { directoryAvailable, guardDelivery } from "../src/runtime";
+import { DeliverySkippedError } from "../src/capabilities";
 import type { DebugLog } from "../src/debug";
 
 /** Records promptSession calls; assertions read calls and debug lines. */
@@ -37,20 +38,35 @@ describe("directoryAvailable", () => {
 });
 
 describe("guardDelivery", () => {
-  test("skips the attempt for a gone directory: no throw, no call, debug line", async () => {
+  test("skips the attempt for a gone directory: typed rejection, no call, debug line", async () => {
     const dir = mkdtempSync(join(tmpdir(), "delivery-guard-"));
     rmSync(dir, { recursive: true });
     const { guard, calls, lines } = makeHarness(dir);
-    await guard("ses_gone", { parts: [] }, "async");
+    // The skip is a typed REJECTION, not a silent success: a resolving
+    // skip made the chat delivery loop stamp mail delivered with no
+    // prompt ever sent (the issue #25 black hole).
+    await expect(guard("ses_gone", { parts: [] }, "async")).rejects.toThrow(DeliverySkippedError);
     expect(calls).toHaveLength(0);
     expect(lines.some((l) => l.includes("runtime:delivery") && l.includes("ses_gone") && l.includes(dir))).toBe(true);
+  });
+
+  test("the rejection names the class: DeliverySkippedError", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "delivery-guard-"));
+    rmSync(dir, { recursive: true });
+    const { guard } = makeHarness(dir);
+    let caught: unknown;
+    await guard("ses_cls", { parts: [] }, "async").catch((err) => {
+      caught = err;
+    });
+    expect(caught).toBeInstanceOf(DeliverySkippedError);
+    expect((caught as Error).name).toBe("DeliverySkippedError");
   });
 
   test("resumes delivery when the directory exists again", async () => {
     const dir = mkdtempSync(join(tmpdir(), "delivery-guard-"));
     rmSync(dir, { recursive: true });
     const { guard, calls } = makeHarness(dir);
-    await guard("ses_back", { parts: [] }, "async");
+    await expect(guard("ses_back", { parts: [] }, "async")).rejects.toThrow(DeliverySkippedError);
     expect(calls).toHaveLength(0);
     // A worktree recreated at the same path must receive mail again - the
     // check runs fresh on every attempt, nothing is cached or suppressed.

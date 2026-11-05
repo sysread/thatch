@@ -667,6 +667,17 @@ describe("hostedSessionIds (reload re-hosting)", () => {
     });
     expect(hosted.sort()).toEqual(["ses_rehydrated", "ses_resumed", "ses_seen"]);
   });
+
+  test("moved-in sessions join the hosted set (location-switch adoption)", () => {
+    const hosted = hostedSessionIds({
+      statusKeys: [],
+      resumedSessions: [],
+      rehostedSessions: [],
+      movedInSessions: ["ses_newcomer", "ses_child"],
+      exclude: ["ses_child"],
+    });
+    expect(hosted).toEqual(["ses_newcomer"]);
+  });
 });
 
 describe("unexpiredGraceRehosts (restart grace re-hosting)", () => {

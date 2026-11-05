@@ -26,6 +26,24 @@ export interface ToastInput {
   duration: number;
 }
 
+/**
+ * The delivery guard's skip, as a typed rejection. The guard wraps
+ * promptSession (src/runtime.ts) and every wake path funnels through it.
+ * Callers treat a rejection as "nothing was sent": the chat delivery loop
+ * keeps the mail pending and logs loudly, the watcher registry counts the
+ * throw toward its (404-gated) death scan, and fire-and-forget sites catch
+ * and log. A silent-success skip instead stamped chat mail delivered with
+ * no prompt ever sent - the wake-accepted-but-never-executed zombie
+ * (issue #25). Lives here (not runtime.ts) because chat.ts needs the class
+ * and runtime.ts imports chat.ts.
+ */
+export class DeliverySkippedError extends Error {
+  constructor(sessionID: string, directory: string) {
+    super(`wake to ${sessionID} skipped: directory ${directory} no longer exists`);
+    this.name = "DeliverySkippedError";
+  }
+}
+
 export interface HostCapabilities {
   /**
    * Whether promptSession honors noReply (deliver without starting a model
@@ -78,8 +96,17 @@ export interface HostCapabilities {
    * The metadata bag rides along on v2 (the spawn stamp
    * `thatch.coordinatorSessionID` lives there); v1 sessions carry none, so
    * the coordinator link is v2-only.
+   *
+   * `time.updated` (epoch ms on v1, ISO string on v2 - the wake-swallow
+   * detector normalizes both) is the session's last turn activity: the
+   * detector compares it against a wake stamp to decide whether the wake
+   * actually produced a turn.
    */
-  sessionGet(id: string): Promise<{ title?: string; metadata?: Record<string, unknown> } | null>;
+  sessionGet(id: string): Promise<{
+    title?: string;
+    metadata?: Record<string, unknown>;
+    time?: { updated?: number | string };
+  } | null>;
   /** List sessions in this directory. Null when unavailable (v2 degrade). */
   sessionList(): Promise<{ id: string; parentID?: string; time?: { updated?: number } }[] | null>;
   /**

@@ -406,21 +406,60 @@ Before any wake attempt runs, the delivery guard (`guardDelivery` in
 bound directory of every session it hosts - still exists. A deleted
 worktree (merged branch) would otherwise error every attempt, and opencode
 surfaces that error to the user as a toast. The guard skips the attempt
-with a `runtime:delivery` debug line instead, leaving the mail queued; the
-check is per attempt, so a worktree recreated at the same path resumes
-delivery. The existence check cannot say why a path is absent (deleted
-tree, broken symlink, parent permission), so any miss classifies as gone -
-deliberate, because surfacing non-ENOENT errors through the attempt would
-buy the toast back for no recovery the pending-and-retry cycle does not
-already provide. The guard wraps `promptSession` in
-`createRuntime`, which covers chat nudges, watcher notifications and death
-notices, rehydrate pings, chat echoes, and extraction dispatch at once;
-MCP hosts never build a runtime, so they are unaffected.
+with a `runtime:delivery` debug line instead; the check is per attempt, so
+a worktree recreated at the same path resumes delivery. The existence
+check cannot say why a path is absent (deleted tree, broken symlink,
+parent permission), so any miss classifies as gone - deliberate, because
+surfacing non-ENOENT errors through the attempt would buy the toast back
+for no recovery the pending-and-retry cycle does not already provide. The
+guard wraps `promptSession` in `createRuntime`, which covers chat nudges,
+watcher notifications and death notices, rehydrate pings, chat echoes, and
+extraction dispatch at once; MCP hosts never build a runtime, so they are
+unaffected.
 
-The hard brake: at most a fixed number of wake prompts per recipient per
-hour (default 6, in-memory on purpose - it is a loop guard, not accounting).
-Without it, two agents politely acknowledging each other would ping-pong
-forever, each wake triggering a reply that wakes the other.
+The skip is a typed rejection (`DeliverySkippedError` in
+`src/capabilities.ts`), never a silent success: a resolving skip made the
+chat delivery loop stamp mail delivered with no prompt ever sent - the
+wake-accepted-but-never-executed zombie (issue #25). Callers treat the
+rejection as "nothing was sent": the chat delivery loop keeps the mail
+pending and logs each failed cycle, and consecutive skips advance the
+wake-swallow detector's watch to condemnation (which releases the
+recipient's hosting - this closes the gap where the `session.moved` event
+was missed, e.g. a plugin reload across the move re-hosting the moved
+session at the old instance). The watcher registry's death scan is
+404-gated, so skips never declare a session's watchers dead. A wedged -
+not dead - recipient recovers through the same shape: the rejected wake
+left the mail pending, and the next cycle's retry lands once the session
+consumes prompts again.
+
+### Location switches and the wake-swallow detector
+
+A session moved mid-life between directories of one project (user
+`session_move`, the stranded-session sweep, the recovery dialog) is
+handed off: the old instance releases hosting on the `session.moved`
+event, the new instance adopts it, and mail delivery resumes from there
+(see [session-lifecycle.md](session-lifecycle.md), "session.moved"). The
+hand-off is what prevents the zombie: without it, the old instance kept
+stamp-delivering mail into a prompt path that no longer reached the
+session.
+
+The detector is the safety net for the whole "wake accepted, turn never
+ran" class, whatever the cause. The poller arms a watch on every
+successful wake (`CHAT_SWALLOW_WATCH_MS`, default 5 minutes) and then
+reads the recipient's live activity time (`sessionGet`'s
+`time.updated`). A turn after the wake stamp resolves the watch. Silence
+counts one swallow: the first swallow logs and toasts loudly (the
+watcher-death-notice family), and `CHAT_SWALLOW_DEAD_COUNT` (default 3)
+consecutive silences condemn the recipient - the wiring site releases its
+hosting, so the instance stops spending wake budget on a prompt path that
+no longer consumes. An unreadable activity time (host unreachable,
+unknown session) drops the watch fail-open: the detector only judges when
+it can see. Watches survive un-hosting on purpose - after a location
+switch, the old instance is the only observer left.
+
+The rate cap is the anti-ping-pong loop guard: without it, two agents
+politely acknowledging each other would wake each other forever, each
+wake triggering a reply that wakes the other.
 
 ### Transcript echo
 

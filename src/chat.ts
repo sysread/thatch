@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { CHAT_NAME_POOL } from "./chat-names";
 import { withDidYouMean } from "./fuzzy";
+import { DeliverySkippedError } from "./capabilities";
 
 /**
  * Cross-session chat: opt-in messaging between live opencode sessions on one
@@ -407,6 +408,14 @@ export const CHAT_RENUDGE_MINUTES = 15;
  *  when it is spent - a message's first delivery is the recipient's actual
  *  inbox and delivers regardless. */
 export const CHAT_MAX_NUDGES_PER_HOUR = 6;
+// Wake-swallow detector: how long after a wake prompt the poller waits
+// before judging it (a healthy session turns within seconds), and how many
+// consecutive no-activity observations condemn the recipient. The detector
+// exists because a prompt can be accepted without ever executing - the
+// observed case is a session whose project location switched mid-life, but
+// the detector catches the whole class (issue #25).
+export const CHAT_SWALLOW_WATCH_MS = 5 * 60_000;
+export const CHAT_SWALLOW_DEAD_COUNT = 3;
 
 /** Human-readable age of an ISO timestamp: "45s ago", "5m ago", "3h ago",
  *  "2d ago". Shared by the CLI roster and the chat_list tool so both
@@ -2389,6 +2398,27 @@ export interface ChatPollerOptions {
    *  shared DB (chat_wakes), so it survives reloads and is visible to
    *  other processes. */
   maxNudgesPerHour?: number;
+  /** Epoch ms of the recipient's last turn activity (its session info's
+   *  time.updated), or null when the host cannot say. Arms the wake-swallow
+   *  detector: a wake that produces no turn is a swallowed prompt - the
+   *  observed cause is a session whose project location switched mid-life,
+   *  but the detector catches the whole class. Omit to disable the
+   *  detector (test fakes without a session surface). */
+  sessionActivity?: (sessionID: string) => Promise<number | null>;
+  /** Loud surfacing for a detected swallow (console + toast at the wiring
+   *  site). Fires once per watch, before the condemned count is reached. */
+  onSwallow?: (sessionID: string, detail: { wakeAt: number }) => Promise<void>;
+  /** The recipient is condemned: M consecutive swallows. The wiring site
+   *  un-hosts it (drops it from this instance's hosted sets) so a moved
+   *  session's old instance stops spending wake budget on undeliverable
+   *  prompts. */
+  onSwallowDead?: (sessionID: string) => void;
+  /** How long after a wake the detector waits before its first judgment.
+   *  Default CHAT_SWALLOW_WATCH_MS (5 minutes). */
+  swallowWatchMs?: number;
+  /** Consecutive no-activity observations that condemn the recipient.
+   *  Default CHAT_SWALLOW_DEAD_COUNT (3). */
+  swallowDeadCount?: number;
 }
 
 /**
@@ -2419,9 +2449,18 @@ export function hostedSessionIds(options: {
   statusKeys: Iterable<string>;
   resumedSessions: Iterable<string>;
   rehostedSessions: Iterable<string>;
+  /** Sessions that moved INTO this instance's directory (session.moved
+   *  adoption). Hosted so the destination instance picks up mail delivery
+   *  immediately instead of waiting for the session's first turn. */
+  movedInSessions?: Iterable<string>;
   exclude: Iterable<string>;
 }): string[] {
-  const hosted = [...options.statusKeys, ...options.resumedSessions, ...options.rehostedSessions];
+  const hosted = [
+    ...options.statusKeys,
+    ...options.resumedSessions,
+    ...options.rehostedSessions,
+    ...(options.movedInSessions ?? []),
+  ];
   const excluded = new Set(options.exclude);
   return [...new Set(hosted)].filter((id) => !excluded.has(id));
 }
@@ -2444,7 +2483,7 @@ export function unexpiredGraceRehosts(grace: Map<string, number>, now: number): 
 }
 
 export class ChatPoller {
-  #opts: Required<ChatPollerOptions>;
+  #opts: ChatPollerOptions & Required<Pick<ChatPollerOptions, "pollIntervalMs" | "renudgeMinutes" | "maxNudgesPerHour" | "swallowWatchMs" | "swallowDeadCount">>;
   #timer: ReturnType<typeof setInterval> | null = null;
   #polling = false;
   #delivering = false;
@@ -2459,12 +2498,29 @@ export class ChatPoller {
   /** Last TTL prune epoch ms. Auto-registered rows are pruned hourly, not
    *  every cycle - the prune is a maintenance sweep, not delivery. */
   #lastPrune = 0;
+  /** Wake-swallow watches, per recipient this process wake-prompted:
+   *  epoch ms of the last wake, consecutive failed-to-wake observations,
+   *  and whether the loud warning has fired (also tracked separately in
+   *  #swallowWarned so it survives condemnation). `fromSkip` marks a watch
+   *  armed by a DeliverySkippedError (nothing was sent): the skip is
+   *  definitive evidence for that cycle, so the activity-time judgment in
+   *  #checkSwallows only applies to watches armed by a successful wake.
+   *  A watch survives un-hosting deliberately: after a location-switch
+   *  hand-off this instance is the only observer left, and the detector is
+   *  what surfaces the black hole. */
+  #wakeWatch = new Map<string, { wakeAt: number; swallows: number; warned: boolean; fromSkip: boolean }>();
+  /** Recipients whose swallow warning already fired this process lifetime
+   *  - the once-per-recipient rule outlives the watch (a condemned and
+   *  later re-armed recipient must not re-toast every three cycles). */
+  #swallowWarned = new Set<string>();
 
   constructor(opts: ChatPollerOptions) {
     this.#opts = {
       pollIntervalMs: CHAT_POLL_INTERVAL_MS,
       renudgeMinutes: CHAT_RENUDGE_MINUTES,
       maxNudgesPerHour: CHAT_MAX_NUDGES_PER_HOUR,
+      swallowWatchMs: CHAT_SWALLOW_WATCH_MS,
+      swallowDeadCount: CHAT_SWALLOW_DEAD_COUNT,
       ...opts,
     };
   }
@@ -2495,6 +2551,8 @@ export class ChatPoller {
     this.stop();
     this.#sentIds.clear();
     this.#budgetLogged.clear();
+    this.#wakeWatch.clear();
+    this.#swallowWarned.clear();
   }
 
   /**
@@ -2529,10 +2587,81 @@ export class ChatPoller {
         // chat_wakes stays an hour of accounting rather than a history.
         this.#opts.store.pruneChatWakes?.(isoMinutesAgo(60));
       }
+      await this.#checkSwallows();
     } catch (err) {
       console.error(`[thatch] chat poll failed: ${err}`);
     } finally {
       this.#polling = false;
+    }
+  }
+
+  /**
+   * Wake-swallow detector (issue #25). A wake prompt can be accepted
+   * without ever executing - the observed cause is a session whose project
+   * location switched mid-life, leaving the old instance prompting into a
+   * pipeline that no longer consumes. For every armed watch past the
+   * window, one live read of the session's activity time decides: a turn
+   * after the wake stamp resolves the watch; silence counts one swallow.
+   * The first silence surfaces loudly; M consecutive silences condemn the
+   * recipient (un-hosted by the wiring site). An unreadable activity time
+   * (host unreachable, unknown session) drops the watch fail-open: the
+   * detector only judges when it can see. Watches armed by a guard skip
+   * (fromSkip) are not judged here - the skip itself was the cycle's
+   * evidence.
+   */
+  async #checkSwallows(): Promise<void> {
+    if (!this.#opts.sessionActivity || !this.#opts.onSwallow) return;
+    for (const [recipient, watch] of this.#wakeWatch) {
+      if (watch.fromSkip) continue;
+      if (Date.now() - watch.wakeAt < this.#opts.swallowWatchMs) continue;
+      const activity = await this.#opts.sessionActivity(recipient).catch(() => null);
+      if (activity === null) {
+        this.#wakeWatch.delete(recipient);
+        continue;
+      }
+      if (activity >= watch.wakeAt) {
+        // Healthy: the wake produced a turn.
+        this.#wakeWatch.delete(recipient);
+        continue;
+      }
+      this.#recordSwallow(recipient, watch.wakeAt, false);
+    }
+  }
+
+  /**
+   * Counts one failed-to-wake observation against the recipient's watch:
+   * a guard skip (fromSkip - nothing was sent) or a silent window after a
+   * successful wake. Warns once per recipient per process lifetime; at
+   * swallowDeadCount consecutive failures the watch is consumed and the
+   * recipient condemned (the wiring site releases its hosting). A later
+   * successful wake resets the count - the wedged-session case: the mail
+   * retried, the session woke, nobody was condemned.
+   */
+  #recordSwallow(recipient: string, wakeAt: number, fromSkip: boolean): void {
+    if (!this.#opts.onSwallow) return;
+    const prev = this.#wakeWatch.get(recipient);
+    const watch = {
+      wakeAt,
+      swallows: fromSkip ? (prev?.fromSkip ? prev.swallows + 1 : 1) : (prev?.swallows ?? 0) + 1,
+      warned: prev?.warned ?? false,
+      fromSkip,
+    };
+    if (!this.#swallowWarned.has(recipient)) {
+      this.#swallowWarned.add(recipient);
+      watch.warned = true;
+      this.#opts.onSwallow(recipient, { wakeAt: watch.wakeAt }).catch(() => {
+        // Surfacing is best-effort; the condemnation path still runs.
+      });
+    }
+    if (watch.swallows >= this.#opts.swallowDeadCount) {
+      this.#wakeWatch.delete(recipient);
+      try {
+        this.#opts.onSwallowDead?.(recipient);
+      } catch (err) {
+        console.error(`[thatch] swallow condemnation failed for ${recipient}: ${err}`);
+      }
+    } else {
+      this.#wakeWatch.set(recipient, watch);
     }
   }
 
@@ -2609,6 +2738,12 @@ export class ChatPoller {
           // keeping the loop bounded by the same budget.
           this.#opts.store.recordChatWake(recipient);
           this.#opts.store.markChatDelivered(deliverRows.map((m) => m.id));
+          // Arm (or re-arm) the wake-swallow watch: the next poll cycles
+          // check that this wake actually produced a turn. A successful
+          // prompt is a new regime - the consecutive-failure count resets
+          // (the warning flag stays, once per recipient per process).
+          const prev = this.#wakeWatch.get(recipient);
+          this.#wakeWatch.set(recipient, { wakeAt: Date.now(), swallows: 0, warned: prev?.warned ?? false, fromSkip: false });
         } catch (err) {
           // The prompt went out but a later write failed: mark the ids as
           // sent so the next cycle counts the retry against the cap
@@ -2620,6 +2755,13 @@ export class ChatPoller {
             for (const m of deliverRows) marked.add(m.id);
             this.#sentIds.set(recipient, marked);
           }
+          // A guard skip (DeliverySkippedError) sent nothing, so the mail
+          // above stays pending AND the skip advances the swallow watch:
+          // consecutive skips condemn the recipient and release its
+          // hosting, closing the gap where the session.moved event was
+          // missed (a plugin reload across the move re-hosts the moved
+          // session at the old instance, whose directory may be gone).
+          if (err instanceof DeliverySkippedError) this.#recordSwallow(recipient, Date.now(), true);
           console.error(`[thatch] chat delivery to ${recipient} failed: ${err}`);
         }
       }

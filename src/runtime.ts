@@ -41,7 +41,7 @@ import { ChatPoller, createWakeGate, EXTRACTION_CHILD_TITLE, hostedSessionIds, i
 import { chatEnabled, chatAutoRegister, loadConfig, notificationDefaults } from "./config";
 import { sendNotification } from "./notify";
 import { osProcessArgs, startupSessionId, continuesLastSessionFromArgv, continuesLastSessionId } from "./os-args";
-import type { HostCapabilities } from "./capabilities";
+import { type HostCapabilities, DeliverySkippedError } from "./capabilities";
 import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
@@ -160,17 +160,23 @@ export function directoryAvailable(path: string): boolean {
   return existsSync(path);
 }
 
+// Re-exported for the guard's callers and tests; the class lives in
+// capabilities.ts (runtime.ts imports chat.ts, so chat.ts cannot import
+// the class from here).
+export { DeliverySkippedError } from "./capabilities";
+
 /**
  * The delivery guard: wraps the host's promptSession so a wake attempt
  * never runs against a session whose directory has been deleted. The
  * attempt itself would error, and opencode surfaces that failure to the
- * user as a toast. Skipping instead leaves the pending mail queued - the
- * check runs fresh on every attempt, so a worktree recreated at the same
- * path (or a session revived in a live directory) resumes delivery with
- * nothing lost. This covers every wake site at once because chat nudges,
- * watcher notifications, watcher death notices, rehydrate pings, chat
- * echoes, and extraction-child dispatch all funnel through promptSession,
- * and a host instance is bound to its sessions' own directory.
+ * user as a toast. Skipping instead REJECTS with a DeliverySkippedError -
+ * the check runs fresh on every attempt, so a worktree recreated at the
+ * same path (or a session revived in a live directory) resumes delivery
+ * with nothing lost. This covers every wake site at once because chat
+ * nudges, watcher notifications, watcher death notices, rehydrate pings,
+ * chat echoes, and extraction-child dispatch all funnel through
+ * promptSession, and a host instance is bound to its sessions' own
+ * directory.
  */
 export function guardDelivery(
   promptSession: HostCapabilities["promptSession"],
@@ -180,7 +186,7 @@ export function guardDelivery(
   return (sessionID, body, mode) => {
     if (!directoryAvailable(directory)) {
       debug("runtime:delivery", `skipped wake to ${sessionID}: directory ${directory} no longer exists`);
-      return Promise.resolve();
+      return Promise.reject(new DeliverySkippedError(sessionID, directory));
     }
     return promptSession(sessionID, body, mode);
   };
@@ -569,6 +575,7 @@ export async function createRuntime(input: {
         statusKeys: sessionStatus.keys(),
         resumedSessions,
         rehostedSessions: [...rehostedSessions, ...unexpiredGraceRehosts(rehostGrace, Date.now())],
+        movedInSessions: movedInSessions,
         exclude: childToParent.keys(),
       }).includes(sessionID),
     onSessionDeath: (deadSessionID, death) => {
@@ -628,6 +635,7 @@ export async function createRuntime(input: {
         statusKeys: sessionStatus.keys(),
         resumedSessions: resumedSessions,
         rehostedSessions: [...rehostedSessions, ...unexpiredGraceRehosts(rehostGrace, now)],
+        movedInSessions: movedInSessions,
         exclude: childToParent.keys(),
       });
       // The journal NEVER SHRINKS within a process lifetime: a plugin
@@ -665,6 +673,40 @@ export async function createRuntime(input: {
       }
     },
     canDeliver: canPromptSession,
+    // Wake-swallow detector (issue #25): a wake whose recipient never turns
+    // surfaces loudly, then condemns the recipient - releaseSessionHosting
+    // drops it from this instance's hosted sets so a moved session's old
+    // instance stops prompting into a pipeline that no longer consumes.
+    sessionActivity: async (sessionID) => {
+      try {
+        const info = await caps.sessionGet(sessionID);
+        const raw = info?.time?.updated;
+        if (typeof raw === "number") return raw;
+        if (typeof raw === "string") {
+          const ms = Date.parse(raw);
+          return Number.isNaN(ms) ? null : ms;
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    },
+    onSwallow: async (sessionID, { wakeAt }) => {
+      console.error(
+        `[thatch] chat wake swallowed: session ${sessionID} was woken at ${new Date(wakeAt).toISOString()} but no turn followed - ` +
+          `it may have moved to another directory or stopped consuming prompts`,
+      );
+      try {
+        await caps.showToast({
+          message: `💬 chat: session ${sessionID} swallowed its wake prompt - it may be unreachable after a location switch`,
+          variant: "warning",
+          duration: 6000,
+        });
+      } catch {
+        // TUI may not be connected. Best-effort.
+      }
+    },
+    onSwallowDead: (sessionID) => releaseSessionHosting(sessionID, "swallow detector"),
   });
   // With chat disabled the tools refuse, so the poller would only heartbeat
   // sessions and burn wake budget against a feature the user turned off.
@@ -1124,6 +1166,50 @@ export async function createRuntime(input: {
     }
   }
 
+  // Location-switch bookkeeping (issue #25). A v2 session's project location
+  // can change mid-life (the user's session_move, the strand sweep's
+  // self-heal, the location-unavailable recovery dialog); the move publishes
+  // a session.moved bus event routed to BOTH the old and the new directory's
+  // instances. Each instance acts on its own membership:
+  //   - the OLD instance releases hosting (status map, rehost sets, and the
+  //     hosted journal row). Without the release it keeps heartbeating and
+  //     "delivering" mail through its own directory guard - which silently
+  //     skips when the old directory was deleted, while the delivery loop
+  //     stamps the mail delivered. That is the zombie-session black hole:
+  //     wake stamps written, no prompt sent, no turn ever runs.
+  //   - the NEW instance adopts the session into hosting so mail delivery
+  //     resumes from there without waiting for the session's first turn.
+  // Both halves are idempotent and no-op for sessions this instance never
+  // hosted (child sessions are excluded - they are never hosted).
+  const movedInSessions = new Set<string>();
+  const releaseSessionHosting = (sessionID: string, reason: string): void => {
+    sessionStatus.delete(sessionID);
+    rehostGrace.delete(sessionID);
+    rehostedSessions.delete(sessionID);
+    resumedSessions.delete(sessionID);
+    movedInSessions.delete(sessionID);
+    // Prune the hosted journal row (keyed by this instance's directory) so a
+    // plugin reload's rehydration cannot resurrect the released session.
+    const hostedRow = db.runtimeStateAll().find((r) => r.kind === "hosted" && r.sessionID === directory);
+    if (hostedRow && Array.isArray(hostedRow.value)) {
+      const ids = hostedRow.value as string[];
+      const next = ids.filter((sid) => sid !== sessionID);
+      if (next.length !== ids.length) db.runtimeStatePut("hosted", directory, next, directory);
+    }
+    debug("runtime:move", `released hosting for ${sessionID} (${reason})`);
+  };
+  const adoptSessionHosting = (sessionID: string): void => {
+    if (childToParent.has(sessionID)) return;
+    movedInSessions.add(sessionID);
+    // Merge into the hosted journal eagerly: adoption is durable before the
+    // poller's first tick, so a reload in between re-hosts the newcomer.
+    // The poller's next hosted-set write produces the identical row.
+    const hostedRow = db.runtimeStateAll().find((r) => r.kind === "hosted" && r.sessionID === directory);
+    const ids = hostedRow && Array.isArray(hostedRow.value) ? (hostedRow.value as string[]) : [];
+    if (!ids.includes(sessionID)) db.runtimeStatePut("hosted", directory, [...ids, sessionID], directory);
+    debug("runtime:move", `adopted moved-in session ${sessionID}`);
+  };
+
   // Dormant watcher recovery (watcher-continuity fast-follow). A restart
   // keeps foreign-pid watcher journal rows instead of pruning them (see the
   // rehydration loop): the defining session's harness died, but the session
@@ -1397,6 +1483,13 @@ export async function createRuntime(input: {
         if (disposed) return;
         try {
           await caps.sessionMove?.(m.id, m.to);
+          // Eager release (L3 of the location-switch fix): this instance
+          // just performed the move itself - the strongest possible move
+          // signal. Un-host immediately instead of waiting for the
+          // session.moved event round-trip (the sweep may have moved a
+          // session this instance still hosted; idempotent when it did
+          // not).
+          releaseSessionHosting(m.id, "strand-sweep move");
           moved++;
         } catch (err) {
           debug("strand-sweep", `move failed for ${m.id} (${trigger}): ${err}`);
@@ -2268,6 +2361,22 @@ export async function createRuntime(input: {
       }
       if (event.type === "permission.replied") {
         alerts.permissionResolved(event.properties.sessionID, replyRequestID(event.properties));
+        return;
+      }
+      if (event.type === "session.moved") {
+        // A session's project location changed (user session_move, strand
+        // sweep self-heal, location-unavailable recovery dialog). The v2
+        // bus routes this event to both the old and the new directory's
+        // instances, so each instance reacts on its own membership: release
+        // when it moved away, adopt when it moved here. See the
+        // location-switch bookkeeping block for why the release is the
+        // black hole's fix.
+        const sessionID = event.properties.sessionID as string | undefined;
+        const toDirectory = event.properties.directory as string | undefined;
+        if (sessionID && toDirectory) {
+          if (toDirectory === directory) adoptSessionHosting(sessionID);
+          else releaseSessionHosting(sessionID, "session.moved to another directory");
+        }
         return;
       }
       if (event.type === "session.created") {

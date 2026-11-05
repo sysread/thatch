@@ -14,6 +14,7 @@ opencode emits bus events for session lifecycle changes. Thatch subscribes to th
 - Session error recovery: child errors requeue parent's accepted entries
 - Session deletion recovery: child deletion requeues; parent deletion completes accepted entries
 - Stranded-session self-heal: sessions whose recorded directory is gone (a merged + deleted worktree) are deleted when machinery (`thatch-extraction` corpses) and moved to the project's canonical checkout when real
+- Location-switch hand-off: a session moved mid-life (`session.moved` event) is un-hosted by the old instance and adopted by the new one, so chat wake delivery follows the session
 - Wrap-up commands: `/thatch/compact` and `/thatch/exit` arm a greenlight check; each resolves on the model's zero-arg tool call (`thatch_compact` / `thatch_exit`) and the next idle
 
 ## How it works
@@ -32,6 +33,32 @@ The snapshot is journal-recovery data only (restored child bookkeeping
 after a reload); live delivery is claim-based: the child's payload fetch
 records exactly which entries it received, and its completion signal
 consumes only those.
+
+### session.moved (location switch)
+
+A v2 session's project location can change mid-life: the user's
+`session_move`, the stranded-session sweep's move, or opencode's
+"location unavailable" recovery dialog. opencode publishes a
+`session.moved` bus event carrying the new directory and routes it to BOTH
+the old and the new directory's plugin instances; the v2 pump forwards it
+past the generic instance gate and each instance reacts on its own
+membership:
+
+- **Moved away** (the session was hosted here, the new directory is not
+  ours): release hosting -- drop the status-map key, the rehost/resume
+  sets, and the hosted journal row (so a reload cannot resurrect it).
+  Without the release the old instance keeps heartbeating and delivering
+  for a session that no longer lives here; when its own directory was also
+  deleted, the delivery guard silently skips the prompt while the chat
+  delivery loop stamps the mail delivered -- the wake-accepted-but-never-
+  executed zombie (issue #25).
+- **Moved here**: adopt the session into hosting (the `movedInSessions`
+  set plus a durable hosted-journal merge), so wake delivery resumes from
+  this instance without waiting for the session's first turn.
+
+The stranded-session sweep's own move path releases hosting eagerly (same
+routine, before the event round-trip) because the sweep performed the move
+itself and needs no event to know.
 
 ### session.created without parentID (top-level session)
 

@@ -504,6 +504,24 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
             const opened = (data ?? {}) as { sessionID?: string; directory?: string };
             if (opened.sessionID && opened.directory) sessionDirs.set(opened.sessionID, opened.directory);
           }
+          if (located.type === "session.moved") {
+            // A session's project location changed. The bus routes this
+            // event to BOTH the old and the new location's instances (the
+            // only session event routed twice), so it must not go through
+            // the generic instance gate: at the old instance the payload's
+            // (new) directory fails the match and the release would never
+            // run. Route it straight to the runtime, which reacts on its
+            // own membership - release here if it moved away, adopt here
+            // if it moved in (the location-switch fix, issue #25).
+            const moved = (data ?? {}) as { sessionID?: string; location?: { directory?: string } };
+            if (moved.sessionID && moved.location?.directory) {
+              await runtime.onEvent({
+                type: "session.moved",
+                properties: { sessionID: moved.sessionID, directory: moved.location.directory },
+              });
+            }
+            continue;
+          }
           let eventDir = located.location?.directory ?? (data.sessionID ? sessionDirs.get(data.sessionID) : undefined);
           if (!eventDir && data.sessionID) eventDir = await resolveSessionDir(data.sessionID);
           runtime.debug("v2:pump", `event ${located.type} dir=${eventDir} self=${directory}`);

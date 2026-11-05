@@ -219,6 +219,31 @@ removes the row itself when the exit greenlight (the model's `thatch_exit`
 tool call) passes, so other sessions stop
 addressing mail to a session that is closing out.
 
+## Moving a session between directories
+
+A session can change its working directory mid-life: you move it with
+`session_move`, thatch's self-heal relocates it out of a deleted
+worktree, or opencode's "session location unavailable" dialog recovers it.
+Wake delivery follows the session. The opencode instance at the old
+directory hands the session off and the instance at the new directory
+picks mail delivery up from there - mail that queued during the move is
+delivered once the session is adopted, not lost and not falsely marked
+read.
+
+If a wake cannot be attempted at all (the old instance's directory is
+gone), the mail is never marked delivered: it stays pending and retries
+every cycle, loudly. That is also what a temporarily wedged session
+sees - one failed or swallowed wake does not give up on it, and the next
+retry lands once the session consumes prompts again.
+
+If a wake prompt is accepted but the session never actually turns (the
+failure mode the hand-off exists to prevent, and one a broken prompt path
+can still cause), thatch says so loudly: a warning toast plus a log line
+name the session, and if it keeps happening the old instance stops
+trying to wake that session at all. If you see the "swallowed its wake
+prompt" toast for a session you expected to be alive, restart or reopen
+that session - it is not processing prompts.
+
 ## Turning chat off
 
 Set `chat.enabled: false` in the thatch config file

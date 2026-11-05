@@ -378,4 +378,45 @@ describe("opencode v2 adapter", () => {
     });
     await waitFor("extraction after a handler throw", () => sessionCreateCalls.length === 1);
   });
+
+  test("pump: session.moved releases a hosted session that moved away and adopts one that moved in", async () => {
+    // The location-switch fix (issue #25): the bus routes the moved event
+    // to BOTH the old and the new directory's instances, so the pump must
+    // bypass the generic instance gate for it and hand it straight to the
+    // runtime. The hosted journal row is the observable: the move-away
+    // prunes the moved session, the move-in adds the newcomer durably.
+    const { ThatchDB } = await import("../src/db");
+    // Seed the hosted journal BEFORE setup: a same-pid same-directory row
+    // rehydrates into rehostedSessions, so this instance hosts ses_moved
+    // from the first beat.
+    const seed = new ThatchDB(join(dbDir, "test.db"));
+    seed.runtimeStatePut("hosted", SESSION_DIR, ["ses_moved"], SESSION_DIR);
+    seed.close();
+
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+
+    // Moved AWAY: this instance must release it (the journal row loses the
+    // id, so no future reload re-hosts it and no wake is prompted through
+    // this instance's dead-directory guard again).
+    await queueEvent({
+      type: "session.moved",
+      data: { sessionID: "ses_moved", location: { directory: "/tmp/thatch-v2-test-elsewhere" } },
+    });
+    // Moved IN: this instance must adopt it (the journal row gains the id
+    // durably, before any poller tick).
+    await queueEvent({
+      type: "session.moved",
+      data: { sessionID: "ses_newcomer", location: { directory: SESSION_DIR } },
+    });
+    await waitFor("session.moved bookkeeping landed", () => {
+      const check = new ThatchDB(join(dbDir, "test.db"));
+      try {
+        const row = check.runtimeStateAll().find((r) => r.kind === "hosted" && r.sessionID === SESSION_DIR);
+        const ids = Array.isArray(row?.value) ? (row!.value as string[]) : [];
+        return !ids.includes("ses_moved") && ids.includes("ses_newcomer");
+      } finally {
+        check.close();
+      }
+    });
+  });
 });
