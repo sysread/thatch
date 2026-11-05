@@ -39,6 +39,42 @@ async function waitFor(desc: string, deadlineMs: number, fn: () => Promise<unkno
   }
 }
 
+/**
+ * Retries a fixture-side SQLite operation while it throws transient
+ * lock/contention errors. Covers the call sites waitFor cannot: the test
+ * process's own db open, registration, and sends all race the serve
+ * process's WAL checkpoints (same shape as the poll-race fixed by
+ * b7cedae), and a throw from any of them fails the use case instantly.
+ *
+ * The retry is safe (not a blanket retry masking real failures) because
+ * every wrapped operation is idempotent on a thrown error:
+ * - ThatchDB construction runs CREATE TABLE IF NOT EXISTS migrations
+ *   (re-running is a no-op) or opens an existing schema;
+ * - registerChatSession is an ensure (a second call returns the SAME
+ *   session names);
+ * - sendChatMessage wraps its inserts in ONE transaction (a throw means
+ *   nothing committed), and the store's unread-batch dedupe suppresses a
+ *   duplicate batch anyway (src/chat.ts send());
+ * - plain reads cannot change state.
+ * Deadline: these operations are millisecond-scale when healthy; 30s is
+ * headroom for a serve process checkpointing under full-suite load.
+ */
+const SQLITE_TRANSIENT = /disk I\/O error|database is locked|database table is locked/i;
+
+async function withSqliteRetry<T>(desc: string, fn: () => T): Promise<T> {
+  const end = Date.now() + 30_000;
+  for (;;) {
+    try {
+      return fn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!SQLITE_TRANSIENT.test(message) || Date.now() > end) throw err;
+      console.log(`  UC-100: transient SQLite error during ${desc}, retrying: ${message}`);
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+}
+
 async function listTextParts(client: ServeHandle["client"], sessionID: string): Promise<string[]> {
   const { data } = await client.session.messages({ path: { id: sessionID } });
   const parts = (data ?? []).flatMap((m) => m.parts);
@@ -93,10 +129,12 @@ const useCase: UseCase = {
       // idle events and may win the race with its title-slug names
       // ("uc-100-alpha-00001"); register() is an ensure, so whichever
       // path mints first wins and the harness uses the ASSIGNED names
-      // from here on.
-      const db = new ThatchDB(ctx.env.THATCH_DB_PATH);
-      const regA = db.registerChatSession(sA, null, null, "opencode", "alpha");
-      const regB = db.registerChatSession(sB, null, null, "opencode", "bravo");
+      // from here on. Every db touch below rides withSqliteRetry - the
+      // serve process checkpoints this WAL continuously, and a transient
+      // IOERR outside waitFor would fail the use case instantly.
+      const db = await withSqliteRetry("open fixture db", () => new ThatchDB(ctx.env.THATCH_DB_PATH));
+      const regA = await withSqliteRetry("register alpha", () => db.registerChatSession(sA, null, null, "opencode", "alpha"));
+      const regB = await withSqliteRetry("register bravo", () => db.registerChatSession(sB, null, null, "opencode", "bravo"));
       if (!regA.ok || !regB.ok) {
         console.log(`  FAIL: registration failed - ${(!regA.ok && regA.error) || (!regB.ok && regB.error)}`);
         return "FAIL";
@@ -108,7 +146,7 @@ const useCase: UseCase = {
       // for the delivery stamp (poller wake) and the read stamp (bravo's
       // model turn calling chat_read).
       const canary = `UC-100 canary message. Acknowledge by calling chat_read, then reply to ${nameA} with the single word ack.`;
-      const sent = db.sendChatMessage(sA, nameB, canary);
+      const sent = await withSqliteRetry("send canary", () => db.sendChatMessage(sA, nameB, canary));
       if (!sent.ok) {
         console.log(`  FAIL: send failed - ${sent.error}`);
         return "FAIL";
@@ -117,8 +155,17 @@ const useCase: UseCase = {
       // NOT readonly: a readonly connection to a WAL database another
       // process is actively writing hits fcntl/checkpoint races that
       // surface as SQLITE_IOERR_VNODE. This is a throwaway fixture copy in
-      // a temp dir - the write flag just makes the polls reliable.
-      const sqlite = new Database(ctx.env.THATCH_DB_PATH);
+      // a temp dir - the write flag just makes the polls reliable. Opened
+      // once and held for the rest of the run: reopen-per-poll churn is
+      // itself a WAL race (each close can checkpoint under the serve
+      // process's feet).
+      let sqlite: Database;
+      try {
+        sqlite = await withSqliteRetry("open polling connection", () => new Database(ctx.env.THATCH_DB_PATH));
+      } catch (err) {
+        console.log(`  FAIL: polling connection failed - ${err}`);
+        return "FAIL";
+      }
       // send() returns the resolved recipient, not the row id; look the
       // row up by body (unique canary text).
       const rowFor = (body: string) => () =>
@@ -133,9 +180,9 @@ const useCase: UseCase = {
       // Step 5: deterministic second wake - a fake MCP identity mails
       // alpha; the poller must wake the real alpha session (promptAsync
       // synthetic part), independent of any model decision.
-      db.registerChatSession("uc100-charlie", null, null, "mcp", "charlie");
+      await withSqliteRetry("register charlie", () => db.registerChatSession("uc100-charlie", null, null, "mcp", "charlie"));
       const mail2 = "UC-100 second canary for alpha.";
-      const sent2 = db.sendChatMessage("uc100-charlie", nameA, mail2);
+      const sent2 = await withSqliteRetry("send second canary", () => db.sendChatMessage("uc100-charlie", nameA, mail2));
       if (!sent2.ok) {
         console.log(`  FAIL: second send failed - ${sent2.error}`);
         return "FAIL";

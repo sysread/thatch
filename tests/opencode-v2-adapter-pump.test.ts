@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { join } from "node:path";
 import { setup } from "../src/opencode/v2";
 import { TOAST_EVENT, tabClosedEventType, tabOpenedEventType } from "../src/session-tab-shared";
@@ -18,6 +18,13 @@ import {
   toolAfterHook,
   waitFor,
 } from "./mocks/opencode-v2-harness";
+
+// These tests pump async events through the v2 adapter harness; under a
+// loaded CI runner the pump can lag. Bun's default per-test timeout is 5s
+// with no margin for that (the 2026-11-03 fleet-contention CI reds). 90s =
+// expected (ms-scale pump handling) x ~900 headroom, above the harness
+// waitFor deadline so real hangs report the poll message.
+setDefaultTimeout(90_000);
 
 // The v2 adapter's bus-event pump: instance/directory filtering, tab rpc
 // routing (open caching, close routing by the closed session's own

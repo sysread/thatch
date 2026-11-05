@@ -5,13 +5,21 @@
 // plugin-extraction.test.ts, and the journal reconcile / claim scoping in
 // plugin-extraction-claims.test.ts.
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll, setDefaultTimeout } from "bun:test";
 import {
   server,
   setupPluginHarness,
   teardownPluginHarness,
 } from "./mocks/plugin-harness";
 import { ThatchDB } from "../src/db";
+
+// This file boots the real plugin server (setup() rehydrates journals,
+// sweeps, and the chat poller - ~2.3s wall on macOS). Bun's default
+// per-test timeout is 5s with no margin for a loaded CI runner (the
+// 2026-11-03 fleet-contention CI reds were exactly this shape). 90s =
+// expected boot x ~40 headroom.
+setDefaultTimeout(90_000);
+
 
 beforeAll(async () => {
   await setupPluginHarness();

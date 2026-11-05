@@ -97,9 +97,14 @@ export async function queueEvent(event: any): Promise<void> {
   return currentHarness.queue(event);
 }
 
-/** Polls until `fn` is truthy (the pump's handlers are async); 5s deadline. */
+/**
+ * Polls until `fn` is truthy (the pump's handlers are async). Deadline is
+ * expected (ms-scale pump handling) x 300 headroom for loaded runners; the
+ * test files using this helper set setDefaultTimeout above it, so a real
+ * hang reports THIS message, not bun's "(timeout)".
+ */
 export async function waitFor(desc: string, fn: () => unknown): Promise<void> {
-  const end = Date.now() + 5000;
+  const end = Date.now() + 30_000;
   while (!fn()) {
     if (Date.now() > end) throw new Error(`timed out waiting for: ${desc}`);
     await new Promise((r) => setTimeout(r, 25));

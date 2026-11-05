@@ -124,7 +124,29 @@ describe("planStrandActions", () => {
   });
 });
 
+/**
+ * Poll helper for the integration tests. House pattern; the deadline is
+ * deliberately huge relative to the work (the boot sweep acts within
+ * ~100ms of the server settling): the budget is expected x ~600 headroom
+ * so a loaded CI runner cannot flake the test. The per-test timeout below
+ * is set ABOVE this deadline so a genuine sweep failure reports THIS
+ * message, not bun's "(timeout)".
+ */
+async function waitForSweep(cond: () => boolean, message: string): Promise<void> {
+  const end = Date.now() + 60_000;
+  while (!cond()) {
+    if (Date.now() > end) throw new Error(message);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
 describe("extraction journal sweep integration (boot trigger)", () => {
+  // Explicit timeout: bun's default is 5s per test, and booting the plugin
+  // server costs ~2.3s wall on macOS (7.7 CPU-seconds) before the sweep
+  // even runs - CI legs historically measured 3-7s for these tests, which
+  // straddles the default. That zero-margin shape caused the 2026-11-03
+  // double-red main (fleet contention; five PR-bisect runs exonerated the
+  // diff). 90s = ~40x the expected boot+sweep cost.
   test("boot sweep prunes dead-directory and past-TTL journal rows", async () => {
     ensureFixtureDirs();
     // Seed the journal before the runtime boots: a dead-directory buffer
@@ -134,6 +156,11 @@ describe("extraction journal sweep integration (boot trigger)", () => {
     seed.runtimeStatePut("buffer", "ses_live_row", [{ tool: "read", sessionID: "ses_live_row", args: {}, title: "f", output: "x" }], LIVE_DIR);
     seed.close();
 
+    // ONE polling connection held across the whole wait: reopening the db
+    // per 25ms poll makes every close checkpoint the WAL under the running
+    // server's feet - the open/close churn that produces SQLITE_IOERR
+    // under load (the UC-100 flake signature).
+    const pollDb = new ThatchDB(join(dbDir, "test.db"));
     let hooks: { dispose?: () => Promise<void> } | undefined;
     try {
       hooks = (await server({
@@ -159,28 +186,21 @@ describe("extraction journal sweep integration (boot trigger)", () => {
       } as any)) as any;
 
       // The boot sweep runs fire-and-forget inside setup(); poll for the
-      // dead-directory row's deletion.
+      // dead-directory row's deletion on the held connection.
       const check = () => {
-        const db = new ThatchDB(join(dbDir, "test.db"));
-        const ids = db.runtimeStateAll().filter((r) => r.kind === "buffer").map((r) => r.sessionID);
-        db.close();
+        const ids = pollDb.runtimeStateAll().filter((r) => r.kind === "buffer").map((r) => r.sessionID);
         return ids;
       };
-      const end = Date.now() + 5000;
-      let ids = check();
-      while (ids.includes("ses_dead_row")) {
-        if (Date.now() > end) throw new Error("boot journal sweep never pruned the dead-directory row");
-        await new Promise((r) => setTimeout(r, 25));
-        ids = check();
-      }
-      expect(ids).toEqual(["ses_live_row"]);
+      await waitForSweep(() => !check().includes("ses_dead_row"), "boot journal sweep never pruned the dead-directory row");
+      expect(check()).toEqual(["ses_live_row"]);
     } finally {
+      pollDb.close();
       await hooks?.dispose?.();
       rmSync(DEAD_DIR, { recursive: true, force: true });
       rmSync(LIVE_DIR, { recursive: true, force: true });
       rmSync(CANONICAL, { recursive: true, force: true });
     }
-  });
+  }, { timeout: 90_000 });
 });
 
 describe("strand sweep integration (v1 harness, boot trigger)", () => {
@@ -228,12 +248,8 @@ describe("strand sweep integration (v1 harness, boot trigger)", () => {
       } as any)) as any;
 
       // The boot sweep is fire-and-forget inside setup(); poll for the
-      // corpse's delete call (the house waitFor pattern, inlined).
-      const end = Date.now() + 5000;
-      while (!deleteCalls.includes("ses_corpse")) {
-        if (Date.now() > end) throw new Error("boot sweep never deleted the machinery corpse");
-        await new Promise((r) => setTimeout(r, 25));
-      }
+      // corpse's delete call.
+      await waitForSweep(() => deleteCalls.includes("ses_corpse"), "boot sweep never deleted the machinery corpse");
 
       // Only the machinery corpse was deleted: the live-dir session is
       // someone's working state, the user session is skipped (the v1 SDK
@@ -241,11 +257,7 @@ describe("strand sweep integration (v1 harness, boot trigger)", () => {
       expect(deleteCalls).toEqual(["ses_corpse"]);
       // One summary toast for the heal, best-effort. The toast lands a few
       // microtasks after the delete call, so poll rather than assert.
-      const toastEnd = Date.now() + 5000;
-      while (toastCalls.length === 0) {
-        if (Date.now() > toastEnd) throw new Error("boot sweep never toasted the heal summary");
-        await new Promise((r) => setTimeout(r, 25));
-      }
+      await waitForSweep(() => toastCalls.length > 0, "boot sweep never toasted the heal summary");
       expect(toastCalls).toHaveLength(1);
       // The v1 client wraps the toast payload: the mock records the whole
       // { body: ToastInput } envelope, not the bare input.
@@ -256,13 +268,13 @@ describe("strand sweep integration (v1 harness, boot trigger)", () => {
       rmSync(LIVE_DIR, { recursive: true, force: true });
       rmSync(CANONICAL, { recursive: true, force: true });
     }
-  });
+  }, { timeout: 90_000 });
 
   test("enumerate failure degrades the boot sweep to a no-op", async () => {
-    // This file's first test removes LIVE_DIR in its finally; rebuild it
-    // here (the raw server() from src/index does not mkdir, unlike
-    // plugin.test.ts's wrapper).
-    mkdirSync(LIVE_DIR, { recursive: true });
+    // Rebuild ALL fixture dirs: the earlier tests' finally blocks remove
+    // them, and this test only assumes the paths exist (or not, for the
+    // dead dir). Rebuilding everything keeps the test order-independent.
+    ensureFixtureDirs();
     const deleteCalls: string[] = [];
     const mockClient = {
       session: {
@@ -288,12 +300,17 @@ describe("strand sweep integration (v1 harness, boot trigger)", () => {
     let hooks: { dispose?: () => Promise<void> } | undefined;
     try {
       hooks = (await server({ client: mockClient, worktree: LIVE_DIR, directory: LIVE_DIR } as any)) as any;
-      await new Promise((r) => setTimeout(r, 150));
+      // Negative wait: the sweep must NOT act. The degrade (enumerate
+      // throws) completes within a few ms of the server settling, so the
+      // settle budget is expected x 100 headroom - long enough that a
+      // loaded runner cannot mistake "sweep still starting" for "sweep
+      // behaved", short enough not to bloat the gate.
+      await new Promise((r) => setTimeout(r, 1_000));
       expect(deleteCalls).toEqual([]);
       expect(existsSync(LIVE_DIR)).toBe(true);
     } finally {
       await hooks?.dispose?.();
       rmSync(LIVE_DIR, { recursive: true, force: true });
     }
-  });
+  }, { timeout: 90_000 });
 });

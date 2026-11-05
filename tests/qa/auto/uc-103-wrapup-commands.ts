@@ -212,7 +212,10 @@ const useCase: UseCase = {
       // observable - the greenlit branch deletes it, so its absence proves
       // the branch ran to completion.
       const v2wait = async (desc: string, fn: () => unknown): Promise<boolean> => {
-        const end = Date.now() + 5000;
+        // Expected settle: ms-scale pump handling. 30s = expected x ~300
+        // headroom for loaded runners; this use case's overall test timeout
+        // is 20 minutes, so the poll window is the only tight budget here.
+        const end = Date.now() + 30_000;
         while (!fn()) {
           if (Date.now() > end) {
             console.log(`  FAIL: timed out waiting for: ${desc}`);

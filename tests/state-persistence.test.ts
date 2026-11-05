@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,14 @@ import { WatcherRegistry } from "../src/watchers";
 import { SharedModelPool } from "../src/embeddings";
 import { server } from "../src/index";
 import { hostedSessionIds, unexpiredGraceRehosts } from "../src/chat";
+
+// This file boots the real plugin server (setup() rehydrates journals,
+// sweeps, and the chat poller - ~2.3s wall on macOS). Bun's default
+// per-test timeout is 5s with no margin for a loaded CI runner (the
+// 2026-11-03 fleet-contention CI reds were exactly this shape). 90s =
+// expected boot x ~40 headroom.
+setDefaultTimeout(90_000);
+
 
 // Persistence of volatile plugin-runtime state across v2 plugin reloads and
 // process restarts (docs/dev/features/opencode-plugin.md, the dispose row of
@@ -49,6 +57,22 @@ const ix = (sessionID: string, tool = "bash"): ToolInteraction => ({
   title: "echo hi",
   output: "hi",
 });
+
+/**
+ * Poll helper for the boot/restart wiring tests. The async work is
+ * fire-and-forget inside server() setup, so the tests poll; the deadline
+ * is expected x 100+ headroom so a loaded CI runner cannot flake it. The
+ * tests using it set an explicit per-test timeout ABOVE this deadline
+ * (bun's default is 5s, which these server-booting tests can exceed under
+ * load) so a genuine failure reports the poll message, not "(timeout)".
+ */
+async function waitForWiring(cond: () => boolean, message: string): Promise<void> {
+  const end = Date.now() + 60_000;
+  while (!cond()) {
+    if (Date.now() > end) throw new Error(message);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
 
 describe("runtime_state db API", () => {
   test("put/get/all/delete round-trip with JSON values", () => {
@@ -205,11 +229,7 @@ describe("runtime rehydration through server()", () => {
       hooks = (await server({ client: mockClient, worktree: WORK_DIR, directory: WORK_DIR } as any)) as any;
 
       // The finalize is fire-and-forget; poll for the delete call.
-      const end = Date.now() + 5000;
-      while (!deleteCalls.includes("ses_corpse_child")) {
-        if (Date.now() > end) throw new Error("restart finalize never deleted the extraction child");
-        await new Promise((r) => setTimeout(r, 25));
-      }
+      await waitForWiring(() => deleteCalls.includes("ses_corpse_child"), "restart finalize never deleted the extraction child");
       // A task-dispatched sub-agent is opencode's own record of subagent
       // work - the finalize must never touch it.
       expect(deleteCalls).toEqual(["ses_corpse_child"]);
@@ -226,7 +246,7 @@ describe("runtime rehydration through server()", () => {
       if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
       else process.env.THATCH_DB_PATH = prevDbPath;
     }
-  });
+  }, { timeout: 90_000 });
 
   test("same-pid rows survive (reload); foreign-pid rows are pruned", async () => {
     const db = new ThatchDB(dbPath);
@@ -963,15 +983,14 @@ describe("dormant watcher recovery through server()", () => {
       // Finalization journals the child row gone (the maps are cleared, and
       // journalChild journals a delete for a parentless child). Poll for it
       // - the reconciler waits out the (shortened) reload window first.
-      const deadline = Date.now() + 5_000;
-      for (;;) {
-        const check = new ThatchDB(dbPath);
-        const rows = check.runtimeStateAll().filter((r) => r.sessionID === "ses_child_r");
-        check.close();
-        if (rows.length === 0) break;
-        if (Date.now() > deadline) break;
-        await new Promise((r) => setTimeout(r, 25));
-      }
+      // ONE connection held across the polls: reopen-per-poll churn makes
+      // every close checkpoint the WAL under the running server's feet.
+      const pollDb = new ThatchDB(dbPath);
+      await waitForWiring(() => {
+        const rows = pollDb.runtimeStateAll().filter((r) => r.sessionID === "ses_child_r");
+        return rows.length === 0;
+      }, "restart finalize never journaled the child row gone");
+      pollDb.close();
       const check = new ThatchDB(dbPath);
       expect(check.runtimeStateAll().some((r) => r.sessionID === "ses_child_r")).toBe(false);
       check.close();
@@ -980,7 +999,7 @@ describe("dormant watcher recovery through server()", () => {
       if (prevWindow === undefined) delete process.env.THATCH_CHILD_RECONCILE_MS;
       else process.env.THATCH_CHILD_RECONCILE_MS = prevWindow;
     }
-  }, 10_000);
+  }, 90_000);
 
   test("a task-kind child row restores without the extraction sets", async () => {
     // A task-dispatched sub-agent journaled with kind "task" must come back
@@ -1175,25 +1194,18 @@ describe("extraction journal sweep", () => {
     process.env.THATCH_RUNTIME_STATE_TTL_MS = "60000";
     const { finally: done } = await bootServer();
     try {
-      const end = Date.now() + 5000;
-      let ids: string[] = [];
-      const check = () => {
-        const sweeped = new ThatchDB(dbPath);
-        ids = sweeped.runtimeStateAll().filter((r) => r.kind === "buffer").map((r) => r.sessionID);
-        sweeped.close();
-      };
-      check();
-      while (ids.includes("ses_hour_old")) {
-        if (Date.now() > end) throw new Error("boot journal sweep never honored the TTL env override");
-        await new Promise((r) => setTimeout(r, 25));
-        check();
-      }
-      expect(ids).toEqual(["ses_fresh"]);
+      // ONE connection held across the polls (reopen-per-poll churn makes
+      // every close checkpoint the WAL under the running server's feet).
+      const pollDb = new ThatchDB(dbPath);
+      const check = () => pollDb.runtimeStateAll().filter((r) => r.kind === "buffer").map((r) => r.sessionID);
+      await waitForWiring(() => !check().includes("ses_hour_old"), "boot journal sweep never honored the TTL env override");
+      expect(check()).toEqual(["ses_fresh"]);
+      pollDb.close();
     } finally {
       delete process.env.THATCH_RUNTIME_STATE_TTL_MS;
       await done();
     }
-  });
+  }, { timeout: 90_000 });
 
   test("the interval sweep reclaims rows that go stale while the process lives", async () => {
     // Boot wiring for the recurring path: a short THATCH_STRAND_SWEEP_MS
@@ -1212,23 +1224,16 @@ describe("extraction journal sweep", () => {
 
     const { finally: done } = await bootServer();
     try {
-      const end = Date.now() + 5000;
-      let ids: string[] = [];
-      const check = () => {
-        const swept = new ThatchDB(dbPath);
-        ids = swept.runtimeStateAll().filter((r) => r.kind === "buffer").map((r) => r.sessionID);
-        swept.close();
-      };
-      check();
-      while (ids.includes("ses_ages")) {
-        if (Date.now() > end) throw new Error("interval journal sweep never ran");
-        await new Promise((r) => setTimeout(r, 25));
-        check();
-      }
+      // ONE connection held across the polls (reopen-per-poll churn makes
+      // every close checkpoint the WAL under the running server's feet).
+      const pollDb = new ThatchDB(dbPath);
+      const check = () => pollDb.runtimeStateAll().filter((r) => r.kind === "buffer").map((r) => r.sessionID);
+      await waitForWiring(() => !check().includes("ses_ages"), "interval journal sweep never ran");
+      pollDb.close();
     } finally {
       delete process.env.THATCH_STRAND_SWEEP_MS;
       delete process.env.THATCH_RUNTIME_STATE_TTL_MS;
       await done();
     }
-  });
+  }, { timeout: 90_000 });
 });

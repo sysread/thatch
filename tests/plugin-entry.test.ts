@@ -7,7 +7,7 @@
 // claim scoping), and plugin-extraction-direct.test.ts (direct-extraction
 // child lifecycle).
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,14 @@ import {
   setupPluginHarness,
   teardownPluginHarness,
 } from "./mocks/plugin-harness";
+
+// This file boots the real plugin server (setup() rehydrates journals,
+// sweeps, and the chat poller - ~2.3s wall on macOS). Bun's default
+// per-test timeout is 5s with no margin for a loaded CI runner (the
+// 2026-11-03 fleet-contention CI reds were exactly this shape). 90s =
+// expected boot x ~40 headroom.
+setDefaultTimeout(90_000);
+
 
 let hooks: Awaited<ReturnType<typeof server>>;
 

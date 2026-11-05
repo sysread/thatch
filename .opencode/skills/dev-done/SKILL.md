@@ -36,7 +36,7 @@ yourself; it is fast and catches what the gate cannot.
   If you add or remove a tool or skill, update them -- they fail qa-auto,
   not check, so the gate will not remind you.
 - If count assertions fail for no obvious reason, the QA master cache may be
-  a stale snapshot: `rm -rf "$TMPDIR/thatch-qa-master"` and rerun.
+  a stale snapshot: `rm -rf "$TMPDIR"/thatch-qa-master-*` and rerun.
 
 ## Unit tests
 

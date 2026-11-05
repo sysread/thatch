@@ -2,7 +2,7 @@
 // prompt, and startup registration paths, the argv/session-resolution
 // helpers, and the session.deleted tombstone guarantee.
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll, setDefaultTimeout } from "bun:test";
 import { Database } from "bun:sqlite";
 import { rmSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -21,6 +21,14 @@ import {
   continuesLastSessionFromArgv,
   continuesLastSessionId,
 } from "../src/index";
+
+// This file boots the real plugin server (setup() rehydrates journals,
+// sweeps, and the chat poller - ~2.3s wall on macOS). Bun's default
+// per-test timeout is 5s with no margin for a loaded CI runner (the
+// 2026-11-03 fleet-contention CI reds were exactly this shape). 90s =
+// expected boot x ~40 headroom.
+setDefaultTimeout(90_000);
+
 
 beforeAll(async () => {
   await setupPluginHarness();

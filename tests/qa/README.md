@@ -78,7 +78,8 @@ Known coupling: the fixture PRE-COPIES skills from the real
 FIDELITY - the fixture's skill set must equal the live mirror's at run time
 (no floor, no count literal). A stale mirror therefore passes silently while
 exercising nothing new; refresh it after committing skill changes. Clear a
-stale master cache with `rm -rf "$TMPDIR/thatch-qa-master"`.
+stale master cache with `rm -rf "$TMPDIR"/thatch-qa-master-*` (the runner's
+roots are run-scoped; see the isolation section).
 
 ## Docker mode (the default `qa-auto`/`qa-live` targets)
 
@@ -144,7 +145,15 @@ modules so their `test.concurrent()` calls register in one file, and
 
 ## Isolation
 
-Each use case runs inside a copy of the repo at `/tmp/thatch-qa/<name>/`.
+Each qa-auto process gets its own run-scoped roots: the master copy at
+`$TMPDIR/thatch-qa-master-<run-id>` and the fixture tree under
+`/tmp/thatch-qa/<run-id>/`. Two concurrent qa-auto runs (two worktrees
+gating at once) are therefore independent - one run's setup can never
+delete the other's live fixtures (`tests/qa-runner-isolation.test.ts`
+pins this with real concurrent subprocesses).
+
+Each use case runs inside a copy of the repo at
+`/tmp/thatch-qa/<run-id>/<name>/`.
 The copy is created via `git archive HEAD` (tracked files only) with
 `node_modules` symlinked from the real repo. Opencode's own npm deps and
 pre-installed skills are copied from `~/.config/opencode/`. Each copy has

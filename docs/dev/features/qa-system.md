@@ -174,19 +174,30 @@ reviewing coverage without spawning sessions.
 
 ### Isolation model
 
-The runner creates a **master copy** of the repo at `/tmp/thatch-qa/master/`
-via `git archive HEAD` (tracked files only — no `.git`, no `node_modules`, no
-untracked artifacts). `node_modules` is symlinked from the real repo to share
+The runner creates a **master copy** of the repo via `git archive HEAD`
+(tracked files only — no `.git`, no `node_modules`, no untracked artifacts).
+`node_modules` is symlinked from the real repo to share
 deps including the HF embedding model cache. opencode's own npm deps
 (`~/.config/opencode/node_modules/`) are copied into the master so each use
 case has them without a warm-up session.
+
+Both the master copy and the fixture tree are **run-scoped**: every qa-auto
+process gets its own `$TMPDIR/thatch-qa-master-<run-id>` master and
+`/tmp/thatch-qa/<run-id>/` fixture root (run id = pid + timestamp). Two
+concurrent qa-auto runs (two worktrees gating at once) are therefore fully
+independent — before this, the second run's master setup `rmSync`'d the
+shared roots and deleted the first run's live fixtures mid-test, surfacing
+as `SQLiteError: disk I/O error` (UC-100), exit-1 saves (UC-131), and empty
+CLI output (UC-132/130). `tests/qa-runner-isolation.test.ts` pins this
+contract with real concurrent subprocesses. Dead runs' roots are reclaimed
+by an age-based GC (older than 24h) on the next run's setup.
 
 Each use case gets a per-use-case copy of the master via `createFixture(name)`,
 with isolated `HOME`, `XDG_CONFIG_HOME`, `THATCH_DB_PATH`, and
 `THATCH_QUEUE_DIR` environment variables, plus `THATCH_NO_NOTIFY=1` so no
 fixture subprocess (opencode included) can fire a real desktop notification
 on the host mid-run. The repo is read-only during QA —
-sessions run inside `/tmp/thatch-qa/<uc-name>/` copies.
+sessions run inside `/tmp/thatch-qa/<run-id>/<uc-name>/` copies.
 
 The `qa` skill (`.opencode/skills/qa/SKILL.md`) instructs the
 LLM on how to execute a single use case in the isolated directory. The skill's
@@ -263,6 +274,6 @@ No separate QA docs directory exists. QA use cases live in `tests/qa/` as execut
 5. **Use cases self-register via `registerUseCase`** — no central registry to
    maintain. Add a new `.ts` file and import it from the barrel.
 6. **The repo is read-only during QA.** Sessions run inside
-   `/tmp/thatch-qa/<uc-name>/` copies created from `git archive HEAD`.
+   `/tmp/thatch-qa/<run-id>/<uc-name>/` copies created from `git archive HEAD`.
 7. **The 20-minute test timeout is the agent-session budget, not test
    execution time.** Reducing it will cause live use cases to time out.

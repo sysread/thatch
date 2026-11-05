@@ -1,5 +1,5 @@
 import { $ } from "bun";
-import { cpSync, copyFileSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -12,13 +12,23 @@ import { tmpdir } from "node:os";
  * assertions. Manual-only use cases set `manualOnly: true` and are skipped.
  */
 
-// Master copy lives outside /tmp/ so opencode sessions (which have
+// Run-scoped roots. The run id keeps concurrent qa-auto PROCESSES (two
+// worktrees gating at once, CI plus a local run) from destroying each
+// other: the old shared /tmp/thatch-qa + thatch-qa-master roots meant the
+// second process's master setup (rmSync of both roots) deleted the first
+// process's LIVE fixtures mid-test. Reproduced 2026-11-05 by overlapping
+// two qa-run invocations: UC-131's CLI died with "SQLiteError: disk I/O
+// error" (the db file unlinked under it) - the same signature seen in
+// that week's UC-100 flakes, and the empty-CLI-output shape that hit
+// UC-132/130. Fixtures stay under /tmp/thatch-qa/ for compatibility with
+// bun test --concurrent (os.tmpdir() paths caused unexplained hangs);
+// the master copy stays outside /tmp/ so opencode sessions (which have
 // external_directory "/tmp/**": "allow" in the master config) cannot
-// delete or corrupt it. Fixtures live under /tmp/thatch-qa/ for
-// compatibility with bun test --concurrent (os.tmpdir() paths caused
-// unexplained hangs).
-const MASTER_ROOT = join(tmpdir(), "thatch-qa-master");
-const QA_ROOT = "/tmp/thatch-qa";
+// delete or corrupt it.
+const RUN_ID = `${process.pid}-${Date.now().toString(36)}`;
+const MASTER_ROOT = join(tmpdir(), `thatch-qa-master-${RUN_ID}`);
+const QA_ROOT = join("/tmp", "thatch-qa", RUN_ID);
+const QA_ROOT_PARENT = "/tmp/thatch-qa";
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 export const MODEL = process.env.QA_MODEL ?? "venice/z-ai-glm-5-3-flash";
 const DRY_RUN = process.env.QA_DRY_RUN === "1";
@@ -125,6 +135,7 @@ async function doEnsureMaster(): Promise<void> {
     rmSync(MASTER_ROOT, { recursive: true, force: true });
     mkdirSync(masterDir, { recursive: true });
     mkdirSync(QA_ROOT, { recursive: true });
+    gcStaleRunRoots();
     return Promise.resolve();
   });
 
@@ -237,6 +248,41 @@ async function doEnsureMaster(): Promise<void> {
 }
 
 // --- Per-use-case fixture ---------------------------------------------------
+
+/**
+ * Reclaims run roots left by DEAD qa-auto processes. Every process gets its
+ * own root (the run id), so cleanup must never touch a sibling run's root -
+ * that deletion was the concurrent-run fixture wipe. Age is the liveness
+ * test instead of pids (a pid can be reused): no qa-auto run survives 24h,
+ * since each use case is capped at 20 minutes. Best-effort: a failed GC
+ * only leaves files behind.
+ */
+function gcStaleRunRoots(): void {
+  const staleMs = 24 * 60 * 60 * 1000;
+  const candidates: string[] = [];
+  try {
+    for (const entry of readdirSync(QA_ROOT_PARENT)) {
+      candidates.push(join(QA_ROOT_PARENT, entry));
+    }
+    for (const entry of readdirSync(tmpdir())) {
+      // "thatch-qa-master" (no suffix) is the legacy shared-root name from
+      // before the run-scoped fix - reclaim it too.
+      if (entry === "thatch-qa-master" || entry.startsWith("thatch-qa-master-")) candidates.push(join(tmpdir(), entry));
+    }
+  } catch {
+    return; // a missing parent means nothing to reclaim
+  }
+  for (const candidate of candidates) {
+    try {
+      if (candidate === QA_ROOT || candidate === MASTER_ROOT) continue;
+      if (Date.now() - statSync(candidate).mtimeMs > staleMs) {
+        rmSync(candidate, { recursive: true, force: true });
+      }
+    } catch {
+      // Somebody else is mid-setup on their own root; leave it alone.
+    }
+  }
+}
 
 export async function createFixture(name: string): Promise<QaContext> {
   const masterDir = MASTER_ROOT;
@@ -630,10 +676,19 @@ export function checkEnv(): void {
 
 // --- Cleanup info ----------------------------------------------------------
 
+/**
+ * This process's run-scoped roots, for introspection (the concurrency pin
+ * test asserts two concurrent runner processes get disjoint roots, and that
+ * one run's master setup cannot delete another run's fixtures).
+ */
+export function qaPaths(): { qaRoot: string; masterRoot: string } {
+  return { qaRoot: QA_ROOT, masterRoot: MASTER_ROOT };
+}
+
 export function printCleanupNotice(): void {
   if (!DRY_RUN) {
-    console.log(`\nQA artifacts left in ${QA_ROOT} and ${MASTER_ROOT}`);
-    console.log(`Remove with: rm -rf ${QA_ROOT}`);
+    console.log(`\nQA artifacts left in ${QA_ROOT} and ${MASTER_ROOT} (run-scoped roots)`);
+    console.log(`Remove ALL runs' artifacts with: rm -rf ${QA_ROOT_PARENT} ${tmpdir()}/thatch-qa-master-*`);
   }
 }
 
@@ -714,7 +769,11 @@ export async function startServe(ctx: QaContext): Promise<ServeHandle> {
     ["opencode", "serve", "--hostname", "127.0.0.1", "--port", String(port)],
     { env: ctx.env, stdout: "pipe", stderr: "pipe" },
   );
-  const deadline = Date.now() + 60_000;
+  // Readiness deadline: an opencode serve boots in ~5-10s on an idle
+  // machine. GitHub CI runners under fleet contention have measured 6x
+  // wall-time degradation this week, so the budget is expected x 10
+  // headroom, not a bare round number.
+  const deadline = Date.now() + 120_000;
   for (;;) {
     if (proc.exitCode !== null) {
       const err = await new Response(proc.stderr).text();
@@ -728,7 +787,7 @@ export async function startServe(ctx: QaContext): Promise<ServeHandle> {
     }
     if (Date.now() > deadline) {
       proc.kill();
-      throw new Error(`startServe: serve did not become reachable at ${url} within 60s`);
+      throw new Error(`startServe: serve did not become reachable at ${url} within 120s`);
     }
     await new Promise((r) => setTimeout(r, 1_000));
   }
