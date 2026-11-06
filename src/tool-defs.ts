@@ -3103,8 +3103,9 @@ const pluginStageDef: ToolDef = {
     "Per-prompt nudge staging for the thatch Claude Code plugin's mod. " +
     "Returns the nudge text (extraction payload, recall matches, " +
     "predictions, behaviors, or the write fallback) to inject into the " +
-    "turn's context, and stamps the mod liveness file. Not for the model " +
-    "to call.",
+    "turn's context, and stamps the mod liveness file. INTERNAL: the mod " +
+    "calls it once per prompt - a direct call is a harmless read (the " +
+    "current nudge state) but redundant.",
   bundledOnly: true,
   args: {
     prompt: z.string().describe("The user's prompt text, as submitted."),
@@ -3134,7 +3135,9 @@ const pluginLifecycleDef: ToolDef = {
   name: "plugin_lifecycle",
   description:
     "Per-event lifecycle staging for the thatch Claude Code plugin's " +
-    "mod. Not for the model to call.",
+    "mod. INTERNAL: the mod forwards host events through it - a direct " +
+    "call records an event with the arguments given (harmless but " +
+    "pointless; alerts need real host events).",
   bundledOnly: true,
   args: {
     event: z.enum(["busy", "realwork", "error", "complete", "arm", "greenlight", "ask", "resolved", "session-end"]),
@@ -3177,8 +3180,10 @@ const pluginLifecycleDef: ToolDef = {
 const pluginChatWakeDef: ToolDef = {
   name: "plugin_chat_wake",
   description:
-    "Chat-wake polling for the thatch Claude Code plugin's mod. Not for " +
-    "the model to call.",
+    "Chat-wake polling for the thatch Claude Code plugin's mod. " +
+    "INTERNAL: the mod's timer polls it - a direct call DRAINS pending " +
+    "chat mail into the response (the mail arrives here instead of as a " +
+    "wake turn; not harmful, but leave it to the timer).",
   bundledOnly: true,
   args: {
     session_id: z.string(),
@@ -3199,8 +3204,10 @@ const pluginChatWakeDef: ToolDef = {
 const pluginWatchPollDef: ToolDef = {
   name: "plugin_watch_poll",
   description:
-    "Watcher-event polling for the thatch Claude Code plugin's mod. Not " +
-    "for the model to call.",
+    "Watcher-event polling for the thatch Claude Code plugin's mod. " +
+    "INTERNAL: the mod's timer polls it - a direct call DRAINS pending " +
+    "watcher events into the response (they arrive here instead of as a " +
+    "turn; not harmful, but leave it to the timer).",
   bundledOnly: true,
   args: {
     session_id: z.string(),

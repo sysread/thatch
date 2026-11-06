@@ -103,6 +103,10 @@ export function appendBatch(sessionID: string, toolCalls: BatchToolCall[]): void
       // docs/plans/claude-code-inline-extraction.md.
       resetMissedCount(sessionID);
     }
+    // The STANDALONE spelling filters here (this queue serves Cursor +
+    // the fallback hooks); the PLUGIN regime's own calls are filtered
+    // upstream - the lifecycle's own-tool check (its spellings include
+    // mcp__plugin_thatch_thatch__*).
     if (lower.startsWith("mcp__thatch__")) continue;
     if (
       lower === "skill" || lower === "task" || lower === "agent" || lower === "subagent" ||

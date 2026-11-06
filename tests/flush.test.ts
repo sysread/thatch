@@ -107,3 +107,34 @@ describe("buildExtractionStage", () => {
     expect(out).not.toContain('"interactions"');
   });
 });
+
+describe("rehydrateOwnWatchers (the hijack fix)", () => {
+  test("re-arms ONLY the session's own rows - foreign rows are never touched", async () => {
+    // Observed live: a QA round's bundled server re-armed EVERY journaled
+    // row on the machine, rewriting pid/directory on rows owned by LIVE
+    // opencode daemons. The own-session scope is the fix; this pins it.
+    const rows = [
+      { kind: "watchers", sessionID: "own-session", value: [{ id: "w1" }] },
+      { kind: "watcher_pending", sessionID: "own-session", value: [{ event: { type: "pr_ci" }, queuedAt: 1 }] },
+      // The foreign rows: the opencode daemon's live watchers.
+      { kind: "watchers", sessionID: "daemon-session", value: [{ id: "w2" }] },
+      { kind: "watcher_pending", sessionID: "daemon-session", value: [{ event: { type: "merged" }, queuedAt: 2 }] },
+    ];
+    const touched: string[] = [];
+    const watchers = {
+      rearm: async (sid: string) => {
+        touched.push(`rearm:${sid}`);
+        return {};
+      },
+      hydratePending: (sid: string) => {
+        touched.push(`hydrate:${sid}`);
+      },
+    };
+    const { rehydrateOwnWatchers } = await import("../src/flush");
+    const n = await rehydrateOwnWatchers({ runtimeStateAll: () => rows }, watchers, "own-session");
+    expect(n).toBe(1);
+    expect(touched).toEqual(["rearm:own-session", "hydrate:own-session"]);
+    // The foreign rows' shapes are never even parsed - the filter is the
+    // session id alone.
+  });
+});

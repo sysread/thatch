@@ -216,3 +216,34 @@ export function computePluginChatWake(db: ThatchDB, hostSessionID: string): stri
     mixed: userRows.length > 0 && userRows.length < pending.length,
   });
 }
+
+/**
+ * The OWN-SESSION watcher rehydrate: re-arms only the rows THIS session
+ * journaled (its continuity across plugin regeneration/server restarts)
+ * and restores its pending queue. Foreign rows - other sessions', other
+ * hosts', live daemons' - are never READ, let alone rewritten: a bundled
+ * server re-arming every row on the machine would hijack live daemons'
+ * watchers (rewriting their pid/directory, stranding their pending
+ * notifications). Returns the number of watcher definitions re-armed.
+ */
+export async function rehydrateOwnWatchers(
+  db: { runtimeStateAll(): { kind: string; sessionID: string; value: unknown }[] },
+  watchers: { rearm(sessionID: string, defs: never): Promise<unknown>; hydratePending(sessionID: string, pending: never): void },
+  sessionID: string,
+): Promise<number> {
+  let rearmed = 0;
+  for (const row of db.runtimeStateAll()) {
+    if (row.sessionID !== sessionID) continue;
+    try {
+      if (row.kind === "watchers" && Array.isArray(row.value)) {
+        await watchers.rearm(sessionID, row.value as never);
+        rearmed += (row.value as unknown[]).length;
+      } else if (row.kind === "watcher_pending" && Array.isArray(row.value)) {
+        watchers.hydratePending(sessionID, row.value as never);
+      }
+    } catch (err) {
+      console.error(`[thatch] watcher rehydrate failed for ${sessionID}: ${err}`);
+    }
+  }
+  return rearmed;
+}

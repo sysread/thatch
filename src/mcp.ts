@@ -13,7 +13,7 @@ import { SidebandServer, sidebandSocketPath } from "./sideband";
 import { peekQueue, consumeQueue, resetMissedCount } from "./extract-queue";
 import { buildExtractionPayload } from "./extraction";
 import { WatcherRegistry, ghApiRun } from "./watchers";
-import { computePluginStage, computePluginChatWake } from "./flush";
+import { computePluginStage, computePluginChatWake, rehydrateOwnWatchers } from "./flush";
 import { pluginToolName } from "./prompts";
 import { createPluginLifecycle } from "./claude-plugin/lifecycle";
 import { seedDefaultBehaviors } from "./seed-behaviors";
@@ -222,6 +222,7 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
   // the host context from it, so session-scoped tools (the watch family)
   // resolve their owner. In-memory; per-session by construction.
   const rawSessionByPid = new Map<number, string>();
+  const rehydratedSessions = new Set<string>();
 
   // Bundled mode wires the WATCHER REGISTRY: the five watch tools serve
   // here (their opencodeOnly fence named the missing poller/delivery -
@@ -269,32 +270,15 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
     }
   }
   if (watchers) {
-    // Rehydrate, NON-BLOCKING: the rearm's baseline refetches (gh) must
-    // not delay the MCP handshake - fire and continue; failures surface
-    // in the log. The registrations are DB-BACKED (the runtime_state
-    // journal rows: durable across sessions, mod reloads, and server
-    // restarts); the watcher_pending rows restore too (the pending queue
-    // survives a server death - hydratePending re-journals immediately).
-    // COST NOTE: N concurrent sessions each re-arm every journaled
-    // watcher (gh polls x N) - correct delivery (pending is per-owner),
-    // linear gh load; acceptable at QA scale, revisit if fleet-wide.
-    void (async () => {
-      for (const row of db.runtimeStateAll()) {
-        if (row.kind === "watchers" && Array.isArray(row.value)) {
-          try {
-            await watchers.rearm(row.sessionID, row.value as never);
-          } catch (err) {
-            console.error(`[thatch] watcher rehydrate failed for ${row.sessionID}: ${err}`);
-          }
-        } else if (row.kind === "watcher_pending" && Array.isArray(row.value)) {
-          try {
-            watchers.hydratePending(row.sessionID, row.value as never);
-          } catch (err) {
-            console.error(`[thatch] watcher pending restore failed for ${row.sessionID}: ${err}`);
-          }
-        }
-      }
-    })();
+    // NO startup rehydrate: a bundled server re-arming every journaled
+    // row would HIJACK the machine's watchers - rewriting pid/directory
+    // on rows owned by LIVE opencode daemons (observed live: a QA round's
+    // server rewrote all five rows on the machine, stranding a pending
+    // notification against a dead pid). Rehydration is DEFERRED to the
+    // stage anchor: when the session id is known, ONLY that session's
+    // rows re-arm (its own continuity - a regenerated plugin's new server
+    // picks its own session's watches back up); foreign rows are never
+    // touched, and their owners' machinery rehydrates them.
     watchers.start();
   }
 
@@ -314,11 +298,20 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
       ? {
           pluginStage: (prompt: string, sessionID: string, transcriptPath?: string) => {
             rawSessionByPid.set(process.ppid, sessionID);
+            // The OWN-SESSION watcher rehydrate (once per session id): the
+            // rows THIS session journaled re-arm under THIS server - the
+            // plugin's continuity mechanism - and foreign rows are never
+            // read, let alone rewritten.
+            if (watchers && !rehydratedSessions.has(sessionID)) {
+              rehydratedSessions.add(sessionID);
+              void rehydrateOwnWatchers(db, watchers, sessionID);
+            }
             return computePluginStage({ db, model, repo, dbPath, toolNamer: pluginToolName }, prompt, sessionID, transcriptPath);
           },
           pluginLifecycle: (event) => lifecycle!.handle(event),
           pluginChatWake: (sessionID: string) => computePluginChatWake(db, sessionID),
           ...(watchers ? { watchers } : {}),
+          projectDir,
         }
       : {}),    // Same-machine tab reader: the MCP server can read the local opencode
     // state tree, so its roster renders the same open/recent split.
@@ -515,7 +508,11 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
       const res = await dispatch(req, tools, prompts, ctx, mode === "bundled"
         ? () => {
             const raw = rawSessionByPid.get(process.ppid);
-            return raw ? trimHostContext({ sessionID: raw, agent: "" }) : undefined;
+            // The STORED key (the mcp hash), not the raw host id: the chat
+            // rows and the watch journal are keyed by it - a raw id here
+            // resolved every identity tool to "not registered" (the
+            // round-4 finding).
+            return raw ? trimHostContext({ sessionID: mcpSessionID(raw), agent: "" }) : undefined;
           }
         : undefined);
       if (res === null || isNotification) continue;

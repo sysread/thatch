@@ -131,7 +131,10 @@ const options = {
     // The greenlight tool: matched handler answers with the server's text.
     harness.setLifecycleResponse({ text: "[not armed] The compact wrap-up was never armed." });
     const res = await harness.run("tool.call", { tool: "mcp__thatch__compact" });
-    expect((res as { result: string }).result).toContain("not armed");
+    // The answer's result carries the MCP tool's OWN shape (McpToolResult):
+    // core validates it against the tool's output schema - a bare string
+    // failed it and the model read EMPTY (the round-4 finding).
+    expect(((res as { result: { content: { text: string }[] } }).result.content[0]?.text)).toContain("not armed");
     expect(harness.lifecycleCalls.at(-1)?.event).toBe("greenlight");
   });
 
@@ -156,6 +159,8 @@ const options = {
     harness.setLifecycleResponse({ text: "", wrapup: "exit" });
     await harness.run("turn.complete", { agentId: undefined, isAborted: false });
     expect(harness.notified.at(-1)).toContain("safe to close");
+    // (The compact/exit answers ride the McpToolResult shape - see the
+    // greenlight assertion above.)
   });
 
   test("session.start registers the wrap-up commands and tools", async () => {

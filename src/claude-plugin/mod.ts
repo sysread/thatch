@@ -610,5 +610,9 @@ async function greenlightWrapup($: ModsApi, options: ThatchModOptions, kind: "co
   }
   // Answer the call without running anything (there is no real tool) -
   // the text is all the model learns, accept-then-teach style.
-  return { result: teach };
+  // The answer's result carries the MCP tool's OWN result shape
+  // (McpToolResult): core validates the answer against the tool's output
+  // schema, and a bare string fails it - the model read the teaching text
+  // as EMPTY.
+  return { result: { content: [{ type: "text", text: teach }], isError: false } };
 }
