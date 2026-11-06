@@ -69,7 +69,11 @@ const useCase: UseCase = {
       for (const [label, path] of [
         [".mcp.json", join(dir, ".mcp.json")],
         ["CLAUDE.md", join(dir, "CLAUDE.md")],
-        [".claude", join(dir, ".claude")],
+        // The setup-WRITTEN pieces of .claude - the dir itself exists in
+        // the fixture (the tracked repo-local QA skill), so the whole-dir
+        // check would false-positive.
+        [".claude/settings.json", join(dir, ".claude", "settings.json")],
+        [".claude/commands", join(dir, ".claude", "commands")],
         [".cursor", join(dir, ".cursor")],
       ] as const) {
         if (existsSync(path)) {

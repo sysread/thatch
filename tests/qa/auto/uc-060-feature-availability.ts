@@ -53,8 +53,8 @@ const useCase: UseCase = {
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
 
-    if (claudeSkills.length !== 41) {
-      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 41`);
+    if (claudeSkills.length !== 42) {
+      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 42`);
       return "FAIL";
     }
     if (!claudeSkills.includes("thatch-code-review")) {

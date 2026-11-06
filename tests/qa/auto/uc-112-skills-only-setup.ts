@@ -31,7 +31,7 @@ const useCase: UseCase = {
   ].join("\n"),
   expected: [
     "- `--skills-only` installs **only** the skill files: the repo's `.claude/skills/`",
-    "  (Claude) or `.cursor/skills/` (Cursor) gets the 41 shared skills, reported via",
+    "  `.claude/skills/` (Claude) gets 42; `.cursor/skills/` (Cursor) 41 - reported via",
     "  the skills dir plus `41 added` on a fresh install and `41 unchanged` on re-run.",
     "- No MCP config (`.mcp.json` / `.cursor/mcp.json`), no instructions",
     "  (`CLAUDE.md` written; the repo's own tracked `AGENTS.md` left",
@@ -79,8 +79,8 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const claudeSkillCount = countThatchSkills(claudeSkillsDir);
-    if (claudeSkillCount !== 41) {
-      console.log(`  FAIL: --skills-only Claude skills count is ${claudeSkillCount}, expected 41`);
+    if (claudeSkillCount !== 42) {
+      console.log(`  FAIL: --skills-only Claude skills count is ${claudeSkillCount}, expected 42`);
       return "FAIL";
     }
     if (!existsSync(join(claudeSkillsDir, "thatch-review-pedantic", "SKILL.md"))) {
@@ -103,6 +103,9 @@ const useCase: UseCase = {
 
     // Reporting: skills dir named, fresh-install counts, other-scope note.
     const out1 = r1.stdout.toString();
+    // The REPORT counts setup's additions (41 - the tracked repo-local QA
+    // skill pre-exists in the master copy and is never "added"); the DIR
+    // count is 42 (41 + thatch-plugin-qa).
     if (!out1.includes(claudeSkillsDir) || !out1.includes("41 added")) {
       console.log("  FAIL: --skills-only stdout does not report the skills dir + '41 added'");
       return "FAIL";
@@ -198,6 +201,9 @@ const useCase: UseCase = {
       console.log("  FAIL: `thatch setup --claude --global --skills-only` exited non-zero");
       return "FAIL";
     }
+    // The GLOBAL fixture dir is fresh: 41 (the tracked repo-local QA
+    // skill exists only in the REPO's .claude/skills, which only the
+    // project-local count sees).
     const claudeGlobalSkills = join(env.CLAUDE_CONFIG_DIR, "skills");
     if (countThatchSkills(claudeGlobalSkills) !== 41) {
       console.log("  FAIL: global --skills-only did not install 40 skills to $CLAUDE_CONFIG_DIR/skills");
@@ -230,6 +236,8 @@ const useCase: UseCase = {
         return "FAIL";
       }
     }
+    // The REPORT counts the install SET (41 - the tracked repo-local QA
+    // skill is never in it, added or unchanged).
     if (!r5.stdout.toString().includes("41 unchanged")) {
       console.log("  FAIL: full setup does not report skills '41 unchanged' after --skills-only");
       return "FAIL";

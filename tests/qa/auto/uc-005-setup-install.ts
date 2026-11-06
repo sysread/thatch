@@ -31,7 +31,7 @@ const useCase: UseCase = {
     "  appends a thatch block to `CLAUDE.md` bracketed by start/end markers (replaced, not",
     "  duplicated, on re-run), writes `.claude/settings.json` hooks (`SessionStart` -> `thatch reminder`,",
     "  `PostToolBatch` -> `thatch buffer-batch`, `UserPromptSubmit` -> `thatch flush-tools`), and installs",
-    "  **41 shared skills** (the code-review coordinator included - it is SHARED) to the repo's `.claude/skills/`.",
+    "  **42 shared skills** (the code-review coordinator included - it is SHARED) to the repo's `.claude/skills/`.",
     "- `--cursor` project-local writes `.cursor/mcp.json`, appends to `AGENTS.md`, writes",
     "  `.cursor/hooks.json` in the **flat format** (`{version:1, hooks:{...}}`): `sessionStart` ->",
     "  `thatch reminder --json`, `postToolUse` -> `thatch buffer-tool`, `beforeSubmitPrompt` ->",
@@ -129,8 +129,8 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (claudeSkillNames.length !== 41) {
-      console.log(`  FAIL: Claude skills count is ${claudeSkillNames.length}, expected 41`);
+    if (claudeSkillNames.length !== 42) {
+      console.log(`  FAIL: Claude skills count is ${claudeSkillNames.length}, expected 42`);
       return "FAIL";
     }
     if (!claudeSkillNames.includes("thatch-code-review")) {
@@ -273,7 +273,7 @@ const useCase: UseCase = {
 
     // Reporting: a no-op re-run reports every skill as unchanged.
     if (!r3c.stdout.toString().includes("41 unchanged")) {
-      console.log("  FAIL: re-run stdout does not report '41 unchanged' for Claude");
+      console.log("  FAIL: re-run stdout does not report '41 unchanged' for Claude (the report counts the install set; the repo-local QA skill is not in it)");
       return "FAIL";
     }
     if (!r3x.stdout.toString().includes("41 unchanged")) {

@@ -27,7 +27,8 @@ const useCase: UseCase = {
     "5. Check whether the `thatch-code-review` coordinator skill is present.",
   ].join("\n"),
   expected: [
-    "- Claude Code and Cursor install exactly **41 shared skills** to the scope's",
+    "- Cursor installs exactly **41 shared skills**; Claude Code 42 (the repo's",
+    "- QA skill is .claude/-side and repo-local),",
     "  skills dir (repo `.claude/skills/` and `.cursor/skills/` for project-local",
     "  setup) — the coordinator (`thatch-code-review`) is **present** (it is SHARED - flat dispatch works); it no longer needs",
     "  sub-agents, which those hosts lack).",
@@ -71,8 +72,8 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (claudeSkills.length !== 41) {
-      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 41`);
+    if (claudeSkills.length !== 42) {
+      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 42`);
       return "FAIL";
     }
     if (!claudeSkills.includes("thatch-code-review")) {
