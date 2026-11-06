@@ -9,6 +9,24 @@ import { stampModLiveness } from "../version-check";
 import type { ThatchDB } from "../db";
 import type { EmbeddingModel } from "../embeddings";
 
+/** The two regime spellings of our own tool namespace: the standalone
+ *  registration (mcp__thatch__*) and the plugin regime's bundled server
+ *  (mcp__plugin_thatch_thatch__*). One helper so the filter and the save
+ *  gate cannot drift apart when a third spelling arrives. */
+const THATCH_TOOL_PREFIXES = ["mcp__thatch__", "mcp__plugin_thatch_thatch__"];
+
+function isThatchOwnToolCall(tool: string | undefined): boolean {
+  // The caller short-circuits on !event.tool first; the guard is for the
+  // helper's own safety.
+  return !!tool && THATCH_TOOL_PREFIXES.some((p) => tool.startsWith(p));
+}
+
+function isThatchMemoryRememberCall(tool: string | undefined): boolean {
+  // The caller short-circuits on !event.tool first; the guard is for the
+  // helper's own safety.
+  return !!tool && THATCH_TOOL_PREFIXES.some((p) => tool === `${p}memory_remember`);
+}
+
 /**
  * The plugin regime's lifecycle layer: the Claude Code mod reports host
  * events (turn start/complete, tool calls, permission asks) through the
@@ -137,13 +155,20 @@ export function createPluginLifecycle(deps: PluginLifecycleDeps) {
           //   agentId filter) and excludes the no-work tools on top
           //   (todowrite/question did nothing the user waits for).
           stampModLiveness(deps.dbPath);
-          if (!event.tool || isMetaToolName(event.tool) || event.tool.startsWith("mcp__thatch__")) {
-            // Our OWN tool traffic: the SAVE gate - a memory_remember that
-            // actually saved drains the queue and resets the counter (the
-            // opencode hook's drain semantics, server-side; the fallback
-            // path gets it inside appendBatch's meta branch, which this
-            // skip never reaches).
-            if (event.tool === "mcp__thatch__memory_remember" && (event.result ?? "").includes(MEMORY_SAVED_MARKER)) {
+          // Our OWN tool traffic: the spellings are REGIME-KEYED - the
+          // standalone registration spells mcp__thatch__*, the PLUGIN
+          // regime's bundled server mcp__plugin_thatch_thatch__* (the
+          // round-3 finding: the mcp__thatch__-only filter let our own
+          // plugin calls land IN the extraction queue and a real save
+          // never drained it). startsWith matches the prefix class (a
+          // spoofed tool name carrying the prefix deeper still matches,
+          // which is correct - the name IS ours).
+          if (!event.tool || isMetaToolName(event.tool) || isThatchOwnToolCall(event.tool)) {
+            // The SAVE gate: a memory_remember that actually saved drains
+            // the queue and resets the counter (the opencode hook's drain
+            // semantics, server-side; the fallback path gets it inside
+            // appendBatch's meta branch, which this skip never reaches).
+            if (isThatchMemoryRememberCall(event.tool) && (event.result ?? "").includes(MEMORY_SAVED_MARKER)) {
               resetMissedCount(sid);
               consumeQueue(sid);
             }

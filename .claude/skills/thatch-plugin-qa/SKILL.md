@@ -38,8 +38,11 @@ Run these once per QA session and keep the outputs at hand:
    are rows in it (chat_sessions, runtime_state, chat_messages).
 4. The extraction queue: `$THATCH_QUEUE_DIR` or the tmp cache dir derived
    from the db path. Queue files are JSONL, one interaction per line.
-5. The debug log (`THATCH_DEBUG=1`): beside the db - the mod-side and
-   server-side event trail.
+5. The FAILURE surfaces: `<pluginRoot>/mod-failures.log` (the mod's
+   fail-open crossings - the last 20 with reasons) and the SERVER's stderr
+   (visible in the session's debug output with `claude --debug`, or the
+   tier-failure `[thatch]` lines on the server side). There is no
+   THATCH_DEBUG debug log on the plugin path.
 
 ## Step A pins: stage, identity, liveness
 
@@ -49,8 +52,9 @@ Run these once per QA session and keep the outputs at hand:
   `thatch-<sha256(dbPath)[:16]>`) has a timestamp from this run. FAIL
   fallback: the mod's hooks are silenced (disableAllHooks / managed
   allowManagedModsOnly) - check `/plugin` shows the plugin enabled, and
-  the debug log carries the stage-failure line (the fail-open logs the
-  reason; silent means the hooks never ran at all).
+  `mod-failures.log` carries the stage-failure line (the fail-open logs
+  the reason; the file's ABSENCE with a processed prompt means the hooks
+  never ran at all).
 - **Instructions delivery**: instructions ride the CLAUDE.md static block
   (the plugin-spelled tool list - `mcp__plugin_thatch_thatch__*`), ensured
   by setup AND by the bundled server at startup. There is NO
@@ -68,8 +72,9 @@ Run these once per QA session and keep the outputs at hand:
 ## Step B pins: alerts, wrap-ups
 
 - **Alert mapping**: a failed round (force a provider error or abort) -
-  PASS: the debug log shows the lifecycle's error forward and the notify
-  dispatcher's compose line. An abort (ESC) must NEVER notify.
+  PASS: `mod-failures.log`/the server stderr show the lifecycle's error
+  forward and the notify dispatcher's compose line. An abort (ESC) must
+  NEVER notify.
 - **Guard caveat**: where the built-in guard loads (managed settings or a
   Team/Enterprise login), the mod's `classic.*` hooks do not run - pause
   (PermissionRequest) and provider-error (StopFailure) alerts are DARK
@@ -84,10 +89,12 @@ Run these once per QA session and keep the outputs at hand:
 
 ## Step C pins: chat wake, adoption
 
-- **Wake delivery**: seed mail via `thatch chat send` to the session's
-  roster name; within ~30s the wake arrives as a system-submitted TURN
-  (not a nudge in context). PASS: the message row's delivered_at is
-  stamped without any model tool call.
+- **Wake delivery**: seed mail via `thatch chat broadcast "QA wake test"`
+  (broadcast is the CLI's send path - it reaches every registered session
+  including this one); within ~30s the wake arrives as a system-submitted
+  TURN (not a nudge in context). PASS: the message row's delivered_at is
+  stamped without any model tool call. (There is no `thatch chat send`
+  subcommand - broadcast is the only CLI write path.)
 - **Continuation adoption**: resume a session (the id forks) - the chat
   identity FOLLOWS: the new session's stage re-registers under the old
   name (the transcript-tail walk). PASS: one roster row, the original

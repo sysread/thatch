@@ -1,7 +1,21 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// EVERY test in this file gets an isolated queue dir: the realwork
+// handler WRITES to the real default queue dir (~/.cache/thatch/queue)
+// otherwise - the test-pollution bug (session ids s1/s2/s3 landed in the
+// user's cache). File-level so no test can forget it.
+let queueDirFixture: string;
+beforeEach(() => {
+  queueDirFixture = mkdtempSync(join(tmpdir(), "lifecycle-queue-"));
+  process.env.THATCH_QUEUE_DIR = queueDirFixture;
+});
+afterEach(() => {
+  delete process.env.THATCH_QUEUE_DIR;
+  rmSync(queueDirFixture, { recursive: true, force: true });
+});
 import { createPluginLifecycle, type PluginLifecycleDeps } from "../src/claude-plugin/lifecycle";
 import type { Config } from "../src/config";
 
@@ -123,10 +137,7 @@ describe("plugin lifecycle: pause asks", () => {
 
 describe("plugin lifecycle: the buffer push (Step D)", () => {
   test("realwork buffers the interaction with input + result (THATCH_QUEUE_DIR isolated)", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "lifecycle-buffer-"));
-    process.env.THATCH_QUEUE_DIR = dir;
-    try {
-      const h = spyAlerts();
+    const h = spyAlerts();
       await h.run({ event: "busy", sessionID: "b1" });
       await h.run({ event: "realwork", sessionID: "b1", tool: "Bash", args: { command: "ls" }, result: "file1" });
       // The push IS the buffer: the queue file now holds the interaction.
@@ -139,17 +150,10 @@ describe("plugin lifecycle: the buffer push (Step D)", () => {
       // And the work mark rode the same site.
       await h.run({ event: "complete", sessionID: "b1", isAborted: false });
       expect(h.notified.map((n) => n.kind)).toEqual(["done"]);
-    } finally {
-      delete process.env.THATCH_QUEUE_DIR;
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   test("meta tools and thatch-spelled calls neither buffer nor mark work", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "lifecycle-buffer2-"));
-    process.env.THATCH_QUEUE_DIR = dir;
-    try {
-      const h = spyAlerts();
+    const h = spyAlerts();
       await h.run({ event: "busy", sessionID: "b2" });
       await h.run({ event: "realwork", sessionID: "b2", tool: "mcp__thatch__chat_read", args: {}, result: "mail" });
       await h.run({ event: "realwork", sessionID: "b2", tool: "Skill", args: {}, result: "loaded" });
@@ -157,17 +161,10 @@ describe("plugin lifecycle: the buffer push (Step D)", () => {
       expect(peekQueue("b2")).toEqual([]);
       await h.run({ event: "complete", sessionID: "b2", isAborted: false });
       expect(h.notified).toEqual([]);
-    } finally {
-      delete process.env.THATCH_QUEUE_DIR;
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   test("the memory_remember save drains the queue (the appendBatch gate, server-side)", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "lifecycle-buffer3-"));
-    process.env.THATCH_QUEUE_DIR = dir;
-    try {
-      const h = spyAlerts();
+    const h = spyAlerts();
       await h.run({ event: "busy", sessionID: "b3" });
       await h.run({ event: "realwork", sessionID: "b3", tool: "Bash", args: { command: "ls" }, result: "x" });
       expect((await import("../src/extract-queue")).peekQueue("b3").length).toBe(1);
@@ -177,9 +174,50 @@ describe("plugin lifecycle: the buffer push (Step D)", () => {
       // wired server-side on the plugin path (the meta-skip never reaches
       // appendBatch's own gate).
       expect((await import("../src/extract-queue")).peekQueue("b3").length).toBe(0);
-    } finally {
-      delete process.env.THATCH_QUEUE_DIR;
-      rmSync(dir, { recursive: true, force: true });
-    }
+  });
+});
+
+describe("the regime-keyed own-tool spellings (the round-3 finding)", () => {
+  test("the PLUGIN spelling is filtered from the buffer AND drains on save", async () => {
+    const h = spyAlerts();
+    await h.run({ event: "busy", sessionID: "p1" });
+    // Our OWN calls under the PLUGIN spelling: neither lands in the queue.
+    await h.run({ event: "realwork", sessionID: "p1", tool: "mcp__plugin_thatch_thatch__memory_recall", args: {}, result: "memories" });
+    await h.run({ event: "realwork", sessionID: "p1", tool: "mcp__plugin_thatch_thatch__plugin_stage", args: {}, result: "nudge" });
+    const { peekQueue } = await import("../src/extract-queue");
+    expect(peekQueue("p1")).toEqual([]);
+    // A REAL tool call buffers.
+    await h.run({ event: "realwork", sessionID: "p1", tool: "Bash", args: { command: "ls" }, result: "file" });
+    expect(peekQueue("p1").length).toBe(1);
+    // The SAVE gate under the PLUGIN spelling: a saved memory_remember
+    // drains + resets.
+    await h.run({ event: "realwork", sessionID: "p1", tool: "mcp__plugin_thatch_thatch__memory_remember", args: { label: "x" }, result: "[saved] test/repo :: x" });
+    expect(peekQueue("p1")).toEqual([]);
+  });
+
+  test("the STANDALONE spelling keeps its behavior (both regimes, one helper)", async () => {
+    const h = spyAlerts();
+    await h.run({ event: "busy", sessionID: "p2" });
+    await h.run({ event: "realwork", sessionID: "p2", tool: "mcp__thatch__memory_recall", args: {}, result: "m" });
+    const { peekQueue } = await import("../src/extract-queue");
+    expect(peekQueue("p2")).toEqual([]);
+    await h.run({ event: "realwork", sessionID: "p2", tool: "mcp__thatch__memory_remember", args: { label: "y" }, result: "[saved] test/repo :: y" });
+    expect(peekQueue("p2")).toEqual([]);
+  });
+
+  test("a foreign-namespaced lookalike is a REAL tool (the prefix is our namespace boundary)", async () => {
+    // startsWith matches our PREFIX only: a different MCP server ("evil")
+    // producing mcp__evil__* is not ours - it buffers like any real tool.
+    // The host controls the namespace spelling, so prefix ownership is the
+    // boundary; content-based suffix matching would let a hostile server
+    // name manufacture save-gate drains.
+    const h = spyAlerts();
+    await h.run({ event: "busy", sessionID: "p3" });
+    await h.run({ event: "realwork", sessionID: "p3", tool: "mcp__evil__mcp__plugin_thatch_thatch__memory_remember", args: {}, result: "x" });
+    const { peekQueue } = await import("../src/extract-queue");
+    expect(peekQueue("p3").length).toBe(1);
+    // And no save gate ran (the drain did not fire on the lookalike).
+    await h.run({ event: "realwork", sessionID: "p3", tool: "mcp__evil__mcp__plugin_thatch_thatch__memory_remember", args: {}, result: "[saved] test/repo :: x" });
+    expect(peekQueue("p3").length).toBe(2);
   });
 });

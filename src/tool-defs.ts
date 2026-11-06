@@ -2081,7 +2081,8 @@ const watchListDef: ToolDef = {
   description:
     "List this session's active watchers with their ids, targets, watched " +
     "event types, and remaining time, plus any detected events that are " +
-    "queued waiting for this session to go idle before delivery. opencode-only.",
+    "queued waiting for this session to go idle before delivery. " +
+    "Available on opencode and the Claude Code plugin regime's bundled server (not the standalone MCP server).",
   args: {},
   opencodeOnly: true,
   async execute(_args, ctx, host) {
@@ -2310,13 +2311,13 @@ const watchCommandCreateDef: ToolDef = {
 };
 
 /**
- * Cancels one watcher. opencode-only, session-scoped: cancelling by id only
- * works for the session that created it.
+ * Cancels one watcher. Session-scoped: cancelling by id only works for
+ * the session that created it.
  */
 const watchCancelDef: ToolDef = {
   name: "watch_cancel",
   bundledServable: true,
-  description: "Cancel one of this session's watchers by id. opencode-only.",
+  description: "Cancel one of this session's watchers by id. Available on opencode and the Claude Code plugin regime's bundled server (not the standalone MCP server).",
   args: {
     id: z.string().describe("The watcher id from watch_create, watch_branch_create, watch_command_create, or watch_list."),
   },
