@@ -154,6 +154,21 @@ When something needs explaining, the **code comment is the right place first**. 
 
 Never reach to fill NOTES. A bullet that is technically correct but that no reviewer holding only the diff would trip on is filler; cut it. An absent NOTES section is the honest outcome.
 
+Two banned shapes, seen in the wild - cut either on sight:
+
+- **The PR's own history.** How the branch evolved - what an earlier push framed, what a review correction renamed, what the ticket used to say and where that record now lives - is process narration, and a bullet pointing at those records ("recorded in a ticket comment") is content that already lives somewhere better. Describe the change as it stands. The evolution belongs to the ticket and the review thread. A rename earns a bullet ONLY as a present-tense trap the reviewer can see: "old name still appears in the X dashboard," never "renamed per feedback."
+- **Absence claims the diff does not provoke.** "No migration; no API changes" earns a bullet only when a reader of this diff would reasonably expect the thing (the change touches models and ships without a migration). Stated without that provocation, the bullet is "I should say something" filler, not scope information.
+
+Bad example (a real one, genericized):
+
+```md
+- **History:** first push framed the metric as a staleness gap per the
+  ticket's original wording; reworked to pipeline duration and renamed
+  per review feedback.
+```
+
+Every clause is process narration. The fix is deletion, not rewording.
+
 Always a `## NOTES` markdown header. Never a bare `Notes:` line ending a section.
 
 One bullet per item. Bold the **leading noun** in each bullet as the scan anchor.
@@ -335,7 +350,7 @@ One line each. Fold into NOTES as bullets.
 - Test plans, unless the reviewer cannot infer them.
 - AI attribution, co-author lines, "generated with" footers.
 - Backstory that does not affect review ("we explored approach A then B then landed on C").
-- **Authoring-process / commit-sequence narration.** e.g. "this first commit pins the naming; the instrumentation lands as follow-up commits", "first I... then...", "as a next step this branch will...". This is the single most common AI tell. Describe the change as it stands, never the order in which you assembled it. If a draft has pending work worth flagging, use a trailing `Remaining work:` bullet list under NOTES.
+- **Authoring-process / commit-sequence narration.** e.g. "this first commit pins the naming; the instrumentation lands as follow-up commits", "first I... then...", "as a next step this branch will...". This is the single most common AI tell. Describe the change as it stands, never the order in which you assembled it. If a draft has pending work worth flagging, use a trailing `Remaining work:` bullet list under NOTES - that is the only process-shaped content NOTES ever carries; the branch's history (earlier framings, renames from feedback) is banned there too, not just in body prose.
 
 ## Worked examples
 
