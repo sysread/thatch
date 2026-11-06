@@ -464,6 +464,14 @@ test("F2: the plugin-regime instructions variant teaches watch+wake as available
   expect(plugin).not.toContain("wake-up delivery is opencode-only");
   expect(plugin).toContain("session_search"); // the trio stays absent-teached
   expect(plugin).not.toContain("watch_create, watch_branch_create, watch_command_create, watch_list, watch_cancel, exit"); // not in the absent list
+  // THE SPELLING PIN, exhaustive: the plugin variant renders ZERO
+  // standalone spellings (mcp__thatch__* tools do not exist in a plugin
+  // session - the host namespaces the bundled server
+  // mcp__plugin_thatch_thatch__*), and the standalone spelling appears in
+  // the rendered tool list, prediction-duplicate paragraph, and extraction
+  // contract alike. One missed paragraph was Jeff's try-3 finding.
+  expect(plugin).not.toContain("mcp__thatch__");
+  expect((plugin.match(/mcp__plugin_thatch_thatch__/g) ?? []).length).toBeGreaterThanOrEqual(32);
 });
 
 test("the fail-open surfaces are LOUD: a stage failure logs the reason", async () => {
