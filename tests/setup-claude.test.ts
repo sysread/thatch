@@ -527,6 +527,42 @@ describe("setupClaudePluginRegime (plugin regime, QA-only)", () => {
     expect(manifest.mcpServers.thatch.command).toBe(checkoutBin);
   });
 
+  test("the legacy home-root CLAUDE.md block is removed (the QA ghost)", async () => {
+    // Observed live: the old setup era wrote instructions to ~/CLAUDE.md
+    // (home root); every session with cwd under $HOME loads it as a
+    // parent-dir CLAUDE.md, and the stale block named standalone tool
+    // spellings next to the plugin's - the "double registration" ghost.
+    // The plugin migration removes it; user content around it survives.
+    const { setupClaudePluginRegime } = await import("../src/setup");
+    const legacyMd = join(home, "CLAUDE.md");
+    writeFileSync(
+      legacyMd,
+      "# My notes\n\n" +
+        "# Persistence\n\n" +
+        "Thatch provides persistent memory across Claude Code sessions. Use it to persist\n" +
+        "knowledge so future sessions can build on what you've already learned.\n" +
+        "Tools are prefixed in Claude Code: `mcp__thatch__memory_remember`.\n" +
+        '"Forget X" - `memory_recall` to find it, then `memory_forget`.\n\n' +
+        "User content stays.\n",
+      "utf-8",
+    );
+    const result = await setupClaudePluginRegime(join(proj, "bin", "thatch"), true, proj, home);
+    const after = readFileSync(legacyMd, "utf8");
+    expect(after).toContain("My notes");
+    expect(after).toContain("User content stays.");
+    expect(after).not.toContain("mcp__thatch__");
+    // The removal is REPORTED.
+    expect(result.deactivated.some((d) => d.includes("legacy instructions block"))).toBe(true);
+  });
+
+  test("a home-root CLAUDE.md with no thatch block is untouched", async () => {
+    const { setupClaudePluginRegime } = await import("../src/setup");
+    const legacyMd = join(home, "CLAUDE.md");
+    writeFileSync(legacyMd, "# Just user content\n", "utf-8");
+    setupClaudePluginRegime(join(proj, "bin", "thatch"), true, proj, home);
+    expect(readFileSync(legacyMd, "utf8")).toBe("# Just user content\n");
+  });
+
   test("checkSetup reports installed under the plugin regime (marker read)", async () => {
     const { setupClaudePluginRegime, checkSetup } = await import("../src/setup");
     const { writeRegimeMarker } = await import("../src/version-check");

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { claudeInstructions, cursorInstructions } from "./prompts";
 import { installSkills, type InstallReport } from "./skills";
@@ -481,6 +481,51 @@ export interface PluginRegimeResult {
 }
 
 /**
+ * Removes the thatch instructions block (sentinel format, or a legacy
+ * pre-sentinel prose block) from a file - the migration's cleanup for the
+ * LEGACY home-root ~/CLAUDE.md: the old setup era wrote instructions
+ * there, and any session whose cwd is under $HOME loads it as a
+ * parent-dir CLAUDE.md - a stale block naming the standalone tool
+ * spellings contradicts the plugin session's real tool names.
+ *
+ * Removal rules (the writer's twin): sentinel blocks remove by span;
+ * intact legacy prose blocks remove by the legacy markers; a BROKEN
+ * legacy block (the em-dash corruption class) removes to EOF only when
+ * the heal guard says the tail is recognizably the instructions -
+ * otherwise leave it for manual repair (never eat user content). Deletes
+ * the file when nothing but whitespace remains. Returns true when
+ * something was removed.
+ */
+function removeLegacyInstructionsBlock(path: string): boolean {
+  if (!existsSync(path)) return false;
+  const existing = readFileSync(path, "utf8");
+  let startIdx = -1;
+  let endLen = 0;
+  const beginIdx = existing.indexOf(THATCH_BEGIN);
+  if (beginIdx >= 0) {
+    const endIdx = existing.indexOf(THATCH_END, beginIdx);
+    if (endIdx < 0) return false; // broken sentinels: checkSetup's report
+    startIdx = beginIdx;
+    endLen = endIdx + THATCH_END.length - beginIdx;
+  } else if (existing.includes(THATCH_MARKER)) {
+    const legacyStart = existing.indexOf(THATCH_MARKER);
+    const legacyEnd = existing.indexOf(THATCH_END_MARKER, legacyStart);
+    if (legacyEnd >= 0) {
+      startIdx = legacyStart;
+      endLen = legacyEnd + THATCH_END_MARKER.length - legacyStart;
+    } else {
+      // Broken legacy block: the writer's heal guard, empty block.
+      return healBrokenBlock(path, existing, legacyStart, "");
+    }
+  }
+  if (startIdx < 0) return false; // no thatch block of either format
+  const rest = (existing.slice(0, startIdx) + existing.slice(startIdx + endLen)).trim();
+  if (rest) writeFileSync(path, rest + "\n");
+  else rmSync(path);
+  return true;
+}
+
+/**
  * Ensures the CLAUDE.md instructions block for the PLUGIN regime in a
  * project directory - idempotent (appendBlock replaces the sentinel
  * block), with the plugin variant's tool spelling. The bundled server
@@ -629,6 +674,17 @@ export function register(on) {
   // session reads). Idempotent: appendBlock replaces the sentinel block.
   appendBlock(join(projectDir, "CLAUDE.md"), claudeInstructions("plugin"), THATCH_MARKER, THATCH_END_MARKER);
   if (global) appendBlock(join(claudeConfigDir(home), "CLAUDE.md"), claudeInstructions("plugin"), THATCH_MARKER, THATCH_END_MARKER);
+  // The LEGACY home-root ~/CLAUDE.md: the old setup era wrote instructions
+  // there, and any session whose cwd is under $HOME loads it as a
+  // parent-dir CLAUDE.md - a stale block naming tools the plugin session
+  // does not have (observed live: the QA "double registration" ghost).
+  // The migration REMOVES it (the instructions live in the config-dir/
+  // project blocks now); broken blocks go through the heal guard, and a
+  // removal is reported so the user knows what changed.
+  const legacyHomeMd = join(home, "CLAUDE.md");
+  if (removeLegacyInstructionsBlock(legacyHomeMd)) {
+    deactivated.push(`legacy instructions block removed: ${legacyHomeMd}`);
+  }
   if (paths.mcpConfigPath && existsSync(paths.mcpConfigPath)) {
     removeMcpServerEntry(paths.mcpConfigPath);
     deactivated.push(`standalone MCP config: ${paths.mcpConfigPath}`);
