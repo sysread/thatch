@@ -213,6 +213,26 @@ export interface SessionTabCloseInput {
   chatName: string | null;
 }
 
+/** Input to SessionTabHost.openTab - the resolved reopen target plus the
+ *  routing anchor. */
+export interface SessionTabOpenInput {
+  /** The session whose tab should open (resolved id). */
+  sessionID: string;
+  /** The calling session's id - the tab-open event's routing anchor (the
+   *  window holding the caller's tab acts first, like a spawn). */
+  coordinatorSessionID: string;
+}
+
+/**
+ * The openTab result is a union, not a throw: a dead target (stale roster
+ * row, aged-out worktree) is an EXPECTED user error the calling model can
+ * act on, unlike the spawn flow's mid-flight throw - which narrates a
+ * stranded CREATED session, and openTab creates nothing to narrate.
+ */
+export type SessionTabOpenResult =
+  | { ok: true; directory: string; title: string | null }
+  | { ok: false; error: string };
+
 /**
  * The v2-only host surface behind thatch_session_tab +
  * thatch_session_tab_close. Implementation lives in src/opencode/v2.ts; the
@@ -228,6 +248,12 @@ export interface SessionTabHost {
    *  toward the TUI: the strip close is requested, not acked (windows not
    *  showing the tab no-op it). */
   closeTab(input: SessionTabCloseInput): Promise<void>;
+  /** Reopens a tab for an EXISTING session: emits the tab-opened rpc event
+   *  (the spawn's event, unchanged) behind the dead-directory guard - only
+   *  the adapter can reach the session domain, so the live-session lookup
+   *  and the fs check on the session's directory happen here. Fire-and-
+   *  forget toward the TUI like closeTab: the open is requested, not acked. */
+  openTab(input: SessionTabOpenInput): Promise<SessionTabOpenResult>;
 }
 
 /**
@@ -2951,6 +2977,89 @@ const sessionTabDef: ToolDef = {
 };
 
 /**
+ * Opens a TUI tab for an EXISTING session - the reopen half of the
+ * session-tab lifecycle (spawn -> supervise -> close -> reopen). opencode
+ * reaps tabs by age while the session lives on, and the strip's reopen
+ * stack only reaches recent closes; this tool reaches any live session by
+ * chat name or id. It reuses the spawn's tab-opened rpc event UNCHANGED
+ * (same payload shape, same coordinator-anchored routing - see
+ * docs/plans/session-tab-open-tool.md), so the TUI half is unaware a
+ * second emitter exists. Tab-level only: nothing is created, prompted, or
+ * deleted, and the already-open case is a silent idempotent no-op.
+ *
+ * The def validates the target locally and delegates the host flow - the
+ * live-session lookup, the dead-directory guard, and the emit - to the v2
+ * adapter through the sessionTabHost seam, the same pattern as the spawn
+ * and close tools. v2Only: same surfaces as the spawn tool.
+ */
+const sessionTabOpenDef: ToolDef = {
+  name: "session_tab_open",
+  description:
+    "Open a TUI tab for an EXISTING session (opencode v2 only). Use when a session's tab " +
+    "was closed (opencode reaps tabs by age) but the session is still alive: a coordinator " +
+    "reopening a dispatched subordinate's tab, or reopening a session found via " +
+    "thatch_session_search. The tab opens UNFOCUSED in this window's strip; nothing is " +
+    "created or prompted - tab-level only, and a tab that is already open stays put. " +
+    "The target is the session's chat name (from the spawn tool's response or the chat " +
+    "roster) or its session id.",
+  args: {
+    session: z.string().min(1).describe(
+      "Which session's tab to open: its chat name (e.g. 'bishop-the-synthetic-00001') or its session id (ses_...).",
+    ),
+  },
+  v2Only: true,
+  async execute(args, ctx, host) {
+    if (!host) {
+      return "Session tabs are unavailable: this host did not provide a session context.";
+    }
+    if (!ctx.sessionTabHost) {
+      return "Session tabs are unavailable: this host did not wire the session-tab surface (opencode v2 only).";
+    }
+    const target = resolveTabTarget(ctx.db, args.session as string);
+    if (!target.ok) return target.error;
+    const result = await ctx.sessionTabHost.openTab({
+      sessionID: target.sessionID,
+      coordinatorSessionID: host.sessionID,
+    });
+    if (!result.ok) return result.error;
+    return [
+      `Tab open requested for ${target.chatName ? `${target.chatName} (${target.sessionID})` : target.sessionID}.`,
+      `  directory: ${result.directory}`,
+      ...(result.title ? [`  title: ${result.title}`] : []),
+      "",
+      "The tab opens unfocused in this window's strip. If it did not appear (headless run, tabs " +
+        "disabled, or the TUI was still connecting), the session is unaffected - it is still there.",
+    ].join("\n");
+  },
+};
+
+/**
+ * Shared target resolution for session_tab_open + session_tab_close: chat
+ * name first (roster names are unique), then a raw ses_ id - so the
+ * coordinator can paste either from its task list and neither tool cares
+ * which it got. A miss suggests near-miss roster names (same source
+ * chat_send suggests from). Lives here rather than session-tab-shared.ts:
+ * that module is the TUI-imported cross-entry contract and must stay free
+ * of db concerns.
+ */
+function resolveTabTarget(db: ThatchDB, raw: string): { ok: true; sessionID: string; chatName: string | null } | { ok: false; error: string } {
+  const target = raw.trim();
+  const row = db.findChatSession(target);
+  const sessionID = row?.session_id ?? (target.startsWith("ses_") ? target : "");
+  if (!sessionID) {
+    return {
+      ok: false,
+      error: withDidYouMean(
+        `No registered session matches "${target}" - pass the subordinate's chat name (from the spawn response) or its session id.`,
+        target,
+        db.listChatSessions().map((s) => s.name),
+      ),
+    };
+  }
+  return { ok: true, sessionID, chatName: row?.name ?? null };
+}
+
+/**
  * Closes a subordinate session's TUI tab. The counterpart of
  * thatch_session_tab: the coordinator's cleanup half of the supervision
  * lifecycle (spawn -> supervise -> verify -> close). Tab-level only - the
@@ -2984,23 +3093,11 @@ const sessionTabCloseDef: ToolDef = {
     if (!ctx.sessionTabHost) {
       return "Session tabs are unavailable: this host did not wire the session-tab surface (opencode v2 only).";
     }
-    const target = (args.session as string).trim();
-    const row = ctx.db.findChatSession(target);
-    const sessionID = row?.session_id ?? (target.startsWith("ses_") ? target : "");
-    if (!sessionID) {
-      // Suggest close chat names from the roster (same source chat_send
-      // suggests from), git-strict: a far-off target (e.g. an unregistered
-      // ses_ id) adds no suggestion line.
-      return withDidYouMean(
-        `No registered session matches "${target}" - pass the subordinate's chat name (from the spawn response) or its session id.`,
-        target,
-        ctx.db.listChatSessions().map((s) => s.name),
-      );
-    }
-    const chatName = row?.name ?? null;
-    await ctx.sessionTabHost.closeTab({ sessionID, chatName });
+    const target = resolveTabTarget(ctx.db, args.session as string);
+    if (!target.ok) return target.error;
+    await ctx.sessionTabHost.closeTab({ sessionID: target.sessionID, chatName: target.chatName });
     return [
-      `Tab close requested for ${chatName ? `${chatName} (${sessionID})` : sessionID}.`,
+      `Tab close requested for ${target.chatName ? `${target.chatName} (${target.sessionID})` : target.sessionID}.`,
       "The tab closes in windows showing it (the session itself is untouched -",
       "the user can reopen the tab). Cross-session chat history is unaffected.",
     ].join("\n");
@@ -3054,6 +3151,7 @@ export const TOOL_DEFS: ToolDef[] = [
   chatBroadcastDef,
   chatStatusDef,
   sessionTabDef,
+  sessionTabOpenDef,
   sessionTabCloseDef,
 ];
 

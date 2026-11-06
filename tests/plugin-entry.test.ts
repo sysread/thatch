@@ -100,6 +100,7 @@ describe("plugin entry", () => {
       // v2-only: the session-tab bridge has no v1 surface.
       "thatch_session_tab",
       "thatch_session_tab_close",
+      "thatch_session_tab_open",
       "thatch_store_list",
       "thatch_watch_branch_create",
       "thatch_watch_cancel",

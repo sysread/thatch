@@ -8,10 +8,10 @@ import { createRuntime } from "../runtime";
 import { enumerateSweepSessions } from "../session-db";
 import { wrapUpCommandContent, wrapUpCommandDescription } from "../commands";
 import { deriveTitle } from "../extraction";
-import { detectRepo, detectWorktreeKind } from "../git";
+import { detectRepo, detectWorktreeKind, pathExists } from "../git";
 import { chatEnabled, loadConfig } from "../config";
 import { EXIT_TAB_CLOSED_EVENT, SESSION_TAB_RPC, TAB_CLOSED_EVENT, TAB_OPENED_EVENT, TOAST_EVENT, buildSubordinatePrompt, tabClosedEventType, tabOpenedEventType } from "../session-tab-shared";
-import { TOOL_DEFS, trimHostContext, type HostToolContext, type SessionTabCloseInput, type SessionTabHost, type SessionTabSpawnInput, type SessionTabSpawnResult } from "../tool-defs";
+import { TOOL_DEFS, trimHostContext, type HostToolContext, type SessionTabCloseInput, type SessionTabHost, type SessionTabOpenInput, type SessionTabOpenResult, type SessionTabSpawnInput, type SessionTabSpawnResult } from "../tool-defs";
 import { deepPassthrough } from "../tool-schema";
 
 // The opencode v2 adapter (opencode 2.x, plugin API @opencode/plugin 2.x).
@@ -869,6 +869,47 @@ function buildSessionTabHost(input: {
     closeTab: async (spec: SessionTabCloseInput): Promise<void> => {
       await input.emitTabClosed({ sessionID: spec.sessionID, chatName: spec.chatName });
       input.debug("session-tab", `tab-close emitted for ${spec.sessionID} (${spec.chatName ?? "unnamed"})`);
+    },
+    // The session_tab_open tool's reopen flow: the dead-directory guard
+    // lives here because only the adapter can reach the session domain. A
+    // session whose directory is gone would open opencode's "Session
+    // location unavailable" dialog on the user's screen, so the tool
+    // refuses with the path instead. The result union (not a throw) keeps
+    // an EXPECTED user error off the failure path - unlike the spawn flow,
+    // nothing was created to narrate.
+    openTab: async (spec: SessionTabOpenInput): Promise<SessionTabOpenResult> => {
+      let info: { title?: string; location?: { directory?: string } } | undefined;
+      try {
+        // Broad catch (the resolveSessionDir idiom above): the pinned
+        // surface has no typed not-found error to narrow on.
+        info = await input.context.session.get({ sessionID: spec.sessionID });
+      } catch {
+        return {
+          ok: false,
+          error:
+            `No live session with id ${spec.sessionID}. It may have been deleted, or it lives on ` +
+            "another machine's daemon - list the chat roster (chat_list) or search sessions (session_search) to find the right target.",
+        };
+      }
+      const directory = info?.location?.directory;
+      if (!directory) {
+        return { ok: false, error: `Session ${spec.sessionID} returned no location - its tab cannot be opened.` };
+      }
+      if (!pathExists(directory)) {
+        return {
+          ok: false,
+          error:
+            `The session's directory no longer exists: ${directory} - its checkout was likely deleted ` +
+            '(a removed worktree or temp dir). Opening a tab for it would show opencode\'s "Session location unavailable" dialog, so the open was refused.',
+        };
+      }
+      await input.emitTabOpened({
+        sessionID: spec.sessionID,
+        directory,
+        coordinatorSessionID: spec.coordinatorSessionID,
+      });
+      input.debug("session-tab", `tab-open emitted for ${spec.sessionID} (${directory})`);
+      return { ok: true, directory, title: typeof info?.title === "string" ? info.title : null };
     },
   };
 }

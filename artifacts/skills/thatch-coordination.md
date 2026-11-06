@@ -66,6 +66,9 @@ wishes and record the decision in the task list.
 
 A finished subordinate's tab closes with `thatch_session_tab_close` (pass
 the subordinate's chat name) once its work is verified — tab-level only:
-the session survives and the user can reopen it. If a subordinate strands
+the session survives and the user can reopen it. If a still-active
+subordinate's tab disappears (opencode reaps tabs by age), restore it with
+`thatch_session_tab_open` (chat name or session id) instead of spawning a
+replacement. If a subordinate strands
 an empty or stuck session, tell the user which session id to delete — you
 cannot delete sessions yourself.

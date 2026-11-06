@@ -11,7 +11,7 @@ setupToolDefsHarness();
 
 describe("TOOL_DEFS", () => {
   test("exports the full tool catalog", () => {
-    expect(TOOL_DEFS.length).toBe(41);
+    expect(TOOL_DEFS.length).toBe(42);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -54,6 +54,7 @@ describe("TOOL_DEFS", () => {
       "chat_broadcast",
       "chat_status",
       "session_tab",
+      "session_tab_open",
       "session_tab_close",
     ]);
   });

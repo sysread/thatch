@@ -8,6 +8,12 @@ peer session: it runs its own agent loop across many turns, in a directory
 of the coordinator's choosing, while the coordinator keeps working. The user
 sees the subordinate's tab appear beside the coordinator's, unfocused.
 
+`thatch_session_tab_open` (opencode v2 only) reopens a tab for an EXISTING
+session - the reopen half of the lifecycle
+(spawn -> supervise -> close -> reopen), for a session whose tab was closed
+by the strip's age-reaping or reopen stack while the session lives on. See
+"Reopening a session's tab" below.
+
 This is NOT the `task` tool: task subagents run inside the dispatcher's turn
 and return their result inline. A tab subordinate outlives the dispatching
 turn and is supervised over cross-session chat.
@@ -101,9 +107,11 @@ Key properties:
 
 `src/session-tab-shared.ts` (SDK-free, per the isolation rule in
 `src/index.ts`) holds the rpc definition (`thatch-tabs`: `tab-opened`
-(carries the subordinate's `sessionID`, its final `directory`, and the
-spawning `coordinatorSessionID` - optional + nullable for wire compat
-across independently-loaded server/TUI halves);
+(carries the target's `sessionID`, its current `directory`, and the
+`coordinatorSessionID` of the session that emitted it - optional + nullable
+for wire compat across independently-loaded server/TUI halves; the event has
+TWO emitters: the spawn tool and the reopen tool, which the TUI half cannot
+distinguish and does not need to);
 `tab-closed` - emitted by the close tool (below) and translated by the v2
 pump into the runtime's confirmed-death path, which also records a
 `chat_tab_closed` marker the chat roster's open-tab reader uses to demote
@@ -130,6 +138,36 @@ import only `@opencode/plugin/tui` and this module.
   host inherits parent metadata onto children - the subordinate's own
   extraction children carry the marker too; treat inherited markers as
   inherited, not first-party.
+
+## Reopening a session's tab
+
+`thatch_session_tab_open {session}` (the target: the session's chat name or
+id, resolved name-first through the chat roster by the SAME resolver as the
+close tool - `resolveTabTarget` in src/tool-defs.ts) reopens a tab for a
+live session whose tab is gone. It reuses the spawn's `tab-opened` event
+UNCHANGED: same payload shape (`sessionID`, the session's CURRENT directory
+read fresh through `session.get`, the calling session's id as
+`coordinatorSessionID`), same coordinator-anchored routing - the TUI half is
+unaware a second emitter exists, and the wire schema gains nothing. The v2
+pump's `sessionDirs` cache reads the payload's directory (as it does for a
+spawn's), which here refreshes the cache with the target's current location.
+
+The dead-directory guard lives host-side in `openTab` (only the adapter can
+reach the session domain): `session.get` (broad catch - no typed not-found
+class on the pinned surface), a defensive `info?.location?.directory` read,
+then an fs existence check. A session whose checkout was deleted (a removed
+worktree or temp dir) would otherwise open opencode's "Session location
+unavailable" dialog on the user's screen - the tool refuses with the path
+instead. The guard narrows the race, it does not close it (the directory can
+still vanish before the TUI's `open`), so the response words the tab as
+requested, not guaranteed - the same honesty as the spawn tool, and the same
+coverage of the dead-listener race ([gotchas.md](../gotchas.md), "A TUI
+started during a daemon replacement"). Already-open tabs are a silent
+idempotent no-op (`ui.tabs.open` is open-without-focus and idempotent).
+`ui.tabs.focus` is deliberately unused: both reopen flows (a coordinator
+restoring workers, a librarian reopening a session found via
+`session_search`) want an unfocused tab, and a focus flag would cost a wire
+schema change for it.
 
 ## Closing a subordinate's tab
 
@@ -175,11 +213,12 @@ dependency for the TUI entry's runtime resolution.
 - Unit: `tests/session-tab-shared.test.ts` (validators, definition shape,
   guard logic), `tests/opencode-v2-adapter-tabs.test.ts` (the execute flows'
   ordering via the `makeContext` double with `session.move` + the `rpc`
-  domain).
+  domain, plus the reopen tool's guard and emit tests).
 - QA: uc-059 (tool list + MCP leak check), uc-014/uc-060 (skill counts),
   uc-119 (the live spawn flow through the docker sandbox), uc-125
   (manualOnly: a spawn from a window viewing a different-directory tab
-  still opens the strip tab).
+  still opens the strip tab), uc-141 (the reopen tool: event emission +
+  the dead-directory guard).
 - Live smoke (recorded 2026-10-08, ALL SCENARIOS PASSED): headless legs -
   directory variant, worktree variant (the move persisted in the session
   row + metadata), headless no-tab; TUI-visual legs (a real container

@@ -80,6 +80,7 @@ const useCase: UseCase = {
       "chat_broadcast",
       "chat_status",
       "session_tab",
+      "session_tab_open",
       "session_tab_close",
     ];
 

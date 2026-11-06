@@ -195,7 +195,15 @@ requirements.
 | Tool | What it does |
 |------|-------------|
 | `thatch_session_tab` | Spawn a detached subordinate LLM session in a new TUI tab: creates the session, pre-assigns its chat name, delivers your task prompt with your coordinator-identity framing, and opens its tab beside yours (unfocused). Takes `prompt` and `title` (required) plus exactly one of `worktree` (a git worktree of the current repository) or `directory` (any existing directory). Requires opencode v2 and the `thatch-coordination` skill describes the supervisor workflow. |
-| `thatch_session_tab_close` | Close a dispatched subordinate's TUI tab when its task is verified and done. Tab-level only: the session survives and the user can reopen the tab; nothing is deleted. Target: the subordinate's chat name or session id; an unmatched target suggests close chat names. opencode v2 only. |
+| `thatch_session_tab_open` | Reopen a TUI tab for an EXISTING session whose tab was closed (opencode reaps tabs by age): the librarian flow (find a vaguely-remembered session with `thatch_session_search`, then open it by id) and a coordinator restoring a still-active subordinate's tab. Tab-level only - nothing is created or prompted; the tab opens unfocused and an already-open tab is a no-op. Refuses (with the path) when the session's checkout no longer exists. Target: the session's chat name or session id; an unmatched target suggests roster names. opencode v2 only. |
+| `thatch_session_tab_close` | Close a dispatched subordinate's TUI tab when its task is verified and done. Tab-level only: the session survives and the user can reopen the tab (or you can, with `thatch_session_tab_open`); nothing is deleted. Target: the subordinate's chat name or session id; an unmatched target suggests close chat names. opencode v2 only. |
+
+Two reopen stories these tools compose into: the **librarian flow** - you
+half-remember a session, so the agent finds it with `thatch_session_search`
+(or `thatch session search` on the CLI) and reopens its tab with
+`thatch_session_tab_open` - and the **coordinator flow** - a coordinator
+whose subordinate's tab was reaped by age reopens it instead of spawning a
+replacement, since the session (and its chat roster row) are still alive.
 
 ### Chat tools
 
