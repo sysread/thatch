@@ -1245,6 +1245,14 @@ switch (command) {
     // If not on PATH (local dev checkout), use the absolute path to this script.
     const thatchOnPath = Bun.which("thatch");
     const thatchBin = thatchOnPath ?? resolve(process.argv[1] ?? process.execPath);
+    // The PLUGIN regime pins the CHECKOUT'S OWN binary, never the PATH
+    // resolution: the generated mod + instructions come from THIS tree, so
+    // the server command must too - a global `thatch` symlink (the
+    // PATH-first pick) usually points at a different checkout whose server
+    // lacks the plugin-regime feature, and the regime runs mixed-source
+    // (every pin dark behind the stage crossing). The fallback regime
+    // keeps the PATH-first name: its feature set is the global install's,
+    // and a bare name survives updates.
     const dir = projectDir();
 
     // Shared reporting: where skills went and what the pass did, so an
@@ -1327,7 +1335,11 @@ switch (command) {
         // instruction. Skills still install (Claude Code discovers them
         // from the config-dir skills path the same as before).
         const { setupClaudePluginRegime } = await import("../src/setup");
-        const result = await setupClaudePluginRegime(thatchBin, isGlobal, dir);
+        // The checkout's OWN binary: the generated mod + instructions come
+        // from this tree, so the server command must too (a PATH-resolved
+        // global `thatch` can be a different checkout without the
+        // plugin-regime feature - the mixed-source install bug).
+        const result = await setupClaudePluginRegime(resolve(process.argv[1] ?? process.execPath), isGlobal, dir);
         writeRegimeMarker(dbPath, "plugin");
 
         say(`Thatch plugin regime installed for Claude Code (${isGlobal ? "global" : "project-local"}).`);

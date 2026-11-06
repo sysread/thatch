@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { claudeInstructions, cursorInstructions } from "./prompts";
 import { installSkills, type InstallReport } from "./skills";
 import { installClaudeCommands } from "./commands";
@@ -550,6 +550,29 @@ export async function setupClaudePluginRegime(
 ): Promise<PluginRegimeResult> {
   const home = homeDir ?? process.env.HOME ?? "/tmp";
   const paths = resolvePaths(global, projectDir, home);
+  // SOURCE-CONSISTENCY GUARD: the generated plugin mixes two sources - the
+  // mod + instructions render from THIS checkout, and the manifest's server
+  // command launches thatchBin. A bin whose tree lacks the plugin-regime
+  // feature (a global symlink to a checkout without src/claude-plugin, the
+  // mixed-source install bug) would run a server with no plugin_stage, and
+  // the mod's fail-open would darken every pin silently. Fail HERE, loudly,
+  // where the human running setup can see it. A bin that cannot be resolved
+  // (tests pass fake paths) skips the guard - a nonexistent command fails
+  // loudly at launch instead, in the host's plugin Errors tab.
+  try {
+    const binTree = dirname(realpathSync(thatchBin));
+    if (!existsSync(join(binTree, "..", "src", "claude-plugin", "mod.ts"))) {
+      throw new Error(
+        `refusing to install the plugin regime from "${thatchBin}": its checkout has no src/claude-plugin (the plugin-regime feature). ` +
+          `The generated mod would come from this checkout while the bundled server launched that stale binary - a mixed-source install whose stage calls all fail silently. ` +
+          `Run setup from the checkout you are testing (bun bin/thatch setup --claude --plugin).`,
+      );
+    }
+  } catch (err) {
+    // A nonexistent bin skips the guard (tests use fake paths); any OTHER
+    // error - including this guard's own refusal - propagates.
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
+  }
   const pluginDir = global
     ? join(claudeConfigDir(home), "thatch-plugin")
     : join(projectDir, ".claude", "thatch-plugin");

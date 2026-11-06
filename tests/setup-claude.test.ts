@@ -514,3 +514,28 @@ describe("setupClaudePluginRegime (plugin regime, QA-only)", () => {
     }
   });
 });
+
+describe("setupClaudePluginRegime source consistency (the mixed-source fix)", () => {
+  test("refuses a bin whose checkout lacks the plugin-regime feature", async () => {
+    // The mixed-source bug: a bin pointing at a tree WITHOUT
+    // src/claude-plugin (Jeff's global symlink to main) ran a server with
+    // no plugin_stage; the mod's fail-open darkened every pin. The guard
+    // must refuse loudly at setup time.
+    const { setupClaudePluginRegime } = await import("../src/setup");
+    const fakeGlobalBin = join(fakeHome, "bin", "thatch");
+    mkdirSync(join(fakeHome, "bin"), { recursive: true });
+    writeFileSync(fakeGlobalBin, "#!/bin/sh\n", "utf-8"); // exists, tree has no src/claude-plugin
+    await expect(setupClaudePluginRegime(fakeGlobalBin, true, projectDir, fakeHome)).rejects.toThrow(/no src\/claude-plugin/);
+  });
+
+  test("the generated manifest's command references the generating checkout", async () => {
+    // Self-consistency by construction: pass the REAL checkout bin (the
+    // setup harness's projectDir hosts the repo); the manifest's command
+    // must be exactly that path - not a PATH-resolved name.
+    const { setupClaudePluginRegime } = await import("../src/setup");
+    const checkoutBin = join(import.meta.dir, "..", "bin", "thatch");
+    const result = await setupClaudePluginRegime(checkoutBin, true, projectDir, fakeHome);
+    const manifest = JSON.parse(readFileSync(join(result.pluginDir, ".claude-plugin", "plugin.json"), "utf8"));
+    expect(manifest.mcpServers.thatch.command).toBe(checkoutBin);
+  });
+});

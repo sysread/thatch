@@ -454,3 +454,19 @@ test("F2: the plugin-regime instructions variant teaches watch+wake as available
   expect(plugin).toContain("session_search"); // the trio stays absent-teached
   expect(plugin).not.toContain("watch_create, watch_branch_create, watch_command_create, watch_list, watch_cancel, exit"); // not in the absent list
 });
+
+test("the fail-open surfaces are LOUD: a stage failure logs the reason", async () => {
+  // The mixed-source install's other half: the bare catch made the regime
+  // silently dark. A stage failure must leave a line in the log sink.
+  const harness = installModsHarness({ instructions: "I", stageError: new Error("server down") });
+  registerMod(harness.register, {
+    instructions: "I",
+    stageTool: { server: "thatch", tool: "plugin_stage" },
+    lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" },
+    chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" },
+    watchPollTool: { server: "thatch", tool: "plugin_watch_poll" },
+  });
+  const out = await harness.runPromptSubmit({ text: "fix the parser" });
+  expect(out.context).toBeUndefined(); // fail-open: the prompt proceeds
+  expect(harness.logged.some((l) => l.includes("stage call failed") && l.includes("server down"))).toBe(true);
+});

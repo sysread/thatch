@@ -43,6 +43,8 @@ export interface ModsHarness {
   sessionId: string;
   readonly compacted: number;
   notified: string[];
+  /** The mod's $.ui.log lines (the fail-open surfaces). */
+  logged: string[];
   registeredCommands: string[];
   registeredTools: string[];
   /** The timer callbacks the mod scheduled ($.clock.every) - tick them by
@@ -60,6 +62,7 @@ export function installModsHarness(options: { instructions: string; stageRespons
   const stageCalls: { prompt: string; sessionId: string }[] = [];
   const lifecycleCalls: Record<string, unknown>[] = [];
   const notified: string[] = [];
+  const logged: string[] = [];
   let compacted = 0;
   let stageResponse: unknown = options.stageResponse ?? "";
   let stageError: Error | undefined = options.stageError;
@@ -96,6 +99,9 @@ export function installModsHarness(options: { instructions: string; stageRespons
       notify: async (text: string) => {
         notified.push(text);
         return { isSent: true, channel: "terminal_bell" };
+      },
+      log: (text: string) => {
+        logged.push(text);
       },
     },
     command: {
@@ -152,6 +158,7 @@ export function installModsHarness(options: { instructions: string; stageRespons
     stageCalls,
     lifecycleCalls,
     notified,
+    logged,
     registeredCommands,
     registeredTools,
     clockTicks,

@@ -35,6 +35,11 @@ export interface ModsApi {
     /** PIN: the out-of-band notification with the documented resolution
      *  contract. Used only for the exit wrap-up's degradation. */
     notify(text: string): Promise<unknown>;
+    /** PIN: the mods runtime's log sink (the debug log's plugin side).
+     *  The fail-open catches use it: silent no-ops are how the mixed-source
+     *  install stayed invisible - a stage failure must leave a line the
+     *  tester can find. */
+    log(text: string): void;
   };
   mcp: {
     /** PIN: calling a manifest-listed server's tool. The response shape
@@ -256,7 +261,14 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
         arguments: { prompt: e.text ?? "", session_id: sessionId, ...(e.transcript_path ? { transcript_path: e.transcript_path } : {}) },
       });
       stageText = readStageText(res);
-    } catch {
+    } catch (err) {
+      // Fail-open (the prompt must never be eaten), but LOUD: a stage
+      // failure darkens every pin behind this crossing, so the tester
+      // needs the reason in the log - the mixed-source install stayed
+      // invisible precisely because this was a bare catch.
+      try {
+        $.ui.log(`[thatch] the stage call failed; prompts proceed without thatch context: ${err instanceof Error ? err.message : err}`);
+      } catch { /* the log sink itself is best-effort */ }
       return next(e);
     }
     if (!stageText.trim()) return next(e);
@@ -393,7 +405,10 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
     if (reason !== "clear" && reason !== "resume" && reason !== "branch") {
       try {
         await forwardLifecycle($, options, { event: "session-end" });
-      } catch { /* death routing is best-effort */ }
+      } catch (err) {
+        // Loud best-effort (same rule as the stage crossing).
+        try { $.ui.log(`[thatch] the session-end forward failed; watcher cleanup did not run: ${err instanceof Error ? err.message : err}`); } catch { /* best-effort */ }
+      }
     }
     return next(e);
   });
@@ -454,7 +469,9 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
           tool: options.chatWakeTool.tool,
           arguments: { session_id: sessionId },
         }));
-      } catch { /* chat wake fails alone */ }
+      } catch (err) {
+        try { $.ui.log(`[thatch] the chat-wake poll failed: ${err instanceof Error ? err.message : err}`); } catch { /* best-effort */ }
+      }
       let watchRes = "";
       try {
         watchRes = readStageText(await $.mcp.call({
@@ -462,7 +479,9 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
           tool: options.watchPollTool.tool,
           arguments: { session_id: sessionId },
         }));
-      } catch { /* watcher events fail alone */ }
+      } catch (err) {
+        try { $.ui.log(`[thatch] the watcher poll failed: ${err instanceof Error ? err.message : err}`); } catch { /* best-effort */ }
+      }
       const text = [wakeText, watchRes].filter((t) => t.trim()).join("\n\n");
       if (!text.trim()) return;
       // A drop of ANY wording means "not delivered" - the conservative
