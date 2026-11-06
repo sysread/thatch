@@ -101,10 +101,15 @@ Run these once per QA session and keep the outputs at hand:
   work MARK stays main-conversation.
 - **Save gate**: a saving `memory_remember` drains the queue + resets the
   missed counter (the opencode drain semantics, server-side).
-- **Watcher round-trip**: `watch_command_create` for `true` (network-free)
-  - PASS: a runtime_state row (kind `watchers`), the first poll cycle
-  fires it, the pending journal row drains, the notification arrives as a
-  turn. The archaeology trio (get_session_info, session_search,
+- **Watcher round-trip**: `watch_command_create` with a condition that
+  becomes TRUE LATER - the tool runs the command once at registration as
+  validation and REFUSES a command that already exits a watched code (the
+  condition is already met), so `true` or `test -f` on an existing file is
+  refused BY DESIGN. PASS: register `test -f <a path that does not exist
+  yet>`, create the marker (e.g. `touch` it), and the first poll cycle
+  after that fires: a runtime_state row (kind `watchers`), the pending
+  journal row drains, the notification arrives as a turn. The
+  archaeology trio (get_session_info, session_search,
   session_get) and exit/compact must NOT exist as tools here (the fence).
 
 ## The update story pins

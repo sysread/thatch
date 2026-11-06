@@ -1,3 +1,5 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { registerUseCase, type UseCase } from "../../runner";
 import { runClaude, makeClaudeCtx, TMP_BASE } from "./harness";
 
@@ -23,18 +25,23 @@ const useCase: UseCase = {
   ].join("\n"),
   steps: [
     "1. Generate the plugin in a fixture home.",
-    "2. Run `claude -p 'Use watch_command_create to watch for the command `true` exiting 0. Then reply ok.' --plugin-dir <generated>`.",
+    "2. Run `claude -p 'Use watch_command_create to watch for the command `test -f <fixture>/watch-marker` exiting 0; do not create that file. Then reply ok.' --plugin-dir <generated>`.",
+    "    (The command must NOT be already-true: the tool runs it once at registration",
+    "    as validation and REFUSES a condition that already exits a watched code -",
+    "    `true` always exits 0, so it is refused by design.)",
     "3. Assert the registry's DB journal: a runtime_state row kind=watchers exists",
     "    (the registration rode the bundled server), with the session's mcp hash as",
     "    its sessionID.",
-    "4. Run one more turn; assert the pending drain: the watcher's first cycle fires",
-    "    the command-watched event, and the notification is submitted (the",
-    "    watcher_pending journal row clears).",
+    "4. Create the marker file (the condition becomes true), then assert the drain:",
+    "    the watcher's next cycle fires the command-watched event and the",
+    "    notification is submitted (the watcher_pending journal row clears).",
   ].join("\n"),
   expected: [
     "- A runtime_state row (kind watchers) exists after the registration turn.",
-    "- The watcher fires within the first poll cycles (a `true` command exits 0",
-    "  immediately) and the pending queue drains - the notification became a turn.",
+    "- The registration survives (a `test -f` on an ABSENT file exits 1 - not yet",
+    "  watched-done - so the tool accepts it).",
+    "- The watcher fires within the first poll cycles after the marker appears and",
+    "  the pending queue drains - the notification became a turn.",
   ].join("\n"),
 
   async run() {
@@ -44,7 +51,7 @@ const useCase: UseCase = {
       const failures: string[] = [];
       const r = await runClaude(
         ctx,
-        "Use the watch_command_create tool to create a command watcher for the command `true` with expected exit code 0. Confirm by replying: registered. Do not save memories.",
+        `Use the watch_command_create tool to create a command watcher for the command 'test -f ${join(ctx.base, "watch-marker")}' with expected exit code 0. Do NOT create that file yourself. Confirm by replying: registered. Do not save memories.`,
       );
       if (r.exitCode !== 0) failures.push(`claude -p exited ${r.exitCode}: ${r.stderr.slice(0, 200)}`);
 
@@ -55,8 +62,10 @@ const useCase: UseCase = {
         failures.push("no runtime_state watchers row - the watch_create call did not reach the bundled server's registry");
       }
 
-      // The drain: within the poll cadence, the `true` watcher fires and
-      // the pending notification submits (pending journal cleared).
+      // The condition becomes true: the watcher's next cycle fires.
+      writeFileSync(join(ctx.base, "watch-marker"), "1");
+      // The drain: within the poll cadence, the pending notification
+      // submits (pending journal cleared).
       await new Promise((res) => setTimeout(res, 45_000));
       const pendingRows = ctx.db.runtimeStateAll().filter((row) => row.kind === "watcher_pending");
       if (pendingRows.length > 0) {
