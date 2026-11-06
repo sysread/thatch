@@ -119,6 +119,11 @@ export const OPENCODE_ONLY_SKILLS: SkillDef[] = loadOpencodeOnlySkills();
 // the prefix is our namespace. Users upgrading from before v0.1.27 delete
 // the old directories manually.
 
+/** Repo-local QA skills: tracked in THIS repo's .claude/skills/ (force-added
+ *  past the .claude/ ignore), never part of the user install set, never
+ *  stale. */
+const QA_LOCAL_SKILLS = new Set(["thatch-plugin-qa"]);
+
 /**
  * Remove stale skill directories before installing the current set.
  *
@@ -152,6 +157,13 @@ function cleanupStaleSkills(skillsDir: string, currentNames: string[]): string[]
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     const name = entry.name;
     const fullPath = join(skillsDir, name);
+
+    // REPO-LOCAL QA skills are exempt: this repo's own .claude/skills/
+    // carries tracked, force-added QA skills (thatch-plugin-qa) that are
+    // NOT in the install set - the setup a developer runs inside the
+    // thatch checkout must not delete them (it did once, mid-QA).
+
+    if (QA_LOCAL_SKILLS.has(name)) continue;
 
     // Remove a stale entry. For symlinks, unlink the symlink itself - never
     // follow the link, which could delete the target (e.g. a shared skill

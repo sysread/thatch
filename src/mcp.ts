@@ -14,6 +14,7 @@ import { peekQueue, consumeQueue, resetMissedCount } from "./extract-queue";
 import { buildExtractionPayload } from "./extraction";
 import { WatcherRegistry, ghApiRun } from "./watchers";
 import { computePluginStage, computePluginChatWake } from "./flush";
+import { pluginToolName } from "./prompts";
 import { createPluginLifecycle } from "./claude-plugin/lifecycle";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { writeVersionFile, removeVersionFile, startVersionChecker, stopVersionChecker, getVersionChecker, readModLiveness, readRegimeMarker } from "./version-check";
@@ -254,6 +255,19 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
         ghRunner: ghApiRun,
       })
     : null;
+  if (mode === "bundled") {
+    // The front door's instructions channel: no `thatch setup` runs in the
+    // marketplace world, so the bundled server ensures the CLAUDE.md
+    // block itself (idempotent; the guard-proof channel - the mod has no
+    // prompt.compose). Best-effort: a read-only project degrades to
+    // instructions-missing, surfaced by the tester's first look.
+    try {
+      const { ensurePluginInstructions } = await import("./setup");
+      ensurePluginInstructions(projectDir);
+    } catch (err) {
+      console.error(`[thatch] could not ensure the CLAUDE.md instructions block: ${err}`);
+    }
+  }
   if (watchers) {
     // Rehydrate, NON-BLOCKING: the rearm's baseline refetches (gh) must
     // not delay the MCP handshake - fire and continue; failures surface
@@ -300,7 +314,7 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
       ? {
           pluginStage: (prompt: string, sessionID: string, transcriptPath?: string) => {
             rawSessionByPid.set(process.ppid, sessionID);
-            return computePluginStage({ db, model, repo, dbPath }, prompt, sessionID, transcriptPath);
+            return computePluginStage({ db, model, repo, dbPath, toolNamer: pluginToolName }, prompt, sessionID, transcriptPath);
           },
           pluginLifecycle: (event) => lifecycle!.handle(event),
           pluginChatWake: (sessionID: string) => computePluginChatWake(db, sessionID),

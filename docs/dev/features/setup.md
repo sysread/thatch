@@ -94,13 +94,17 @@ Four artifacts, all idempotent:
 regime instead (docs/plans/claude-code-holistic-integration.md): it
 generates the plugin directory (`$CLAUDE_CONFIG_DIR/thatch-plugin/` for
 global, `<projectDir>/.claude/thatch-plugin/` for local) - the manifest
-bundling the MCP server as `thatch mcp --bundled`, the hooks module shim,
-the rendered one-template instructions, and the bundled mod logic - and
-DEACTIVATES the fallback writers above (the settings hooks, the CLAUDE.md
-block, the `.mcp.json` server entry; the global `claude mcp add`
-registration prints as a manual removal step). Opt-in must DELETE: the
-fallback's auto-refresh would otherwise resurrect the removed hooks, and
-both regimes would deliver every prompt.
+bundling the MCP server as `thatch mcp --bundled` (pinned to the
+GENERATING checkout's binary - a global `thatch` from another tree is the
+mixed-source bug, and setup REFUSES a bin whose tree lacks
+`src/claude-plugin`), the hooks module shim, the rendered one-template
+instructions, and the bundled mod logic - and DEACTIVATES the fallback
+DELIVERY writers (the settings hooks, the `.mcp.json` server entry; the
+global `claude mcp add` registration prints as a manual removal step).
+The CLAUDE.md instructions block is the inverse: ENSURED with the plugin
+variant's tool spelling, because it is the only instructions channel that
+survives the built-in guard (the guard passes over user mods'
+`prompt.compose` hooks on managed settings and Team/Enterprise logins).
 
 The regime marker (beside the DB in the config dir - DURABLE, not the tmp
 cache: a reboot must not erase the regime story) makes `checkSetup`

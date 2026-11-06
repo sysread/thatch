@@ -9,12 +9,23 @@ import { installModsHarness } from "./mocks/mods-harness";
 // shapes in one place; if a pin fails on the real app, the fix lands
 // there and here.
 
-describe("plugin mod: prompt.compose", () => {
-  test("injects the instructions as a new section, preserving existing ones", async () => {
-    const harness = installModsHarness({ instructions: "THATCH INSTRUCTIONS BLOCK" });
-    registerMod(harness.register, { instructions: "THATCH INSTRUCTIONS BLOCK", stageTool: { server: "thatch", tool: "plugin_stage" }, lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" }, chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" }, watchPollTool: { server: "thatch", tool: "plugin_watch_poll" } });
-    const out = await harness.runPromptCompose({ sections: ["existing section"] });
-    expect(out.sections).toEqual(["existing section", "THATCH INSTRUCTIONS BLOCK"]);
+describe("plugin mod: prompt.compose is NOT registered", () => {
+  test("instructions never ride compose (the guard passes over user mods' compose hooks)", async () => {
+    // The guard (cc-plugin-sec-default, loaded on Team/Enterprise logins +
+    // managed settings) passes over a user's mod's prompt.compose hooks -
+    // instructions delivered there vanish on exactly the machines where a
+    // corporate security plugin sits. Delivery is the CLAUDE.md static
+    // block (ensured by setup + the bundled server); a compose regression
+    // would double-deliver on open machines.
+    const harness = installModsHarness({ instructions: "I" });
+    registerMod(harness.register, {
+      instructions: "I",
+      stageTool: { server: "thatch", tool: "plugin_stage" },
+      lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" },
+      chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" },
+      watchPollTool: { server: "thatch", tool: "plugin_watch_poll" },
+    });
+    expect(harness.registrations.some((r) => r.event === "prompt.compose")).toBe(false);
   });
 });
 

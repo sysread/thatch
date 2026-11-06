@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { claudeInstructions, cursorInstructions } from "./prompts";
 import { installSkills, type InstallReport } from "./skills";
@@ -159,48 +159,6 @@ function removeThatchHooks(settingsPath: string): void {
   }
   if (Object.keys(hooks).length === 0) delete settings.hooks;
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-}
-
-/** Removes the thatch instruction block (between THATCH_BEGIN/THATCH_END)
- *  from an instructions file - the plugin regime's deactivation of the
- *  CLAUDE.md/AGENTS.md marker block. Deletes the file when nothing but
- *  whitespace remains. */
-function removeBlock(path: string): void {
-  if (!existsSync(path)) return;
-  const existing = readFileSync(path, "utf8");
-  // The remover's twin rules match the WRITER's: sentinel-format blocks
-  // AND pre-sentinel legacy blocks (prose delimiters, the em-dash heal
-  // class). Opt-in must deactivate BOTH - a surviving legacy block means
-  // both regimes deliver instructions.
-  let startIdx = -1;
-  let endLen = 0;
-  const beginIdx = existing.indexOf(THATCH_BEGIN);
-  if (beginIdx >= 0) {
-    const endIdx = existing.indexOf(THATCH_END, beginIdx);
-    // Broken sentinels cannot be healed by removal (the span is unknown) -
-    // leave for checkSetup, which reports them.
-    if (endIdx < 0) return;
-    startIdx = beginIdx;
-    endLen = endIdx + THATCH_END.length - beginIdx;
-  } else if (existing.includes(THATCH_MARKER)) {
-    const legacyStart = existing.indexOf(THATCH_MARKER);
-    const legacyEnd = existing.indexOf(THATCH_END_MARKER, legacyStart);
-    if (legacyEnd >= 0) {
-      startIdx = legacyStart;
-      endLen = legacyEnd + THATCH_END_MARKER.length - legacyStart;
-    } else {
-      // Broken legacy block: the writer's heal guard, empty block - remove
-      // to EOF only when the tail is recognizably the instructions; when
-      // the guard fails, leave for manual repair (checkSetup reports it),
-      // never eat possibly-user content.
-      healBrokenBlock(path, existing, legacyStart, "");
-      return;
-    }
-  }
-  if (startIdx < 0) return; // no thatch block of either format
-  const rest = (existing.slice(0, startIdx) + existing.slice(startIdx + endLen)).trim();
-  if (rest) writeFileSync(path, rest + "\n");
-  else rmSync(path);
 }
 
 // ---------------------------------------------------------------------------
@@ -523,6 +481,20 @@ export interface PluginRegimeResult {
 }
 
 /**
+ * Ensures the CLAUDE.md instructions block for the PLUGIN regime in a
+ * project directory - idempotent (appendBlock replaces the sentinel
+ * block), with the plugin variant's tool spelling. The bundled server
+ * calls this at startup: in the front-door world (a marketplace install,
+ * no `thatch setup` run) the server is the only thatch process that knows
+ * the project and can write the block - the guard-proof instructions
+ * channel the mod cannot deliver (the guard passes over user mods'
+ * prompt.compose hooks).
+ */
+export function ensurePluginInstructions(projectDir: string): void {
+  appendBlock(join(projectDir, "CLAUDE.md"), claudeInstructions("plugin"), THATCH_MARKER, THATCH_END_MARKER);
+}
+
+/**
  * Installs the Claude Code PLUGIN regime: generates the plugin directory
  * (manifest + bundled MCP server + mod) and deactivates the fallback
  * regime's writers (settings hooks, CLAUDE.md block, standalone MCP
@@ -650,12 +622,13 @@ export function register(on) {
       deactivated.push(`hooks: ${settings}`);
     }
   }
-  for (const md of [join(claudeConfigDir(home), "CLAUDE.md"), join(projectDir, "CLAUDE.md")]) {
-    if (existsSync(md)) {
-      removeBlock(md);
-      deactivated.push(`instructions: ${md}`);
-    }
-  }
+  // Instructions are NOT deactivated: the mod has no prompt.compose (the
+  // guard passes over user mods' compose hooks), so the CLAUDE.md static
+  // block is the ONLY instructions channel - ensured here with the PLUGIN
+  // variant's tool spelling, in BOTH scopes (whichever CLAUDE.md the
+  // session reads). Idempotent: appendBlock replaces the sentinel block.
+  appendBlock(join(projectDir, "CLAUDE.md"), claudeInstructions("plugin"), THATCH_MARKER, THATCH_END_MARKER);
+  if (global) appendBlock(join(claudeConfigDir(home), "CLAUDE.md"), claudeInstructions("plugin"), THATCH_MARKER, THATCH_END_MARKER);
   if (paths.mcpConfigPath && existsSync(paths.mcpConfigPath)) {
     removeMcpServerEntry(paths.mcpConfigPath);
     deactivated.push(`standalone MCP config: ${paths.mcpConfigPath}`);

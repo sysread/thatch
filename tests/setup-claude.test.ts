@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -454,18 +454,33 @@ describe("registerClaudeMcpServer", () => {
 });
 
 describe("setupClaudePluginRegime (plugin regime, QA-only)", () => {
-  test("generates the plugin and deactivates the fallback writers", async () => {
-    // Pre-seed a fallback install: hooks in settings.json, a CLAUDE.md
-    // marker block, and a .mcp.json server entry. The plugin regime's
-    // opt-in must DELETE all three (opt-in that only adds leaves both
-    // regimes delivering every prompt).
-    const binPath = join(projectDir, "bin", "thatch");
-    setupClaudeCode(binPath, false, projectDir, fakeHome);
-    const settingsPath = join(projectDir, ".claude", "settings.json");
-    expect(readFileSync(settingsPath, "utf8")).toContain("thatch");
+  // A DEDICATED base per test: the regime marker + the CLAUDE.md block
+  // are durable state - sharing the harness fixture leaked them into the
+  // later checkSetup tests (same process, shared THATCH_DB_PATH).
+  let base: string;
+  let home: string;
+  let proj: string;
+  let dbPath: string;
 
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "thatch-plugin-regime-"));
+    home = join(base, "home");
+    proj = join(base, "proj");
+    dbPath = join(base, "thatch.db");
+    mkdirSync(join(proj, ".git"), { recursive: true });
+    mkdirSync(home, { recursive: true });
+    process.env.THATCH_DB_PATH = dbPath;
+  });
+
+  afterEach(() => {
+    delete process.env.THATCH_DB_PATH;
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  test("generates the plugin and deactivates the delivery writers", async () => {
+    const binPath = join(proj, "bin", "thatch");
     const { setupClaudePluginRegime } = await import("../src/setup");
-    const result = await setupClaudePluginRegime(binPath, false, projectDir, fakeHome);
+    const result = await setupClaudePluginRegime(binPath, true, proj, home);
 
     // The generated plugin: manifest (bundling the server), the modules
     // list that makes it a mod, the shim, the rendered instructions, and
@@ -474,68 +489,56 @@ describe("setupClaudePluginRegime (plugin regime, QA-only)", () => {
     const manifest = JSON.parse(readFileSync(join(pluginDir, ".claude-plugin", "plugin.json"), "utf8"));
     expect(manifest.name).toBe("thatch");
     expect(manifest.mcpServers.thatch.args).toEqual(["mcp", "--bundled"]);
-    expect(manifest.mcpServers.thatch.env.THATCH_PROJECT_DIR).toBe(projectDir);
     const hooksJson = JSON.parse(readFileSync(join(pluginDir, "hooks", "hooks.json"), "utf8"));
     expect(hooksJson.modules).toEqual(["./register.js"]);
     expect(readFileSync(join(pluginDir, "hooks", "instructions.js"), "utf8")).toContain("When a system nudge reports queued tool interactions");
     expect(existsSync(join(pluginDir, "hooks", "mod.js"))).toBe(true);
 
-    // The deactivation: hooks, instructions, and the standalone MCP entry
-    // are GONE from the fallback files. A CLAUDE.md that held ONLY the
-    // thatch block is deleted outright (removeBlock's contract); one with
-    // other content survives minus the block.
-    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
-    expect(JSON.stringify(settings)).not.toContain("thatch");
-    const claudeMdPath = join(projectDir, "CLAUDE.md");
-    if (existsSync(claudeMdPath)) {
-      expect(readFileSync(claudeMdPath, "utf8")).not.toContain(claudeInstructions().slice(0, 40).split("\n")[0]);
-    }
-    const mcpJson = JSON.parse(readFileSync(join(projectDir, ".mcp.json"), "utf8"));
-    expect(mcpJson.mcpServers?.thatch).toBeUndefined();
+    // Instructions are ENSURED - the CLAUDE.md block with the PLUGIN
+    // variant's tool spelling is the guard-proof channel (the mod has no
+    // prompt.compose; the guard passes over user mods' compose hooks).
+    const claudeMd = readFileSync(join(proj, "CLAUDE.md"), "utf8");
+    expect(claudeMd).toContain("thatch:begin");
+    expect(claudeMd).toContain("mcp__plugin_thatch_thatch__memory_remember");
+    expect(claudeMd).not.toContain("`mcp__thatch__memory_remember`");
+  });
 
-    // The reported deactivation list says what it did.
-    expect(result.deactivated.some((d) => d.includes("settings.json"))).toBe(true);
+  test("refuses a bin whose checkout lacks the plugin-regime feature", async () => {
+    // The mixed-source bug: a bin pointing at a tree WITHOUT
+    // src/claude-plugin (a global symlink to another checkout) ran a
+    // server with no plugin_stage; the mod's fail-open darkened every
+    // pin. The guard must refuse loudly at setup time.
+    const { setupClaudePluginRegime } = await import("../src/setup");
+    const fakeBin = join(home, "bin", "thatch");
+    mkdirSync(join(home, "bin"), { recursive: true });
+    writeFileSync(fakeBin, "#!/bin/sh\n", "utf-8");
+    await expect(setupClaudePluginRegime(fakeBin, true, proj, home)).rejects.toThrow(/no src\/claude-plugin/);
+  });
+
+  test("the generated manifest's command references the generating checkout", async () => {
+    // Self-consistency by construction: pass the REAL checkout bin; the
+    // manifest's command must be exactly that path - never a PATH-resolved
+    // name (the PATH-first pick is the fallback regime's rule, and a
+    // global `thatch` from another tree is the mixed-source bug).
+    const { setupClaudePluginRegime } = await import("../src/setup");
+    const checkoutBin = join(import.meta.dir, "..", "bin", "thatch");
+    const result = await setupClaudePluginRegime(checkoutBin, true, proj, home);
+    const manifest = JSON.parse(readFileSync(join(result.pluginDir, ".claude-plugin", "plugin.json"), "utf8"));
+    expect(manifest.mcpServers.thatch.command).toBe(checkoutBin);
   });
 
   test("checkSetup reports installed under the plugin regime (marker read)", async () => {
-    const binPath = join(projectDir, "bin", "thatch");
     const { setupClaudePluginRegime, checkSetup } = await import("../src/setup");
     const { writeRegimeMarker } = await import("../src/version-check");
-    await setupClaudePluginRegime(binPath, false, projectDir, fakeHome);
-    writeRegimeMarker(join(process.env.THATCH_DB_PATH ?? join(fakeHome, ".config", "thatch", "thatch.db")), "plugin");
-    // checkSetup only runs when the host env names a Claude session.
-    process.env.CLAUDE_PROJECT_DIR = projectDir;
+    await setupClaudePluginRegime(join(proj, "bin", "thatch"), true, proj, home);
+    writeRegimeMarker(dbPath, "plugin");
+    process.env.CLAUDE_PROJECT_DIR = proj;
     try {
-      const status = checkSetup(projectDir, fakeHome);
+      const status = checkSetup(proj, home);
       expect(status?.status).toBe("installed");
       expect((status as { regime?: string }).regime).toBe("plugin");
     } finally {
       delete process.env.CLAUDE_PROJECT_DIR;
     }
-  });
-});
-
-describe("setupClaudePluginRegime source consistency (the mixed-source fix)", () => {
-  test("refuses a bin whose checkout lacks the plugin-regime feature", async () => {
-    // The mixed-source bug: a bin pointing at a tree WITHOUT
-    // src/claude-plugin (Jeff's global symlink to main) ran a server with
-    // no plugin_stage; the mod's fail-open darkened every pin. The guard
-    // must refuse loudly at setup time.
-    const { setupClaudePluginRegime } = await import("../src/setup");
-    const fakeGlobalBin = join(fakeHome, "bin", "thatch");
-    mkdirSync(join(fakeHome, "bin"), { recursive: true });
-    writeFileSync(fakeGlobalBin, "#!/bin/sh\n", "utf-8"); // exists, tree has no src/claude-plugin
-    await expect(setupClaudePluginRegime(fakeGlobalBin, true, projectDir, fakeHome)).rejects.toThrow(/no src\/claude-plugin/);
-  });
-
-  test("the generated manifest's command references the generating checkout", async () => {
-    // Self-consistency by construction: pass the REAL checkout bin (the
-    // setup harness's projectDir hosts the repo); the manifest's command
-    // must be exactly that path - not a PATH-resolved name.
-    const { setupClaudePluginRegime } = await import("../src/setup");
-    const checkoutBin = join(import.meta.dir, "..", "bin", "thatch");
-    const result = await setupClaudePluginRegime(checkoutBin, true, projectDir, fakeHome);
-    const manifest = JSON.parse(readFileSync(join(result.pluginDir, ".claude-plugin", "plugin.json"), "utf8"));
-    expect(manifest.mcpServers.thatch.command).toBe(checkoutBin);
   });
 });

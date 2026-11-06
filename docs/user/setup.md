@@ -103,11 +103,14 @@ thatch setup --claude --plugin   # the in-process plugin (QA)
 The plugin regime installs thatch as a Claude Code PLUGIN instead of
 hooks: an in-process mod (context injection at each prompt, alerts, the
 chat wake poller, the wrap-up commands) plus the MCP server bundled in
-the plugin. It generates the plugin directory, DEACTIVATES the hook
-regime's writers (the settings hooks, the CLAUDE.md block, the `.mcp.json`
-entry - so nothing delivers twice), and prints the load command
-(`claude --plugin-dir <dir>`). Re-running it refreshes the plugin in
-place. This regime is in QA; the hook regime above stays the default.
+the plugin. It generates the plugin directory (its server command points
+at the checkout that ran setup), DEACTIVATES the hook regime's delivery
+writers (the settings hooks and the `.mcp.json` entry - so nothing
+delivers twice), and ENSURES the CLAUDE.md instructions block (that block
+is the one instructions channel Claude Code's built-in security guard
+never blocks). It prints the load command (`claude --plugin-dir <dir>`).
+Re-running it refreshes the plugin in place. This regime is in QA; the
+hook regime above stays the default.
 
 The `thatch/` subdirectory preserves the `/thatch/` invocation
 namespace. On Claude Code and Cursor, run a full `--claude`/`--cursor`

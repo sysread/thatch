@@ -1,7 +1,7 @@
 import { buildExtractionPayload, type ToolInteraction } from "./extraction";
 import { peekQueue, getMissedCount, incrementMissedCount, queueFilePath } from "./extract-queue";
 import { stampModLiveness } from "./version-check";
-import { escalationLevel, extractionNudge, claudeInlineExtraction, claudeWriteNudge, claudeRecallNudge, predictionNudge, behaviorNudge, mcpToolName, chatNotificationNudge } from "./prompts";
+import { escalationLevel, extractionNudge, claudeInlineExtraction, claudeWriteNudge, claudeRecallNudge, predictionNudge, behaviorNudge, mcpToolName, chatNotificationNudge, type ToolNamer } from "./prompts";
 import { mcpChatHookLine, mcpSessionID, isoMinutesAgo, renderChatParticipant, CHAT_CLI_SENDER, CHAT_RENUDGE_MINUTES } from "./chat";
 import type { ThatchDB } from "./db";
 
@@ -72,6 +72,7 @@ export function buildExtractionStage(opts: {
   host: FlushHost;
   sessionID: string;
   repo: string;
+  toolNamer?: ToolNamer;
 }): string {
   const { interactions, missedCount, host, sessionID, repo } = opts;
   if (host === "cursor") {
@@ -80,9 +81,9 @@ export function buildExtractionStage(opts: {
   const payload = buildExtractionPayload(interactions, repo);
   const queuePath = queueFilePath(sessionID);
   const level = escalationLevel(missedCount);
-  const output = claudeInlineExtraction(interactions.length, sessionID, payload, queuePath, level);
+  const output = claudeInlineExtraction(interactions.length, sessionID, payload, queuePath, level, opts.toolNamer);
   if (output.length <= INLINE_OUTPUT_BUDGET) return output;
-  return claudeInlineExtraction(interactions.length, sessionID, null, queuePath, level);
+  return claudeInlineExtraction(interactions.length, sessionID, null, queuePath, level, opts.toolNamer);
 }
 
 /**
@@ -102,6 +103,12 @@ export async function computePluginStage(
     model: { queryEmbed(text: string): Promise<Float32Array> };
     repo: string;
     dbPath: string;
+    /** The tool spelling the delivered nudges render: the PLUGIN regime's
+     *  bundled server is namespaced mcp__plugin_thatch_thatch__ by the
+     *  host (pluginToolName), the standalone registration mcp__thatch__ -
+     *  a nudge that names tools the model cannot call strands the
+     *  contract. */
+    toolNamer?: ToolNamer;
   },
   prompt: string,
   sessionID: string,
@@ -129,11 +136,11 @@ export async function computePluginStage(
     if (interactions.length > 0) {
       const missed = getMissedCount(sessionID);
       incrementMissedCount(sessionID);
-      stageText = buildExtractionStage({ interactions, missedCount: missed, host: "claude-code", sessionID, repo: deps.repo });
+      stageText = buildExtractionStage({ interactions, missedCount: missed, host: "claude-code", sessionID, repo: deps.repo, toolNamer: deps.toolNamer });
     }
-  } catch {
-    // Extraction is best-effort at stage level: the queues' tiers below
-    // still run.
+  } catch (err) {
+    // Extraction is best-effort at stage level: the later tiers still run.
+    console.error(`[thatch] the extraction tier failed: ${err}`);
   }
 
   if (stageText === null) {
@@ -152,20 +159,29 @@ export async function computePluginStage(
             .filter((r) => r._score >= threshold)
             .map((r) => ({ label: r.label, score: Math.round(r._score * 1000) / 1000, store: r.store }));
           if (matches.length > 0) parts.push(claudeRecallNudge(matches));
-        } catch { /* recall failed - tiers 3-4 still run */ }
+        } catch (err) {
+        // Failure lines are never swallowed (the house hook rule): the
+        // server's stderr is the plugin debug log's other half.
+        console.error(`[thatch] recall tier failed: ${err}`);
+      }
         try {
           const threshold = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.60");
           const predictions = deps.db.scorePredictionNudge(stores, embedding, threshold, 5);
-          if (predictions.length > 0) parts.push(predictionNudge(predictions, mcpToolName));
-        } catch { /* predictions failed - tiers 3-4 still run */ }
+          if (predictions.length > 0) parts.push(predictionNudge(predictions, deps.toolNamer ?? mcpToolName));
+        } catch (err) {
+        console.error(`[thatch] prediction tier failed: ${err}`);
+      }
         try {
           const threshold = parseFloat(process.env.THATCH_BEHAVIOR_THRESHOLD ?? "0.60");
           const behaviors = deps.db.scoreBehaviorNudge(stores, embedding, threshold, 5);
-          if (behaviors.length > 0) parts.push(behaviorNudge(behaviors, mcpToolName));
-        } catch { /* behaviors failed - the write fallback still runs */ }
+          if (behaviors.length > 0) parts.push(behaviorNudge(behaviors, deps.toolNamer ?? mcpToolName));
+        } catch (err) {
+        console.error(`[thatch] behavior tier failed: ${err}`);
+      }
         if (parts.length > 0) stageText = parts.join("\n\n");
-      } catch {
+      } catch (err) {
         // The embedding itself failed - fall through to the write nudge.
+        console.error(`[thatch] the stage embedding failed; degrading to the write nudge: ${err}`);
       }
     }
     if (stageText === null) stageText = claudeWriteNudge();

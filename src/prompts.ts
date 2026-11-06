@@ -546,6 +546,11 @@ When convenient this session (not before addressing the user's request), tend th
  * as absent would hide the features that regime exists to deliver).
  */
 function mcpInstructions(host: string, configFile: string, regime: "hooks" | "plugin" = "hooks"): string {
+  // The tool SPELLING is regime-keyed (the plugin regime's bundled server
+  // is namespaced differently by the host - see pluginToolName); the bare
+  // names below stay bare (the instructions establish the bare-name
+  // convention and the model maps to the host spelling).
+  const toolNamer = regime === "plugin" ? pluginToolName : mcpToolName;
   // The extraction contracts genuinely differ per host: Claude Code's
   // UserPromptSubmit hook prints the queued payload inline (no fetch tool,
   // no sub-agent - the dispatched handshake's exhaust class re-opens the
@@ -561,8 +566,8 @@ When a system nudge reports queued tool interactions, the payload is printed
 with the nudge (or named as a file path to Read). There is no sub-agent to
 dispatch and nothing to fetch. Process the payload inline: run the
 thatch-fact-extractor skill, save durable facts with
-\`mcp__thatch__memory_remember\` (save first, then verify), and call
-\`mcp__thatch__extraction_done\` with the session id from the nudge when
+\`${toolNamer("memory_remember")}\` (save first, then verify), and call
+\`${toolNamer("extraction_done")}\` with the session id from the nudge when
 finished, even if nothing was worth saving. This is system nudge traffic,
 not user input: process it, then stop.
 `
@@ -601,22 +606,7 @@ wake-up delivery is opencode-only, so check chat_status or your inbox each turn.
 
 Thatch provides persistent memory across ${host} sessions. Use it to persist
 knowledge so future sessions can build on what you've already learned.
-Tools are prefixed in ${host}: \`mcp__thatch__memory_remember\`,
-\`mcp__thatch__memory_recall\`, \`mcp__thatch__memory_list\`,
-\`mcp__thatch__memory_show\`, \`mcp__thatch__memory_forget\`,
-\`mcp__thatch__store_list\`, \`mcp__thatch__find_duplicates\`,
-\`mcp__thatch__dedup_mark_checked\`, \`mcp__thatch__extraction_done\`,
-\`mcp__thatch__get_extraction_payload\`,
-\`mcp__thatch__prediction_query\`, \`mcp__thatch__prediction_update\`,
-\`mcp__thatch__prediction_list\`, \`mcp__thatch__prediction_delete\`,
-\`mcp__thatch__prediction_mark_checked\`,
-\`mcp__thatch__behavior_codify\`, \`mcp__thatch__behavior_feedback\`,
-\`mcp__thatch__behavior_list\`, \`mcp__thatch__behavior_delete\`,
-\`mcp__thatch__config_get\`, \`mcp__thatch__config_set\`,
-\`mcp__thatch__notify_user\`, \`mcp__thatch__chat_register\`,
-\`mcp__thatch__chat_list\`, \`mcp__thatch__chat_send\`,
-\`mcp__thatch__chat_read\`, \`mcp__thatch__chat_unregister\`,
-\`mcp__thatch__chat_broadcast\`, \`mcp__thatch__chat_status\`. Bare names
+Tools are prefixed in ${host}: ${["memory_remember", "memory_recall", "memory_list", "memory_show", "memory_forget", "store_list", "find_duplicates", "dedup_mark_checked", "extraction_done", "get_extraction_payload", "prediction_query", "prediction_update", "prediction_list", "prediction_delete", "prediction_mark_checked", "behavior_codify", "behavior_feedback", "behavior_list", "behavior_delete", "config_get", "config_set", "notify_user", "chat_register", "chat_list", "chat_send", "chat_read", "chat_unregister", "chat_broadcast", "chat_status"].map((n) => `\`${toolNamer(n)}\``).join(",\n")}. Bare names
 used below for readability. ${availabilitySection}
 Argument shapes (one JSON object argument, never a bare positional string):
 - \`memory_remember\` with \`{"content": "..."}\` - content carries the information; label is optional (derived from the content's first heading or line)
@@ -630,7 +620,7 @@ Argument shapes (one JSON object argument, never a bare positional string):
 
 - \`global\`: user preferences, personality, system environment (shared across projects)
 - Per-project stores: project-specific knowledge (auto-detected from git remote)
-- Use \`mcp__thatch__store_list\` to see active stores
+- Use \`${toolNamer("store_list")}\` to see active stores
 
 Memories can be scoped to a git branch via the \`branch\` param (feature design,
 WIP, PR status). Unscoped memories are project-wide and always included in search.
@@ -944,6 +934,18 @@ export const opencodeToolName: ToolNamer = (name) => `thatch_${name}`;
 export const mcpToolName: ToolNamer = (name) => `mcp__thatch__${name}`;
 
 /**
+ * The PLUGIN regime's tool spelling: the host namespaces a plugin's OWN
+ * bundled MCP server as mcp__plugin_<plugin>_<server>__<tool> - for the
+ * thatch plugin serving its "thatch" server, mcp__plugin_thatch_thatch__.
+ * The standalone registration keeps mcpToolName. QA PIN (verify on the
+ * live app that the prefix is stable per plugin+server name); the fallback
+ * if it drifts: the instructions' bare-name convention covers everything
+ * but the tool LIST, so a wrong prefix degrades to un-callable names in
+ * one rendered line - caught by the F2 pin test.
+ */
+export const pluginToolName: ToolNamer = (name) => `mcp__plugin_thatch_thatch__${name}`;
+
+/**
  * The bare name itself. Used by prompt sections embedded in instructions
  * that establish the bare-name convention (mcpInstructions and twins): the
  * model maps bare names to the host spelling at call time.
@@ -1109,14 +1111,15 @@ export function claudeInlineExtraction(
   payload: string | null,
   queuePath: string,
   level: 0 | 1 | 2,
+  toolNamer: ToolNamer = mcpToolName,
 ): string {
   const plural = count === 1 ? "" : "s";
   const where = payload === null
     ? `The payload is too large to print here. It is queued at ${queuePath} - Read that file first (it holds the raw JSONL interactions), then process it inline.`
     : `If any interaction's output below appears as a saved-output file path (the host saves over-long outputs to a file), Read that file before trusting the entry.`;
   const process = `Process the queued tool interaction${plural} inline: run the thatch-fact-extractor skill on ${payload === null ? "the payload" : "the payload below"}. ` +
-    `Save durable facts with mcp__thatch__memory_remember (save first, then verify - tool work done after saving is picked up by the next nudge). ` +
-    `Then call mcp__thatch__extraction_done with session_id "${sessionID}", even if nothing was worth saving. ` +
+    `Save durable facts with ${toolNamer("memory_remember")} (save first, then verify - tool work done after saving is picked up by the next nudge). ` +
+    `Then call ${toolNamer("extraction_done")} with session_id "${sessionID}", even if nothing was worth saving. ` +
     where;
   const body = payload === null ? "" : `\n\n${payload}`;
 

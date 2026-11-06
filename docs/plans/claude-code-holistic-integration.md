@@ -165,6 +165,20 @@ The npm-sourced entry makes this the natural front door: one install command pul
 
 The regime marker + deactivation logic are identical under every route (the plugin content is the same shape from the npm package, the generated dir, or a marketplace relative-path source).
 
+### QA findings (2026-11-06, Jeff's live QA): the guard's bypass list reshapes instruction delivery
+
+Live QA surfaced two facts, both verified against the mods docs (events.md, admin.md):
+
+- **The built-in guard passes over a user's mod's hooks on a documented event list** (admin.md, "Know which hooks of a user's mod don't run"): all `classic.*` events, `prompt.compose`, `prompt.section`, `prompt.context`, `prompt.attachment`, `skill.prompt`, `attribution.text`, `session.compact`, `settings.read`, and the attachment/hook-context/compaction `session.append` doors. The guard loads on managed settings AND on any Team/Enterprise `/login` credential - a corporate security plugin sits on exactly the machines real users have. `/plugin` (v2.1.299+) shows the note naming the bypassed hooks.
+- **The tool spelling is regime-keyed**: a plugin's own bundled server is namespaced `mcp__plugin_<plugin>_<server>__<tool>` - `mcp__plugin_thatch_thatch__*` for ours - not the standalone `mcp__thatch__*` the instructions template spelled.
+
+The design consequence, implemented on the branch:
+
+1. **Instructions moved to the guard-proof channel**: the mod no longer registers `prompt.compose` (a bypassed hook would vanish on managed machines AND double-deliver on open ones); the CLAUDE.md static block - context no guard touches - is the ONLY instructions channel. Setup ensures it with the plugin variant's spelling; the **bundled server ensures it at startup** (the front-door world has no `thatch setup` run; the server is the only thatch process that knows the project). The regenerated instructions ship in hooks/instructions.js still (the artifact + fallback).
+2. **The nudge texts are regime-spelled**: the stage tool's delivered nudges render tool names through `pluginToolName` on the bundled server - a nudge naming `mcp__thatch__*` in plugin context names tools the model cannot call. Bare names (the recall nudge's convention, the chat line) are untouched.
+3. **The `classic.*` bypass is a NAMED DEGRADATION, accepted for now**: under the guard, the mod's pause alerts (PermissionRequest/Denied) and provider-error alerts (StopFailure) do not run. The core delivery (prompt.submit, tool.call, turn.*) is NOT on the bypass list and runs. The follow-up that closes it: carry the alert paths as SETTINGS HOOKS in the plugin's own hooks/hooks.json - the guard preserves "hooks in settings files and in plugins' hooks/hooks.json" - which would route pause/error alerts through the fallback's fresh-process machinery inside the plugin. Designed here; not built in this PR.
+4. **Server-side failures log**: the stage's tier failures write `[thatch]` lines to the server's stderr (the plugin debug log), matching the house hook-failure rule.
+
 ### Migration steps for the flip (designed now, executed at the ship gate)
 
 The default-flip decision is already queued for the ship gate: when QA passes and Jeff calls the merge, setup's default inverts to the plugin path and the README carries the front door. The flip is a designed step, not an afterthought:
