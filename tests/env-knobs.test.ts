@@ -32,6 +32,9 @@ function allSource(): string {
 // Protocol strings, not knobs: they mark extraction payload boundaries,
 // sub-agent ready tokens, and the instructions-file markers setup.ts writes.
 const PROTOCOL_MARKERS = new Set([
+  // A code constant whose name matches the THATCH_* env pattern (the two
+  // regime tool-name prefixes - not an environment variable).
+  "THATCH_TOOL_PREFIXES",
   "THATCH_MARKER",
   "THATCH_BEGIN",
   "THATCH_END",
