@@ -1,5 +1,9 @@
 import type { ModRegistrar, ModsApi, PromptSubmitEvent, PromptComposeEvent } from "../../src/claude-plugin/mod";
 
+/** The connected bundled-server name (the d.ts's `usually
+ *  plugin:<plugin>:<server>` rule for ours). */
+export const PLUGIN_SERVER_NAME = "plugin:thatch:thatch";
+
 /**
  * A hand-rolled mods-$ double for the Claude Code plugin mod's unit tests.
  * The mod's decision logic is pure against this shape: registrations are
@@ -45,6 +49,10 @@ export interface ModsHarness {
   notified: string[];
   /** The mod's $.ui.log lines (the fail-open surfaces). */
   logged: string[];
+  /** The failure FILE's last write (the headless-visible sink), or null. */
+  get failureFile(): { path: string; text: string } | null;
+  /** The manifest keys the mod connected through. */
+  connectCalls: string[];
   registeredCommands: string[];
   registeredTools: string[];
   /** The timer callbacks the mod scheduled ($.clock.every) - tick them by
@@ -69,6 +77,9 @@ export function installModsHarness(options: { instructions: string; stageRespons
   const lifecycleResponses: unknown[] = [];
   const chatWakeResponses: unknown[] = [];
   const watchPollResponses: unknown[] = [];
+  const connectCalls: string[] = [];
+  let connectRefusal: string | null = null;
+  let failureFile: { path: string; text: string } | null = null;
   const sessionId = "ses_mod_under_test";
   const registeredCommands: string[] = [];
   const registeredTools: string[] = [];
@@ -131,24 +142,45 @@ export function installModsHarness(options: { instructions: string; stageRespons
       },
     },
     mcp: {
-      call: async (call) => {
-        if (call.tool === "plugin_stage") {
-          stageCalls.push({ prompt: String(call.arguments?.prompt ?? ""), sessionId: String(call.arguments?.session_id ?? "") });
+      // THE REAL HOST SIGNATURE (the d.ts): POSITIONAL - call(server, tool,
+      // args?) - and connect(manifestKey) resolves the routable
+      // `plugin:<plugin>:<server>` name. The harness encodes the shapes the
+      // mod must meet; the call-shape pin test holds the mod to them.
+      call: async (server: string, tool: string, args?: Record<string, unknown>) => {
+        if (server !== PLUGIN_SERVER_NAME) {
+          throw new Error(`the mod must route by the CONNECTED server name (${PLUGIN_SERVER_NAME}), got "${server}"`);
+        }
+        if (tool === "plugin_stage") {
+          stageCalls.push({ prompt: String(args?.prompt ?? ""), sessionId: String(args?.session_id ?? "") });
           if (stageError) throw stageError;
           return stageResponse;
         }
-        if (call.tool === "plugin_lifecycle") {
-          lifecycleCalls.push({ ...call.arguments });
+        if (tool === "plugin_lifecycle") {
+          lifecycleCalls.push({ ...args });
           return lifecycleResponses.length > 0 ? lifecycleResponses.shift() : { text: "" };
         }
-        if (call.tool === "plugin_chat_wake") {
+        if (tool === "plugin_chat_wake") {
           return chatWakeResponses.length > 0 ? chatWakeResponses.shift() : "";
         }
-        if (call.tool === "plugin_watch_poll") {
+        if (tool === "plugin_watch_poll") {
           return watchPollResponses.length > 0 ? watchPollResponses.shift() : "";
         }
-        throw new Error(`unexpected tool call: ${call.server}/${call.tool}`);
+        throw new Error(`unexpected tool call: ${server}/${tool}`);
       },
+      connect: async (serverKey: string) => {
+        connectCalls.push(serverKey);
+        if (connectRefusal) return { isConnected: false, reason: "refused", message: connectRefusal };
+        // The real shape: the manifest key resolves to the namespaced name.
+        return { isConnected: true, server: PLUGIN_SERVER_NAME };
+      },
+    },
+    fs: {
+      write: async (path: string, text: string) => {
+        failureFile = { path, text };
+      },
+    },
+    plugin: {
+      root: "/fake/plugin/root",
     },
   };
 
@@ -159,6 +191,10 @@ export function installModsHarness(options: { instructions: string; stageRespons
     lifecycleCalls,
     notified,
     logged,
+    get failureFile() {
+      return failureFile;
+    },
+    connectCalls,
     registeredCommands,
     registeredTools,
     clockTicks,

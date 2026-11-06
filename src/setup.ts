@@ -627,10 +627,11 @@ import { INSTRUCTIONS } from "./instructions.js";
 export function register(on) {
   return thatchRegister(on, {
     instructions: INSTRUCTIONS,
-    stageTool: { server: "thatch", tool: "plugin_stage" },
-    lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" },
-    chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" },
-    watchPollTool: { server: "thatch", tool: "plugin_watch_poll" },
+    serverKey: "thatch",
+    stageTool: "plugin_stage",
+    lifecycleTool: "plugin_lifecycle",
+    chatWakeTool: "plugin_chat_wake",
+    watchPollTool: "plugin_watch_poll",
   });
 }
 `,

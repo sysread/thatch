@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { registerMod, readStageText } from "../src/claude-plugin/mod";
 import { installModsHarness } from "./mocks/mods-harness";
@@ -20,17 +20,17 @@ describe("plugin mod: prompt.compose is NOT registered", () => {
     const harness = installModsHarness({ instructions: "I" });
     registerMod(harness.register, {
       instructions: "I",
-      stageTool: { server: "thatch", tool: "plugin_stage" },
-      lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" },
-      chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" },
-      watchPollTool: { server: "thatch", tool: "plugin_watch_poll" },
+      serverKey: "thatch", stageTool: "plugin_stage",
+      lifecycleTool: "plugin_lifecycle",
+      chatWakeTool: "plugin_chat_wake",
+      watchPollTool: "plugin_watch_poll",
     });
     expect(harness.registrations.some((r) => r.event === "prompt.compose")).toBe(false);
   });
 });
 
 describe("plugin mod: prompt.submit", () => {
-  const options = { instructions: "I", stageTool: { server: "thatch", tool: "plugin_stage" }, lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" }, chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" }, watchPollTool: { server: "thatch", tool: "plugin_watch_poll" } };
+  const options = { instructions: "I", serverKey: "thatch", stageTool: "plugin_stage", lifecycleTool: "plugin_lifecycle", chatWakeTool: "plugin_chat_wake", watchPollTool: "plugin_watch_poll" };
 
   test("injects the stage text as context, tagged with the session id and prompt", async () => {
     const harness = installModsHarness({ instructions: "I", stageResponse: { text: "[thatch] nudge text" } });
@@ -104,10 +104,10 @@ test("the mod's import graph is Node-free (the mods runtime gives hooks no Node 
 describe("plugin mod: lifecycle forwarding (Step B)", () => {
 const options = {
     instructions: "I",
-    stageTool: { server: "thatch", tool: "plugin_stage" },
-    lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" },
-    chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" },
-    watchPollTool: { server: "thatch", tool: "plugin_watch_poll" },
+    serverKey: "thatch", stageTool: "plugin_stage",
+    lifecycleTool: "plugin_lifecycle",
+    chatWakeTool: "plugin_chat_wake",
+    watchPollTool: "plugin_watch_poll",
   };
 
   test("turn.start forwards busy for MAIN-conversation turns only", async () => {
@@ -179,10 +179,10 @@ const options = {
 describe("plugin mod: chat wake (Step C)", () => {
   const options = {
     instructions: "I",
-    stageTool: { server: "thatch", tool: "plugin_stage" },
-    lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" },
-    chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" },
-    watchPollTool: { server: "thatch", tool: "plugin_watch_poll" },
+    serverKey: "thatch", stageTool: "plugin_stage",
+    lifecycleTool: "plugin_lifecycle",
+    chatWakeTool: "plugin_chat_wake",
+    watchPollTool: "plugin_watch_poll",
   };
 
   test("session.start schedules the poll cadence and registers the wrap-up surface", async () => {
@@ -239,10 +239,10 @@ describe("THE WIRE: mod forwards through the REAL plugin_lifecycle schema", () =
   // lifecycle spy, so the seam's naming contract is asserted end to end.
   const options = {
     instructions: "I",
-    stageTool: { server: "thatch", tool: "plugin_stage" },
-    lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" },
-    chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" },
-    watchPollTool: { server: "thatch", tool: "plugin_watch_poll" },
+    serverKey: "thatch", stageTool: "plugin_stage",
+    lifecycleTool: "plugin_lifecycle",
+    chatWakeTool: "plugin_chat_wake",
+    watchPollTool: "plugin_watch_poll",
   };
 
   test("abort + realwork survive the schema into the lifecycle verdicts", async () => {
@@ -262,9 +262,9 @@ describe("THE WIRE: mod forwards through the REAL plugin_lifecycle schema", () =
       const { TOOL_DEFS } = await import("../src/tool-defs");
       const def = TOOL_DEFS.find((t) => t.name === "plugin_lifecycle")!;
       const harnessCall = harness.api.mcp.call.bind(harness.api.mcp);
-      harness.api.mcp.call = async (call: { server: string; tool: string; arguments?: Record<string, unknown> }) => {
-        if (call.tool !== "plugin_lifecycle") return harnessCall(call);
-        return def.execute((call.arguments ?? {}) as never, { pluginLifecycle: async (event: Record<string, unknown>) => { captured.push(event); return { text: "ok" }; } } as never);
+      harness.api.mcp.call = async (server: string, tool: string, args?: Record<string, unknown>) => {
+        if (tool !== "plugin_lifecycle") return harnessCall(server, tool, args);
+        return def.execute((args ?? {}) as never, { pluginLifecycle: async (event: Record<string, unknown>) => { captured.push(event); return { text: "ok" }; } } as never);
       };
 
       // The mod's forwards, with the mod's ACTUAL spellings.
@@ -317,10 +317,10 @@ describe("THE WIRE: mod forwards through the REAL plugin_lifecycle schema", () =
 describe("THE WIRE: all four crossings through the REAL tool defs", () => {
   const options = {
     instructions: "I",
-    stageTool: { server: "thatch", tool: "plugin_stage" },
-    lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" },
-    chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" },
-    watchPollTool: { server: "thatch", tool: "plugin_watch_poll" },
+    serverKey: "thatch", stageTool: "plugin_stage",
+    lifecycleTool: "plugin_lifecycle",
+    chatWakeTool: "plugin_chat_wake",
+    watchPollTool: "plugin_watch_poll",
   };
 
   /** Routes the harness's mcp.call for ONE tool through the tool's REAL
@@ -332,9 +332,9 @@ describe("THE WIRE: all four crossings through the REAL tool defs", () => {
     const def = TOOL_DEFS.find((t) => t.name === toolName)!;
     const harness = installModsHarness({ instructions: "I", stageResponse: "" });
     const orig = harness.api.mcp.call.bind(harness.api.mcp);
-    harness.api.mcp.call = async (call: { server: string; tool: string; arguments?: Record<string, unknown> }) => {
-      if (call.tool !== toolName) return orig(call);
-      return def.execute((call.arguments ?? {}) as never, spyCtx as never);
+    harness.api.mcp.call = async (server: string, tool: string, args?: Record<string, unknown>) => {
+      if (tool !== toolName) return orig(server, tool, args);
+      return def.execute((args ?? {}) as never, spyCtx as never);
     };
     registerMod(harness.register, options);
     return harness;
@@ -362,17 +362,17 @@ describe("THE WIRE: all four crossings through the REAL tool defs", () => {
     const wakeDef = TOOL_DEFS.find((t) => t.name === "plugin_chat_wake")!;
     const pollDef = TOOL_DEFS.find((t) => t.name === "plugin_watch_poll")!;
     const orig = harness.api.mcp.call.bind(harness.api.mcp);
-    harness.api.mcp.call = async (call: { server: string; tool: string; arguments?: Record<string, unknown> }) => {
-      if (call.tool === "plugin_chat_wake") {
-        return wakeDef.execute((call.arguments ?? {}) as never, {
+    harness.api.mcp.call = async (server: string, tool: string, args?: Record<string, unknown>) => {
+      if (tool === "plugin_chat_wake") {
+        return wakeDef.execute((args ?? {}) as never, {
           pluginChatWake: (sid: string) => {
             wakeCalls.push(sid);
             return "";
           },
         } as never);
       }
-      if (call.tool === "plugin_watch_poll") {
-        return pollDef.execute((call.arguments ?? {}) as never, {
+      if (tool === "plugin_watch_poll") {
+        return pollDef.execute((args ?? {}) as never, {
           watchers: {
             consumePending: (sid: string) => {
               pollCalls.push(sid);
@@ -381,7 +381,7 @@ describe("THE WIRE: all four crossings through the REAL tool defs", () => {
           },
         } as never);
       }
-      return orig(call);
+      return orig(server, tool, args);
     };
     registerMod(harness.register, options);
     // One beat, two polls - both session ids arrive schema-validated.
@@ -480,12 +480,40 @@ test("the fail-open surfaces are LOUD: a stage failure logs the reason", async (
   const harness = installModsHarness({ instructions: "I", stageError: new Error("server down") });
   registerMod(harness.register, {
     instructions: "I",
-    stageTool: { server: "thatch", tool: "plugin_stage" },
-    lifecycleTool: { server: "thatch", tool: "plugin_lifecycle" },
-    chatWakeTool: { server: "thatch", tool: "plugin_chat_wake" },
-    watchPollTool: { server: "thatch", tool: "plugin_watch_poll" },
+    serverKey: "thatch", stageTool: "plugin_stage",
+    lifecycleTool: "plugin_lifecycle",
+    chatWakeTool: "plugin_chat_wake",
+    watchPollTool: "plugin_watch_poll",
   });
   const out = await harness.runPromptSubmit({ text: "fix the parser" });
   expect(out.context).toBeUndefined(); // fail-open: the prompt proceeds
   expect(harness.logged.some((l) => l.includes("stage call failed") && l.includes("server down"))).toBe(true);
+});
+
+test("THE CALL-SHAPE PIN: the harness + mod match the HOST's own d.ts when it is installed", async () => {
+  // The round-2 blocker's root: the mock + the mod shared a wrong
+  // $.mcp.call understanding (one object; positional in truth). The
+  // host ships its type definitions INSIDE the generated plugin tree
+  // (<pluginRoot>/.claude-plugin/types/claude-code/index.d.ts) - when
+  // present (a real QA install), the shapes are pinned against it; in
+  // CI (no install) the test skips - the harness's structural assertions
+  // carry the contract there.
+  const dts = join(process.env.HOME ?? "", ".claude", "thatch-plugin", ".claude-plugin", "types", "claude-code", "index.d.ts");
+  if (!existsSync(dts)) return;
+  const src = readFileSync(dts, "utf8");
+  // call is POSITIONAL with (server, tool, args?).
+  expect(src).toMatch(/call:\s*\(server:\s*string,\s*tool:\s*string,\s*args\?:\s*Record<string,\s*unknown>\)\s*=>\s*Promise<McpToolResult>/);
+  // connect takes the MANIFEST KEY and resolves the routable name.
+  expect(src).toMatch(/connect:\s*\(server:\s*string\)\s*=>\s*Promise<McpConnectResult>/);
+  expect(src).toContain("`plugin:<plugin>:<server>`");
+  // The harness encodes the same shape: its call takes (server, tool, args)
+  // positionally and refuses the wrong server name.
+  const harnessSrc = readFileSync(join(__dirname, "mocks", "mods-harness.ts"), "utf8");
+  expect(harnessSrc).toContain("call: async (server: string, tool: string, args?: Record<string, unknown>)");
+  expect(harnessSrc).toContain('PLUGIN_SERVER_NAME = "plugin:thatch:thatch"');
+  // And the mod routes through connect + positional call only - no
+  // object-form mcp.call survives anywhere in the mod source.
+  const modSrc = readFileSync(join(__dirname, "../src/claude-plugin/mod.ts"), "utf8");
+  expect(modSrc).not.toMatch(/\$\.mcp\.call\(\s*\{/);
+  expect(modSrc).toContain("await $.mcp.connect(options.serverKey)");
 });

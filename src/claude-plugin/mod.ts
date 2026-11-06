@@ -42,12 +42,33 @@ export interface ModsApi {
     log(text: string): void;
   };
   mcp: {
-    /** PIN: calling a manifest-listed server's tool. The response shape
-     *  is assumed to be the tool's text (string) or an object carrying
-     *  it; readStageText tolerates all plausible shapes. Fallback: if
-     *  $.mcp.call is unavailable, the mod fails open - prompts proceed
-     *  without thatch context. */
-    call(call: { server: string; tool: string; arguments?: Record<string, unknown> }): Promise<unknown>;
+    /**
+     * THE REAL SIGNATURE (the host's own d.ts, plugins/types/claude-code):
+     * POSITIONAL - call(server, tool, args?) - and `server` is the name
+     * /mcp lists the server under, which for a plugin's OWN bundled server
+     * is `plugin:<plugin>:<server>` (get it from $.mcp.connect's result,
+     * never guess). Returns the MCP result: { content: blocks, isError }.
+     * Fallback: any throw fails open - prompts proceed without thatch
+     * context, and recordFailure leaves the reason in the log + the
+     * failure file.
+     */
+    call(server: string, tool: string, args?: Record<string, unknown>): Promise<unknown>;
+    /**
+     * Connects a server listed in THIS plugin's manifest, resolving to the
+     * name `$.mcp.call` takes ({ isConnected: true, server } or
+     * { isConnected: false, reason, message }).
+     */
+    connect(server: string): Promise<{ isConnected: boolean; server?: string; reason?: string; message?: string }>;
+  };
+  fs: {
+    /** Overwrite-write a file. The failure sink's writer (the mod has no
+     *  Node APIs; $.ui.log is transcript-only and invisible to -p runs). */
+    write(path: string, text: string): Promise<void>;
+  };
+  plugin: {
+    /** This plugin's directory (holding plugin.json), absolute - the
+     *  failure sink's home. */
+    root: string;
   };
   command: {
     /** PIN: programmatic command registration (session.start; a taken
@@ -133,15 +154,17 @@ export interface ThatchModOptions {
    *  Session-static regardless: CLAUDE.md text that changes between
    *  requests invalidates the prompt cache. */
   instructions: string;
-  /** The bundled server's stage tool coordinates (the plugin's own
-   *  manifest server). */
-  stageTool: { server: string; tool: string };
-  /** The bundled server's lifecycle tool coordinates. */
-  lifecycleTool: { server: string; tool: string };
-  /** The bundled server's chat-wake poll coordinates. */
-  chatWakeTool: { server: string; tool: string };
-  /** The bundled server's watcher-poll drain coordinates. */
-  watchPollTool: { server: string; tool: string };
+  /** The bundled server's KEY in this plugin's manifest - the argument
+   *  $.mcp.connect takes; its result's `server` (usually
+   *  `plugin:<plugin>:<server>`, ours `plugin:thatch:thatch`) is the name
+   *  $.mcp.call routes by. NEVER guess it: the bare name is the mod's own
+   *  registered-tool namespace ($.tool.register's), not the server's. */
+  serverKey: string;
+  /** The tool names on that server. */
+  stageTool: string;
+  lifecycleTool: string;
+  chatWakeTool: string;
+  watchPollTool: string;
   /** The chat-wake poll cadence, ms (the opencode poller's beat, 30s). */
   wakePollMs?: number;
 }
@@ -214,6 +237,8 @@ export function readStageText(res: unknown): string {
     const v = obj[key];
     if (typeof v === "string") return v;
   }
+  // The $.mcp.call result's own envelope: { content: McpContentBlock[] }.
+  if (Array.isArray(obj.content)) return readStageText(obj.content);
   return "";
 }
 
@@ -223,6 +248,48 @@ export function readStageText(res: unknown): string {
  * hook - so the GREENLIGHT TOOLS register first and the command names,
  * which can collide, last).
  */
+/** The failure buffer + the resolved bundled-server name, both module
+ *  state - a reload wipes them and the next call re-resolves / the buffer
+ *  restarts (failure-shaped, acceptable). */
+let bundledServerName: string | null = null;
+const failureLines: string[] = [];
+
+/**
+ * The failure sink: $.ui.log (transcript-visible) + a FILE line (the
+ * headless-visible surface - a `claude -p` session has no transcript to
+ * read; the file is the QA loop's evidence). The file lives in the
+ * plugin's own root, last 20 lines, overwrite-write (the mod has no
+ * append; the volume is failure-shaped, not high-frequency).
+ */
+function recordFailure($: ModsApi, kind: string, err: unknown): void {
+  const reason = err instanceof Error ? err.message : String(err);
+  failureLines.push(`${new Date().toISOString()} ${kind}: ${reason}`);
+  if (failureLines.length > 20) failureLines.splice(0, failureLines.length - 20);
+  try {
+    $.ui.log(`[thatch] ${kind}: ${reason}`);
+  } catch { /* the log sink is best-effort */ }
+  void $.fs.write(`${$.plugin.root}/mod-failures.log`, failureLines.join("\n")).catch(() => {
+    // The file sink is best-effort too - the log line above is the floor.
+  });
+}
+
+/**
+ * The mod's ONE path to the bundled server: connect (the manifest key ->
+ * the routable `plugin:<plugin>:<server>` name) then POSITIONAL
+ * $.mcp.call(server, tool, args). Every mod->server crossing in this file
+ * goes through here; a failure throws for the caller's fail-open catch.
+ */
+async function callBundledServer($: ModsApi, options: ThatchModOptions, tool: string, args?: Record<string, unknown>): Promise<unknown> {
+  if (!bundledServerName) {
+    const conn = await $.mcp.connect(options.serverKey);
+    if (!conn.isConnected || !conn.server) {
+      throw new Error(`the bundled server is not connected: ${conn.message ?? conn.reason ?? "unknown"}`);
+    }
+    bundledServerName = conn.server;
+  }
+  return $.mcp.call(bundledServerName, tool, args);
+}
+
 export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
   // NO prompt.compose hook: the built-in guard (cc-plugin-sec-default -
   // loaded on managed settings AND on Team/Enterprise logins) passes over
@@ -260,20 +327,11 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
     let stageText = "";
     try {
       const sessionId = await $.session.id();
-      const res = await $.mcp.call({
-        server: options.stageTool.server,
-        tool: options.stageTool.tool,
-        arguments: { prompt: e.text ?? "", session_id: sessionId, ...(e.transcript_path ? { transcript_path: e.transcript_path } : {}) },
-      });
+      const res = await callBundledServer($, options, options.stageTool, { prompt: e.text ?? "", session_id: sessionId, ...(e.transcript_path ? { transcript_path: e.transcript_path } : {}) });
       stageText = readStageText(res);
     } catch (err) {
-      // Fail-open (the prompt must never be eaten), but LOUD: a stage
-      // failure darkens every pin behind this crossing, so the tester
-      // needs the reason in the log - the mixed-source install stayed
-      // invisible precisely because this was a bare catch.
-      try {
-        $.ui.log(`[thatch] the stage call failed; prompts proceed without thatch context: ${err instanceof Error ? err.message : err}`);
-      } catch { /* the log sink itself is best-effort */ }
+      // Fail-open (the prompt must never be eaten), but LOUD - both sinks.
+      recordFailure($, "the stage call failed; prompts proceed without thatch context", err);
       return next(e);
     }
     if (!stageText.trim()) return next(e);
@@ -411,8 +469,7 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
       try {
         await forwardLifecycle($, options, { event: "session-end" });
       } catch (err) {
-        // Loud best-effort (same rule as the stage crossing).
-        try { $.ui.log(`[thatch] the session-end forward failed; watcher cleanup did not run: ${err instanceof Error ? err.message : err}`); } catch { /* best-effort */ }
+        recordFailure($, "the session-end forward failed; watcher cleanup did not run", err);
       }
     }
     return next(e);
@@ -469,23 +526,15 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
       }
       let wakeText = "";
       try {
-        wakeText = readStageText(await $.mcp.call({
-          server: options.chatWakeTool.server,
-          tool: options.chatWakeTool.tool,
-          arguments: { session_id: sessionId },
-        }));
+        wakeText = readStageText(await callBundledServer($, options, options.chatWakeTool, { session_id: sessionId }));
       } catch (err) {
-        try { $.ui.log(`[thatch] the chat-wake poll failed: ${err instanceof Error ? err.message : err}`); } catch { /* best-effort */ }
+        recordFailure($, "the chat-wake poll failed", err);
       }
       let watchRes = "";
       try {
-        watchRes = readStageText(await $.mcp.call({
-          server: options.watchPollTool.server,
-          tool: options.watchPollTool.tool,
-          arguments: { session_id: sessionId },
-        }));
+        watchRes = readStageText(await callBundledServer($, options, options.watchPollTool, { session_id: sessionId }));
       } catch (err) {
-        try { $.ui.log(`[thatch] the watcher poll failed: ${err instanceof Error ? err.message : err}`); } catch { /* best-effort */ }
+        recordFailure($, "the watcher poll failed", err);
       }
       const text = [wakeText, watchRes].filter((t) => t.trim()).join("\n\n");
       if (!text.trim()) return;
@@ -525,11 +574,7 @@ export function registerMod(on: ModRegistrar, options: ThatchModOptions): void {
 
 async function forwardLifecycle($: ModsApi, options: ThatchModOptions, args: Record<string, unknown>): Promise<{ text: string; wrapup?: "compact" | "exit" }> {
   const sessionId = await $.session.id();
-  const res = await $.mcp.call({
-    server: options.lifecycleTool.server,
-    tool: options.lifecycleTool.tool,
-    arguments: { ...args, session_id: sessionId },
-  });
+  const res = await callBundledServer($, options, options.lifecycleTool, { ...args, session_id: sessionId });
   return readLifecycleResult(res);
 }
 
