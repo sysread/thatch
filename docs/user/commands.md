@@ -47,7 +47,8 @@ invoke it. The remaining commands (`refine`, `self-review`, `peer-review`,
   submitting it: the full review pipeline weighted for reputation and
   simplicity. Takes the same target argument as peer-review. Rounds
   iterate (fix or decline each finding, then re-review the updated
-  state) until a round produces no meaningful findings, at most three.
+  state) until a round produces no meaningful findings (a drift guard at
+  ten rounds is the only hard stop).
   See [code-review.md](code-review.md).
 - `/thatch/compact` and `/thatch/exit` — the wrap-up commands. They run a
   pre-flight checklist (flush extraction, finish promised memory writes,

@@ -123,7 +123,7 @@ describe("review-mode commands (peer-review, self-review)", () => {
     expect(peer!.content).toContain("org velocity");
     expect(peer!.content).toContain("Never report findings of the form");
     expect(self!.content).toContain("reputation");
-    expect(self!.content).toContain("three rounds");
+    expect(self!.content).toContain("drift guard at ten rounds");
     expect(self!.content).not.toContain("org velocity");
 
     // The post-synthesis adjudication is peer-mode only: self-review stays

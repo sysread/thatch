@@ -72,7 +72,8 @@ whose work is under review.
   surfaced for an adopt-or-dismiss decision rather than left as
   footnotes. The review iterates: after each round you fix or decline
   each finding, and the next round re-reviews the updated state until
-  a round produces no meaningful findings (at most three rounds).
+  a round produces no meaningful findings (the loop's only hard stop is
+  a ten-round drift guard).
 - `/thatch/peer-review` reviews another author's change. Findings are
   weighted for org velocity: simpler ways to the same outcome, existing
   helpers that already do the work, extremely clear documentation, and

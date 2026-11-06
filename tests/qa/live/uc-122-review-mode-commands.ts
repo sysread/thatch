@@ -36,7 +36,7 @@ const useCase: UseCase = {
     "- peer-review's report shows the memory walk over the touched area.",
     "- peer-review ends in the adjudication stage: walkthrough first, then one finding at a time in the template with the verdict line, kept findings staged as a draft review, and the review submitted by the user, never the session.",
     "- self-review leads with the reputation lenses (Seed C) and surfaces the simpler design as a decision (Seed D).",
-    "- self-review iterates a second round after fixes and terminates at the first round with no meaningful findings (never more than three).",
+    "- self-review iterates a second round after fixes and terminates at the first round with no meaningful findings (the only hard stop is a ten-round drift guard).",
     "- Both commands resolve the review target from the command text or default to the current branch, and cite file:line against the range head SHA.",
   ].join("\n"),
 };
