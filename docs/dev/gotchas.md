@@ -347,6 +347,20 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   must change, clone only when the value actually differs (see the
   truncation guard in `push`).
 
+## Adapter test fixtures must model the host's real tool shapes
+
+- **A fixture that spells a host's args like a different host pins a
+  fiction.** The extraction summarizer (`summarizeArgs`/`deriveTitle` in
+  src/extraction.ts) shipped broken for opencode v2: every v2 adapter test
+  buffered a `Read` call with a `file_path` arg (Claude Code's spelling),
+  while real v2 built-ins are lowercase `read`/`edit`/`write` declaring the
+  arg `path` (packages/core/src/tool/plugin/{edit,read,write}.ts in the
+  opencode repo). The suite stayed green while every live v2
+  read/edit/write payload entry summarized as "file: undefined" with an
+  empty title. When a test simulates a host hook, take the tool name and
+  arg keys from that host's source, not from another host's familiar
+  shape; `fileArg` in src/extraction.ts lists the known spellings.
+
 ## Command frontmatter descriptions must be quoted YAML scalars
 
 - **A plain-scalar frontmatter value containing a colon followed by a space

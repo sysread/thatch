@@ -50,10 +50,12 @@ describe("opencode v2 adapter", () => {
 
     // Buffer an interaction so the matching idle event triggers direct
     // extraction (session.create) - the observable for "the runtime got it".
+    // Real v2 built-in shape: lowercase tool name, file arg `path` - the
+    // v2 read/edit/write plugins declare path, not filePath/file_path.
     await toolAfterHook!({
-      tool: "Read",
+      tool: "read",
       sessionID: "ses_v2_new",
-      input: { file_path: "/src/app.ts" },
+      input: { path: "/src/app.ts" },
       status: "completed",
       result: { content: "const x = 1;" },
     });
@@ -120,9 +122,9 @@ describe("opencode v2 adapter", () => {
     // directory caches the subordinate here, so its later location-less
     // idle event routes to this instance and drives extraction.
     await toolAfterHook!({
-      tool: "Read",
+      tool: "read",
       sessionID: "ses_sub_local",
-      input: { file_path: "/src/app.ts" },
+      input: { path: "/src/app.ts" },
       status: "completed",
       result: { content: "const x = 1;" },
     });
@@ -377,9 +379,9 @@ describe("opencode v2 adapter", () => {
 
     // A subsequent event for a session whose get succeeds still lands.
     await toolAfterHook!({
-      tool: "Read",
+      tool: "read",
       sessionID: "ses_v2_alive",
-      input: { file_path: "/src/app.ts" },
+      input: { path: "/src/app.ts" },
       status: "completed",
       result: { content: "const x = 1;" },
     });
