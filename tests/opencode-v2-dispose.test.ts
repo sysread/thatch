@@ -145,7 +145,7 @@ describe("v2 dispose race hardening", () => {
     delete process.env.THATCH_STRAND_SWEEP; // the beforeEach set it to "off"
     process.env.OPENCODE_DB = sweepPath;
     try {
-      const context = makeContext({ remove: true });
+      const context = makeContext();
       cleanup = (await setup(context as any)) as () => Promise<void>;
 
       await waitFor("strand sweep healed the stranded sessions", () => sessionMoveCalls.length === 1 && sessionRemoveCalls.length === 1);
@@ -187,7 +187,7 @@ describe("v2 dispose race hardening", () => {
     delete process.env.THATCH_STRAND_SWEEP;
     process.env.OPENCODE_DB = sweepPath;
     try {
-      const context = makeContext({ remove: true });
+      const context = makeContext();
       cleanup = (await setup(context as any)) as () => Promise<void>;
 
       await waitFor("strand sweep moved the stranded session", () => sessionMoveCalls.length === 1);

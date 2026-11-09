@@ -53,11 +53,10 @@ Tab strip: subordinate tab appears, unfocused
 
 Key properties:
 
-- **v2-only by construction.** The ToolDef carries `v2Only: true`; the v1
-  adapter (`src/tools.ts`) and the MCP server (`src/mcp.ts`) filter it. The
-  system prompt lists the tool only when the runtime is built with
-  `v2Tools: true` - a prompt listing a nonexistent tool is the
-  first-call-mistake class.
+- **opencode-only by construction.** The ToolDef carries `opencodeOnly:
+  true`; the MCP server (`src/mcp.ts`) filters it out of tools/list. The
+  system prompt always lists the tool (the opencode host always wires the
+  session-tab surface when the rpc registration exists).
 - **The event anchors on the coordinator**, so the tab opens in the
   coordinator's window under any `tabs.scope` - even when the session
   lives in a worktree or temp dir, and even when the coordinator window is

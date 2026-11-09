@@ -27,7 +27,7 @@ const useCase: UseCase = {
     "- An isolated fixture with THATCH_DB_PATH and XDG_CONFIG_HOME set",
   ].join("\n"),
   steps: [
-    "1. Verify the catalog: session_tab_open exists in TOOL_DEFS with v2Only true (no v1 or MCP surface).",
+    "1. Verify the catalog: session_tab_open exists in TOOL_DEFS with opencodeOnly true (no MCP surface).",
     "2. Boot the v2 adapter with a session.get override that resolves a live session whose directory exists, seed its chat-roster row, and call thatch_session_tab_open with the chat name.",
     "3. Verify the emitted event: the spawn's tab-opened event, payload = resolved session id, the session's current directory, and the calling session's id as the routing anchor.",
     "4. Re-boot with a session.get override that returns a location whose directory does NOT exist, and call the tool again.",
@@ -39,15 +39,15 @@ const useCase: UseCase = {
   ].join("\n"),
 
   async run(ctx: QaContext) {
-    // Step 1: the catalog pin - v2Only keeps the tool off the v1 adapter
-    // and the MCP list (both filter sites test the v2Only flag).
+    // Step 1: the catalog pin - opencodeOnly keeps the tool off the MCP
+    // list (the filter site tests the opencodeOnly flag).
     const def = TOOL_DEFS.find((t) => t.name === "session_tab_open");
     if (!def) {
       console.log("  FAIL: session_tab_open missing from TOOL_DEFS");
       return "FAIL";
     }
-    if (!def.v2Only) {
-      console.log("  FAIL: session_tab_open must be v2Only (no v1/MCP surface)");
+    if (!def.opencodeOnly) {
+      console.log("  FAIL: session_tab_open must be opencodeOnly (no MCP surface)");
       return "FAIL";
     }
 

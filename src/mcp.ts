@@ -70,10 +70,9 @@ export function compileTools(): Map<string, CompiledTool> {
   const map = new Map<string, CompiledTool>();
   for (const def of TOOL_DEFS) {
     // opencode-only tools depend on host capabilities MCP servers don't
-    // have (e.g. session identity via HostToolContext) - never expose them.
-    // v2-only tools ride v2 plugin surfaces (session move, rpc emit) with
-    // no MCP equivalent - same rule.
-    if (def.opencodeOnly || def.v2Only) continue;
+    // have (e.g. session identity via HostToolContext, or the session-tab
+    // bridge's session.move/rpc-emit flow) - never expose them.
+    if (def.opencodeOnly) continue;
     const schema = z.object(def.args);
     // The validator deep-passthroughs so typo'd keys survive into the
     // tool's accept-then-teach guards at EVERY object level ("you passed

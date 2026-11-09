@@ -70,7 +70,7 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
   const replyOf = (r: unknown): string => String((r as any)?.content ?? "");
 
   test("compact greenlight triggers the session.compact action", async () => {
-    cleanup = (await setup(makeContext({ compact: true }) as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/compact", "ses_wrapc");
     await callCompactTool("ses_wrapc");
     await idle("ses_wrapc");
@@ -100,7 +100,7 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
   // final action. That toast pin has no tool-protocol analog; likewise the
   // old "token must be trailing" pin: a tool call cannot be mid-text.)
   test("an un-greenlit compact arm survives an idle and triggers nothing", async () => {
-    cleanup = (await setup(makeContext({ compact: true }) as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/compact", "ses_wrapb");
     await idle("ses_wrapb");
     // Negative wait: the pump's handler is async; settle before asserting.
@@ -140,7 +140,7 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
   });
 
   test("thatch_compact without an armed compact refuses with no side effects", async () => {
-    cleanup = (await setup(makeContext({ compact: true }) as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const reply = await callCompactTool("ses_wrapnoarmc");
     expect(replyOf(reply)).toContain("No compaction in progress");
     expect(exitEvents().length).toBe(0);
@@ -151,7 +151,7 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
     // The cross-kind refusal matrix, compact leg: an exit arm plus
     // thatch_compact is a "no compaction in progress" refusal, never a
     // greenlight - the callback owns the kind check.
-    cleanup = (await setup(makeContext({ compact: true }) as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/exit", "ses_wrapxk");
     const reply = await callCompactTool("ses_wrapxk");
     expect(replyOf(reply)).toContain("No compaction in progress");
@@ -166,7 +166,7 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
   test("thatch_exit against a compact arm refuses and leaves the compact arm alone", async () => {
     // The cross-kind refusal matrix, exit leg: a compact arm plus
     // thatch_exit is a "no exit in progress" refusal, never a greenlight.
-    cleanup = (await setup(makeContext({ compact: true }) as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/compact", "ses_wrapck");
     const reply = await callExitTool("ses_wrapck");
     expect(replyOf(reply)).toContain("No exit in progress");
@@ -191,7 +191,7 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
   });
 
   test("a second thatch_compact call is idempotent and compacts exactly once", async () => {
-    cleanup = (await setup(makeContext({ compact: true }) as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/compact", "ses_wrapdblc");
     const first = await callCompactTool("ses_wrapdblc");
     const second = await callCompactTool("ses_wrapdblc");
@@ -220,7 +220,7 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
   });
 
   test("compact greenlight does not unregister the session", async () => {
-    cleanup = (await setup(makeContext({ compact: true }) as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const before = new ThatchDB(process.env.THATCH_DB_PATH!);
     before.registerChatSession("ses_wrapnu", "p", null, "opencode", "deltawrap");
     before.close();
@@ -235,7 +235,7 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
   });
 
   test("session.deleted clears a pending wrap-up", async () => {
-    cleanup = (await setup(makeContext({ compact: true }) as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/compact", "ses_wrapd");
     await queueEvent({
       type: "session.deleted",
@@ -250,16 +250,16 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
 });
 
 describe("installOpencodeCommands", () => {
-  test("writes the wrap-up and action command files and is idempotent", async () => {
+  test("writes the action command files (wrap-ups register in code) and is idempotent", async () => {
     const { installOpencodeCommands } = await import("../src/commands");
     const home = mkdtempSync(join(tmpdir(), "thatch-cmds-"));
     try {
       const first = installOpencodeCommands(home);
       const names = first.map((p) => p.split("/").pop()!.replace(/\.md$/, "")).sort();
-      expect(names).toEqual(["bug-intake", "compact", "defrag", "exit", "extract", "hygiene", "peer-review", "refine", "reflect", "self-review", "whois"]);
-      const compact = readFileSync(join(first[0]!), "utf8");
-      expect(compact).toContain("description:");
-      expect(compact).toContain("thatch_compact");
+      expect(names).toEqual(["bug-intake", "defrag", "extract", "hygiene", "peer-review", "refine", "reflect", "self-review", "whois"]);
+      const defrag = readFileSync(join(first[0]!), "utf8");
+      expect(defrag).toContain("description:");
+      expect(defrag).toContain("$ARGUMENTS");
       // Re-run: everything current, nothing rewritten.
       expect(installOpencodeCommands(home)).toEqual([]);
     } finally {
@@ -273,45 +273,43 @@ describe("installOpencodeCommands", () => {
     try {
       const dir = join(home, "opencode", "command", "thatch");
       mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, "compact.md"), "stale content");
+      writeFileSync(join(dir, "defrag.md"), "stale content");
       const written = installOpencodeCommands(home);
-      // compact.md was stale (rewritten); everything else was missing (created).
-      expect(written).toContain(join(dir, "compact.md"));
+      // defrag.md was stale (rewritten); everything else was missing (created).
       expect(written).toContain(join(dir, "defrag.md"));
-      expect(readFileSync(join(dir, "compact.md"), "utf8")).toContain("thatch_compact");
+      expect(written).toContain(join(dir, "extract.md"));
+      expect(readFileSync(join(dir, "defrag.md"), "utf8")).toContain("$ARGUMENTS");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });
 
   test("wrap-up command bodies label the sections: user text first, then the checklist", async () => {
-    // opencode replaces $ARGUMENTS with the text typed after the command
-    // (/thatch/exit thanks! -> "thanks!" in the User Message section), and
-    // with no argument the section renders empty. The header labels are
-    // load-bearing: without them the user's text dangles after the
-    // checklist and reads like a sign-off addressed at the instructions.
-    const { opencodeCommandDefs } = await import("../src/commands");
-    const wrapUps = opencodeCommandDefs().filter((d) => d.name === "compact" || d.name === "exit");
+    // The wrap-ups are no longer file-installed; their template bodies
+    // load through wrapUpCommandContent (the CommandEditor's execute
+    // delivers this same text as the session prompt).
+    const { wrapUpCommandContent } = await import("../src/commands");
+    const wrapUps = (["compact", "exit"] as const).map((kind) => ({ name: kind, content: wrapUpCommandContent(kind) }));
     for (const def of wrapUps) {
       const body = def.content.slice(def.content.indexOf("---", 3) + 3);
       expect(body.trimStart()).toMatch(/^# User Message\n\n\$ARGUMENTS\n\n\(That section carries/);
       expect(body).toContain(`# Pre-${def.name === "compact" ? "compact" : "exit"} wrap-up`);
       expect(body).toContain("treat the user message as n/a");
     }
-    const exit = opencodeCommandDefs().find((d) => d.name === "exit")!;
+    const exit = wrapUpCommandContent("exit");
     // The exit template deliberately does NOT instruct the model to
     // unregister from chat: the plugin-side unregister on the greenlit
     // idle is the deterministic path, and a model-side unregister mid-turn
     // would delete the chat row before the exit branch can place the
     // session's watcher deaths by that row (the death lands unplaceable).
-    expect(exit.content).not.toContain("chat_unregister");
+    expect(exit).not.toContain("chat_unregister");
   });
 });
 
 describe("action commands", () => {
   test("each action file carries its core body and the user message section", async () => {
     const { opencodeCommandDefs, actionDefs } = await import("../src/commands");
-    const defs = opencodeCommandDefs().filter((d) => !["compact", "exit"].includes(d.name));
+    const defs = opencodeCommandDefs();
     const actions = actionDefs();
     expect(defs.map((d) => d.name)).toEqual(actions.map((a) => a.name));
     for (const def of defs) {
@@ -379,10 +377,10 @@ describe("action commands", () => {
     const opencodeNames = opencodeCommandDefs().map((d) => d.name).sort();
     const claudeNames = claudeCommandDefs().map((d) => d.name).sort();
     const promptNames = [...compilePrompts().keys()].sort();
-    // Claude Code gets the shared actions only; opencode adds the wrap-ups
-    // (needs plugin arming) and the opencode-only actions (need session
-    // identity).
-    expect(opencodeNames.sort()).toEqual([...claudeNames, "compact", "exit", "extract", "whois"].sort());
+    // Claude Code gets the shared actions only; opencode adds the
+    // opencode-only actions (need session identity). The wrap-ups register
+    // in code on opencode and never file-install on either host.
+    expect(opencodeNames.sort()).toEqual([...claudeNames, "extract", "whois"].sort());
     // MCP prompts match Claude Code's set: same shared actions, same bodies.
     expect(promptNames).toEqual(claudeNames);
   });

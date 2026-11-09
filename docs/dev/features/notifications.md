@@ -45,16 +45,14 @@ Key decisions:
   key intact: the MCP validator throws a raw zod "Unrecognized key" error,
   and v2's input repair strips it (a bare "Nothing to update", or worse a
   mixed patch that writes the valid fields while silently dropping the
-  typo); only a call that reaches execute unvalidated (opencode v1
-  forwards raw input) dies at the strict section schemas during the merge.
-  `execute` validates every key against the config schema's field lists
+  typo); only a call that reaches execute unvalidated dies at the strict
+  section schemas during the merge. `execute` validates every key against the config schema's field lists
   (derived from `config.ts`'s schema shapes, so they cannot drift) and
   returns an error naming the typo with a fuzzy `Did you mean ...?`
   suggestion (`src/fuzzy.ts`, the same git-weighted matcher the memory and
-  chat misses use). Nothing is written on a typo. Both plugin hosts
+  chat misses use). Nothing is written on a typo. Both hosts
   deliver unknown keys to this check (MCP: the validator clone
-  deep-passthroughs; opencode v2: the declared schema permits them;
-  opencode v1 forwards raw input by its own implementation) - see
+  deep-passthroughs; opencode: the declared schema permits them) - see
   `docs/dev/mcp-parity.md` for the exact per-host schema surfaces.
 - **`config_set` refuses to write when the file failed to parse.** A save
   would write a merged-whole file from the empty fallback config and silently
@@ -176,7 +174,7 @@ Details that matter:
 ## Alerts: the automatic notification path (opencode only)
 
 `src/alerts.ts` holds an in-memory state machine per session. The plugin
-runtime (both the v1 and v2 adapters feed it the same event stream) drives it
+runtime (the adapter feeds it the event stream) drives it
 from the shared `onEvent` hook; delivery reuses `sendNotification` with the
 `alerts` config section choosing the channel per event (`alertMode`, default
 `banner`). Voice and sound come from `alertVoice` (`src/config.ts`): the
@@ -198,8 +196,8 @@ Events consumed:
 |-------|---------------|
 | `question.asked` / `permission.asked` | Pause alert, deduped per request id; cleared by the matching replied/rejected event. |
 | `session.status` busy | Marks the session active and resets the round. |
-| `session.status` retry (v1 only) | Clears a recorded error -- opencode recovered on its own -- but preserves the real-work flag (the tool calls before the retry happened). |
-| `session.error` / `session.execution.failed` | Records the error name; on v2 the adapter emits this paired with the idle event, so the verdict always follows. |
+| `session.status` retry | Clears a recorded error -- opencode recovered on its own -- but preserves the real-work flag (the tool calls before the retry happened). |
+| `session.error` (from `session.execution.failed`) | Records the error name; the adapter emits this paired with the idle event, so the verdict always follows. |
 | `session.status` idle (from active) | The verdict: error alert, done alert, or silence. A recorded error delivers its verdict WITHOUT the message fetch (the fetch rides the same host API whose failure plausibly accompanied the failure). |
 | `session.deleted` | Drops the state. |
 
@@ -222,10 +220,8 @@ this a real round of work the user asked for?":
   `HostCapabilities.sessionMessages` output). The round delimiter is v2's
   own idle marker: v2 appends a `{type: "idle"}` marker message at every
   turn end (`SessionMessage.Idle`), so the round is everything after the
-  previous marker -- the host's turn definition, immune to mid-round
-  steers. V1 has no markers and falls back to "newest non-assistant message
-  triggered the round" (a mid-round steer under-classifies there; accepted
-  v1 limitation).
+  previous marker - the host's turn definition, immune to mid-round
+  steers.
 
 Silence rules, in verdict order:
 
@@ -235,8 +231,7 @@ Silence rules, in verdict order:
   tests (whose client mocks have no message surface) from ever spawning a
   real banner.
 - **Synthetic-trigger silence** -- nudges, background-task completions, and
-  watcher wake-ups are synthetic deliveries (v2: their own message kind; v1:
-  all-synthetic text parts on the user message). A round they triggered
+  watcher wake-ups are synthetic deliveries (their own message kind). A round they triggered
   never fires the DONE alert, even when it does real work. It is a silence
   on the done verdict only: a synthetic round that ends in a real error
   still banners the error. The rule exists because async thatch activity
@@ -275,7 +270,7 @@ Deduplication across TUIs is structural: the runtime is one instance per
 project directory in the shared server regardless of how many TUIs are
 attached, so per-session state is exact by construction. Delivering from the
 TUI side (opencode's attention API) would fire once per attached TUI and was
-rejected for that reason (plus v1 has no TUI plugin surface at all).
+rejected for that reason.
 
 ## Prompt surface
 
@@ -305,7 +300,7 @@ rejected for that reason (plus v1 has no TUI plugin surface at all).
   value, default).
 - `tests/tool-defs-catalog-session.test.ts` -- registry count and name list (hardcoded literals that fail loudly when the surface changes).
 - `tests/alerts.test.ts` -- the alert state machine: `deriveRoundShape`
-  (idle-marker delimiter, v1 fallback, synthetic trigger detection), the
+  (idle-marker delimiter, synthetic trigger detection), the
   real-work flag, pause dedup and re-arm, abort/shutdown silence,
   error-with-name, retry recovery, `mode: none` per event, config
   round-trip (isolated tempdir).

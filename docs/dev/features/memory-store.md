@@ -84,9 +84,8 @@ right parameter and, for show/forget, how to find exact labels
 (`memory_list` or `memory_recall`, then retry with the label copied in
 full) instead of the call dying at validation. When the call MISNAMES the
 key, the near-miss reaches the guard (unknown keys survive host
-validation: the MCP validator clone deep-passthroughs, the opencode v2
-plugin's declared schema permits them, and the opencode v1 host forwards
-raw input by its own implementation), and the guard answers with the
+validation: the MCP validator clone deep-passthroughs and the opencode
+plugin's declared schema permits them), and the guard answers with the
 correction: "you passed 'labels'; did you mean
 'label'?" - teach-only, the misnamed key's value is never applied.
 Optionality is what makes the teaching reachable: on the

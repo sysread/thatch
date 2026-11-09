@@ -1,17 +1,12 @@
 // HostCapabilities: the plugin-lifecycle operations the shared runtime needs
-// from whatever opencode version hosts it. The v1 adapter implements it over
-// the SDK client from PluginInput; the v2 adapter implements it over the v2
-// promise-context domains, degrading (catch-and-ignore or null) where the v2
-// surface lacks an operation. This is the lifecycle-level sibling of
-// CoreContext (src/tool-defs.ts), which is the per-tool-call seam; they stay
-// separate on purpose.
+// from the opencode 2.x host. The v2 adapter (src/opencode/v2.ts) implements
+// it over the plugin promise-context domains. This is the lifecycle-level
+// sibling of CoreContext (src/tool-defs.ts), which is the per-tool-call
+// seam; they stay separate on purpose.
 //
-// Typed structurally so test doubles and both adapters satisfy it without a
-// runtime dependency on either SDK package; the v1 bridge alone imports the
-// v1 SDK types (type-only, erased at runtime) so the compiler checks its
-// mapping against the real client.
-
-import type { PluginInput } from "@opencode-ai/plugin";
+// Typed structurally so test doubles satisfy it without a runtime dependency
+// on the SDK package; the adapter imports the SDK types (type-only, erased at
+// runtime) so the compiler checks its mapping against the real context.
 
 /** Minimal text-part shape used for session prompts and nudges. */
 export interface PromptPart {
@@ -46,76 +41,54 @@ export class DeliverySkippedError extends Error {
 
 export interface HostCapabilities {
   /**
-   * Whether promptSession honors noReply (deliver without starting a model
-   * turn). True on both hosts: v1 uses promptAsync with noReply; v2 routes
-   * to session.synthetic({ resume: false }) - a synthetic inbox item that
-   * does not wake execution (live-probed 2026-11-05). The flag stays until
-   * the v1 drop deletes it (Phase B of the drop-v1 plan): turning it on
-   * for a host without support would create a model-turn feedback loop.
+   * Create a session. Returns its id. The host's create API has no
+   * parentID, so an extraction child is a top-level session in the
+   * parent's project directory and only the title carries over; the
+   * runtime records the parent link in its own maps.
    */
-  readonly noReplyDelivery: boolean;
-  /**
-   * The host lets plugins register slash commands programmatically (v2's
-   * CommandEditor). When true the runtime installs only the action command
-   * FILES and the adapter registers the wrap-up commands in code (arming
-   * the greenlight check via onCommandExecuteBefore) - a registered
-   * command and an installed file with the same name would collide.
-   */
-  readonly nativeCommands: boolean;
-  /** Live session statuses, as client.session.status() returns. */
-  fetchStatuses(): Promise<Record<string, { type: string }> | null>;
-  /**
-   * Create a child session. Returns its id. v1 passes the parentID through
-   * (the host links the child); v2 has no parentID on its create API, so
-   * the child is a top-level session in the parent's project directory and
-   * only the title carries over.
-   */
-  sessionCreate(input: { parentID: string; title: string }): Promise<{ id: string }>;
+  sessionCreate(input: { title: string }): Promise<{ id: string }>;
   /**
    * Delete a session (extraction-child cleanup, so the picker stays clean
-   * and `-c` resume does not land in a child). v1: client delete. v2:
-   * session.remove on the promise domain (upstream #52387), runtime-guarded
-   * because the pinned dev types predate the surface - an older host
-   * degrades to a no-op (best-effort by the caller's contract).
+   * and `-c` resume does not land in a child). session.remove on the
+   * promise domain (upstream #52387).
    */
   sessionDelete(id: string): Promise<void>;
   /**
-   * Prompt a session with text parts. `sync` mode blocks until the child
-   * finishes (v1 client.session.prompt); async mode returns immediately
-   * (v1 client.session.promptAsync). Both may reject; callers own
-   * fire-and-forget vs await.
+   * Prompt a session with text parts. The host enqueues the message and
+   * returns while the model turn runs asynchronously, so callers own
+   * fire-and-forget vs await. May reject; the delivery guard wraps this.
    */
   promptSession(
     sessionID: string,
     body: { parts: PromptPart[]; noReply?: boolean },
-    mode: "sync" | "async",
   ): Promise<void>;
   /**
    * Fetch one session's info (title, location). Null when the host rejects.
-   * The metadata bag rides along on v2 (the spawn stamp
-   * `thatch.coordinatorSessionID` lives there); v1 sessions carry none, so
-   * the coordinator link is v2-only.
+   * The metadata bag rides along (the spawn stamp
+   * `thatch.coordinatorSessionID` lives there).
    *
-   * `time.updated` (epoch ms on v1, ISO string on v2 - the wake-swallow
-   * detector normalizes both) is the session's last turn activity: the
-   * detector compares it against a wake stamp to decide whether the wake
-   * actually produced a turn.
+   * `time.updated` (epoch ms; the wake-swallow detector also accepts an ISO
+   * string) is the session's last turn activity: the detector compares it
+   * against a wake stamp to decide whether the wake actually produced a
+   * turn.
    */
   sessionGet(id: string): Promise<{
     title?: string;
     metadata?: Record<string, unknown>;
     time?: { updated?: number | string };
   } | null>;
-  /** List sessions in this directory. Null when unavailable (v2 degrade). */
+  /**
+   * List sessions in this directory (directory-scoped, matching the `-c`
+   * continue-target resolution's needs). Null when the host rejects.
+   */
   sessionList(): Promise<{ id: string; parentID?: string; time?: { updated?: number } }[] | null>;
   /**
    * Enumerate every session the host knows (id, title, directory, parent
    * link, project link) plus each project's canonical checkout directory,
-   * for the runtime's stranded-session sweep. v1 maps client.session.list();
-   * v2 reads opencode.db readonly (its promise domain has no session list
-   * and the sweep needs machine-wide rows, not per-directory ones). Null
-   * when the host has no enumeration surface or the read fails - the sweep
-   * treats null as "nothing known, do nothing".
+   * for the runtime's stranded-session sweep. Reads opencode.db readonly
+   * (the promise domain's session list is directory-scoped and the sweep
+   * needs machine-wide rows, not per-directory ones). Null when the read
+   * fails - the sweep treats null as "nothing known, do nothing".
    */
   enumerateSessions(): Promise<{
     sessions: { id: string; title: string; directory: string; parentId: string | null; projectId: string | null }[];
@@ -126,17 +99,15 @@ export interface HostCapabilities {
    * real sessions stranded in a deleted worktree (deletion is reserved for
    * machinery sessions); moving is exactly what opencode's own
    * "session location unavailable" recovery dialog does, minus the
-   * directory picking. Optional: the v1 SDK has no move endpoint, so the
-   * v1 adapter omits it and the sweep degrades to machinery-only deletion.
+   * directory picking.
    */
-  sessionMove?(id: string, directory: string): Promise<void>;
+  sessionMove(id: string, directory: string): Promise<void>;
   /**
    * Fetch a session's message list (alert round classification). Null when
-   * unavailable. v2 reads them via
-   * session.context, mapped into this shape. Parts carry the fields the
-   * round classifier needs: tool parts name their tool, text parts carry
-   * the synthetic flag, and info.error holds the message-level error name
-   * (abort / stall detection).
+   * unavailable. Read via session.context, mapped into this shape. Parts
+   * carry the fields the round classifier needs: tool parts name their
+   * tool, text parts carry the synthetic flag, and info.error holds the
+   * message-level error name (abort / stall detection).
    */
   sessionMessages(
     id: string,
@@ -148,108 +119,18 @@ export interface HostCapabilities {
   showToast(toast: ToastInput): Promise<void>;
   /**
    * Trigger the host's compaction for a session (the wrap-up compact
-   * action). v1 dispatches the TUI's session_compact command (the legacy
-   * alias route; the id is ignored). v2 calls session.compact on the
-   * promise domain (upstream #52385), runtime-guarded because the pinned
-   * dev types predate that surface; an older host degrades to a logged
-   * no-op.
+   * action): session.compact on the promise domain (upstream #52385), the
+   * same core compaction the built-in /compact runs.
    */
   compactSession(sessionID: string): Promise<void>;
   /**
    * End the session's presence on the host (the wrap-up exit action). The
    * runtime records the session's watcher deaths and unregisters it from
    * chat BEFORE calling here, so implementations only close out the host
-   * side. v1 publishes the TUI's app.exit command - the id is unused
-   * because the whole app is leaving. v2 emits the session-tab bridge's
-   * exit-tab-closed event, a TUI-only close of the session's OWN tab (the
-   * daemon hosts every tab, so an app-wide exit would take down unrelated
-   * sessions too); a host with no bridge degrades to a logged no-op.
+   * side: the session-tab bridge's exit-tab-closed event, a TUI-only close
+   * of the session's OWN tab (the daemon hosts every tab, so an app-wide
+   * exit would take down unrelated sessions too); a host with no bridge
+   * degrades to a logged no-op.
    */
   exitHost(sessionID: string): Promise<void>;
-}
-
-/**
- * v1 implementation: the SDK client from PluginInput. The mapping mirrors
- * the v1 hook surface one call at a time, so the client-mocking tests
- * observe identical call patterns.
- */
-export function capabilitiesFromClient(client: PluginInput["client"]): HostCapabilities {
-  return {
-    noReplyDelivery: true,
-    nativeCommands: false,
-    fetchStatuses: async () => {
-      const { data } = await client.session.status();
-      return data ?? {};
-    },
-    sessionCreate: async (input) => {
-      const result = await client.session.create({ body: input });
-      return { id: result.data!.id };
-    },
-    sessionDelete: async (id) => {
-      await client.session.delete({ path: { id } });
-    },
-    promptSession: async (sessionID, body, mode) => {
-      const call = { path: { id: sessionID }, body };
-      if (mode === "async") await client.session.promptAsync(call);
-      else await client.session.prompt(call);
-    },
-    sessionGet: async (id) => {
-      const { data } = await client.session.get({ path: { id } });
-      return data ?? null;
-    },
-    sessionList: async () => {
-      const { data } = await client.session.list();
-      return data ?? null;
-    },
-    enumerateSessions: async () => {
-      const { data } = await client.session.list();
-      if (!data) return null;
-      return {
-        sessions: data.map((s) => ({
-          id: s.id,
-          title: s.title ?? "",
-          directory: (s as { directory?: string }).directory ?? "",
-          parentId: (s as { parentID?: string }).parentID ?? null,
-          projectId: null,
-        })),
-        canonicalByProject: {},
-      };
-    },
-    sessionMessages: async (id) => {
-      const { data } = await client.session.messages({ path: { id } });
-      // Map the message-level error (if any) to its name - the alert
-      // classifier matches aborts by name, and v1 message infos carry the
-      // full error object.
-      return (
-        data?.map((m) => ({
-          ...m,
-          info: {
-            ...m.info,
-            // Name-then-type fallback (mirroring the v2 mapping's
-            // type-then-name), so an error carrying only one of the two
-            // still reaches the alert classifier on both lines.
-            error:
-              (m.info as { error?: { name?: string; type?: string } } | undefined)?.error?.name ??
-              (m.info as { error?: { type?: string } } | undefined)?.error?.type,
-          },
-        })) ?? null
-      );
-    },
-    showToast: async (toast) => {
-      await client.tui.showToast({ body: toast });
-    },
-    compactSession: async () => {
-      // executeCommand only accepts legacy alias names; "session_compact"
-      // maps to the TUI's session.compact action, the same thing the
-      // built-in /compact command runs.
-      await client.tui.executeCommand({ body: { command: "session_compact" } });
-    },
-    exitHost: async () => {
-      // No exit alias exists, so publish the TUI keymap command directly -
-      // the same dispatch as the /exit slash command.
-      await client.tui.publish({
-        body: { type: "tui.command.execute", properties: { command: "app.exit" } },
-      } as Parameters<typeof client.tui.publish>[0]);
-    },
-  };
 }

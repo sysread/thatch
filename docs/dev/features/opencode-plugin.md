@@ -1,85 +1,76 @@
-# Feature: OpenCode plugin dual-adapter (v1 + v2)
+# Feature: OpenCode plugin (v2)
 
-The opencode plugin supports both opencode lines from one npm package: the
-1.18.x plugin API and the 2.x plugin API. The user's setup (shim file, config
-key, DB, skills) is identical under either host.
+The opencode plugin is the v2-only host integration: one SDK
+(`@opencode/plugin`), one entry shape, one adapter. The plugin requires
+opencode 2.1 or newer (the `session.synthetic` `resume` option and the
+typed `session.compact` / `session.remove` / `session.list` promise-domain
+members). The v1 line (opencode 1.18.x and its plugin SDK) is gone -
+dropped outright in the drop-opencode-v1 plan; a v1 host cannot load this
+plugin at all.
 
 ## Architecture
 
 ```text
-src/index.ts          dual entry -- merged default export { id, setup, server }
-  │                     opencode v1 reads default.server; v2 reads
-  │                     default.setup and strips excess keys. Both loaders
-  │                     verified against tagged upstream source.
-  ├── (lazy) → src/opencode/v1.ts   v1 adapter (@opencode-ai/plugin)
-  └── (lazy) → src/opencode/v2.ts   v2 adapter (@opencode/plugin)
-                     both delegate to:
+src/index.ts          plugin entry -- default export { id, setup }
+                        the host's module validator decodes the default
+                        export as { id, setup } and ignores named exports
+  └── (lazy) → src/opencode/v2.ts   the adapter (@opencode/plugin):
+                      registers tools/commands/hooks, builds
+                      HostCapabilities over the promise context, pumps bus
+                      events; delegates to:
                 src/runtime.ts      shared runtime (nudges, system prompt,
                                     session events, extraction, bookkeeping)
-                     ↑ consumes
+                      ↑ consumes
                 src/capabilities.ts HostCapabilities seam
 ```
 
-### The isolation rule
-
-`src/index.ts`'s static import graph must stay SDK-free. Each adapter
-imports its host's SDK (`@opencode-ai/plugin` vs `@opencode/plugin`), and the
-SDKs resolve only under their own host's install, so the entry reaches both
-adapters exclusively through dynamic `import()`. A top-level await would make
-either host's load block on (or fail from) the other host's adapter. The pure
-helpers (`osProcessArgs`, `startupSessionId`, ...) live in `src/os-args.ts`,
-which is safe to re-export statically.
-
 ### The export shape
 
-Upstream loaders decide everything:
+The host's plugin-module validator decodes `default` as `{ id, effect }`
+or `{ id, setup }` with Effect Schema; excess keys are tolerated and
+stripped, and named exports are silently ignored. `{ id, setup }` is
+therefore the whole plugin surface; `src/index.ts` lazy-imports the
+adapter inside `setup` so the SDK's module side effects evaluate there,
+not at plugin-load time.
 
-- **v1** (`packages/opencode/src/plugin/shared.ts`, `readV1Plugin`, identical
-  across 1.18.0-1.18.32): reads only `mod.default`; uses `default.server` if
-  present and never reaches the named-export ("legacy") fallback. Excess keys
-  (like `setup`) are invisible to it. A default export with `id` but no
-  `server` throws and the host SILENTLY SKIPS the plugin (error-publish is
-  commented out in the upstream caller).
-- **v2** (`packages/core/src/plugin/module.ts` @ v2.0.9): decodes `default`
-  as `{ id, effect }` or `{ id, setup }` with Effect Schema; excess keys
-  (like `server`) are tolerated and stripped (verified empirically at
-  effect@4.0.0-rc.112, the version v2 pins).
+### The capability seam
 
-So the merged object `{ id, setup, server }` satisfies both. A module with a
-named `server` export plus a v2-shaped default does NOT work on v1 -- that
-shape throws in `readV1Plugin`.
+`HostCapabilities` (src/capabilities.ts) is the interface of host
+operations the shared runtime needs - 11 members, all implemented over
+the v2 promise context by `buildCapabilities` (src/opencode/v2.ts). It is
+the lifecycle-level sibling of `CoreContext` (src/tool-defs.ts, the
+per-tool-call seam); they stay separate on purpose. This table is the
+permanent record of the contract.
 
-## The capability seam
+| Member | Implementation | Contract notes |
+|---|---|---|
+| `sessionCreate({title})` | `session.create({location, title})` | no parentID on the host API: an extraction child is a top-level session in the parent's project directory, and the runtime records the parent link in its own maps; the adapter registers the child id for event forwarding (its events carry the project directory, which the pump's directory filter would otherwise drop). A missing id throws into the extraction fallback |
+| `sessionDelete(id)` | `session.remove({sessionID})` (upstream #52387) | extraction-child cleanup, so the picker stays clean and `-c` resume does not land in a child; the strand sweep deletes machinery corpses through it too |
+| `promptSession(sessionID, {parts, noReply?})` | text join + `session.prompt` / `session.synthetic` | the prompt endpoint takes text, not parts; nudge injections ride the prompt hook. noReply deliveries (chat echoes, session-start reminder, re-attach notice) route to `session.synthetic({ resume: false })` - enqueued WITHOUT waking execution (live-probed 2026-11-05: no execution events, the prompt hook never fires for the item, the message materializes in history at the next turn's inbox delivery; the visible delta: the bubble appears at the session's next turn rather than instantly). All-synthetic bodies (watcher + chat wake nudges) route to the WAKING synthetic (`resume` defaults true). The noReply route keys on the flag, not the parts' synthetic flags - the chat echo's part is deliberately non-synthetic, and a flag-keyed route would fall through to `session.prompt`: a real model turn that calls chat tools, which echoes again |
+| `sessionGet(id)` | `session.get({sessionID})` | metadata bag rides along (the spawn stamp `thatch.coordinatorSessionID` lives there); `time.updated` (epoch ms) feeds the wake-swallow detector |
+| `sessionList()` | `session.list({directory})` | directory-scoped (live-probed 2026-11-05: the filter works, rows carry `parentID` + `time.updated` epoch ms) - the `-c` continue-target resolution wants "most recent top-level session in THIS directory" |
+| `enumerateSessions()` | readonly read of opencode.db | the strand sweep needs machine-wide rows (dead-worktree sessions belong to no live instance, and the never-activated directories have no live session.list caller) - the same readonly pattern as the `-c` inheritance resolution; null on schema drift, which the sweep treats as "nothing known, do nothing" |
+| `sessionMove(id, dir)` | `session.move({sessionID, directory})` | the strand sweep's self-heal for real sessions stranded in a deleted worktree; the session_tab spawn flow's worktree move uses the same member |
+| `sessionMessages(id)` | `session.context({sessionID})` | mapped into the `{info: {role}, parts}` shape the alert round-derivation reads (`mapSessionContextMessages`); the promise domain's session surface has no message-list endpoint |
+| `showToast(toast)` | toast rpc event | the only TUI feedback channel: the `./tui` plugin's `ui.toast.show`. Best-effort by contract (the runtime's call sites catch-and-ignore): a TUI-less environment or an rpc-less SDK floor shows nothing, silently |
+| `compactSession(id)` | `session.compact({sessionID})` (upstream #52385) | the wrap-up compact action - the same core compaction the built-in /compact runs |
+| `exitHost(id)` | exit-tab-closed rpc event | the wrap-up exit: the runtime records the session's watcher deaths and unregisters it from chat BEFORE this runs; the emit is a TUI-ONLY close of the session's OWN tab (upstream anomalyco/opencode#50984's ask - the daemon hosts every tab, so an app-wide exit would take down unrelated sessions). The pump deliberately never translates this event (a second death pass would erase the durable death row the first one wrote). Degrades to a logged no-op without the rpc surface; a TUI with no tab for the session never acts - the event is ephemeral |
 
-`HostCapabilities` (src/capabilities.ts) is the interface of host operations
-the shared runtime needs. It is the lifecycle-level sibling of `CoreContext`
-(src/tool-defs.ts, the per-tool-call seam); they stay separate on purpose.
+## Hook and registration surface
 
-| Capability | v1 source | v2 source | v2 strategy |
-|---|---|---|---|
-| bus events | `event` hook | `event.subscribe` (raw SSE) | client-side location filter; location-less events resolve via `session.get` (`{sessionID}` input) and drop unresolvable (mirrors v1's server-side filter); events for plugin-created extraction children pass by ID (they live in the project directory, which differs from the instance directory on below-root launches) |
-| incoming message | `chat.message` hook | `session.hook("prompt")` | the hook awaits the runtime; nudge injections append to the OUTBOUND request's user message whose text matches the entry's stored prompt, in the context hook (v2 wire `Message` carries parts in `content`, not `parts`). Entries form a per-session set (cap 3, oldest evicted) so a prompt queued mid-turn keeps its own entry instead of evicting the running turn's; a prompt whose nudge computation comes up empty clears the session's whole set, so the running turn's remaining rounds lose their block in that one case (smaller than the staleness it prevents: an entry left behind would match its own prompt text in later requests' session history and replay a stale block there) |
-| system prompt | `experimental.chat.system.transform` | `session.hook("context")` | mutates the request's system array; the runtime's plain strings convert to `{type: "text", text}` SystemPart objects at the boundary |
-| compaction | `experimental.session.compacting` + `.autocontinue` + `session.compacted` | `session.hook("compaction")` | flag lands; context-injection surface unverified |
-| wrap-up commands | `command.execute.before` + command files | `command.transform` + `CommandEditor.add` | registered in code: `execute` arms the greenlight check (`onCommandExecuteBefore`) and delivers the same prompt body the v1 file carries, substituting the invocation's prompt text for `$ARGUMENTS` (v2's `session.prompt` does no template expansion); the runtime installs only ACTION command files on v2 and REMOVES stale wrap-up files from earlier v1 runs (a file and a registered command with the same name would collide) |
-| tools | `hooks.tool` map via `tool()` | `tool.transform` + `ToolEditor.add` | zod shapes pre-converted to JSON Schema with our own zod (v2's `instanceof $ZodType` detection fails for ours and drops the schema); results wrap as `{ content }` |
-| tool buffering | `tool.execute.after` hook | `tool.hook("execute.after")` | wired: feeds the same extraction buffer; `Tool.Result.content` is flattened (string passes through, content-part arrays contribute their text parts); the title is derived from the tool name and args (`deriveTitle`), since v2's `Tool.Result.output` is a typed output value, not a title |
-| noReply deliveries | `promptAsync` with `noReply` | `session.synthetic({ resume: false })` | turn-free delivery works on both lines (live-probed 2026-11-05 against a real v2 binary: no execution events, the prompt hook never fires for the item, and the message materializes in history at the next turn's inbox delivery). The v2 visible delta vs v1: the bubble appears at the session's next turn rather than instantly. The routing keys on the noReply flag, not the parts' synthetic flags - the chat echo's part is deliberately non-synthetic, and a flag-keyed route would fall through to `session.prompt`: a real model turn that calls chat tools, which echoes again |
-| synthetic wake deliveries | `promptAsync` with `synthetic` parts | `session.synthetic` endpoint | watcher + chat wake nudges route to v2's synthetic endpoint (TUI-hidden), matching v1 |
-| child sessions | `client.session.create/promptAsync/prompt/delete` | `session.create/prompt` | create+prompt supported (a missing id throws into the extraction fallback); delete rides `session.remove` (upstream #52387, in v2.0.22), runtime-guarded like compact -- an older host keeps the documented gap (the session picker accumulates one `thatch-extraction` entry per extraction, and `-c` "continue last session" logic that picks the newest top-level session will land in an extraction child after any session that triggered extraction); the strand sweep deletes such corpses opportunistically and moves stranded real sessions to their project's canonical checkout (see session-lifecycle.md) |
-| session status | `client.session.status` | none | returns `{}`; the wake gate treats unknown as idle and the event-fed status map does the gating |
-| session messages | `client.session.messages` | `session.context` | mapped into the v1 `{info: {role}, parts}` shape, so the alert round-shape derivation works (the promise domain has no `message` accessor) |
-| session list | `client.session.list` | `session.list({ directory })` | directory-scoped list matching v1's client semantics (live-probed 2026-11-05: the filter works, rows carry `parentID` + `time.updated` epoch ms) - the `-c` resume listing works on both lines |
-| session enumeration (strand sweep) | `client.session.list` | readonly read of opencode.db | the sweep needs machine-wide rows (dead-worktree sessions belong to no live instance, and the never-activated directories have no live session.list caller), so the v2 adapter reads `session_v2` + `project` directly -- the same readonly pattern as the `-c` inheritance resolution; null on schema drift, which the sweep treats as "nothing known, do nothing" (a `session.list`-based re-evaluation needs the scope question answered - see the drop-v1 plan's D7) |
-| session move | none | `session.move` (promise domain) | the strand sweep's self-heal for real sessions stranded in a deleted worktree; v1 has no move endpoint, so the adapter omits it and the sweep degrades to machinery-only deletion |
-| compaction trigger | `client.tui.executeCommand("session_compact")` | `session.compact({sessionID})` | wired behind a runtime guard: upstream [#52385](https://github.com/anomalyco/opencode/pull/52385) exposed `session.compact` on the promise domain (in the installed v2.0.25), newer than the pinned dev types - an older host degrades to a logged no-op (the wrap-up checklist and flush still run, the automatic compaction is skipped) |
-| toasts | `client.tui.showToast` | toast rpc event | wired: every runtime toast call site (alerts, extraction metrics, chat registration, watcher rearm notices) emits the bridge's `toast` event, which the `./tui` plugin shows via `ui.toast.show`; the pump never translates it (TUI-only by nature). Best-effort by contract: a TUI-less environment or an rpc-less SDK floor shows nothing, silently |
-| redo command (/s) | none | keymap slash command | the `./tui` plugin registers a keymap layer with `slash: {name: "s", arguments: true}` (v2 ships a built-in `/redo` that CANCELS a staged undo, so the free name is `s`); the core (src/redo-shared.ts) is SDK-free with injected client ops - parse the perl-style substitution, page-walk `client.message.list` (desc, cursor) to the last real user message, run the guards (staged undo, pending inbox, delivered chat wake), and only then the /undo trio (`interrupt` + `wait` + `revert.stage`) followed by `session.prompt` resubmit of the edited text; every failure aborts before the revert. See the redo command section below |
-| wrap-up exit | `client.tui.publish` | exit-tab-closed rpc event | the wrap-up exit runs the runtime's death callback synchronously (the runtime, before the chat unregister - `sessionDied` places the death row by the chat row, so the order is load-bearing; the durable row write + care-based delivery ride an async continuation) and then emits `rpc.thatch-tabs.exit-tab-closed`, a TUI-ONLY close of the session's OWN tab (the `./tui` plugin's `ui.tabs.close`): the tab-scoped semantic upstream [anomalyco/opencode#50984](https://github.com/anomalyco/opencode/issues/50984) asks for, since the daemon hosts every tab and `app.exit` would take down unrelated sessions. The pump deliberately never translates this event (a second death pass would erase the durable death row the first one wrote; the session_tab_close tool's `tab-closed` is the only death-translating event). Degrades to a logged no-op without the rpc surface; a TUI with no tab for the session (headless run, tabs off) never acts - the event is ephemeral |
-| session tabs | n/a | rpc event bridge | `thatch_session_tab` (v2Only) spawns a detached subordinate session (create -> move -> chat-register -> emit `rpc.thatch-tabs.tab-opened` -> prompt); the `./tui` CLI plugin consumes the event and calls `ui.tabs.open` (open-without-focus, idempotent). `thatch_session_tab_open` (v2Only) reopens a tab for an EXISTING session by emitting the SAME event (second emitter, wire schema unchanged) behind a dead-directory guard (sessionGet + fs check in the adapter's `openTab` - a session whose checkout is gone would open the TUI's "Session location unavailable" dialog, so the tool refuses). `thatch_session_tab_close` emits `rpc.thatch-tabs.tab-closed {sessionID, chatName}` - the pump translates it into the runtime's confirmed-death path. The registration's third event, `exit-tab-closed` (the wrap-up exit's), is TUI-only - see the wrap-up exit row |
-| tab close | n/a | no session.deleted on v2 tab close | bounded 2026-10-07: watcher death detection cancels a closed tab's watchers once its pending events age past `THATCH_WATCH_DEATH_MINUTES` (default 120) while deliveries throw 404-class errors, and the death is care-routed: a toast banner for the user plus a prompt push to the dead subordinate's coordinator (its spawn metadata `thatch.coordinatorSessionID`), never an arbitrary same-project peer; the roster row itself still lingers until the reaper. NOTE: an earlier version of this row claimed deliveries "fail their idle gate" - wrong: the v2 gate opens (the status stub reads as idle) and the PROMPT fails; same leak, different link |
-| wake gate after reload | `session.status` event map | map rehydrates empty | known gap: v2's fetchStatuses stub is structural (the promise context has no session.status), so in the reload window - until the session's next status event - the proactive-prompt gate is fully open |
-| dispose | `dispose` hook | cleanup returned from `setup` | must be idempotent: v2 auto-reloads plugins on file change, and a non-idempotent cleanup doubles pollers/pumps/nudges. Volatile runtime state (extraction buffer + accepted entries, child bookkeeping, wrap-up arms, watcher definitions) is journaled to the `runtime_state` table - instance-scoped by the writing location's directory - and rehydrated on the next `setup()`: rows from the same process AND directory (a reload) all restore; child rows carry a kind marker (extraction vs task-dispatched sub-agent, defaulting to extraction for pre-marker rows) so only extraction children restore the `extracting`/`extractionChildren` sets; rows from a dead process are pruned unless the session is the `-c`/`-s` startup resume, which inherits recovery-safe state only (buffer requeued, no live child bookkeeping - the child died with the old process); a dead process's journaled extraction children are also DELETED through the host before the prune (the opencode session row is global and would otherwise outlive the journal as a picker corpse - the restart-window leak). Exception: a dead process's watcher definitions are kept as DORMANT rows (no polling, no delivery) instead of pruned - resuming the session re-arms them on its first message (a `chat.message` scan: own rows re-arm, same-directory rows of still-dead sessions banner the user via the notify pipeline, gated on the owning pid being dead, rows past the watcher TTL plus a 24h grace age out). Restored sessions get a synthetic noReply re-attach notice on both hosts (v2 via the resume:false synthetic; it materializes at the session's next turn). The chat poller re-hosts the instance's journaled hosted set on reload, so pending chat mail wakes sessions the reload left asleep and heartbeats keep the reaper from reaping live registrations. The embedding model is refcounted per db path, so N location instances share one resident model. An extraction journal sweep (same boot + interval timer as the strand sweep, session-lifecycle.md) reclaims stranded `buffer`/`accepted` rows whose directory died or that went silent past a TTL, plus a global AGE-ONLY pass over `watcher_death` rows (the bound on unpicked stamped rows; death rows are exempt from the dead-directory rule, since the coordinator consuming the row runs in the main checkout) |
+| Runtime need | Host surface | Strategy |
+|---|---|---|
+| bus events | `event.subscribe` (raw SSE) | client-side location filter; location-less events resolve via the `sessionDirs` cache or `session.get` and drop unresolvable; events for plugin-created extraction children pass by ID; `session.moved` routes to both the old and new location's instances, so it bypasses the generic gate and lets the runtime act on its own membership |
+| incoming message | `session.hook("prompt")` | the hook awaits the runtime; nudge injections append to the OUTBOUND request's user message whose text matches the entry's stored prompt, in the context hook (wire `Message` carries parts in `content`, not `parts`). Entries form a per-session set (cap 3, oldest evicted) so a prompt queued mid-turn keeps its own entry instead of evicting the running turn's; a prompt whose nudge computation comes up empty clears the session's whole set, so the running turn's remaining rounds lose their block in that one case (smaller than the staleness it prevents: an entry left behind would match its own prompt text in later requests' session history and replay a stale block there) |
+| system prompt | `session.hook("context")` | mutates the request's system array; the runtime's plain strings convert to `{type: "text", text}` SystemPart objects at the boundary |
+| compaction | `session.hook("compaction")` | marks the session compacting AND injects the re-familiarization system context (the compaction request carries the same mutable `system` array the context hook mutates) |
+| wrap-up commands | `command.transform` + `CommandEditor.add` | registered in code: `execute` arms the greenlight check (`onCommandExecuteBefore`) and delivers the template's prompt body, substituting the invocation's prompt text for `$ARGUMENTS` (`session.prompt` does no template expansion); only ACTION command files install on disk - a file with the same name as a registered command would collide, and pre-drop wrap-up files are removed at load |
+| tools | `tool.transform` + `ToolEditor.add` | `thatch_` names; input schemas pre-converted to JSON Schema with our own zod (the host's `instanceof $ZodType` detection fails for ours and drops the schema); results wrap as `{ content }` |
+| tool buffering | `tool.hook("execute.after")` | feeds the extraction buffer; `Tool.Result.content` is flattened (string passes through, content-part arrays contribute their text parts); the title is derived from the tool name and args (`deriveTitle`), since `Tool.Result.output` is a typed output value, not a title |
+| session tabs | rpc event bridge | `thatch_session_tab` (opencodeOnly) spawns a detached subordinate session (create -> move -> chat-register -> emit `rpc.thatch-tabs.tab-opened` -> prompt); the `./tui` CLI plugin consumes the event and calls `ui.tabs.open` (open-without-focus, idempotent). `thatch_session_tab_open` reopens a tab for an EXISTING session by emitting the SAME event behind a dead-directory guard (sessionGet + fs check in the adapter's `openTab` - a session whose checkout is gone would open the TUI's "Session location unavailable" dialog, so the tool refuses). `thatch_session_tab_close` emits `rpc.thatch-tabs.tab-closed {sessionID, chatName}` - the pump translates it into the runtime's confirmed-death path |
+| redo command (/s) | keymap slash command | see the redo command section below |
+| dispose | cleanup returned from `setup` | must be idempotent: the host auto-reloads plugins on file change, and a non-idempotent cleanup doubles pollers/pumps/nudges. Volatile runtime state (extraction buffer + accepted entries, child bookkeeping, wrap-up arms, watcher definitions) is journaled to the `runtime_state` table - instance-scoped by the writing location's directory - and rehydrated on the next `setup()`: rows from the same process AND directory (a reload) all restore; child rows carry a kind marker (extraction vs task-dispatched sub-agent, defaulting to extraction for pre-marker rows) so only extraction children restore the `extracting`/`extractionChildren` sets; rows from a dead process are pruned unless the session is the `-c`/`-s` startup resume, which inherits recovery-safe state only (buffer requeued, no live child bookkeeping - the child died with the old process); a dead process's journaled extraction children are also DELETED through the host before the prune. Exception: a dead process's watcher definitions are kept as DORMANT rows (no polling, no delivery) instead of pruned - resuming the session re-arms them on its first message. Restored sessions get a synthetic noReply re-attach notice (the resume:false synthetic; it materializes at the session's next turn). The chat poller re-hosts the instance's journaled hosted set on reload. The embedding model is refcounted per db path, so N location instances share one resident model |
+| wake gate | event-fed status map | the host exposes no live session-status endpoint to plugins; the gate reads the compacting set and the event-fed map only, and absence from the map is not evidence of busy (the `-s` startup session is hosted from init, before it emits any status event). Known gap: in the reload window - until the session's next status event - the gate is fully open |
 
 ## The redo command (/s)
 
@@ -91,9 +82,9 @@ No LLM is involved.
 
 - **Registration**: a keymap layer in `src/opencode/tui-plugin.ts`
   (`{id: "thatch.redo", slash: {name: "s", arguments: true}, run}`),
-  additive to the existing `data.listen` setup. The name is `s` because v2
-  ships a built-in `/redo` that cancels a staged undo - the recovery path
-  every guard toast points at, and the opposite semantic.
+  additive to the existing `data.listen` setup. The name is `s` because the
+  host ships a built-in `/redo` that cancels a staged undo - the recovery
+  path every guard toast points at, and the opposite semantic.
 - **SDK-free core**: `src/redo-shared.ts` (the session-tab-shared isolation
   pattern - zero SDK imports; the client arrives as the injected
   `RedoSessionOps` narrow interface, so the destructive-ordering invariant
@@ -120,9 +111,9 @@ No LLM is involved.
 
 ## Live verification and remaining unknowns
 
-The v2 adapter was written against tagged source (v2.0.9) before a live
+The adapter was written against tagged source (v2.0.9) before a live
 binary was available, then verified against a real v2.0.15 binary on
-2026-09-23: merged-default loading, tool schemas (via pre-converted JSON
+2026-09-23: default-export loading, tool schemas (via pre-converted JSON
 Schema - see the gotcha), event shapes, the execution-lifecycle idle signal,
 synthetic wake delivery, and command registration all work; the full QA
 suite runs green against a v2 serve.
@@ -142,9 +133,9 @@ only" before that):
   binding available, not an airtight one: an identical prompt re-submitted
   after a missed prompt hook still matches and replays; the next
   prompt-hook run that fires is the recovery. The prompt-time block still
-  re-fires on every round of its OWN turn (v1's persistent-synthetic-part
-  semantics), and the block carries a snapshot footer stating the labels
-  are a submission-time snapshot and pointing at the live re-check tool.
+  re-fires on every round of its OWN turn, and the block carries a
+  snapshot footer stating the labels are a submission-time snapshot and
+  pointing at the live re-check tool.
 - Whether `SessionGenerate.messages` are fresh objects per model call within
   a turn. The context hook appends injections to the matched message's
   content, which changes the text the binding check compares. With fresh
@@ -161,56 +152,62 @@ only" before that):
   directory, but the session hooks (`prompt`, `context`, `compaction`)
   have no such filter - whether a hook can fire for another directory's
   session is unverified, pre-existing.
-- An npm-installed copy (not the dev checkout, which has devDependencies
-  present) loading under v2 - the isolation rule's real-world proof.
 
 The wrap-up exit closes the session's own tab over the session-tab rpc
-bridge - the tab-scoped close upstream
-[anomalyco/opencode#50984](https://github.com/anomalyco/opencode/issues/50984)
-asks for. Known degrade: a TUI with no tab for the session (headless run,
+bridge. Known degrade: a TUI with no tab for the session (headless run,
 tabs off) never acts - the event is ephemeral, nobody is listening.
-Install opencode-v2 (brew formula `anomalyco/tap/opencode-v2`; conflicts
-with the v1 formula's binary name, so it cannot coexist) and re-run the
-QA live suite against it.
+
+The whole-repo drift gate (`tests/no-v1-sdk.test.ts`) enforces the
+one-SDK rule: no file under src/, tests/, qa/, bin/, or package.json may
+reference the v1 SDK package scope, so the v1 adapter cannot quietly
+return.
 
 ## User setup compatibility
 
 No config file moves or changes format. The DB, model cache, version-check
-files, and skills dirs are host-agnostic and shared. opencode's own config
-key (`plugin` vs `plugins`) is auto-migrated by v2. The only user-owned file
-with a content change is the dev-session shim, and its new dual-shape content
-loads under both hosts.
+files, and skills dirs are host-agnostic. The dev-session shim is a plain
+default-export re-export (see docs/user/setup.md); the named `server`
+re-export from pre-drop shims no longer exists and fails to load.
 
-The session-tab feature adds a second user-owned artifact: the TUI-side
-plugin entry. A local FILE plugin shim carries a `server` entrypoint only
-(v2's `plugin/module.ts`), and the TUI's plugin discovery loads directories
-and symlinks, never plain files - so the dev-checkout install must be a
-DIRECTORY shim: `thatch/index.ts` (the dual-shape re-export, unchanged) plus
-`thatch/tui.ts` (re-exporting the TUI plugin). DELETE the old `thatch.ts`
-file in the same step - a file and a directory shim coexisting dies with
-`duplicate instance plugin ids: thatch` before any plugin code runs (the
-duplicate check is in activation, so nothing inside the plugin can
-self-heal it).
+The session-tab feature needs the DIRECTORY shim form so the TUI's plugin
+discovery (directories and symlinks, never plain files) can load the
+`./tui` entrypoint: `thatch/index.ts` plus `thatch/tui.ts`. DELETE the old
+`thatch.ts` file in the same step - a file and a directory shim
+coexisting dies with `duplicate instance plugin ids: thatch` before any
+plugin code runs (the duplicate check is in activation, so nothing inside
+the plugin can self-heal it).
 
 ## Source files
 
-- `src/index.ts` -- dual entry, merged default export, lazy wrappers
-- `src/opencode/v1.ts` -- v1 hooks adapter
-- `src/opencode/v2.ts` -- v2 promise-context adapter + capability impl
-- `src/opencode/tui-plugin.ts` -- v2 TUI CLI plugin (the `./tui` entrypoint: consumes the session-tab rpc events, drives `ui.tabs`, registers the /s redo command)
-- `src/session-tab-shared.ts` -- the cross-entry session-tab contract (rpc definition, prompt builder, validators)
-- `src/redo-shared.ts` -- the /s redo command's SDK-free core (substitution parser, apply engine, orchestration over injected ops)
-- `tests/redo-shared.test.ts` -- the redo command's parser, apply, guard, and ordering tests (mocked deps)
-- `src/capabilities.ts` -- `HostCapabilities`, `capabilitiesFromClient`
+- `src/index.ts` -- plugin entry: default export `{ id, setup }`, lazy
+  adapter import
+- `src/opencode/v2.ts` -- the adapter: setup, registrations, event pump,
+  HostCapabilities implementation, the session-tab host flow
+- `src/opencode/tui-plugin.ts` -- the TUI CLI plugin (the `./tui`
+  entrypoint: consumes the session-tab rpc events, drives `ui.tabs`,
+  registers the /s redo command)
+- `src/session-tab-shared.ts` -- the cross-entry session-tab contract (rpc
+  definition, prompt builder, validators)
+- `src/redo-shared.ts` -- the /s redo command's SDK-free core (substitution
+  parser, apply engine, orchestration over injected ops)
+- `tests/redo-shared.test.ts` -- the redo command's parser, apply, guard,
+  and ordering tests (mocked deps)
+- `src/capabilities.ts` -- `HostCapabilities`, `PromptPart`, `ToastInput`,
+  `DeliverySkippedError`
 - `src/runtime.ts` -- the shared runtime (all behavioral logic)
 - `src/os-args.ts` -- pure argv helpers
-- `tests/opencode-v2-*.test.ts` -- v2 adapter contract tests (mocked context; shared fixtures in `tests/mocks/opencode-v2-harness.ts`)
-- `tests/session-tab-shared.test.ts` -- session-tab validators, rpc definition shape, TUI guard logic
-- `tests/plugin-*.test.ts` -- v1 adapter contract tests (mocked client; shared fixtures in `tests/mocks/plugin-harness.ts`)
+- `tests/opencode-v2-*.test.ts` -- adapter contract tests (mocked context;
+  shared fixtures in `tests/mocks/opencode-v2-harness.ts` and
+  `tests/mocks/v2-harness.ts`)
+- `tests/plugin-*.test.ts` -- runtime behavior tests through the v2
+  harness
+- `tests/session-tab-shared.test.ts` -- session-tab validators, rpc
+  definition shape, TUI guard logic
+- `tests/no-v1-sdk.test.ts` -- the one-SDK drift gate
 
 ## Interactions with other features
 
-Everything downstream of the hooks is unchanged by the dual adapter:
+Everything downstream of the hooks is unchanged by the adapter:
 [extraction.md](extraction.md), [nudge-pipeline.md](nudge-pipeline.md),
 [session-lifecycle.md](session-lifecycle.md),
 [cross-session-chat.md](cross-session-chat.md),

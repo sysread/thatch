@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { setup } from "../src/opencode/v2";
@@ -35,7 +35,7 @@ setDefaultTimeout(90_000);
 // The v2 adapter's registration, wrap-up commands (/thatch/compact,
 // /thatch/exit), and the SDK capability floors: greenlight-gated host
 // actions on a current host, the blocked path, and the logged no-op
-// degrades when the host lacks session.compact / the rpc surface.
+// degrade when the host lacks the rpc surface.
 
 let cleanup: (() => Promise<void>) | undefined;
 
@@ -84,10 +84,9 @@ describe("opencode v2 adapter", () => {
     expect(sessionPromptCalls.filter((c: any) => String(c?.text).includes("plugin reloaded"))).toEqual([]);
   });
 
-  test("session-start reminder delivers on v2 via the resume:false synthetic", async () => {
-    // The second noReply fix site: the reminder was gated off on v2
-    // entirely (noReplyDelivery false); with the flag true it flows through
-    // the same no-wake synthetic path as the re-attach notice.
+  test("session-start reminder delivers via the resume:false synthetic", async () => {
+    // The second noReply feature site: the reminder rides the same
+    // no-wake synthetic path as the re-attach notice.
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await queueEvent({
       type: "session.created",
@@ -189,37 +188,6 @@ describe("opencode v2 adapter", () => {
     expect(sessionPromptCalls[1].text).toContain("Pre-exit wrap-up");
   });
 
-  test("loading the v2 adapter never evaluates the v1 SDK (isolation rule)", () => {
-    // A v2 user install skips optional peers, so @opencode-ai/plugin is
-    // ABSENT. Simulate the absence in a SUBPROCESS (module mocks are
-    // process-global, so an in-process mock would leak into the v1 adapter
-    // tests): a generated test file registers a mock that throws on
-    // require, then imports the v2 adapter. If any RUNTIME import path
-    // from src/opencode/v2.ts reached tools.ts (the v1 wrapper), the
-    // import would explode here - and on a real v2 host it would kill the
-    // whole plugin load.
-    const probe = join(dbDir, "iso-probe.test.ts");
-    writeFileSync(
-      probe,
-      [
-        `import { test, mock } from "bun:test";`,
-        `mock.module("@opencode-ai/plugin", () => {`,
-        `  throw new Error("SIMULATED ABSENCE: @opencode-ai/plugin must not load under v2");`,
-        `});`,
-        `test("v2 adapter loads without the v1 SDK", async () => {`,
-        `  await import(${JSON.stringify(join(import.meta.dir, "..", "src", "opencode", "v2.ts"))});`,
-        `});`,
-      ].join("\n"),
-    );
-    const proc = Bun.spawnSync([process.execPath, "test", probe], {
-      cwd: join(import.meta.dir, ".."),
-      env: { ...process.env, THATCH_DB_PATH: join(dbDir, "iso.db"), XDG_CONFIG_HOME: join(dbDir, "config") },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    expect(proc.exitCode).toBe(0);
-  });
-
   test("cleanup is idempotent and disposes the runtime once", async () => {
     const context = makeContext();
     const dispose = (await setup(context as any)) as () => Promise<void>;
@@ -263,7 +231,7 @@ describe("opencode v2 adapter", () => {
   test("a greenlit /thatch/compact triggers session.compact on the next idle", async () => {
     // The greenlight is the zero-arg thatch_compact tool call; the compact
     // fires on the session's next idle.
-    cleanup = (await setup(makeContext({ compact: true }) as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const compact = addedCommands.find((c) => c.name === "thatch/compact")!;
     await compact.execute({ sessionID: "ses_v2_wrap_ok" });
     expect(wrapupArmed("ses_v2_wrap_ok")).toBe(true);
@@ -430,7 +398,7 @@ describe("opencode v2 adapter", () => {
     // The blocked path died with the token: blockers are prose per the
     // template, and an un-greenlit compact idle (e.g. a background
     // extractor running mid-checklist) must not consume the arm or toast.
-    cleanup = (await setup(makeContext({ compact: true }) as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const compact = addedCommands.find((c) => c.name === "thatch/compact")!;
     await compact.execute({ sessionID: "ses_v2_wrap_mid" });
     await queueEvent({
@@ -456,29 +424,6 @@ describe("opencode v2 adapter", () => {
     });
     await waitFor("late session.compact called", () => sessionCompactCalls.length === 1);
     expect(wrapupArmed("ses_v2_wrap_mid")).toBe(false);
-  });
-
-  test("an older SDK without session.compact degrades to a logged no-op, not a crash", async () => {
-    // The pinned dev types predate upstream #52385, so the adapter guards
-    // the call at runtime; the default context (no compact member) models
-    // that older host.
-    const { lines } = await captureConsoleError(async () => {
-      cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
-      const compact = addedCommands.find((c) => c.name === "thatch/compact")!;
-      await compact.execute({ sessionID: "ses_v2_wrap_floor" });
-      const compactTool = addedTools.find((t) => t.name === "thatch_compact")!;
-      await compactTool.execute({}, { sessionID: "ses_v2_wrap_floor", agent: "build" });
-      await queueEvent({
-        type: "session.execution.succeeded",
-        location: { directory: SESSION_DIR },
-        data: { sessionID: "ses_v2_wrap_floor" },
-      });
-      await waitFor("wrap-up resolved on the floor host", () => !wrapupArmed("ses_v2_wrap_floor"));
-      await new Promise((r) => setTimeout(r, 150));
-      expect(sessionCompactCalls.length).toBe(0);
-      return;
-    });
-    expect(lines.some((line) => line.includes("compaction trigger unavailable"))).toBe(true);
   });
 
   test("a host without the rpc surface exits greenlit with a logged no-op", async () => {

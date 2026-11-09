@@ -56,9 +56,8 @@ For local development before publishing, use a file path:
 { "plugin": ["./path/to/thatch/src/index.ts"] }
 ```
 
-The same file loads on both opencode lines (1.x via its `server` export,
-2.x via its default export). Or place the thatch repo in
-`.opencode/plugins/` for auto-loading.
+The file's default export (`{ id, setup }`) is what the host loads. Or
+place the thatch repo in `.opencode/plugins/` for auto-loading.
 
 ### Claude Code
 

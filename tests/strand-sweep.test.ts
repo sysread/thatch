@@ -235,7 +235,6 @@ describe("strand sweep integration (v2 db-read enumeration, boot trigger)", () =
     ]);
     try {
       cleanup = (await setup(makeContext({
-        remove: true,
         location: { directory: LIVE_DIR, project: { directory: LIVE_DIR, canonical: LIVE_DIR } },
       }) as any)) as () => Promise<void>;
 
@@ -278,7 +277,6 @@ describe("strand sweep integration (v2 db-read enumeration, boot trigger)", () =
     process.env.OPENCODE_DB = "/nonexistent/opencode.db";
     try {
       cleanup = (await setup(makeContext({
-        remove: true,
         location: { directory: LIVE_DIR, project: { directory: LIVE_DIR, canonical: LIVE_DIR } },
       }) as any)) as () => Promise<void>;
       // Negative wait: the sweep must NOT act. The degrade (enumerate

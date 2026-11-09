@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { journalResult, parseQaVerdict, QA_ROOT, RESULT_JOURNAL } from "./qa/runner";
+import { journalGuarded, journalResult, parseQaVerdict, QA_ROOT, RESULT_JOURNAL } from "./qa/runner";
 
 // The QA verdict parser (tests/qa/runner.ts): the LAST "Result:" line
 // decides. Line-start anchored so quoted prose mid-line cannot override a
@@ -62,5 +62,26 @@ describe("result journal", () => {
     // swallows, which the happy-path test above already exercises. This
     // test pins that a nonexistent parent dir does not throw.
     expect(() => journalResult({ uc: "UC-X", leg: null, result: "PASS" })).not.toThrow();
+  });
+
+  test("a THROWN use case still journals its name (journalGuarded)", async () => {
+    // The crash-path pin (the 2026-11-09 gap: UC-100's waitFor timeout
+    // bypassed the completion-path write, so the failing name existed only
+    // in truncated stdout). journalGuarded journals THREW + the error head
+    // and rethrows.
+    const boom = new Error("waitFor: timed out waiting for: canary delivered");
+    let rethrew = false;
+    try {
+      await journalGuarded({ uc: "UC-THROWTEST", leg: "v2" }, async () => {
+        throw boom;
+      });
+    } catch (err) {
+      rethrew = err === boom;
+    }
+    expect(rethrew).toBe(true);
+    const lines = readFileSync(RESULT_JOURNAL, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const threw = lines.find((l) => l.uc === "UC-THROWTEST");
+    expect(threw).toMatchObject({ result: "THREW", leg: "v2" });
+    expect(threw.output).toContain("canary delivered");
   });
 });

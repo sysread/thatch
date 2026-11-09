@@ -257,11 +257,11 @@ export interface SessionTabHost {
 }
 
 /**
- * A tool definition - the single source of truth shared by the opencode plugin
- * wrapper (tools.ts) and the MCP server (mcp.ts). The `args` field is a ZodRawShape
- * (a plain object of Zod types), which opencode's `tool()` accepts directly and
- * the MCP server wraps in `z.object()` for validation (a deep-passthrough clone,
- * so typo'd keys survive into the accept-then-teach guards) and
+ * A tool definition - the single source of truth shared by the opencode
+ * plugin registration (src/opencode/v2.ts) and the MCP server (mcp.ts).
+ * The `args` field is a ZodRawShape (a plain object of Zod types), which
+ * the MCP server wraps in `z.object()` for validation (a deep-passthrough
+ * clone, so typo'd keys survive into the accept-then-teach guards) and
  * `z.toJSONSchema()` for the protocol response.
  */
 export interface ToolDef {
@@ -270,20 +270,12 @@ export interface ToolDef {
   args: Record<string, z.ZodType>;
   execute(args: Record<string, unknown>, ctx: CoreContext, host?: HostToolContext): Promise<string>;
   /**
-   * When true, the tool exists only on the opencode plugin path and the MCP
-   * server filters it out of tools/list. Used for tools that depend on host
-   * capabilities MCP hosts lack (e.g. session identity).
+   * When true, the tool exists only on the opencode plugin path and the
+   * MCP server filters it out of tools/list. Used for tools that depend on
+   * host capabilities MCP hosts lack (e.g. session identity, or the
+   * session-tab bridge's create/move/prompt/emit flow).
    */
   opencodeOnly?: boolean;
-  /**
-   * When true, the tool exists only on the opencode v2 adapter path: the v1
-   * adapter's createTools and the MCP server filter it out. Used for tools
-   * whose host needs ride v2-only plugin surfaces (e.g. the session-tab
-   * tool's create/move/prompt/emit flow). The def carries v2Only only -
-   * never also opencodeOnly - so the opencodeOnly name assertions are
-   * untouched and each filter site tests `opencodeOnly || v2Only`.
-   */
-  v2Only?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -2307,7 +2299,9 @@ const watchCancelDef: ToolDef = {
  * "[registered] NAME" and "[sent] to NAME (session-id prefix)" shapes, the
  * "[broadcast] to N session[s]" fan-out header, and the exact
  * "Inbox empty." sentinel that suppresses the read echo. Reformat them in
- * the same change as chatEchoText and its tests.
+ * the same change as chatEchoText and the tests that pin these shapes
+ * (the echo describe in tests/chat-echo.test.ts and the echo-delivery
+ * pins in tests/plugin-entry.test.ts).
  */
 
 /**
@@ -2884,12 +2878,12 @@ const chatStatusDef: ToolDef = {
  * The def validates everything it can locally (title, exactly-one location
  * arg, directory existence, worktree-repo identity) and delegates the host
  * flow - chat registration, session creation, the move, the rpc emit, and
- * prompt delivery - to the v2 adapter through the sessionTabHost seam.
+ * prompt delivery - to the adapter through the sessionTabHost seam.
  * chatName resolution for the preamble happens here because the tool has
  * the db handle; the adapter receives it ready-made.
  *
- * v2Only: the whole flow rides v2 plugin surfaces (session.move, rpc emit)
- * with no v1 or MCP equivalent.
+ * opencodeOnly: the whole flow rides plugin host surfaces (session.move,
+ * rpc emit) with no MCP equivalent.
  */
 const sessionTabDef: ToolDef = {
   name: "session_tab",
@@ -2926,7 +2920,7 @@ const sessionTabDef: ToolDef = {
       "tab opens in this window's strip regardless of where the directory is.",
     ),
   },
-  v2Only: true,
+  opencodeOnly: true,
   async execute(args, ctx, host) {
     if (!host) {
       return "Session tabs are unavailable: this host did not provide a session context.";
@@ -2988,9 +2982,9 @@ const sessionTabDef: ToolDef = {
  * deleted, and the already-open case is a silent idempotent no-op.
  *
  * The def validates the target locally and delegates the host flow - the
- * live-session lookup, the dead-directory guard, and the emit - to the v2
+ * live-session lookup, the dead-directory guard, and the emit - to the
  * adapter through the sessionTabHost seam, the same pattern as the spawn
- * and close tools. v2Only: same surfaces as the spawn tool.
+ * and close tools. opencodeOnly: same surfaces as the spawn tool.
  */
 const sessionTabOpenDef: ToolDef = {
   name: "session_tab_open",
@@ -3007,7 +3001,7 @@ const sessionTabOpenDef: ToolDef = {
       "Which session's tab to open: its chat name (e.g. 'bishop-the-synthetic-00001') or its session id (ses_...).",
     ),
   },
-  v2Only: true,
+  opencodeOnly: true,
   async execute(args, ctx, host) {
     if (!host) {
       return "Session tabs are unavailable: this host did not provide a session context.";
@@ -3069,8 +3063,8 @@ function resolveTabTarget(db: ThatchDB, raw: string): { ok: true; sessionID: str
  * session's watchers immediately.
  *
  * The target resolves name-first (chat names are unique) then by session
- * id - so the coordinator can paste either from its task list. v2Only:
- * same surfaces as the spawn tool.
+ * id - so the coordinator can paste either from its task list.
+ * opencodeOnly: same surfaces as the spawn tool.
  */
 const sessionTabCloseDef: ToolDef = {
   name: "session_tab_close",
@@ -3085,7 +3079,7 @@ const sessionTabCloseDef: ToolDef = {
       "(e.g. 'bishop-the-synthetic-00001') or its session id (ses_...).",
     ),
   },
-  v2Only: true,
+  opencodeOnly: true,
   async execute(args, ctx, host) {
     if (!host) {
       return "Session tabs are unavailable: this host did not provide a session context.";
@@ -3198,9 +3192,10 @@ export function buildCoreContext(
 }
 
 /**
- * Trim opencode's per-call ToolContext to the host-agnostic fields the
- * shared definitions know about. Both adapters do this same two-field trim;
- * tests and MCP paths pass no host context.
+ * Trim the host's per-call tool context to the host-agnostic fields the
+ * shared definitions know about (the adapter does this same two-field
+ * trim at its registration boundary); tests and MCP paths pass no host
+ * context.
  */
 export function trimHostContext(
   hostContext: { sessionID: string; agent: string } | undefined,

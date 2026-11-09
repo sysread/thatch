@@ -12,12 +12,18 @@ services; everything runs on your machine.
 
 ## Install
 
-**OpenCode** - add the plugin to `opencode.jsonc`; it installs on next start
-and works with opencode 1.x and 2.x:
+**OpenCode** - add the plugin to `opencode.jsonc`; it installs on next start.
+Requires opencode 2.1 or newer:
 
 ```jsonc
 { "plugin": ["@jeffober/thatch"] }
 ```
+
+Upgrading from a pre-2.x-only release: any hand-written plugin shim that
+re-exports the plugin's old named `server` export fails to load after this
+version - replace it with a plain re-export of the default export (see the
+[setup guide](https://github.com/sysread/thatch/wiki/Guide%3A-Setup)) or
+delete the shim and let the package install above do the work.
 
 **Claude Code** - install globally, then run setup in your project:
 

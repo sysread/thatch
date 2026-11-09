@@ -66,7 +66,7 @@ const useCase: UseCase = {
       s.query("INSERT INTO project VALUES ('p1', ?)").run(ctx.dir);
       s.close();
 
-      const harness = makeV2Harness(ctx.dir, { remove: true, childID: "qa-123-spawn-child" });
+      const harness = makeV2Harness(ctx.dir, { childID: "qa-123-spawn-child" });
       let dispose: (() => Promise<void>) | undefined;
       const prevXdg = process.env.XDG_CONFIG_HOME;
       const prevData = process.env.XDG_DATA_HOME;

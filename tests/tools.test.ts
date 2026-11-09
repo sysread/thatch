@@ -4,8 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { buildCoreContext } from "../src/tool-defs";
-import { createTools } from "../src/tools";
+import { TOOL_DEFS, buildCoreContext, trimHostContext } from "../src/tool-defs";
 
 let dbPath: string;
 let dbDir: string;
@@ -15,11 +14,14 @@ const defaultStore = "test-owner/test-repo";
 
 type ExecuteFn = (args: Record<string, unknown>) => Promise<string>;
 
+// The tool-behavior vehicle: TOOL_DEFS bound to a per-test CoreContext,
+// mirroring the adapter's registration (def.execute(input, coreContext,
+// trimHostContext(host))). Host-less calls pass undefined, the MCP-shape.
 function makeTools(db: ThatchDB, model: MockEmbeddingModel, store: string): Record<string, { execute: ExecuteFn }> {
-  const map = createTools(buildCoreContext(db, model, store));
+  const coreContext = buildCoreContext(db, model, store);
   const out: Record<string, { execute: ExecuteFn }> = {};
-  for (const [name, def] of Object.entries(map)) {
-    out[name] = { execute: (args) => def.execute(args as any, undefined as any) as Promise<string> };
+  for (const def of TOOL_DEFS) {
+    out[`thatch_${def.name}`] = { execute: (args) => def.execute(args as any, coreContext) as Promise<string> };
   }
   return out;
 }
@@ -37,14 +39,6 @@ beforeEach(() => {
 afterEach(() => {
   db.close();
   rmSync(dbDir, { recursive: true, force: true });
-});
-
-describe("v1 tool surface", () => {
-  test("excludes v2Only tools (session_tab rides v2-only host surfaces)", () => {
-    expect(tools["thatch_session_tab"]).toBeUndefined();
-    // Sanity: the map itself is populated.
-    expect(tools["thatch_chat_status"]).toBeDefined();
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -402,9 +396,11 @@ describe("thatch_dedup_mark_checked", () => {
 // ---------------------------------------------------------------------------
 
 describe("thatch_get_session_info", () => {
-  test("passes opencode's ToolContext through to the shared execute", async () => {
-    const map = createTools(buildCoreContext(db, model, defaultStore));
-    const sessionTool = map.thatch_get_session_info;
+  test("passes the host context through trimHostContext to the shared execute", async () => {
+    // The adapter's registration shape: def.execute(input, coreContext,
+    // trimHostContext(toolContext)) - the host context must reach the
+    // shared execute for the session report to name the session.
+    const def = TOOL_DEFS.find((d) => d.name === "get_session_info")!;
     const fakeContext = {
       sessionID: "ses_wrapper_test",
       messageID: "msg_wrapper_test",
@@ -415,7 +411,7 @@ describe("thatch_get_session_info", () => {
       metadata: () => {},
       ask: async () => {},
     } as any;
-    const result = await (sessionTool as any).execute({}, fakeContext);
+    const result = await def.execute({}, buildCoreContext(db, model, defaultStore), trimHostContext(fakeContext));
     expect(result).toContain("sessionID: ses_wrapper_test");
     expect(result).toContain("agent: build");
   });

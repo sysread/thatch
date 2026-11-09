@@ -55,6 +55,23 @@ export function journalResult(line: {
     // a use case.
   }
 }
+
+/**
+ * Runs a use-case body, journaling a THREW line (with the error head) if
+ * it throws, then rethrowing. The crash path is the journal's most
+ * important case: a timed-out or crashed UC leaves no completion-path
+ * write, so without this guard the failing name exists only in stdout -
+ * one truncated capture away from being lost.
+ */
+export async function journalGuarded<T>(meta: { uc: string; leg?: string | null }, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    const head = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
+    journalResult({ ...meta, result: "THREW", output: head });
+    throw err;
+  }
+}
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 export const MODEL = process.env.QA_MODEL ?? "venice/z-ai-glm-5-3-flash";
 const DRY_RUN = process.env.QA_DRY_RUN === "1";
@@ -102,13 +119,13 @@ export interface UseCase {
    */
   userDoc?: string;
   /**
-   * Which opencode majors this use case applies to, as tags from the QA
-   * matrix's binary discovery ("v1", "v2"). Default: every discovered
-   * host. Only meaningful for use cases that touch opencode - an
-   * automatable use case with no custom-opencode run keeps a single leg
-   * regardless.
+   * True when a custom `run` function spawns the opencode binary itself
+   * (a serve process, an `opencode run` invocation) - the runner then
+   * resolves the opencode binary the same way it does for live use cases.
+   * Use cases with no custom run always spawn opencode and need not set
+   * this.
    */
-  hosts?: string[];
+  spawnsOpencode?: boolean;
   /**
    * Custom run function. If omitted, defaults to runViaOpencode.
    * Automatable use cases override this with direct CLI assertions.
@@ -214,22 +231,16 @@ async function doEnsureMaster(): Promise<void> {
       // plugin file's own directory (.opencode/plugins/), not the project
       // root, so "./src/index" never loads - the plugin silently fails to
       // import and every in-session thatch tool/poller is missing. Same
-      // pattern as the real global config's plugin file. Dual-shape: the
-      // named export serves v1 hosts; the default re-export (merged
-      // {id, setup, server}) serves v2 hosts, which validate only the
-      // default export of the module they load.
+      // pattern as the real global config's plugin file.
       //
-      // FILE shape on purpose, though real installs on v2 should use the
-      // directory form (see docs/user/setup.md): v1 auto-discovers only
-      // files (config/plugin.ts globs "{plugin,plugins}/*.{ts,js}" - a
-      // directory shim is invisible and the fixture's plugin never loads,
-      // which deterministically kills UC-100's chat canary on v1), and v2
-      // auto-discovers files AND directories (source-directory.ts), so
-      // shipping both shapes here would die on "duplicate instance plugin
-      // ids". The QA suite is headless - no TUI process ever loads the
-      // ./tui entrypoint - so the directory form buys QA nothing. TUI-side
-      // loading is verified by the live smoke, not here.
-      `export { server } from ${JSON.stringify(join(masterDir, "src", "index"))};\nexport { default } from ${JSON.stringify(join(masterDir, "src", "index"))};\n`,
+      // FILE shape on purpose, though real installs should use the
+      // directory form (see docs/user/setup.md): the QA suite is headless
+      // - no TUI process ever loads the ./tui entrypoint - so the
+      // directory form buys QA nothing, and the file shape keeps the
+      // fixture's plugin out of v2's directory auto-discovery (a directory
+      // shim plus this file would die on "duplicate instance plugin ids").
+      // TUI-side loading is verified by the live smoke, not here.
+      `export { default } from ${JSON.stringify(join(masterDir, "src", "index"))};\n`,
     );
     return Promise.resolve();
   });
@@ -428,11 +439,9 @@ export async function createFixture(name: string): Promise<QaContext> {
 
 /**
  * Builds the `opencode run` invocation for the host binary that ctx.env's
- * PATH selects. The majors disagree on flags: v1 has --dir (v2 dropped it -
- * the project resolves from the working directory, so cwd is the common
- * spelling), and v2 needs --standalone because its default run waits on the
- * shared background daemon, which an isolated fixture sandbox must not boot
- * or reuse. Both accept --model/--auto.
+ * PATH selects. `--standalone` is required because the default run waits
+ * on the shared background daemon, which an isolated fixture sandbox must
+ * not boot or reuse. `--model`/`--auto` pass through.
  *
  * QA_DOCKER=1 runs the same invocation inside the qa/opencode-sandbox
  * container instead of the host binary: the fixture dir and the master copy
@@ -447,11 +456,7 @@ export function opencodeRunArgs(ctx: QaContext, prompt: string): { args: string[
   // Exact "1": QA_DOCKER=0 must disable, not enable (a bare truthy check
   // would read the string "0" as on).
   const docker = process.env.QA_DOCKER === "1";
-  // The docker image pins opencode v2 - the host's binary (possibly absent,
-  // possibly v1) is irrelevant to what actually runs.
-  const major = docker ? 2 : serveMajorVersion(ctx.env);
-  const base = major >= 2 ? ["opencode", "run", "--standalone"] : ["opencode", "run"];
-  const args = [...base, "--model", MODEL, "--auto", prompt];
+  const args = ["opencode", "run", "--standalone", "--model", MODEL, "--auto", prompt];
   if (!docker) return { args, cwd: ctx.dir };
   ensureQaDockerImage();
   const mounts = [ctx.dir, MASTER_ROOT];
@@ -585,85 +590,56 @@ Evidence:
 import { test } from "bun:test";
 
 /**
- * One registration leg: a test to register and, in matrix mode, the host
- * binDir that gets prepended to the fixture PATH so `opencode` resolves to
- * that install. label is null in single-binary mode (the test keeps the
- * bare use-case name).
+ * One registration leg: the test to register and, when a discovered v2
+ * binary exists, its binDir prepended to the fixture PATH so `opencode`
+ * resolves to that install.
  */
 interface MatrixLeg {
-  label: string | null;
   binDir?: string;
 }
 
 /**
- * The registration legs for one use case. Opencode-driven use cases (live
- * default-run ones, and automatable ones that declare hosts - UC-100 spawns
- * `opencode serve`, UC-098 spawns run) get one leg per DISCOVERED opencode
- * install, names suffixed (" [v1]"/" [v2]") when there are several.
- * Automatable use cases that never touch opencode keep a single leg so the
- * fast suite is not doubled for no information. QA_HOSTS=v1,v2 narrows the
- * legs when iterating against one major.
+ * The registration leg for one use case. Opencode-driven use cases (live
+ * default-run ones, and automatable ones whose run spawns the binary -
+ * UC-100 spawns `opencode serve`, UC-098 spawns run) resolve the opencode
+ * binary: a discovered v2 install wins (its binDir is prepended to the
+ * fixture PATH); with none discovered the PATH binary is used as-is.
+ * Automatable use cases that never touch opencode keep a single leg.
  */
 function matrixLegs(uc: UseCase): MatrixLeg[] {
   if (process.env.QA_DOCKER === "1") {
     // The docker image pins opencode v2, so host-binary discovery does not
-    // apply: the matrix collapses to a single unlabeled leg through the
-    // container. (A v1 docker leg would need a v1-pinned image - not built.)
-    return [{ label: null }];
+    // apply: the single leg runs through the container.
+    return [{}];
   }
-  const spawnsOpencode = !uc.run || uc.hosts !== undefined;
-  if (!spawnsOpencode) return [{ label: null }];
-  const discovered = discoverHostBinaries();
-  const requested = uc.hosts ?? discovered.map((h) => h.tag);
-  let applicable = discovered.filter((h) => requested.includes(h.tag));
-  const narrow = process.env.QA_HOSTS?.split(",").map((s) => s.trim()).filter(Boolean);
-  if (narrow?.length) {
-    applicable = applicable.filter((h) => narrow.includes(h.tag));
-    if (applicable.length === 0) {
-      console.log(`  [qa] QA_HOSTS=${narrow.join(",")} matches none of the discovered installs (${discovered.map((h) => h.tag).join(", ") || "none"}) - nothing to run`);
-      return [];
-    }
-  }
-  if (applicable.length === 0) {
-    if (uc.hosts !== undefined) {
-      // A declared hosts list is an assertion about which majors the use
-      // case covers; silently running the PATH binary instead would test
-      // the wrong major.
-      console.log(`  [qa] ${uc.name}: declared hosts (${uc.hosts.join(", ")}) match no discovered install (${discovered.map((h) => h.tag).join(", ") || "none"}) - not registered`);
-      return [];
-    }
-    return [{ label: null }];
-  }
-  if (applicable.length === 1) {
-    // Single install: keep the bare test name so single-binary machines
-    // see the same names as before.
-    return [{ label: null, binDir: applicable[0].binDir }];
-  }
-  return applicable.map((h) => ({ label: h.tag, binDir: h.binDir }));
+  const spawnsOpencode = !uc.run || uc.spawnsOpencode === true;
+  if (!spawnsOpencode) return [{}];
+  // The plugin requires opencode 2: a discovered v1 binary is an unusable
+  // host, never selected - only the v2 tag is.
+  const v2 = discoverHostBinaries().find((h) => h.tag === "v2");
+  return [{ binDir: v2?.binDir }];
 }
 
 /**
  * Register a use case as a concurrent bun test. Handles dry-run skipping,
- * manual-only marking, fixture setup, result assertion - and one
- * registration per applicable discovered opencode install when several are
- * present (test names gain a " [v1]"/" [v2]" suffix).
+ * manual-only marking, fixture setup, and result assertion.
  */
 export function registerUseCase(uc: UseCase): void {
   for (const leg of matrixLegs(uc)) registerLeg(uc, leg);
 }
 
 function registerLeg(uc: UseCase, leg: MatrixLeg): void {
-  const testName = leg.label ? `${uc.name} [${leg.label}]` : uc.name;
+  const testName = uc.name;
   test.concurrent(testName, async () => {
     if (DRY_RUN) {
       console.log(`  [DRY RUN] ${testName} — skipped`);
-      journalResult({ uc: uc.name, leg: leg.label, result: "DRY-RUN-SKIPPED" });
+      journalResult({ uc: uc.name, result: "DRY-RUN-SKIPPED" });
       return;
     }
 
     if (uc.manualOnly) {
       console.log(`  [MANUAL] ${testName} — skipped`);
-      journalResult({ uc: uc.name, leg: leg.label, result: "MANUAL-ONLY" });
+      journalResult({ uc: uc.name, result: "MANUAL-ONLY" });
       return;
     }
 
@@ -673,25 +649,29 @@ function registerLeg(uc: UseCase, leg: MatrixLeg): void {
       const check = await $`command -v opencode`.quiet().nothrow();
       if (check.exitCode !== 0) {
         console.log(`  [MANUAL] ${testName} — skipped (opencode not on PATH)`);
-        journalResult({ uc: uc.name, leg: leg.label, result: "MANUAL-ONLY", output: "opencode not on PATH" });
+        journalResult({ uc: uc.name, result: "MANUAL-ONLY", output: "opencode not on PATH" });
         return;
       }
     }
 
     await ensureMaster();
-    // The fixture dir is keyed by name: matrix legs of one use case must
-    // not share it - a v2-migrated session db in a shared fixture would
-    // fail the v1 leg's serve with "Database is not empty and has no
-    // session table".
-    const ctx = await createFixture(leg.label ? `${uc.name}-${leg.label}` : uc.name);
+    const ctx = await createFixture(uc.name);
     if (leg.binDir) {
       ctx.env.PATH = `${leg.binDir}:${ctx.env.PATH}`;
     }
     const runFn = uc.run ?? ((c: QaContext) => runViaOpencode(uc, c));
-    const result = await runFn(ctx);
-
-    console.log(`  ${testName}: ${result}`);
-    journalResult({ uc: uc.name, leg: leg.label, result });
+    // The crash path journals too: a THROWN test (waitFor timeout, an
+    // assertion escape) must still name itself in the journal - the crash
+    // is exactly when the name matters most, and the completion-path write
+    // below never runs (the 2026-11-09 UC-100 timeout was only in the
+    // tee'd stdout). The deliberate FAIL/PARTIAL rethrow happens AFTER the
+    // guard so it cannot double-journal.
+    const result = await journalGuarded({ uc: uc.name }, async () => {
+      const r = await runFn(ctx);
+      console.log(`  ${testName}: ${r}`);
+      journalResult({ uc: uc.name, result: r });
+      return r;
+    });
 
     if (result === "FAIL" || result === "PARTIAL") {
       throw new Error(`${testName}: ${result}`);
@@ -733,11 +713,10 @@ export function printCleanupNotice(): void {
 
 // --- Serve-mode plumbing (multi-session use cases) ---------------------------
 
-import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 import { OpenCode as OpenCodeV2 } from "@opencode/client/promise";
 import { discoverHostBinaries } from "./binaries";
 
-/** Fixed serve credential: v2's serve requires basic auth; v1 ignores it. */
+/** Fixed serve credential: the serve process requires basic auth. */
 const SERVE_PASSWORD = "thatch-qa-password";
 
 // --- Orphan reaping ---------------------------------------------------------
@@ -804,55 +783,26 @@ for (const signal of ["exit", "SIGINT", "SIGTERM"] as const) {
 }
 
 /**
- * The serve-mode client, version-matched to the `opencode` binary on PATH:
- * v2 declared a breaking server-API change (v1's SDK client gets 405s from
- * a v2 server), so a v2 binary gets the v2 SDK client wrapped in the v1
- * method/response shapes the use cases are written against. The wrap-up
- * call sites only use session.create/prompt/messages/delete.
+ * The serve-mode client: the v2 promise client (OpenCode.make) pointed at
+ * the serve process, authenticated and directory-scoped through headers.
+ * Use cases call it with the promise-domain input shapes (session.create
+ * takes `{title}`, prompt takes `{sessionID, text}`, message.list takes
+ * `{sessionID}`).
  */
-function v2ClientAsV1(client: ReturnType<typeof OpenCodeV2.make>, directory: string): OpencodeClient {
-  const textOf = (body: any) => (body?.parts ?? []).map((p: any) => p?.text ?? "").join("\n\n");
-  const partsOf = (message: any) =>
-    message.type === "assistant"
-      ? (message.content ?? [])
-          .filter((c: any) => c.type === "text")
-          .map((c: any) => ({ type: "text", text: c.text ?? "" }))
-      : [{ type: "text", text: message.text ?? "" }];
-  return {
-    session: {
-      create: async (input: any) => ({ data: await client.session.create({ ...input?.body, location: { directory } }) }),
-      prompt: async (input: any) => ({ data: await client.session.prompt({ sessionID: input.path.id, text: textOf(input.body) }) }),
-      messages: async (input: any) => {
-        const result = await client.message.list({ sessionID: input.path.id });
-        return { data: result.data.map((m: any) => ({ info: { role: m.type }, parts: partsOf(m) })) };
-      },
-      delete: async (input: any) => ({ data: await client.session.remove({ sessionID: input.path.id }) }),
-    },
-  } as unknown as OpencodeClient;
-}
-
-function serveMajorVersion(env?: Record<string, string>): number {
-  // env-aware so a matrix leg detects the binary its fixture PATH selects,
-  // not whatever the test process's own PATH resolves first.
-  const result = Bun.spawnSync(["opencode", "--version"], ...(env ? [{ env }] : []));
-  // Output: "opencode v2.0.15" - the first dotted number is the major.
-  return Number.parseInt(result.stdout.toString().match(/(\d+)\.\d+/)?.[1] ?? "1", 10);
-}
-
 export interface ServeHandle {
   /** Base URL the serve process listens on. */
   url: string;
-  /** SDK client for driving sessions over HTTP. */
-  client: OpencodeClient;
+  /** The v2 promise client for driving sessions over HTTP. */
+  client: ReturnType<typeof OpenCodeV2.make>;
   /** Kills the serve process. Call in a finally block. */
   stop: () => void;
 }
 
 /**
- * Start a long-lived `opencode serve` on the fixture and return an SDK
- * client for it. Unlike `opencode run` one-shots - which die at turn end,
- * taking the plugin's chat poller with them - a serve process hosts
- * sessions across many turns, so it is the only way to observe wake
+ * Start a long-lived `opencode serve` on the fixture and return the
+ * promise client for it. Unlike `opencode run` one-shots - which die at
+ * turn end, taking the plugin's chat poller with them - a serve process
+ * hosts sessions across many turns, so it is the only way to observe wake
  * delivery between two real sessions.
  *
  * The port is picked up front and readiness is polled over HTTP rather
@@ -866,7 +816,7 @@ export async function startServe(ctx: QaContext): Promise<ServeHandle> {
   const url = `http://127.0.0.1:${port}`;
   // serve takes no project flag: it boots project-free and loads the
   // instance per request via the x-opencode-directory header, which the
-  // SDK client below sends from the `directory` option.
+  // client below sends.
   const proc = spawnWatched(
     ["opencode", "serve", "--hostname", "127.0.0.1", "--port", String(port)],
     { env: ctx.env, stdout: "pipe", stderr: "pipe" },
@@ -893,22 +843,12 @@ export async function startServe(ctx: QaContext): Promise<ServeHandle> {
     }
     await new Promise((r) => setTimeout(r, 1_000));
   }
-  const client =
-    serveMajorVersion(ctx.env) >= 2
-      ? v2ClientAsV1(
-          OpenCodeV2.make({
-            baseUrl: url,
-            headers: {
-              Authorization: `Basic ${btoa(`opencode:${SERVE_PASSWORD}`)}`,
-              "x-opencode-directory": ctx.dir,
-            },
-          }),
-          ctx.dir,
-        )
-      : createOpencodeClient({
-          baseUrl: url,
-          directory: ctx.dir,
-          headers: { Authorization: `Basic ${btoa(`opencode:${SERVE_PASSWORD}`)}` },
-        });
+  const client = OpenCodeV2.make({
+    baseUrl: url,
+    headers: {
+      Authorization: `Basic ${btoa(`opencode:${SERVE_PASSWORD}`)}`,
+      "x-opencode-directory": ctx.dir,
+    },
+  });
   return { url, client, stop: () => { try { proc.kill(); } catch { /* already dead */ } } };
 }

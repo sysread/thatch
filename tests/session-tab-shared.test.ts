@@ -274,11 +274,10 @@ describe("isSameMainCheckout", () => {
 });
 
 describe("session_tab registration invariants", () => {
-  test("the def is flagged v2Only only - never also opencodeOnly", () => {
+  test("the def is flagged opencodeOnly (rides host surfaces MCP lacks)", () => {
     const def = TOOL_DEFS.find((d) => d.name === "session_tab");
     expect(def).toBeDefined();
-    expect(def?.v2Only).toBe(true);
-    expect(def?.opencodeOnly).toBeUndefined();
+    expect(def?.opencodeOnly).toBe(true);
   });
 
   test("the execute refuses when no host session context is supplied", async () => {

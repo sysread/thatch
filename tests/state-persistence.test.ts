@@ -97,16 +97,12 @@ async function waitForWiring(cond: () => boolean, message: string): Promise<void
 async function bootV2(opts?: {
   dir?: string;
   worktree?: string;
-  remove?: boolean;
-  compact?: boolean;
   get?: (input: any) => Promise<any>;
 }): Promise<{ harness: V2Harness; dispose: () => Promise<void> }> {
   const dir = opts?.dir ?? WORK_DIR;
   const worktree = opts?.worktree ?? dir;
   const context = makeContext({
     location: { directory: dir, project: { directory: worktree, canonical: worktree } },
-    ...(opts?.remove ? { remove: true } : {}),
-    ...(opts?.compact ? { compact: true } : {}),
     ...(opts?.get ? { get: opts.get } : {}),
   });
   const harness = currentHarness;
@@ -245,7 +241,7 @@ describe("runtime rehydration through setup()", () => {
     try {
       process.env.THATCH_DB_PATH = dbPath;
       process.env.XDG_CONFIG_HOME = join(dbDir, "config");
-      ({ dispose } = await bootV2({ remove: true }));
+      ({ dispose } = await bootV2());
 
       // The finalize is fire-and-forget; poll for the remove call.
       await waitForWiring(() => sessionRemoveCalls.some((c: any) => c?.sessionID === "ses_corpse_child"), "restart finalize never deleted the extraction child");
@@ -398,7 +394,7 @@ describe("runtime rehydration through setup()", () => {
     try {
       process.env.THATCH_DB_PATH = dbPath;
       process.env.XDG_CONFIG_HOME = join(dbDir, "config");
-      ({ dispose } = await bootV2({ compact: true }));
+      ({ dispose } = await bootV2());
 
       const idle = (sessionID: string) =>
         queueEvent({
@@ -699,12 +695,12 @@ describe("dormant watcher recovery through setup()", () => {
     state: { headSha: "aaaa1111" },
     ...overrides,
   });
-  const startServer = async (opts?: { remove?: boolean }) => {
+  const startServer = async () => {
     const prevConfig = process.env.XDG_CONFIG_HOME;
     const prevDbPath = process.env.THATCH_DB_PATH;
     process.env.THATCH_DB_PATH = dbPath;
     process.env.XDG_CONFIG_HOME = join(dbDir, "config");
-    const { harness, dispose } = await bootV2(opts);
+    const { harness, dispose } = await bootV2();
     return {
       harness,
       finally: async () => {
@@ -965,7 +961,7 @@ describe("dormant watcher recovery through setup()", () => {
 
     const prevWindow = process.env.THATCH_CHILD_RECONCILE_MS;
     process.env.THATCH_CHILD_RECONCILE_MS = "50";
-    const { finally: done } = await startServer({ remove: true });
+    const { finally: done } = await startServer();
     try {
       // Finalization journals the child row gone (the maps are cleared, and
       // journalChild journals a delete for a parentless child), then deletes

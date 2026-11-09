@@ -127,8 +127,9 @@ export interface ExecuteUnwrap {
  * buffer excludes them because buffering the pipeline's own traffic feeds
  * the nudge with its own exhaust (the dispatch/ack loops, September 2026);
  * the alert classifier excludes them because a round made of only these
- * did nothing the user asked for. "task" is v1's dispatch tool, "subagent"
- * v2's, "agent" the MCP-path spelling - match all three, never one name.
+ * did nothing the user asked for. "task" and "subagent" are the host's
+ * dispatch-tool spellings across SDK generations, "agent" the MCP-path
+ * spelling - match all three, never one name.
  */
 export function isMetaToolName(tool: string): boolean {
   const t = tool.toLowerCase();

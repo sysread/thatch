@@ -1,6 +1,6 @@
 # Hygiene System
 
-Unless noted, `client.*` names below are the opencode v1 mapping; the v2 equivalents and degrades are in [opencode-plugin.md](opencode-plugin.md).
+Behavior is described in runtime terms; the host-surface registrations and the HostCapabilities mapping are in [opencode-plugin.md](opencode-plugin.md).
 
 Store maintenance signals surfaced at session start. The plugin never deletes
 memories itself — it surfaces problems and lets the agent tend the store.
@@ -36,7 +36,7 @@ memories itself — it surfaces problems and lets the agent tend the store.
 
 - **opencode**: `session.created` event for top-level sessions (no `parentID`).
   The hygiene report is appended to the session-start reminder sent via
-  `client.session.prompt`.
+  `promptSession` (a noReply delivery).
 - **Claude Code**: `SessionStart` hook → `thatch reminder` (runs
   `hygieneReport`, appends to reminder text, prints to stdout).
 - **Cursor**: `sessionStart` hook → `thatch reminder --json` (same, wrapped as

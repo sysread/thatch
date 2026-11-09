@@ -188,7 +188,7 @@ describe("plugin entry", () => {
   });
 
   test("direct extraction: child idle cleans up and deletes child session", async () => {
-    cleanup = (await setup(makeContext({ remove: true }) as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
 
     // Buffer + trigger extraction
     await bufferBash("ses_direct3", "file.txt");
@@ -338,7 +338,7 @@ describe("plugin entry", () => {
   });
 
   test("HIGH fix: non-extraction sub-agent idle does not drain buffer or delete session", async () => {
-    cleanup = (await setup(makeContext({ remove: true }) as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
 
     // Buffer entries in parent
     await bufferBash("ses_task_parent", "file.txt");

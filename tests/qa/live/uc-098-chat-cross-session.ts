@@ -18,9 +18,9 @@ import { registerUseCase, opencodeRunArgs, type UseCase, type QaContext, type Us
 
 const useCase: UseCase = {
   name: "UC-098-chat-cross-session",
-  // Custom run that spawns `opencode run` itself - declared hosts put it in
-  // the QA matrix (one leg per discovered install).
-  hosts: ["v1", "v2"],
+  // Custom run that spawns `opencode run` itself - the runner resolves the
+  // opencode binary for it.
+  spawnsOpencode: true,
   preconditions: [
     "- `opencode` on PATH and VENICE_API_KEY set (live opencode sessions)",
     "- Two sequential sessions share the fixture's THATCH_DB_PATH",

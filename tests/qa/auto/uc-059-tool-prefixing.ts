@@ -96,13 +96,13 @@ const useCase: UseCase = {
       return "FAIL";
     }
 
-    // v2Only tools are in TOOL_DEFS but must NOT appear in the MCP
-    // server's tools/list (compileTools filters them like opencodeOnly).
+    // opencode-only tools are in TOOL_DEFS but must NOT appear in the MCP
+    // server's tools/list (compileTools filters on opencodeOnly).
     const { compileTools } = await import("../../../src/mcp");
     const mcpNames = [...compileTools().keys()];
     for (const def of TOOL_DEFS) {
-      if (def.v2Only && mcpNames.includes(def.name)) {
-        console.log(`  FAIL: v2Only tool "${def.name}" leaked into the MCP surface`);
+      if (def.opencodeOnly && mcpNames.includes(def.name)) {
+        console.log(`  FAIL: opencodeOnly tool "${def.name}" leaked into the MCP surface`);
         return "FAIL";
       }
     }

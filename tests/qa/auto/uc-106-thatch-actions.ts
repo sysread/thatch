@@ -2,6 +2,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 
+// The transformers mock the adapter's runtime needs (no model download in
+// QA) is registered by the shared harness module below, at import time.
+import { setup as setupV2 } from "../../../src/opencode/v2";
+import { makeV2Harness } from "../../mocks/v2-harness";
+
 /**
  * UC-106: Thatch actions (/thatch/defrag, extract, hygiene, peer-review,
  * refine, reflect, self-review, whois).
@@ -18,20 +23,20 @@ import { registerUseCase, type UseCase, type QaContext } from "../runner";
 const useCase: UseCase = {
   name: "UC-106-thatch-actions",
   preconditions: [
-    "- The opencode plugin installed (src/index.ts dual-shape entry export)",
+    "- The opencode plugin installed (src/index.ts default-export entry)",
     "- An isolated fixture with THATCH_DB_PATH and XDG_CONFIG_HOME set",
   ].join("\n"),
   steps: [
-    "1. Load the plugin server. Verify the action command files (defrag, extract, hygiene, peer-review, refine, reflect, self-review, whois) were synced next to the wrap-up files, each carrying a description frontmatter and its instruction body.",
+    "1. Load the v2 adapter. Verify the action command files (defrag, extract, hygiene, peer-review, refine, reflect, self-review, whois) were synced into the fixture's config home, each carrying a description frontmatter and its instruction body - and that no wrap-up files install (they register in code).",
     "2. Verify the extract action instructs the model to learn the session ID from get_session_info and pass it explicitly to the sub-agent.",
     "3. Verify installClaudeCommands writes only the shared actions (defrag, hygiene, peer-review, refine, reflect, self-review), with any tool names in MCP spelling (defrag and peer-review name tools through the namer; hygiene, refine, and self-review name none).",
-    "4. Verify host parity: opencode = claude set + compact/exit/extract/whois; MCP prompts = claude set.",
+    "4. Verify host parity: opencode = claude set + extract/whois; MCP prompts = claude set.",
     "5. Verify the review-mode command files (peer-review, self-review) synced into both host installs with the mode overlay present, and the Claude rendering of peer-review spelling memory recall for MCP (the full body markers are pinned by tests/commands.test.ts).",
-    "6. Buffer a tool interaction for a session via tool.execute.after, then call thatch_get_extraction_payload with the session_id omitted and a host context carrying that session ID. Verify the queued payload comes back.",
+    "6. Buffer a tool interaction for a session via the tool execute.after hook, then call thatch_get_extraction_payload with the session_id omitted and a host context carrying that session ID. Verify the queued payload comes back.",
     "7. Call the same tool with no session_id and no host context (the MCP-host shape). Verify the error names the parent-session rule.",
   ].join("\n"),
   expected: [
-    "- The plugin syncs the wrap-up command files (compact, exit) plus every action command file (defrag, extract, hygiene, peer-review, refine, reflect, self-review, whois).",
+    "- The plugin syncs every action command file (defrag, extract, hygiene, peer-review, refine, reflect, self-review, whois); the wrap-ups (compact, exit) never install as files.",
     "- The nudge-backed action bodies are rendered from the prompt cores; the extract action carries the session-id rule.",
     "- Claude Code gets the shared actions (defrag, hygiene, peer-review, refine, reflect, self-review); MCP prompts match Claude Code's set one-to-one.",
     "- The review-mode command files sync with the mode overlay present; the Claude rendering spells memory recall for MCP (mcp__thatch__memory_recall), never the opencode spelling.",
@@ -39,38 +44,35 @@ const useCase: UseCase = {
   ].join("\n"),
 
   async run(ctx: QaContext) {
-    // server() reads env at init (same pattern as UC-103).
+    // The adapter reads env at init (same pattern as UC-103): THATCH_DB_PATH
+    // for the store, XDG_CONFIG_HOME for the skill + command installs.
+    // Redirect both into the fixture for the init window so the run never
+    // touches the real user config, and restore immediately (other UCs
+    // share this process).
     const prevXdg = process.env.XDG_CONFIG_HOME;
     const prevDb = process.env.THATCH_DB_PATH;
     process.env.XDG_CONFIG_HOME = ctx.env.XDG_CONFIG_HOME;
     process.env.THATCH_DB_PATH = ctx.env.THATCH_DB_PATH;
-    const { server } = await import("../../../src/index");
-    let hooks: Awaited<ReturnType<typeof server>>;
+    const harness = makeV2Harness(ctx.dir, { childID: "qa-106-child" });
+    let dispose: (() => Promise<void>) | undefined;
     try {
-      hooks = await server({ client: {
-        session: {
-          prompt: async () => {},
-          promptAsync: async () => {},
-          create: async () => ({ data: { id: "qa-106-child" } }),
-          delete: async () => {},
-          get: async () => ({ data: { title: "QA actions session" } }),
-          status: async () => ({ data: {} }),
-          messages: async () => ({ data: [] }),
-        },
-        tui: { showToast: async () => {}, executeCommand: async () => ({ data: true }), publish: async () => ({ data: true }) },
-      }, worktree: ctx.dir } as any);
+      dispose = (await setupV2(harness.context as any)) as () => Promise<void>;
     } finally {
       process.env.XDG_CONFIG_HOME = prevXdg;
       process.env.THATCH_DB_PATH = prevDb;
     }
     try {
-      // Step 1: action command files synced at plugin load.
+      // Step 1: action command files synced at adapter load; no wrap-ups.
       const dir = join(ctx.env.XDG_CONFIG_HOME, "opencode", "command", "thatch");
-      for (const name of ["compact", "exit", "defrag", "extract", "hygiene", "peer-review", "refine", "reflect", "self-review", "whois"]) {
+      for (const name of ["defrag", "extract", "hygiene", "peer-review", "bug-intake", "refine", "reflect", "self-review", "whois"]) {
         if (!existsSync(join(dir, `${name}.md`))) {
           console.log(`  FAIL: ${name}.md not installed into the fixture config home`);
           return "FAIL";
         }
+      }
+      if (existsSync(join(dir, "compact.md")) || existsSync(join(dir, "exit.md"))) {
+        console.log("  FAIL: wrap-up files must not install (they register in code)");
+        return "FAIL";
       }
       const defrag = readFileSync(join(dir, "defrag.md"), "utf8");
       if (!defrag.includes("description:") || !defrag.includes("$ARGUMENTS")) {
@@ -105,7 +107,7 @@ const useCase: UseCase = {
       const { compilePrompts } = await import("../../../src/mcp");
       const opencodeNames = opencodeCommandDefs().map((d) => d.name).sort();
       const promptNames = [...compilePrompts().keys()].sort();
-      const expectedOpen = [...names, "compact", "exit", "extract", "whois"].sort();
+      const expectedOpen = [...names, "extract", "whois"].sort();
       if (opencodeNames.join(",") !== expectedOpen.join(",") || promptNames.join(",") !== names.join(",")) {
         console.log(`  FAIL: command set parity broken (opencode=${opencodeNames.join(",")} prompts=${promptNames.join(",")})`);
         return "FAIL";
@@ -131,32 +133,38 @@ const useCase: UseCase = {
       }
 
       // Step 6: omitted session_id resolves through the plugin's own tools.
+      // The adapter's registered execute returns a v2 Tool.Result
+      // ({ content }) - the string lives in .content.
       const ses = "ses-qa-106";
-      await hooks["tool.execute.after"]!({
+      await harness.toolAfter({
         tool: "read",
         sessionID: ses,
-        callID: "qa-106-call",
         args: { filePath: "/tmp/qa-106.txt" },
-      }, { output: "qa fixture content" } as any);
-      const fetched = await hooks.tool!.thatch_get_extraction_payload.execute({}, {
-        sessionID: ses,
-        agent: "build",
-      } as any);
-      if (typeof fetched !== "string" || !fetched.includes("qa fixture content")) {
-        console.log(`  FAIL: omitted session_id should fetch the invoking session's queue, got: ${String(fetched).slice(0, 120)}`);
+        status: "completed",
+        result: { content: "qa fixture content" },
+      });
+      const fetched = (await harness.addedTools
+        .find((t) => t.name === "thatch_get_extraction_payload")!
+        .execute({}, { sessionID: ses, agent: "build" })) as { content?: unknown };
+      const fetchedText = typeof fetched === "string" ? fetched : String(fetched?.content ?? "");
+      if (!fetchedText.includes("qa fixture content")) {
+        console.log(`  FAIL: omitted session_id should fetch the invoking session's queue, got: ${fetchedText.slice(0, 120)}`);
         return "FAIL";
       }
 
       // Step 7: no session_id and no host context -> the parent-id rule.
-      const noHost = await hooks.tool!.thatch_get_extraction_payload.execute({}, {} as any);
-      if (typeof noHost !== "string" || !noHost.includes("session_id is required") || !noHost.includes("parent")) {
-        console.log(`  FAIL: MCP-shape call should error with the parent-id rule, got: ${String(noHost).slice(0, 120)}`);
+      const noHost = (await harness.addedTools
+        .find((t) => t.name === "thatch_get_extraction_payload")!
+        .execute({}, undefined)) as { content?: unknown };
+      const noHostText = typeof noHost === "string" ? noHost : String(noHost?.content ?? "");
+      if (!noHostText.includes("session_id is required") || !noHostText.includes("parent")) {
+        console.log(`  FAIL: MCP-shape call should error with the parent-id rule, got: ${noHostText.slice(0, 120)}`);
         return "FAIL";
       }
 
       return "PASS";
     } finally {
-      hooks.dispose?.();
+      await dispose?.();
     }
   },
 };

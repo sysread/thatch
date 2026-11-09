@@ -31,12 +31,12 @@ import { createAlerts, alertDelivery, deriveRoundShape, isNoWorkTool, replyReque
 import { mostRecentTopLevelSessionId, sessionDirectories } from "./session-db";
 import type { CoreContext } from "./tool-defs";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
-import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommandFiles } from "./commands";
+import { installOpencodeCommands, removeWrapUpCommandFiles } from "./commands";
 import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
 import { WatcherRegistry, ghApiRun, ghAvailable, runWatchedCommand, watcherTarget, withCwdFallback, type Watcher, type WatcherEvent } from "./watchers";
-import { watcherNotificationNudge, watcherRearmNotice, watcherDeathNotice, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
+import { watcherNotificationNudge, watcherRearmNotice, watcherDeathNotice, chatNotificationNudge, chatEchoText } from "./prompts";
 import { ChatPoller, createWakeGate, EXTRACTION_CHILD_TITLE, hostedSessionIds, isDefaultSessionTitle, isMachinerySessionTitle, nowIso, unexpiredGraceRehosts } from "./chat";
 import { chatEnabled, chatAutoRegister, loadConfig, notificationDefaults } from "./config";
 import { sendNotification } from "./notify";
@@ -183,12 +183,12 @@ export function guardDelivery(
   directory: string,
   debug: DebugLog,
 ): HostCapabilities["promptSession"] {
-  return (sessionID, body, mode) => {
+  return (sessionID, body) => {
     if (!directoryAvailable(directory)) {
       debug("runtime:delivery", `skipped wake to ${sessionID}: directory ${directory} no longer exists`);
       return Promise.reject(new DeliverySkippedError(sessionID, directory));
     }
-    return promptSession(sessionID, body, mode);
+    return promptSession(sessionID, body);
   };
 }
 
@@ -245,15 +245,8 @@ export async function createRuntime(input: {
   capabilities: HostCapabilities;
   directory: string;
   worktree: string;
-  /**
-   * True on the opencode v2 adapter: the system prompt's Tools list then
-   * includes the v2-only session-tab tool. v1 and MCP hosts omit it - the
-   * tool does not exist there, and a prompt listing a nonexistent tool is
-   * the first-call-mistake class.
-   */
-  v2Tools?: boolean;
 }): Promise<ThatchRuntime> {
-  const { capabilities, directory, worktree, v2Tools } = input;
+  const { capabilities, directory, worktree } = input;
   // The opencode server's cwd is wherever the server happened to start;
   // `worktree` is the project this plugin instance actually serves.
   // `directory` is the session's own directory - on resume after the
@@ -383,20 +376,17 @@ export async function createRuntime(input: {
 
   // The proactive-prompt gate, shared by both delivery registries (watchers
   // and chat). Two layers, in cost order: the compacting set and the
-  // event-fed sessionStatus map answer cheaply, and a final check verifies
-  // against the server's live status - the map is only as fresh as the
-  // event stream, and a stale "idle" turns a wake into mid-turn context
-  // injection (observed live: a session read mail mid-burst, contradicted
-  // its own in-flight plan, and looped).
+  // event-fed sessionStatus map. ABSENCE from the map is not evidence of
+  // busy: the `-s` startup session is hosted from init, before it has
+  // emitted any status event, so a gate that rejected on absence would
+  // leave that session mail-deaf - beating fine, never woken - until its
+  // first turn. (A live server-side status check used to back this map;
+  // it died with the v1 host, whose status endpoint it read. The map is
+  // only as fresh as the event stream - a stale "idle" can wake into a
+  // mid-turn session, an accepted residual.)
   const canPromptSession = createWakeGate({
     isCompacting: (sessionID) => compacting.has(sessionID),
     mappedStatus: (sessionID) => sessionStatus.get(sessionID),
-    fetchStatuses: async () => {
-      return (await caps.fetchStatuses()) ?? {};
-    },
-    onStatusError: (sessionID, err) => {
-      console.error(`[thatch] status check failed for ${sessionID}: ${err}`);
-    },
   });
 
   // In-memory watcher registry for proactive event notifications (GitHub PR
@@ -507,7 +497,6 @@ export async function createRuntime(input: {
       await caps.promptSession(
         coordinatorSessionID,
         { parts: [{ type: "text", text: watcherDeathNotice(death.targets, { name: death.chatName, sessionID: deadSessionID }, { rearmsOnResume: false }), synthetic: true }] },
-        "async",
       );
       if (disposed) return;
       db.runtimeStateDelete("watcher_death", deadSessionID);
@@ -544,7 +533,6 @@ export async function createRuntime(input: {
             { type: "text", text: watcherNotificationNudge(events[0]?.target ?? "watched target", events, watchers.pollSeconds), synthetic: true },
           ],
         },
-        "async",
       );
       // Toast: the notification part is TUI-hidden, so without this the
       // user watching the session sees the model wake up with no visible
@@ -660,7 +648,6 @@ export async function createRuntime(input: {
         {
           parts: [{ type: "text", text: chatNotificationNudge(senders, count, batch), synthetic: true }],
         },
-        "async",
       );
       try {
         await caps.showToast({
@@ -1142,11 +1129,10 @@ export async function createRuntime(input: {
     debug("runtime:rehydrate", `restored ${counts}`);
     // Ping the restored sessions directly: the reload/restart happened
     // outside their event stream, so without this the sessions would not
-    // know the plugin is back. noReply delivery starts no model turn: v1
-    // renders the bubble via promptAsync noReply; v2 enqueues a
-    // resume:false synthetic (materializes at the next turn's inbox
+    // know the plugin is back. The noReply delivery starts no model turn:
+    // a resume:false synthetic (materializes at the next turn's inbox
     // delivery - no wake; live-probed 2026-11-05).
-    if (chatOn && caps.noReplyDelivery) {
+    if (chatOn) {
       for (const sessionID of rehydratedSessions) {
         void caps
           .promptSession(
@@ -1161,7 +1147,6 @@ export async function createRuntime(input: {
               ],
               noReply: true,
             },
-            "async",
           )
           .catch(() => {
             // The session may be gone (restart prune edge) - the poller's
@@ -1449,31 +1434,28 @@ export async function createRuntime(input: {
   // for the pump to repopulate the status map, then finalize any restored
   // child that is no longer running. A child genuinely mid-turn keeps its
   // own idle event, and the finalize is idempotent if both paths race.
+  // Liveness reads the event-fed map only (the host exposes no live status
+  // endpoint to plugins; a child that emitted no status event during the
+  // window reads as idle and finalizes - the idempotent finalize makes
+  // that safe).
   const reconcileRestoredChildren = async () => {
     if (restoredChildren.size === 0) return;
     // The reload window: how long to let the event pump repopulate the
     // status map before judging a restored child "no longer running".
     // Read at call time (not module load) so the test suite can shorten it
-    // per server() instance instead of waiting out the production 10s.
+    // per setup() instance instead of waiting out the production 10s.
     const windowMs = Number(process.env.THATCH_CHILD_RECONCILE_MS) || 10_000;
     await new Promise<void>((resolve) => {
       const t = setTimeout(resolve, windowMs);
       t.unref?.();
     });
-    // Dispose (a v2 plugin reload or process exit) may have closed the db
+    // Dispose (a plugin reload or process exit) may have closed the db
     // during the window; finalizing into it would throw on the journal
     // write. The reloaded instance's own reconciler owns the rows now.
     if (disposed) return;
-    let live: Record<string, { type: string }> = {};
-    try {
-      live = (await caps.fetchStatuses()) ?? {};
-    } catch {
-      // Map-only liveness then - the event-fed statuses are the fallback.
-    }
     for (const [childId, parentId] of restoredChildren) {
       const mapped = sessionStatus.get(childId);
-      const remote = live[childId]?.type;
-      if (remote === "busy" || remote === "retry" || mapped === "busy" || mapped === "retry") continue;
+      if (mapped === "busy" || mapped === "retry") continue;
       restoredChildren.delete(childId);
       await finishExtractionChild(childId, parentId);
     }
@@ -1634,20 +1616,21 @@ export async function createRuntime(input: {
     console.error(`[thatch] skill install failed: ${err}`);
   }
 
-  // Same for the wrap-up slash commands: synced into the global config dir on
+  // Same for the action slash commands: synced into the global config dir on
   // every load so template updates self-heal. Config is loaded before plugins
   // during server startup, so a first-ever install lands on the next start.
-  // Hosts that register commands natively (v2) get the action commands as
-  // files only - the wrap-ups register in code (onCommandExecuteBefore), and a file with
-  // the same name as a registered command would collide.
+  // The wrap-ups are NOT installed as files - they register in code
+  // (onCommandExecuteBefore arming via the CommandEditor), and a file with
+  // the same name as a registered command would collide. Files written by
+  // pre-drop runs (which installed the wrap-ups) are removed first.
   try {
-    if (caps.nativeCommands) removeWrapUpCommandFiles(configHome);
-    installOpencodeCommands(configHome, caps.nativeCommands ? opencodeActionCommandDefs() : undefined);
+    removeWrapUpCommandFiles(configHome);
+    installOpencodeCommands(configHome);
   } catch (err) {
     console.error(`[thatch] command install failed: ${err}`);
   }
 
-  const sys = systemPrompt(repo, chatOn, v2Tools);
+  const sys = systemPrompt(repo, chatOn);
   const compact = compactionContext(repo);
 
   // Direct extraction: create a child session linked to the parent and prompt
@@ -1674,7 +1657,6 @@ export async function createRuntime(input: {
     const promptText = extractionDirectPrompt(batch.length, parentID);
 
     const result = await caps.sessionCreate({
-      parentID,
       title: EXTRACTION_CHILD_TITLE,
     });
     // session.created event fires here, setting childToParent and
@@ -1691,10 +1673,10 @@ export async function createRuntime(input: {
     // it can only ever refer to this machinery session, and it ages out
     // with the auto-row TTL.
     db.markChatMachinery(childId, "extraction");
-    // v2's session API cannot create a CHILD session (no parentID in its
+    // The session API cannot create a CHILD session (no parentID in its
     // create input), so the adapter returns a top-level session and no
     // session.created event carries the parent mapping. Set both here
-    // eagerly; on v1 the event sets the same values (idempotent).
+    // eagerly (idempotent).
     if (!childToParent.has(childId)) {
       childToParent.set(childId, parentID);
       parentSnapshots.set(childId, [...extraction.peek(parentID)]);
@@ -1726,7 +1708,6 @@ export async function createRuntime(input: {
           {
             parts: [{ type: "text", text: promptText }],
           },
-          "async",
         );
       } catch (err) {
         console.error(`[thatch] extraction child prompt failed: ${err}`);
@@ -1743,7 +1724,6 @@ export async function createRuntime(input: {
           {
             parts: [{ type: "text", text: promptText }],
           },
-          "sync",
         )
         .catch((err: unknown) => {
           console.error(`[thatch] extraction child failed: ${err}`);
@@ -1996,24 +1976,20 @@ export async function createRuntime(input: {
       // the output hidden behind a default-off TUI toggle, so without this
       // the human watching a session never sees the conversation happen.
       // Delivery is a noReply prompt: the part renders as a visible bubble
-      // and starts no model turn (v1: promptAsync noReply; v2: a
-      // resume:false synthetic). Non-synthetic also means later turns see
-      // the echo in context - a small duplication of the tool call it
-      // mirrors, accepted for visibility. Fire-and-forget: an echo failure
-      // must never fail the tool call it follows.
+      // and starts no model turn (a resume:false synthetic). Non-synthetic
+      // also means later turns see the echo in context - a small
+      // duplication of the tool call it mirrors, accepted for visibility.
+      // Fire-and-forget: an echo failure must never fail the tool call it
+      // follows.
       if (input.tool.startsWith("thatch_chat_")) {
         const echo = chatEchoText(
           input.tool,
           (input.args ?? {}) as Record<string, unknown>,
           typeof output.output === "string" ? output.output : "",
         );
-        // noReply-only: on a host whose prompt endpoint starts a real
-        // model turn, delivering the echo would create a turn that calls
-        // chat tools, which echoes again - the loop the noReply flag exists
-        // to prevent. Both current hosts deliver turn-free (v2 via the
-        // resume:false synthetic), so the flag is a guard against future
-        // hosts, not a v2 gap.
-        if (echo && caps.noReplyDelivery) {
+        // noReply delivery is structural on this host (the resume:false
+        // synthetic), so every echo delivers turn-free.
+        if (echo) {
           void caps
             .promptSession(
               input.sessionID,
@@ -2021,7 +1997,6 @@ export async function createRuntime(input: {
                 noReply: true,
                 parts: [{ type: "text", text: echo }],
               },
-              "async",
             )
             .catch((err) => {
               // The echo must never fail the tool call, but a silent catch
@@ -2032,10 +2007,11 @@ export async function createRuntime(input: {
         }
         return;
       }
-      // "task" is v1's dispatch tool and "subagent" is v2's - a dispatch
-      // buffers itself otherwise, and the nudge then fires on the pipeline's
-      // own exhaust (the subagent-dispatch loop, sibling of the
-      // execute-wrapped-ack loop below). isMetaToolName owns the set.
+      // "task" and "subagent" are the host's dispatch tool spellings ("agent"
+      // the MCP-path spelling) - a dispatch buffers itself otherwise, and
+      // the nudge then fires on the pipeline's own exhaust (the
+      // subagent-dispatch loop, sibling of the execute-wrapped-ack loop
+      // below). isMetaToolName owns the set.
       if (isMetaToolName(input.tool)) return;
       // Code Mode execute calls: when the code wraps thatch_* invocations,
       // run the wrapped tools' hook semantics and never buffer the call
@@ -2119,12 +2095,6 @@ export async function createRuntime(input: {
     },
 
     onChatMessage: async (input, output) => {
-      // Chat transcript echoes arrive here like any user message - but no
-      // model turn ever reads them, and the nudge machinery would embed
-      // and scan their text for nothing (and fire spurious toasts when
-      // thresholds cross). Skip them entirely.
-      if (isChatEchoParts(output.parts)) return;
-
       // Dormant watcher recovery: a resumed session's first message re-arms
       // its restarted watchers and hears about dead ones (see
       // scanDormantWatchers). Injected as synthetic parts - the same path
@@ -2801,14 +2771,11 @@ export async function createRuntime(input: {
       if (event.type !== "session.created") return;
       const id = event.properties.info.id;
 
-      // noReply hosts only: a host without noReply delivery would turn the
-      // reminder into a real model turn replying to itself. Both current
-      // hosts deliver turn-free (v2 via the resume:false synthetic); the
-      // gate stays for future hosts. The system prompt (onSystemTransform)
-      // still carries the essentials everywhere. The gate precedes the
-      // hygiene scan so a noReply-less host does not pay a DB + repo scan
-      // for a skipped report.
-      if (!caps.noReplyDelivery) return;
+      // The reminder rides a noReply delivery (a resume:false synthetic -
+      // no model turn replying to itself). The system prompt
+      // (onSystemTransform) carries the essentials on every request too.
+      // The gate precedes the hygiene scan so a non-chat host does not pay
+      // a DB + repo scan for a skipped report.
 
       let hygiene: string | null = null;
       try {
@@ -2824,7 +2791,6 @@ export async function createRuntime(input: {
             noReply: true,
             parts: [{ type: "text", text: sessionStartReminder(repo, hygiene), synthetic: true }],
           },
-          "sync",
         );
       } catch (err) {
         console.error(`[thatch] session-start reminder failed: ${err}`);

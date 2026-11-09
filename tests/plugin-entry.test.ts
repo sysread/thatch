@@ -1,6 +1,6 @@
 // The former plugin.test.ts "plugin entry" describe, split by topic,
 // re-based onto the v2 harness (the drop-v1 plan's Phase A-prime): this file
-// holds the dual-entry shape tests (exports, tool registry, hook presence,
+// holds the plugin-entry shape tests (exports, tool registry, hook presence,
 // system/context transform, chat-tool transcript echo) and the trailing
 // skill-install / event-pump / delivery-guard wiring. The rest of the block
 // lives in plugin-extraction.test.ts (interaction buffering + payload
@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setup } from "../src/opencode/v2";
-import thatchPlugin, { server } from "../src/index";
+import thatchPlugin from "../src/index";
 import {
   addedTools,
   compactionHook,
@@ -51,10 +51,9 @@ afterEach(async () => {
 });
 
 describe("plugin entry", () => {
-  test("exports a server function and the merged v2 default export", () => {
-    // The named v1 export survives Phase A-prime (the shim reads it), and
-    // the merged default export is what a v2 host validates: { id, setup }.
-    expect(typeof server).toBe("function");
+  test("exports the v2 plugin shape as the default export", () => {
+    // A v2 host validates the default export as { id, setup } and ignores
+    // named exports entirely.
     expect(typeof thatchPlugin.setup).toBe("function");
     expect(typeof thatchPlugin.id).toBe("string");
     expect(thatchPlugin.id.length).toBeGreaterThan(0);
@@ -97,7 +96,7 @@ describe("plugin entry", () => {
       "thatch_prediction_update",
       "thatch_session_get",
       "thatch_session_search",
-      // v2-only: the session-tab bridge has no v1 surface.
+      // opencode-only: the session-tab bridge rides host surfaces MCP lacks.
       "thatch_session_tab",
       "thatch_session_tab_close",
       "thatch_session_tab_open",

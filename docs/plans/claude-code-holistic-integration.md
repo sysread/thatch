@@ -56,6 +56,13 @@ Per feature: what it is FOR, the quirk-accommodation parts, and the disposition 
 
 ### Is HostCapabilities host-neutral? No - and the contract is re-derived, not stretched
 
+> NOTE (post-drop cross-ref): the opencode-v1 drop (docs/plans/drop-opencode-v1.md)
+> later slimmed HostCapabilities from 14 members to 11 - the
+> `noReplyDelivery`/`nativeCommands`/`fetchStatuses` flags and the v1
+> adapter are gone. The 14-member mapping table below describes the
+> pre-drop interface this plan was written against; its own disposition
+> re-derives the seam and does not depend on the v1 members.
+
 **The single most load-bearing number for the structure question: a CC mod can faithfully implement 3.5 of HostCapabilities' 14 members (12 methods + 2 flags) - and two of those mappings are degenerate.** That ratio IS the quantification of Jeff's quirk-tailoring hypothesis: the shared runtime's lifecycle contract is almost entirely opencode-session-shaped, and no amount of adapter code can stretch it over a host with no session-creation API. HostCapabilities (src/capabilities.ts:29-143, introduced `b57fdc7` for v1/v2 compatibility: "whatever opencode version hosts it") maps as follows: `showToast` -> `$.ui.toast` (faithful); `compactSession` -> `$.session.compact` (faithful); `nativeCommands` -> true (CC mods register commands programmatically - the flag maps, though the arming contract differs from v2's CommandEditor); `sessionMessages` -> `$.session.messages()` (partial - lacks `info.error` and the synthetic flag the alert classifier needs); `promptSession` -> `$.prompt.submit` (degenerate only: idle-gated, self-session, always a real turn - no noReply, no child targeting); `noReplyDelivery` as a constant false. The other 8 members (`sessionCreate`/`sessionDelete`/`sessionGet`/`sessionList`/`sessionMove`/`enumerateSessions`/`fetchStatuses`/`exitHost`) have no CC surface, by design. **The seam is therefore re-derived from the concept map** into six host-neutral operations, and the mapping table below is the adapter contract both adapters must satisfy:
 
 | Neutral seam operation | opencode adapter (maps onto HostCapabilities) | Claude Code mod adapter |

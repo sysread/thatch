@@ -4,15 +4,15 @@ import { join } from "node:path";
 import { makeV2Harness, type V2Harness } from "./v2-harness";
 
 // The v2 adapter's contract fixtures: a mocked v2 promise context (plain
-// objects, call-recording arrays - the house pattern from
-// tests/mocks/plugin-harness.ts) driving the real runtime through the adapter. The
-// context itself comes from the shared harness (tests/mocks/v2-harness.ts,
-// which also serves the QA use cases and registers the transformers mock);
-// makeContext below just rebinds this module's recorders onto the new
-// harness's live arrays so the opencode-v2-*.test.ts part files keep their
-// ergonomic names. Every recorder is an exported `let`: an importing part
-// file's name aliases the live value at read time (rebound by each
-// makeContext call), never a snapshot.
+// objects, call-recording arrays - the house pattern) driving the real
+// runtime through the adapter. The context itself comes from the shared
+// harness (tests/mocks/v2-harness.ts, which also serves the QA use cases
+// and registers the transformers mock); makeContext below just rebinds
+// this module's recorders onto the new harness's live arrays so the
+// opencode-v2-*.test.ts part files keep their ergonomic names. Every
+// recorder is an exported `let`: an importing part file's name aliases the
+// live value at read time (rebound by each makeContext call), never a
+// snapshot.
 
 export const SESSION_DIR = "/tmp/thatch-v2-test-session";
 export const PROJECT_DIR = "/tmp/thatch-v2-test-project";
@@ -61,13 +61,8 @@ export function makeContext(options?: {
   // A session.list override (the -c continue-target surface). Defaults to
   // an empty page; the recorded calls live in sessionListCalls.
   list?: (input: any) => Promise<any>;
-  // A session.compact member (upstream #52385). Absent by default so the
-  // default context models the older SDK floor the adapter must guard.
-  compact?: boolean;
-  // A session.remove member (upstream #52387), same floor rule as compact.
-  remove?: boolean;
-  // Omit the rpc domain entirely: the older SDK floor without the
-  // session-tab surface.
+  // Omit the rpc domain entirely: an SDK floor without the session-tab
+  // surface.
   omitRpc?: boolean;
 }) {
   currentHarness = makeV2Harness(SESSION_DIR, {

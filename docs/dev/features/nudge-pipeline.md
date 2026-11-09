@@ -1,6 +1,6 @@
 # Per-Message Nudge Pipeline
 
-Unless noted, `client.*` names below are the opencode v1 mapping; the v2 equivalents and degrades are in [opencode-plugin.md](opencode-plugin.md).
+Behavior is described in runtime terms; the host-surface registrations and the HostCapabilities mapping are in [opencode-plugin.md](opencode-plugin.md).
 
 Runs on every user message. Priority tiers share one embedding
 computation. The pipeline injects *synthetic parts*---text the model sees in
@@ -43,7 +43,7 @@ nudged). The MCP path runs via external CLI hook processes that communicate
 with the long-lived MCP server through the sideband socket and keeps all
 four.
 
-### opencode path (`src/runtime.ts`, `onChatMessage` - v1 `chat.message` hook, v2 `session.hook("prompt")`)
+### opencode path (`src/runtime.ts`, `onChatMessage` - the `session.hook("prompt")` registration)
 
 #### Compaction guard
 
@@ -92,7 +92,7 @@ is now plugin-driven end-to-end (`triggerExtraction` at session idle); see
 - Filters results to `_score >= RECALL_THRESHOLD` (0.55, env:
   `THATCH_RECALL_THRESHOLD`).
 - If matches survive: injects `recallNudge(matches)` as a synthetic text part
-  and fires a toast notification via `client.tui.showToast`.
+  and fires a toast notification via the session-tab bridge's toast event.
 - Wrapped in its own try/catch. A recall failure does not block prediction or
   behavior tiers.
 
@@ -139,8 +139,7 @@ A nudge block is computed once, when the message is submitted, and stays
 attached to that message for the whole turn - including every model round
 trip after mid-turn tool calls. Predictions, behaviors, or memories the
 conversation mutates mid-turn do NOT refresh an already-injected block
-(v1: the synthetic part lives on the stored message; v2:
-`pendingInjections` re-injects the prompt-time text into every outbound
+(`pendingInjections` re-injects the prompt-time text into every outbound
 request of the turn, bound to the message it was computed for - see
 [opencode-plugin.md](opencode-plugin.md)). The prediction and behavior
 blocks therefore end with a snapshot footer naming the store state they
@@ -243,7 +242,7 @@ may act on it or interrupt the user.
 
 ## Toast notifications (opencode only)
 
-`client.tui.showToast` is best-effort. If the TUI is not connected (headless
+The bridge toast event is best-effort. If the TUI is not connected (headless
 mode), the call is silently ignored. Toasts are model-invisible: they go to
 the user only, not into the conversation history.
 
@@ -259,10 +258,13 @@ No-save runs produce no toast to avoid notification fatigue.
 
 ## Synthetic nudge parts (opencode only)
 
-Nudges are injected as turn-free noReply deliveries (v1: `client.session.prompt`
-with `noReply: true`; v2: `session.synthetic({ resume: false })` - the
-adapter's `promptSession` dispatches per host). The `synthetic` flag is a
-TUI-visibility marker, not a
+Per-message nudges (recall, prediction, behavior) ride the prompt-hook /
+context-hook pair: the prompt hook computes them and the context hook
+appends them to the outbound request's user message - the model sees the
+nudge text on every round of its turn, and the user never sees it in the
+TUI transcript because the injections never enter the stored message.
+Wake nudges (watcher events, chat mail) ride `session.synthetic` inbox
+items. The `synthetic` flag is a TUI-visibility marker, not a
 model-routing flag. The model sees the nudge text in the conversation. The
 user does not see it in the TUI transcript. This asymmetry is what makes the
 nudge-injection pattern work: the model can act on the nudge without
@@ -277,7 +279,7 @@ TUI display. The opencode framework's history serializer filters on
 
 - **Extraction pipeline** ([extraction.md](extraction.md)): the MCP tier 1
   is the extraction nudge. On opencode there is no extraction
-  nudge - extraction is plugin-driven at session idle, so `chat.message`
+  nudge - extraction is plugin-driven at session idle, so the prompt hook
   runs the recall/prediction/behavior tiers only.
 - **Memory store** ([memory-store.md](memory-store.md)): tier 2 searches
   stored memories via `db.search()`. This path records no telemetry---the

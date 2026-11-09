@@ -1,6 +1,6 @@
 # Cross-Session Chat
 
-Unless noted, `client.*` names below are the opencode v1 mapping; the v2 equivalents and degrades are in [opencode-plugin.md](opencode-plugin.md).
+Behavior is described in runtime terms; the host-surface registrations and the HostCapabilities mapping are in [opencode-plugin.md](opencode-plugin.md).
 
 Cross-session chat lets independent opencode sessions on one machine message
 each other through thatch: sessions join a shared directory (automatically,
@@ -24,7 +24,7 @@ User-facing behavior is documented in
 - A shared SQLite directory and inbox in thatch.db, writable by any opencode
   process on the machine
 - A per-process poller that heartbeats hosted sessions and delivers wake
-  prompts via `client.session.promptAsync` with a synthetic part - the same
+  prompts as waking synthetic inbox items (`session.synthetic`) - the same
   mechanism watchers use
 - Anti-loop protection at two levels: prompt guidance (messages are
   informational, no reflexive auto-reply) and a hard per-recipient nudge
@@ -124,7 +124,7 @@ is RECLAIMED (names are owned by the session id, minted once, never
 renamed) and the row's heartbeat is refreshed - hosting is the
 heartbeat, so the serving harness beats and delivers for the row again.
 `-c/--continue` resolves no id on the command line, so the plugin
-resolves the same target the harness does: `client.session.list()`
+resolves the same target the harness does: `session.list({directory})`
 (directory-scoped, the plugin's client carries the directory), sorted by
 `time.updated` descending like the TUI does, first row without a
 `parentID`. That registration is not synchronous at init (the list call
@@ -147,7 +147,7 @@ mechanical barrier, a documented trust posture.
 
 Every exit path - `chat_unregister`, `session.deleted`, and a greenlit
 `/thatch/exit` (the plugin unregisters the exiting session before the
-host close-out - v1 publishes `app.exit`, v2 closes the session's own
+host close-out - the exit-tab-closed event closes the session's own
 tab - so the roster stops advertising a host that is about to vanish)
 - writes a
 `chat_leave_tombstones` row (with a `reason` naming the path: `exit` for
@@ -474,9 +474,8 @@ exchange is invisible to the human watching the session. The plugin's
 `tool.execute.after` hook builds a short echo for the conversational events
 (`chatEchoText()` in `src/prompts.ts`: register, send, read, broadcast) and
 delivers it as a turn-free `noReply` prompt: rendered as a visible bubble in
-the transcript, no model turn started (v1: promptAsync noReply; v2: the
-resume:false synthetic - the bubble materializes at the session's next
-turn's inbox delivery). Failed calls never echo;
+the transcript, no model turn started (the resume:false synthetic - the bubble
+materializes at the session's next turn's inbox delivery). Failed calls never echo;
 `chat_list` and `chat_unregister` stay on the muted tool line. Broadcasts
 echo their fan-out count with the clipped body.
 
@@ -485,14 +484,10 @@ also means later turns see the echo in context - a small duplication of the
 tool call it mirrors, accepted for visibility. Echo bodies are clipped
 (send: the body; read: the formatted inbox; broadcast: the body) so a
 bubble stays cheap. Echo delivery is fire-and-forget: a failure must never
-fail the tool call it follows. Because the opencode server fires the
-`chat.message` hook (v1) or the prompt hook (v2) for every real prompt, the
-plugin's message handler skips messages whose
-visible text is entirely `[chat]`-prefixed bubbles (`isChatEchoParts`) -
-otherwise every echo would run the nudge machinery for a message no model
-turn reads. The accepted edge: a real user message whose every visible
-part starts with the prefix is skipped the same way, losing that one turn's
-advisory nudges.
+fail the tool call it follows. The echo cannot re-enter the nudge
+machinery: it rides a `resume: false` synthetic, and the prompt hook never
+fires for synthetic inbox items (live-probed 2026-11-05), so no model turn
+and no nudge computation ever sees the echo as a prompt.
 
 ### The untrusted-content frame
 
@@ -622,7 +617,7 @@ wake analog is the existing hook channel.
 
 | Host        | Send/receive | New-mail signal                                        | Echo bubbles |
 |-------------|--------------|--------------------------------------------------------|--------------|
-| opencode    | yes          | promptAsync wake (idle-gated)                          | yes          |
+| opencode    | yes          | synthetic wake (idle-gated)                          | yes          |
 | claude code | yes          | Stop-hook reminder at turn end + flush-tools hook line | no           |
 | cursor      | yes          | flush-tools hook line + chat-notify follow-up at turn end | no        |
 

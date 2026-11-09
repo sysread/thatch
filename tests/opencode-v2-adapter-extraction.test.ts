@@ -1,6 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { setup } from "../src/opencode/v2";
-import { runtimeStateRow } from "./mocks/runtime-state";
 import {
   addedTools,
   contextHook,
@@ -177,7 +176,7 @@ describe("opencode v2 adapter", () => {
     // resume out of extraction children). finishExtractionChild drives it
     // from the child's idle event; the child routes through the
     // childSessions forwarding set (its events carry no location here).
-    const context = makeContext({ remove: true });
+    const context = makeContext();
     cleanup = (await setup(context as any)) as () => Promise<void>;
     await toolAfterHook!({
       tool: "bash",
@@ -195,34 +194,5 @@ describe("opencode v2 adapter", () => {
     await queueEvent({ type: "session.execution.succeeded", data: { sessionID: "v2-test-child" } });
     await waitFor("child deleted", () => sessionRemoveCalls.length === 1);
     expect(sessionRemoveCalls[0]).toEqual({ sessionID: "v2-test-child" });
-  });
-
-  test("an older SDK without session.remove leaves the child in place, silently", async () => {
-    // The floor keeps the documented gap (the picker accumulates one
-    // thatch-extraction entry per extraction): best-effort by contract, so
-    // the degrade is silent and the rest of the child cleanup still runs.
-    // The child journal row is the completion observable: journalChild
-    // deletes it after the map cleanup and BEFORE sessionDelete, so
-    // row-gone proves the cleanup ran - the settle idiom cannot (a throw
-    // in finishExtractionChild would also leave remove at zero).
-    const childJournaled = (): boolean => runtimeStateRow(process.env.THATCH_DB_PATH!, "child", "v2-test-child") !== null;
-    const context = makeContext();
-    cleanup = (await setup(context as any)) as () => Promise<void>;
-    await toolAfterHook!({
-      tool: "bash",
-      sessionID: "ses_v2_child_floor",
-      input: { command: "git log" },
-      status: "completed",
-      result: { content: "abc123 real work" },
-    });
-    await queueEvent({
-      type: "session.execution.succeeded",
-      location: { directory: SESSION_DIR },
-      data: { sessionID: "ses_v2_child_floor" },
-    });
-    await waitFor("extraction child created and journaled", () => sessionCreateCalls.length === 1 && childJournaled());
-    await queueEvent({ type: "session.execution.succeeded", data: { sessionID: "v2-test-child" } });
-    await waitFor("child cleanup completed", () => !childJournaled());
-    expect(sessionRemoveCalls.length).toBe(0);
   });
 });

@@ -12,34 +12,32 @@ No `setup` command — opencode loads the plugin from `opencode.json`:
 { "plugin": ["@jeffober/thatch"] }
 ```
 
-The plugin supports both opencode lines: v1 (1.18.x) via the `experimental.*`
-hook surface below, and v2 (2.x) via the promise-context domains
-(`session.hook("prompt"/"context"/"compaction")`, `tool.transform`). Both
-adapters delegate to the shared runtime (`src/runtime.ts`); the hooks below
-describe the v1 shape the v2 mappings mirror. The v1 hooks, registered in
-code (`src/opencode/v1.ts`):
+The plugin targets opencode 2.x through the promise-context domains
+(`session.hook("prompt"/"context"/"compaction")`, `tool.transform`,
+`command.transform`, `event.subscribe`), registered in code
+(`src/opencode/v2.ts`) and delegating to the shared runtime
+(`src/runtime.ts`). The registrations:
 
-| Hook | Input | Output | Behavior |
-|------|-------|--------|----------|
-| `experimental.chat.system.transform` | `{}` | `{ system: string[] }` | Pushes the system prompt (store names, usage rules). |
-| `experimental.session.compacting` | `{ sessionID }` | `{ context: string[] }` | Marks the session as compacting, pushes re-familiarization context. |
-| `experimental.compaction.autocontinue` | `{ sessionID }` | `{ enabled: boolean }` | Clears the compacting flag so `chat.message` nudges resume post-compaction. |
-| `tool.execute.after` | `{ tool, sessionID, callID, args }` | `{ title, output, metadata }` | Buffers non-`thatch_`, non-`skill`, non-`task` tool calls into the in-memory extraction ring buffer (max 20). In child sessions, also tracks new/updated/deleted counts via `childMetrics` for the extraction toast. |
-| `chat.message` | `{ sessionID, messageID }` | `{ message, parts }` | Prompt-aware recall nudge (plus prediction/behavior auto-fire). No extraction nudge - extraction is plugin-driven at session idle. Suppressed while compacting or for task-dispatched sub-agent sessions (children that are not extraction children). |
-| `event` | `{ event: { type, properties } }` | — | Dispatches on `event.type`: `session.created` (top-level) → `client.session.prompt` with reminder + hygiene heartbeat; `session.created` (child with `parentID`) → records `childToParent` + snapshots parent's pending buffer. `session.status` idle (parent, pending interactions) → `triggerExtraction` (direct child-session extraction); idle (child) → complete/drain, `showToast` with metrics, delete child. `session.error` (child) → requeue parent's accepted entries. `session.deleted` → requeue if child, drop accepted if parent, clean maps. `session.compacted` → clear compacting flag. |
-| `dispose` | — | — | Closes the DB. |
+| Registration | Shape | Behavior |
+|------|-------|----------|
+| `session.hook("context")` | `{ sessionID, system, messages }` (mutated in place) | Pushes the system prompt (store names, usage rules) into the request's system array; appends the turn's stored nudge injections to the matched user message. |
+| `session.hook("compaction")` | `{ sessionID, system }` (mutated in place) | Marks the session as compacting, pushes re-familiarization context. |
+| `tool.hook("execute.after")` | `{ tool, sessionID, input, status, result }` | Buffers non-`thatch_`, non-`skill`, non-`task` tool calls into the in-memory extraction ring buffer (max 20). In child sessions, also tracks new/updated/deleted counts via `childMetrics` for the extraction toast. |
+| `session.hook("prompt")` | `{ sessionID, messageID, prompt }` | Prompt-aware recall nudge (plus prediction/behavior auto-fire). No extraction nudge - extraction is plugin-driven at session idle. Suppressed while compacting or for task-dispatched sub-agent sessions (children that are not extraction children). |
+| `event.subscribe` | `{ type, data, location? }` bus events | Dispatches on translated `type`: `session.created` (top-level) → noReply reminder (resume:false synthetic) with hygiene heartbeat; `session.created` (child with `parentID`) → records `childToParent` + snapshots parent's pending buffer. Idle (parent, pending interactions) → `triggerExtraction` (direct child-session extraction); idle (child) → complete/drain, toast with metrics, delete child. Error (child) → requeue parent's accepted entries. `session.deleted` → requeue if child, drop accepted if parent, clean maps. `session.compaction.ended` → clear compacting flag. |
+| cleanup (from `setup`) | — | Closes the DB; idempotent for plugin reloads. |
 
 Skills install to `$XDG_CONFIG_HOME/opencode/skills` at plugin init — shared
 **and** opencode-only (the coordinator needs sub-agents).
 
 Direct extraction is the primary path for opencode: when a parent session goes
-idle with pending tool interactions, the `event` hook creates a child session
-and prompts it directly via `triggerExtraction`. The `chat.message` extraction
+idle with pending tool interactions, the event pump creates a child session
+and prompts it directly via `triggerExtraction`. The prompt-hook extraction
 nudge is a fallback — it fires only if direct extraction was never triggered or
 threw an error (the `extracting` set is cleared on failure).
 
-`client.tui.showToast` is called from the `event` hook (on child idle, with
-extraction metrics: new/updated/deleted counts) and from `chat.message` (on
+Toasts ride the session-tab rpc bridge's toast event (on child idle, with
+extraction metrics: new/updated/deleted counts) and from the prompt hook (on
 recall, prediction, and behavior matches). Best-effort — silently ignored if
 the TUI is not connected (headless mode).
 

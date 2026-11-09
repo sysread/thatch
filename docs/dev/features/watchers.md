@@ -1,6 +1,6 @@
 # Watchers
 
-Unless noted, `client.*` names below are the opencode v1 mapping; the v2 equivalents and degrades are in [opencode-plugin.md](opencode-plugin.md).
+Behavior is described in runtime terms; the host-surface registrations and the HostCapabilities mapping are in [opencode-plugin.md](opencode-plugin.md).
 
 Watchers are the general mechanism for event-driven notifications from
 external sources: the model registers a watch on something outside the
@@ -155,7 +155,7 @@ busy or compacting - resets the chain; skips are never death evidence),
 the throw is 404-class (verified live 2026-10-07: prompt_async to a
 closed v2 tab returns 404 while the session row persists; a 5xx loop is
 a wedged server, never death), and the session is hosted by this
-process (sibling v1 processes and MCP sessions are never touched).
+process (sibling opencode processes and MCP sessions are never touched).
 MCP-owner watches keep TTL-only death: their turn-driven heartbeat
 cannot distinguish a closed Cursor tab from a parked one. On death:
 watchers and pending drop, and the notice is CARE-ROUTED - delivered
@@ -266,7 +266,7 @@ per-target breakdown while events sit undelivered, so a busy session
 with queued events is distinguishable from a watcher that fired
 nothing.
 
-When the gate is open, the plugin calls `client.session.promptAsync`
+When the gate is open, the plugin delivers a waking synthetic inbox item (`session.synthetic`)
 on the session with a synthetic text part built by
 `watcherNotificationNudge()`. This triggers a full model turn - the
 model reads the notification and decides whether to act. The

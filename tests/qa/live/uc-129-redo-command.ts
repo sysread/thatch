@@ -12,7 +12,6 @@ import { registerUseCase, type UseCase } from "../runner";
  */
 const useCase: UseCase = {
   name: "UC-129-redo-command",
-  hosts: ["v2"],
   manualOnly: true,
   preconditions: [
     "- thatch configured as a plugin in opencode v2 (the ./tui entrypoint loaded: the /s command in prompt slash completion)",

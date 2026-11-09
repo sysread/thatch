@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { registerUseCase, startServe, type QaContext, type ServeHandle, type UseCase } from "../runner";
 import { ThatchDB } from "../../../src/db";
+import { mapSessionContextMessages } from "../../../src/opencode/v2";
 
 /**
  * UC-100: Two-session chat delivery through a live opencode server.
@@ -76,17 +77,19 @@ async function withSqliteRetry<T>(desc: string, fn: () => T): Promise<T> {
 }
 
 async function listTextParts(client: ServeHandle["client"], sessionID: string): Promise<string[]> {
-  const { data } = await client.session.messages({ path: { id: sessionID } });
-  const parts = (data ?? []).flatMap((m) => m.parts);
-  return parts.filter((p) => p.type === "text").map((p) => p.text);
+  // The promise client's message.list returns a page of SessionMessageInfo;
+  // mapSessionContextMessages (the adapter's own mapping) turns it into the
+  // {info, parts} shape, whose text parts are the transcript.
+  const page = await client.message.list({ sessionID });
+  const messages = mapSessionContextMessages(page.data);
+  return messages.flatMap((m) => m.parts ?? []).filter((p) => p.type === "text").map((p) => p.text ?? "");
 }
 
 const useCase: UseCase = {
   name: "UC-100-two-session-chat",
   // Spawns `opencode serve`, so unlike most auto use cases it is
-  // host-version-coupled: declared hosts run one leg per discovered
-  // install.
-  hosts: ["v1", "v2"],
+  // host-coupled: the runner resolves the opencode binary for it.
+  spawnsOpencode: true,
   preconditions: [
     "- opencode binary on PATH and VENICE_API_KEY set (the recipient session runs real model turns).",
   ].join("\n"),
@@ -109,8 +112,14 @@ const useCase: UseCase = {
       const client = handle.client;
 
       // Step 1: two independent sessions, both hosted by the serve process.
-      const sA = (await client.session.create({ body: { title: "uc-100 alpha" } })).data?.id;
-      const sB = (await client.session.create({ body: { title: "uc-100 bravo" } })).data?.id;
+      // The promise client returns the created SessionInfo directly (no
+      // envelope). The location is EXPLICIT: create's default resolves the
+      // serve process's cwd, not the x-opencode-directory header (the
+      // re-base's live finding - a header-only create landed the sessions
+      // in the runner's worktree, where no plugin loads and the pump's
+      // directory filter drops every event).
+      const sA = (await client.session.create({ title: "uc-100 alpha", location: { directory: ctx.dir } })).id;
+      const sB = (await client.session.create({ title: "uc-100 bravo", location: { directory: ctx.dir } })).id;
       if (!sA || !sB) {
         console.log("  FAIL: session.create returned no id");
         return "FAIL";
@@ -118,9 +127,11 @@ const useCase: UseCase = {
 
       // Step 2: the poller's hosted set is built from session-status
       // events, which only flow after a session has run a turn. One
-      // trivial turn each makes both deliverable.
-      await client.session.prompt({ path: { id: sA }, body: { parts: [{ type: "text", text: "Reply with exactly: ok" }] } });
-      await client.session.prompt({ path: { id: sB }, body: { parts: [{ type: "text", text: "Reply with exactly: ok" }] } });
+      // trivial turn each makes both deliverable. The prompt endpoint
+      // takes `{sessionID, text}` - the parts join is the adapter's own
+      // joinTextParts contract.
+      await client.session.prompt({ sessionID: sA, text: "Reply with exactly: ok" });
+      await client.session.prompt({ sessionID: sB, text: "Reply with exactly: ok" });
 
       // Step 3: register through the real store. The project column is
       // null here - the poller selects by hosted session IDs, so project
@@ -178,7 +189,7 @@ const useCase: UseCase = {
       console.log("  canary delivered and read by bravo");
 
       // Step 5: deterministic second wake - a fake MCP identity mails
-      // alpha; the poller must wake the real alpha session (promptAsync
+      // alpha; the poller must wake the real alpha session (waking
       // synthetic part), independent of any model decision.
       await withSqliteRetry("register charlie", () => db.registerChatSession("uc100-charlie", null, null, "mcp", "charlie"));
       const mail2 = "UC-100 second canary for alpha.";

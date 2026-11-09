@@ -19,7 +19,6 @@ import { registerUseCase, type UseCase } from "../runner";
  */
 const useCase: UseCase = {
   name: "UC-125-session-tab-switched-window",
-  hosts: ["v2"],
   manualOnly: true,
   preconditions: [
     "- thatch configured as a plugin in opencode v2 (the coordinator-anchored routing: coordinatorSessionID rides the tab-opened event)",

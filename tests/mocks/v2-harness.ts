@@ -15,10 +15,9 @@
  * buffered tool interactions, and set the canned final assistant message
  * the wrap-up greenlight check reads.
  *
- * The session domain's newer members (compact - upstream #52385; remove -
- * #52387) are optional by design: absent by default so the default context
- * models the older-SDK floor the adapter must runtime-guard; pass true to
- * model a current host (calls land in calls.compact / calls.remove).
+ * The session domain models the current SDK surface: compact and remove
+ * are REQUIRED members (the typed calls in the adapter's
+ * buildCapabilities land in calls.compact / calls.remove).
  *
  * Defaults are the UNIT harness's defaults (the more-tested behavior):
  * session.get returns no location, session.context returns nothing until
@@ -28,12 +27,11 @@
  *
  * The transformers mock below is registered at import time so every
  * consumer gets it (the adapter's runtime builds BgeEmbeddingModel; the
- * mock gives hash-based vectors with no download - same pattern as
- * tests/mocks/plugin-harness.ts). The pipeline strips BgeEmbeddingModel's
- * QUERY_PREFIX so queryEmbed and passageEmbed of the same text land on the
- * same vector - without the strip, a tool-seeded matcher (passageEmbed)
- * can never be re-found by the nudge path (queryEmbed), which the v2
- * staleness-binding tests depend on.
+ * mock gives hash-based vectors with no download). The pipeline strips
+ * BgeEmbeddingModel's QUERY_PREFIX so queryEmbed and passageEmbed of the
+ * same text land on the same vector - without the strip, a tool-seeded
+ * matcher (passageEmbed) can never be re-found by the nudge path
+ * (queryEmbed), which the v2 staleness-binding tests depend on.
  */
 
 import { mock } from "bun:test";
@@ -59,8 +57,7 @@ mock.module("@huggingface/transformers", () => ({
     return { data: vec };
   },
   // BgeEmbeddingModel's default factory sets env.cacheDir before building
-  // the pipeline, so the mock must expose a writable env object (same
-  // contract as tests/mocks/plugin-harness.ts).
+  // the pipeline, so the mock must expose a writable env object.
   env: {},
 }));
 
@@ -70,13 +67,8 @@ export interface V2HarnessOptions {
   /** The project directory when it differs from the instance directory
    *  (opencode launched below the project root). Defaults to `dir`. */
   projectDir?: string;
-  /** A session.compact member (upstream #52385). Absent by default: the
-   *  older-SDK floor the adapter must runtime-guard. */
-  compact?: boolean;
-  /** A session.remove member (upstream #52387), same floor rule as compact. */
-  remove?: boolean;
-  /** Omit the rpc domain entirely: the older SDK floor without the
-   *  session-tab surface. */
+  /** Omit the rpc domain entirely: an SDK floor without the session-tab
+   *  surface. */
   omitRpc?: boolean;
   /** The id session.create returns (the extraction/child session). */
   childID?: string;
@@ -222,22 +214,14 @@ export function makeV2Harness(dir: string, options?: V2HarnessOptions): V2Harnes
         calls.synthetic.push(input);
         return {};
       },
-      ...(options?.compact
-        ? {
-            compact: async (input: any) => {
-              calls.compact.push(input);
-              return {};
-            },
-          }
-        : {}),
-      ...(options?.remove
-        ? {
-            remove: async (input: any) => {
-              calls.remove.push(input);
-              return {};
-            },
-          }
-        : {}),
+      compact: async (input: any) => {
+        calls.compact.push(input);
+        return {};
+      },
+      remove: async (input: any) => {
+        calls.remove.push(input);
+        return {};
+      },
     },
     event: {
       subscribe: ({ signal }: { signal: AbortSignal }) =>

@@ -47,15 +47,11 @@ here first. These are the things that have already cost time.
 
 ## Hooks (opencode)
 
-- **`tool.execute.after` is a plugin hook, NOT a bus event.** It must stay on
-  the hook object returned by `server`. Moving it into the `event` handler
-  (where `session.created` lives) silently never fires it — the event bus has
-  no such event. This was dead for weeks because the failure was invisible.
-- **`client.tui.executeCommand` only accepts legacy alias names**
-  (`session_compact`, `agent_cycle`, ...). Unknown commands publish
-  `{command: undefined}` and silently no-op — no error surfaces. For TUI
-  commands without an alias (e.g. `app.exit`), publish
-  `tui.command.execute` directly via `client.tui.publish`.
+- **`tool.execute.after` is a plugin hook registration, NOT a bus event.** It
+  must stay in the `tool.hook("execute.after")` registration. Moving it into
+  the event pump (where `session.created` lives) silently never fires it —
+  the event bus has no such event. This was dead for weeks because the
+  failure was invisible.
 - **Command markdown written by the plugin is invisible until the next server
   start.** opencode loads config (including command discovery) before
   plugins, so `installOpencodeCommands` self-heals on every load but a
@@ -189,7 +185,7 @@ here first. These are the things that have already cost time.
   skips this reads and writes the developer's real
   `~/.config/thatch/config.json`. See `tests/notify.test.ts` for the
   save-and-restore pattern. The same rule is sharper for tests that boot
-  `server()` directly: without `THATCH_DB_PATH` + `XDG_CONFIG_HOME` isolation
+  the adapter directly: without `THATCH_DB_PATH` + `XDG_CONFIG_HOME` isolation
   the boot rehydrates from, and its boot sweeps mutate, the developer's real
   `thatch.db` - the strand sweep deletes sessions through the host and the
   journal sweep deletes `runtime_state` rows. Backstop: the
@@ -198,9 +194,9 @@ here first. These are the things that have already cost time.
   an un-isolated boot lands in a throwaway db. That covers omission, not
   removal - a test that actively DELETES the vars at runtime undoes the
   default (env is read at call time). Every harness helper
-  (`tests/mocks/plugin-harness.ts`, the `startServer` helpers in
-  `state-persistence.test.ts`) sets and restores both; copy one rather than
-  hand-rolling a boot.
+  (`tests/mocks/opencode-v2-harness.ts`'s setupTestEnv, the `startServer`
+  helpers in `state-persistence.test.ts`) sets and restores both; copy one
+  rather than hand-rolling a boot.
 - **osascript exits 0 even when macOS drops the banner.** Focus/Do Not Disturb
   or missing notification permission silently swallow it. `notify_user` result
   text therefore reports command success only; never interpret exit 0 as
@@ -222,20 +218,6 @@ prose end marker stopped matching, and setup could never update the block
 again while `checkSetup` reported `markers-broken` on every session. Rule:
 never use file content as its own delimiter; agents will reword it. The
 legacy-prose detection constants exist only to migrate old installs.
-
-## The dual-shape plugin entry: named `server` + v2 default export silently breaks v1
-
-opencode v1's plugin loader (`readV1Plugin`, identical across 1.18.x) reads
-ONLY `mod.default`. A module that exports a named `server` plus a v2-shaped
-default `{ id, setup }` (no `server` inside the default) makes v1 throw on
-load - and the host swallows the error and SKIPS the plugin with no visible
-message. The failure looks like "thatch tools disappeared", not like a load
-error. This is why the dual entry exports a MERGED default object
-(`{ id, setup, server }`) and why every shim (the user's
-`~/.config/opencode/plugins/thatch.ts` and the QA runner's generated one)
-must re-export the default as well as the name. A named-only shim loads on
-v1 and silently disables thatch on v2 - same invisible failure, opposite
-host.
 
 ## The extraction buffer matches on tool NAME, so Code Mode execute calls re-queue pipeline traffic
 
@@ -397,7 +379,7 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
 
 ## A running TUI never adopts a NEW ./tui plugin entrypoint - restart the TUI
 
-- **The v2 TUI discovers its CLI plugins at process startup only.** The
+- **The TUI discovers its CLI plugins at process startup only.** The
   server side hot-reloads plugin code (the digest watcher), and the TUI
   hot-reloads the SOURCE of plugins it already loaded - but a plugin that
   GAINS a `./tui` entrypoint (or a fresh install of one) is a discovery-
@@ -410,14 +392,16 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   proved the registration logic was correct the whole time: a FRESH TUI
   (the docker sandbox attach) showed the tab immediately.
 - **Fix**: convert the install to the directory shim (docs/user/setup.md),
-  THEN restart the TUI. A restart ALONE fixes nothing when the install is
-  a FILE shim - the file shape never loads a `./tui` entrypoint, whatever
-  the process age. First diagnostic: `ls ~/.config/opencode/plugins/` -
-  a FILE (`thatch.ts`) means no TUI consumer has ever loaded there,
-  restart or not; the directory form (`thatch/index.ts` + `tui.ts`) is
-  required. (2026-10-08, the thog TUI: the restart-and-respawn test
-  DISPROVED the stale-process theory and pointed here - the conversion
-  was the missing install step.)
+  deleting the old file shim in the same step (a file `thatch.ts` and a
+  directory `thatch/` coexisting dies on duplicate plugin ids before any
+  plugin code runs), THEN restart the TUI. A restart ALONE fixes nothing
+  when the install is a FILE shim - the file shape never loads a `./tui`
+  entrypoint, whatever the process age. First diagnostic:
+  `ls ~/.config/opencode/plugins/` - a FILE (`thatch.ts`) means no TUI
+  consumer has ever loaded there, restart or not; the directory form
+  (`thatch/index.ts` + `tui.ts`) is required. (2026-10-08, the thog TUI:
+  the restart-and-respawn test DISPROVED the stale-process theory and
+  pointed here - the conversion was the missing install step.)
 - **Fix**: restart the TUI window once after adopting (or changing the
   shape of) a `./tui` entrypoint. DIAGNOSTIC WARNING: `tabs.json` cannot
   discriminate here - it is SHARED across windows and written by ANY tab
@@ -426,25 +410,6 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   event worked. The discriminating test: restart the TUI and re-spawn; a
   tab appearing post-restart confirms the stale-process diagnosis; a tab
   still absent is a real bug worth a report.
-
-## The two opencode lines discover plugins differently: no one shim shape auto-loads on both
-
-- **v1 auto-discovers plugin FILES only** - its config plugin scan globs
-  `{plugin,plugins}/*.{ts,js}`, which never matches a directory. **v2
-  auto-discovers files AND directories** (and symlinks), and its activation
-  dies on duplicate ids - so a plugins directory holding BOTH `thatch.ts`
-  and `thatch/` loads the server plugin twice on v2 and dies with
-  "duplicate instance plugin ids" before any plugin code runs. There is no
-  single on-disk shape that auto-loads on both lines as a directory-based
-  multi-entry plugin. Consequences: the dev-checkout install uses the file
-  shim for v1-only or v2-only use, or the directory shim for v2's `./tui`
-  entrypoint (session tabs) - deleting the file shim in the same step; the
-  QA fixture keeps the FILE shim because the QA suite is headless (no TUI
-  process ever loads `./tui`, and the file shape is the only one that loads
-  on both lines - a directory shim deterministically killed UC-100's v1
-  chat canary). Local plugin specs handed to a loader explicitly
-  (`"plugin": ["./path"]`) can point at a directory on v1 - it is only the
-  AUTO-discovery scan that is files-only.
 
 ## A promptSession wrapper must stay synchronous or fire-and-forget delivery assertions misfire
 

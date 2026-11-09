@@ -681,46 +681,28 @@ describe("wake gate", () => {
   const gate = (over?: {
     compacting?: boolean;
     mapped?: string;
-    statuses?: Record<string, { type?: string } | undefined>;
-    failFetch?: boolean;
   }) => {
-    const errors: unknown[] = [];
     const canPrompt = createWakeGate({
       isCompacting: () => over?.compacting ?? false,
       mappedStatus: () => over?.mapped,
-      fetchStatuses: async () => {
-        if (over?.failFetch) throw new Error("server down");
-        return over?.statuses ?? {};
-      },
-      onStatusError: (_id, err) => errors.push(err),
     });
-    return { canPrompt, errors };
+    return { canPrompt };
   };
 
-  test("map-absent session falls through to the live check and wakes", async () => {
+  test("map-absent session wakes (absence is not evidence of busy)", () => {
     const { canPrompt } = gate({});
-    expect(await canPrompt("ses_quiet")).toBe(true);
+    expect(canPrompt("ses_quiet")).toBe(true);
   });
 
-  test("known busy/retry rejects without fetching", async () => {
-    const { canPrompt, errors } = gate({ mapped: "busy", failFetch: true });
-    expect(await canPrompt("ses_busy")).toBe(false);
-    expect(await gate({ mapped: "retry", failFetch: true }).canPrompt("s")).toBe(false);
-    expect(errors).toHaveLength(0); // pre-filter: never reached the server
+  test("known busy/retry rejects", () => {
+    expect(gate({ mapped: "busy" }).canPrompt("ses_busy")).toBe(false);
+    expect(gate({ mapped: "retry" }).canPrompt("s")).toBe(false);
+    // Mapped idle and unknown-but-mapped states wake.
+    expect(gate({ mapped: "idle" }).canPrompt("s")).toBe(true);
   });
 
-  test("the live status map is authoritative: busy fails closed, absent means idle", async () => {
-    const { canPrompt: busy } = gate({ statuses: { ses_x: { type: "busy" } } });
-    expect(await busy("ses_x")).toBe(false);
-    const { canPrompt: idleish } = gate({ statuses: { ses_x: { type: "idle" } } });
-    expect(await idleish("ses_x")).toBe(true);
-  });
-
-  test("compacting fails closed; server failure fails closed", async () => {
-    expect(await gate({ compacting: true, failFetch: true }).canPrompt("ses_c")).toBe(false);
-    const { canPrompt, errors } = gate({ failFetch: true });
-    expect(await canPrompt("ses_c")).toBe(false);
-    expect(errors).toHaveLength(1);
+  test("compacting fails closed", () => {
+    expect(gate({ compacting: true }).canPrompt("ses_c")).toBe(false);
   });
 });
 

@@ -85,19 +85,19 @@ describe("MCP teardown", () => {
 describe("MCP compileTools", () => {
   test("exposes every shared tool under its bare name", () => {
     const tools = compileTools();
-    for (const def of TOOL_DEFS.filter((d) => !d.opencodeOnly && !d.v2Only)) {
+    for (const def of TOOL_DEFS.filter((d) => !d.opencodeOnly)) {
       expect(tools.has(def.name), `missing ${def.name}`).toBe(true);
     }
   });
 
   test("filters out opencode-only tools", () => {
     const tools = compileTools();
-    for (const def of TOOL_DEFS.filter((d) => d.opencodeOnly || d.v2Only)) {
+    for (const def of TOOL_DEFS.filter((d) => d.opencodeOnly)) {
       expect(tools.has(def.name), `${def.name} must not be exposed over MCP`).toBe(false);
     }
   });
 
-  test("exposes 29 shared tools (session_tab is v2-opencode-only)", () => {
+  test("exposes 29 shared tools (session_tab is opencode-only)", () => {
     expect(compileTools().size).toBe(29);
   });
 
@@ -160,9 +160,10 @@ describe("MCP compilePrompts", () => {
     const promptNames = [...compilePrompts().keys()].sort();
     const claudeNames = claudeCommandDefs().map((d) => d.name).sort();
     expect(promptNames).toEqual(claudeNames);
-    // And opencode is strictly a superset: shared actions + wrap-ups + the
-    // opencode-only actions.
+    // And opencode is strictly a superset: shared actions + the
+    // opencode-only actions. The wrap-ups register in code and never
+    // appear in any file-installed set.
     const opencodeNames = opencodeCommandDefs().map((d) => d.name).sort();
-    expect(opencodeNames).toEqual([...promptNames, "compact", "exit", "extract", "whois"].sort());
+    expect(opencodeNames).toEqual([...promptNames, "extract", "whois"].sort());
   });
 });
