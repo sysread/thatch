@@ -106,10 +106,15 @@ thatch chat broadcast "deploy halted" --project acme/payments
 ```
 
 The message goes out under your name (from `git config user.name` or
-your OS username), to every live session - open sessions wake on their
-next poll, tab-less and Claude Code/Cursor sessions read it at their
+your OS username), to every live session. Only OPEN sessions are woken
+(a broadcast is one-way FYI traffic - waking every idle session on the
+machine for it is exactly what thatch does not do); tab-less and
+Claude Code/Cursor sessions are not woken and read it at their
 next prompt, and stale opencode sessions (whose host process is gone)
-are skipped and named in the report.
+are skipped. The report names each open-tab delivery on its own line
+and summarizes the rest as counts: no-tab and mcp recipients by
+delivery state, and skipped and out-of-scope sessions per project -
+a broadcast to a fleet-scale directory stays a handful of lines.
 Repeat `--project` to narrow the audience to those projects.
 
 You are not joining the chat: every delivered message carries a note

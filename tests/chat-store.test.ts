@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
-import { nowIso, isoMinutesAgo as cutoffAgo, NAME_CHARSET, slugifyTitle, isDefaultSessionTitle, humanAge, renderChatParticipant, CHAT_CLI_SENDER, cliBroadcastFrame, sanitizeCliSenderName, matchesHostSessionID, buildChatRosterJsonRow, mcpSessionID, type ChatSessionRow } from "../src/chat";
+import { nowIso, isoMinutesAgo as cutoffAgo, NAME_CHARSET, slugifyTitle, isDefaultSessionTitle, humanAge, renderChatParticipant, CHAT_CLI_SENDER, cliBroadcastFrame, sanitizeCliSenderName, matchesHostSessionID, buildChatRosterJsonRow, mcpSessionID, renderBroadcastReport, type ChatSessionRow } from "../src/chat";
 import { CHAT_NAME_POOL } from "../src/chat-names";
 import { TOOL_DEFS } from "../src/tool-defs";
 import { makeChatDbFixture, disposeChatDbFixture, makeReg } from "./mocks/chat-harness";
@@ -530,6 +530,143 @@ describe("ChatStore via ThatchDB", () => {
     // Assigned names always carry a numeric counter suffix, so the bare
     // sentinel shape can never be issued by the pool either.
     expect(CHAT_CLI_SENDER).not.toMatch(/-\d{5}$/);
+  });
+
+  test("the CLI report names open tabs and counts the fleet-scale rest", () => {
+    // The incident shape (2026-11-09): 94 delivered lines plus ~490
+    // stale-skip lines for a one-line FYI. The report names ONLY the
+    // open-tab recipients - the sessions that matter and the only ones
+    // woken - and summarizes every other bucket as counts.
+    reg("ses_a", "alice", "sysread/thatch");
+    reg("ses_b", "bob", "sysread/thatch");
+    reg("ses_c", "carol", "sysread/thatch");
+    reg("ses_m", "mickey", "sysread/thatch");
+    reg("ses_g1", "ghost1", "sysread/thog");
+    reg("ses_g2", "ghost2", "sysread/thog");
+    const np = db.registerChatSession("ses_np", null, null, "opencode", "noproj");
+    if (!np.ok) throw new Error("reg(ses_np) failed");
+    raw.run("UPDATE chat_sessions SET host_kind = 'mcp' WHERE session_id = 'ses_m'");
+    raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id IN ('ses_g1', 'ses_g2', 'ses_np')");
+    // alice and bob have tabs; carol's tab is closed.
+    const tabs = new Set(["ses_a", "ses_b"]);
+    openTabsFixture = tabs;
+    const result = db.broadcastChatMessageFromUser("GH Actions is flaky, FYI", { senderName: "Jeff Ober" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const lines = renderBroadcastReport(result, {
+      rowsByName: new Map(db.listChatSessions().map((r) => [r.name, r])),
+      openTabs: tabs,
+      projects: [],
+    });
+    expect(lines).toEqual([
+      "Broadcast from Jeff Ober to 4 of 7 registered sessions:",
+      "  delivered: alice-00001 (sysread/thatch) [open]",
+      "  delivered: bob-00001 (sysread/thatch) [open]",
+      "  delivered to 1 session with no open tab (read at next prompt)",
+      "  delivered to 1 mcp session (read at next prompt)",
+      "Skipped:",
+      "  - 2 stale sessions in sysread/thog",
+      "  - 1 stale session with no project",
+    ]);
+  });
+
+  test("the CLI report counts out-of-scope rows per project and echoes the filter", () => {
+    reg("ses_a", "alice", "acme/one");
+    reg("ses_b", "bob", "acme/two");
+    reg("ses_c", "carol", "acme/two");
+    const np = db.registerChatSession("ses_np", null, null, "opencode", "noproj");
+    if (!np.ok) throw new Error("reg(ses_np) failed");
+    const result = db.broadcastChatMessageFromUser("standup", { projects: ["acme/one"], senderName: "cli user" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const lines = renderBroadcastReport(result, {
+      rowsByName: new Map(db.listChatSessions().map((r) => [r.name, r])),
+      openTabs: new Set(),
+      projects: ["acme/one"],
+    });
+    expect(lines).toEqual([
+      "Broadcast from cli user to 1 of 4 registered sessions (projects: acme/one):",
+      "  delivered to 1 session with no open tab (read at next prompt)",
+      "Out of scope (project filter):",
+      "  - 2 sessions in acme/two",
+      "  - 1 session with no project",
+    ]);
+  });
+
+  test("the CLI report names a concurrently vanished recipient instead of counting it", () => {
+    // A row that unregistered between the write and the render has no
+    // roster entry to classify; it is rare (bounded by concurrent
+    // unregisters, not fleet size), so it stays named and marked rather
+    // than folded into a count whose wording would promise a read.
+    reg("ses_a", "alice");
+    const result = db.broadcastChatMessageFromUser("anyone?", { senderName: "cli user" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    raw.run("DELETE FROM chat_sessions WHERE session_id = 'ses_a'");
+    const lines = renderBroadcastReport(result, {
+      rowsByName: new Map(db.listChatSessions().map((r) => [r.name, r])),
+      openTabs: new Set(),
+      projects: [],
+    });
+    expect(lines).toEqual([
+      "Broadcast from cli user to 1 of 1 registered sessions:",
+      "  delivered: alice-00001 (p) [no longer registered]",
+    ]);
+  });
+
+  test("the CLI report keeps the tskmstr-parseable delivered-line prefix", () => {
+    // jowi-dev/tskmstr's board parses `delivered: NAME` lines off this
+    // report (src/work/thatch_chat.rs): the named-line shape is a
+    // consumer contract, pinned here so a reword cannot drift it.
+    reg("ses_a", "alice", "acme/one");
+    reg("ses_b", "bob", "acme/one");
+    const tabs = new Set(["ses_a", "ses_b"]);
+    openTabsFixture = tabs;
+    const result = db.broadcastChatMessageFromUser("hi", { senderName: "cli user" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const lines = renderBroadcastReport(result, {
+      rowsByName: new Map(db.listChatSessions().map((r) => [r.name, r])),
+      openTabs: tabs,
+      projects: [],
+    });
+    const named = lines.filter((l) => l.trim().startsWith("delivered: "));
+    expect(named).toEqual([
+      "  delivered: alice-00001 (acme/one) [open]",
+      "  delivered: bob-00001 (acme/one) [open]",
+    ]);
+    // Count lines must never parse as session names: no count line
+    // carries the delivered-name prefix.
+    expect(lines.some((l) => /^\s*delivered: \d/.test(l))).toBe(false);
+  });
+
+  test("the CLI report carries the dedupe and split notes unchanged", () => {
+    reg("ses_a", "alice");
+    const first = db.broadcastChatMessageFromUser("once", { senderName: "cli user" });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    // The identical retry lands while the first is still UNREAD: the
+    // retry is suppressed and reported, and the note rides the report.
+    const retry = db.broadcastChatMessageFromUser("once", { senderName: "cli user" });
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) return;
+    expect(retry.deduped).toBe(1);
+    const lines = renderBroadcastReport(retry, {
+      rowsByName: new Map(db.listChatSessions().map((r) => [r.name, r])),
+      openTabs: new Set(),
+      projects: [],
+    });
+    expect(lines).toContain("  duplicate suppressed for 1 recipient (an identical unread broadcast stands)");
+    // A split body reports its part count.
+    const split = db.broadcastChatMessageFromUser(["A".repeat(1_900), "B".repeat(1_900)].join("\n\n"), { senderName: "cli user" });
+    expect(split.ok).toBe(true);
+    if (!split.ok) return;
+    const splitLines = renderBroadcastReport(split, {
+      rowsByName: new Map(db.listChatSessions().map((r) => [r.name, r])),
+      openTabs: new Set(),
+      projects: [],
+    });
+    expect(splitLines).toContain("  sent as 2 parts per recipient (body exceeded the split length)");
   });
 
   test("read drains the inbox oldest-first and stamps messages read", () => {

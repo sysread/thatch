@@ -327,7 +327,8 @@ note, and the broadcast skip all call it, so they cannot disagree.
 Heartbeat age alone conflates presence with recency: a finished
 conversation stays fresh until its directory's instance stops beating it
 (days), and a closed tab leaves a fresh row. The refinement is a READ-ONLY
-second signal, `src/tab-state.ts`: at roster render and broadcast time,
+second signal, `src/tab-state.ts`: at roster render, broadcast, and
+poller delivery time,
 glob `<XDG_STATE_HOME>/opencode/*/tui/tabs.json` (one file per release
 channel - "latest" today, hence the glob), parse BOTH scope modes
 (`global.tabs` and per-path `cwd.*.tabs`; the scope depends on opencode's
@@ -389,6 +390,25 @@ One wake prompt covers all of a recipient's pending messages: sender names
 and a count, pointer-only like watcher notifications, with the model calling
 `chat_read` for content. On success the poller stamps `delivered_at`
 (re-stamping on re-nudges resets the re-nudge timer).
+
+The sender-kind wake gate: a batch whose rows are ALL from the CLI
+sentinel (the human user's terminal broadcast) wakes the recipient only
+when a tab is open for it right now (the poller's `openTabs` option,
+fed by the same tab-state reader as the roster); a tab-less recipient
+keeps the mail unread and reads it at its next prompt, and when its
+tab reopens the still-undelivered row wakes as a first delivery,
+exempt from the nudge cap. Any agent-sent row in the batch lifts the
+gate - agent mail is a real message that justifies the turn, and the
+CLI rows ride along in the same prompt. No provider means no tab
+signal, which reads as "not open" (the roster's honesty rule): the
+gate fails toward silence, never toward a fleet wake. This gate closed
+the 2026-11-09 incident class - one terminal FYI woke roughly fifty
+idle hosted sessions, one model turn each machine-wide - and brought
+the poller in line with what the CLI broadcast's documentation had
+promised all along (open sessions wake; tab-less and MCP sessions read
+at their next prompt). Agent-sent mail is untouched: direct
+`chat_send` and the agent `chat_broadcast` (whose fan-out already
+requires an open tab) keep their wake semantics.
 
 The hard rate cap (default 6 per recipient per rolling hour) counts every
 wake prompt in the shared `chat_wakes` table, written at send time so a
@@ -559,13 +579,15 @@ rides in part 1 only, with each row still naming the sender through the
 Delivery is the store's `broadcastFromUser()` (both entry points share
 the `#fanOut` core): the cap check, split, single transaction,
 per-recipient dedupe, and name snapshots are byte-identical to the tool
-path, but `requireOpen` is false - the CLI has no tab signal to read,
-and the tab skip exists because a WAKE to a tab-less session is
-swallowed. A CLI row is delivered by the ordinary poller like any tool
-row: open opencode sessions are woken, RECENT opencode rows and MCP
-rows read their mail at the next prompt, and the wake nudge is
-user-voiced (`chatNotificationNudge`'s `fromUser` framing - the
-agent-mail "not user input" rule would be a lie here). STALE opencode
+path, but `requireOpen` is false - the mail itself lands in every
+non-stale inbox (rows are cheap, and every reader that misses the wake
+still gets its copy at the next prompt). A CLI row is delivered by the
+ordinary poller under the sender-kind wake gate (below): open opencode
+sessions are woken, RECENT opencode rows and MCP
+rows are NOT woken and read their mail at the next prompt, and the
+wake nudge is user-voiced (`chatNotificationNudge`'s `fromUser`
+framing - the agent-mail "not user input" rule would be a lie here).
+STALE opencode
 rows are still skipped and reported; a stale MCP row still receives.
 A repeatable `--project` flag narrows the audience by exact
 whole-value match against the registered project (the comparison
@@ -574,6 +596,17 @@ rows, land in the report's out-of-scope bucket so the omission is
 visible. `delivered_at` is never stamped by the CLI write: the
 wake/poll machinery owns delivery stamping. The tool's
 `chat_broadcast` surface is unchanged and cannot name its sender.
+
+The CLI report is summarized, not per-recipient
+(`renderBroadcastReport()` in `src/chat.ts`): the open-tab recipients -
+the sessions that matter and the only ones woken - are named one line
+each in the historical `delivered: NAME (PROJECT) [open]` shape (a
+consumer contract: jowi-dev/tskmstr's board parses delivered names off
+that prefix), while no-tab and mcp recipients, skips, and out-of-scope
+rows collapse into count lines by delivery state and per project. The
+per-recipient report once rendered a one-line terminal FYI as ~600
+lines (94 delivered plus ~490 stale skips, observed 2026-11-09); the
+counts keep the report fleet-scale-safe in both directions.
 
 ## Interactions with other features
 
@@ -743,9 +776,9 @@ within their clamps - invalid values silently fall back to the default.
 - `tests/qa/auto/uc-097-chat.ts` - full lifecycle against a mocked poller
 - `tests/qa/auto/uc-099-chat-cli.ts` - `chat list` roster and `chat tail`
   JSONL and `--pretty` contracts over a seeded DB
-- `tests/qa/auto/uc-128-chat-cli-broadcast.ts` - the CLI broadcast: report
-  buckets, fence note, sentinel rows, dedupe, and failure paths over a
-  seeded DB
+- `tests/qa/auto/uc-128-chat-cli-broadcast.ts` - the CLI broadcast:
+  summarized report (open tabs named, the rest counted), fence note,
+  sentinel rows, dedupe, and failure paths over a seeded DB
 - `tests/qa/auto/uc-116-chat-send-dedupe.ts` - a retried send is suppressed
 - `tests/qa/auto/uc-119-chat-split-long-messages.ts` - an oversized body is
   auto-split into marker-decorated parts

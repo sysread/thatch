@@ -699,6 +699,104 @@ export interface BroadcastResult {
   parts: number;
 }
 
+/** One broadcast recipient's delivery state at report time, from the
+ *  post-write roster: "open" (opencode row, fresh heartbeat, a tab open
+ *  now - the only state a user-voiced broadcast wakes), "mcp" (reads at
+ *  its next prompt), "no tab" (fresh opencode row, tab closed or
+ *  unknown - reads at its next prompt), or "gone" (the roster row
+ *  vanished between the write and the report). */
+export type BroadcastDeliveryKind = "open" | "mcp" | "no tab" | "gone";
+
+export function broadcastDeliveryKind(
+  row: ChatSessionRow | undefined,
+  openTabs: ReadonlySet<string>,
+  now: number,
+): BroadcastDeliveryKind {
+  if (!row) return "gone";
+  if (row.host_kind === "mcp") return "mcp";
+  return chatLiveness(row, now, openTabs) === "open" ? "open" : "no tab";
+}
+
+/**
+ * Renders the CLI broadcast report: named lines for the recipients that
+ * matter (the open tabs - also the only ones the poller wakes for a
+ * user-voiced batch), and count lines for every other bucket. The
+ * per-recipient line-per-session report once turned a one-line terminal
+ * FYI into ~600 lines (94 delivered plus ~490 stale skips, observed
+ * 2026-11-09), so the bulk is summarized: skipped rows count per
+ * project, out-of-scope rows count per project, and no-tab and mcp
+ * recipients count by delivery state. The named `delivered: NAME
+ * (PROJECT) [open]` lines keep their historical shape - a downstream
+ * parser (jowi-dev/tskmstr's board) reads delivered names off exactly
+ * that prefix.
+ *
+ * `rowsByName` is the post-write roster keyed by display name (names
+ * are never reused, so the join is stable); `openTabs` and `now` are
+ * the same single-sample liveness inputs the roster render uses.
+ * `projects` is the caller's --project list, echoed in the header when
+ * non-empty.
+ */
+export function renderBroadcastReport(
+  result: BroadcastResult,
+  opts: { rowsByName: Map<string, ChatSessionRow>; openTabs: ReadonlySet<string>; projects: string[]; now?: number },
+): string[] {
+  const now = opts.now ?? Date.now();
+  const lines: string[] = [];
+  const audience = result.recipients.length + result.skipped.length + result.outOfScope.length;
+  const scope = opts.projects.length > 0 ? ` (projects: ${opts.projects.join(", ")})` : "";
+  lines.push(`Broadcast from ${result.senderName} to ${result.recipients.length} of ${audience} registered sessions${scope}:`);
+  const open: BroadcastRecipient[] = [];
+  const gone: BroadcastRecipient[] = [];
+  let noTab = 0;
+  let mcp = 0;
+  for (const r of result.recipients) {
+    const kind = broadcastDeliveryKind(opts.rowsByName.get(r.name), opts.openTabs, now);
+    if (kind === "open") open.push(r);
+    else if (kind === "gone") gone.push(r);
+    else if (kind === "mcp") mcp++;
+    else noTab++;
+  }
+  for (const r of open) lines.push(`  delivered: ${r.name} (${r.project ?? "no project"}) [open]`);
+  for (const r of gone) lines.push(`  delivered: ${r.name} (${r.project ?? "no project"}) [no longer registered]`);
+  if (noTab > 0) lines.push(`  delivered to ${noTab} session${noTab === 1 ? "" : "s"} with no open tab (read at next prompt)`);
+  if (mcp > 0) lines.push(`  delivered to ${mcp} mcp session${mcp === 1 ? "" : "s"} (read at next prompt)`);
+  // Skips and out-of-scope rows summarize per project: the section is
+  // fleet-scale (hundreds of rows on a busy machine), and the project
+  // breakdown is the part a human acts on. Projects render
+  // alphabetically, rows with no project last, so repeated runs of the
+  // same broadcast produce identical output.
+  const skippedLines = countByProject(result.skipped.map((s) => [s.reason, s.project] as const)).flatMap(([reason, groups]) =>
+    groups.map(([project, n]) => `  - ${n} ${reason} session${n === 1 ? "" : "s"} ${project === null ? "with no project" : `in ${project}`}`),
+  );
+  if (skippedLines.length > 0) lines.push("Skipped:", ...skippedLines);
+  const outOfScopeLines = countByProject(result.outOfScope.map((o) => ["out of scope", o.project] as const)).flatMap(([, groups]) =>
+    groups.map(([project, n]) => `  - ${n} session${n === 1 ? "" : "s"} ${project === null ? "with no project" : `in ${project}`}`),
+  );
+  if (outOfScopeLines.length > 0) lines.push("Out of scope (project filter):", ...outOfScopeLines);
+  if (result.deduped > 0) lines.push(`  duplicate suppressed for ${result.deduped} recipient${result.deduped === 1 ? "" : "s"} (an identical unread broadcast stands)`);
+  if (result.parts > 1) lines.push(`  sent as ${result.parts} parts per recipient (body exceeded the split length)`);
+  return lines;
+}
+
+/** Groups (key, project) pairs into sorted per-project counts: one
+ *  [key, [project, count][]] entry per distinct key, projects
+ *  alphabetical with null-project rows last. Pure - the report render
+ *  is deterministic for the same input. */
+function countByProject(pairs: ReadonlyArray<readonly [string, string | null]>): Array<[string, Array<[string | null, number]>]> {
+  const byKey = new Map<string, Map<string | null, number>>();
+  for (const [key, project] of pairs) {
+    const groups = byKey.get(key) ?? new Map<string | null, number>();
+    groups.set(project, (groups.get(project) ?? 0) + 1);
+    byKey.set(key, groups);
+  }
+  return [...byKey.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, groups]) => [
+      key,
+      [...groups.entries()].sort((a, b) => (a[0] === null ? 1 : b[0] === null ? -1 : a[0].localeCompare(b[0]))),
+    ]);
+}
+
 export class ChatStore {
   #db: Database;
 
@@ -1106,11 +1204,12 @@ export class ChatStore {
    * sentinel (CHAT_CLI_SENDER, never a registered row) carrying an
    * explicit from_name, so no registration exists to look up or spoof.
    * The write itself performs no wake and stamps no delivered_at: the
-   * ordinary poller then delivers the rows exactly as it delivers tool
-   * rows (waking open sessions), and RECENT opencode rows (fresh
-   * heartbeat, tab closed) and MCP rows read their mail at the next
-   * prompt. requireOpen is false - the CLI has no tab signal, and a
-   * delivery that waits for the next prompt needs none. STALE rows are
+   * ordinary poller then delivers the rows (ChatPoller's sender-kind
+   * wake gate: user-voiced batches wake only open-tab sessions), and
+   * RECENT opencode rows (fresh heartbeat, tab closed) and MCP rows
+   * read their mail at the next prompt. requireOpen is false - the CLI
+   * has no tab signal, and a delivery that waits for the next prompt
+   * needs none. STALE rows are
    * still skipped and reported: a dead host never reads the mail.
    * `projects` (exact whole-value matches against the registered
    * project) narrows the fan-out; rows outside the filter - including
@@ -2375,6 +2474,14 @@ export interface ChatPollerOptions {
    *  context injection. Undeliverable messages stay pending and retry on
    *  later cycles. */
   canDeliver: (sessionID: string) => boolean | Promise<boolean>;
+  /** Open-tab session ids at delivery time (the tab-state reader,
+   *  src/tab-state.ts). A batch whose rows are ALL from the CLI sentinel
+   *  (the human user's terminal broadcast) wakes a recipient only when
+   *  this set contains it; every other recipient keeps the mail unread
+   *  and reads it at the next prompt. Omitted means no tab signal, which
+   *  by the roster's honesty rule reads as "not open": user-voiced
+   *  batches then wake nobody. */
+  openTabs?: () => ReadonlySet<string>;
   /** Poll interval. Default 30s - frequent enough that wake prompts feel
    *  prompt, cheap enough that the shared DB sees only a couple of light
    *  statements per cycle per process. */
@@ -2713,8 +2820,29 @@ export class ChatPoller {
         byRecipient.set(msg.to_session, queue);
       }
 
+      // Open-tab snapshot for the user-broadcast wake gate, resolved at
+      // most once per pass and only when a user-only batch appears.
+      let openTabs: ReadonlySet<string> | null = null;
+      const userWakeTabs = () => (openTabs ??= this.#opts.openTabs?.() ?? new Set<string>());
+
       for (const [recipient, messages] of byRecipient) {
         if (!(await this.#opts.canDeliver(recipient))) continue;
+        // Sender-kind wake gate: a batch that is entirely the human
+        // user's CLI broadcast wakes only open-tab recipients. A terminal
+        // broadcast is one-way FYI traffic; waking every hosted session
+        // for it spends a model turn per recipient machine-wide
+        // (observed 2026-11-09: one one-line broadcast, roughly fifty
+        // woken idle sessions). The mail itself still lands in every
+        // inbox - rows are cheap, and a tab-less session reads at its
+        // next prompt (the hook's pending line surfaces it); when its
+        // tab reopens, the still-undelivered row wakes then as a first
+        // delivery, exempt from the nudge cap. Any agent-sent row in the
+        // batch lifts the gate: agent mail is a real message that
+        // justifies the turn, and the CLI rows ride along in the same
+        // prompt. No provider means no tab signal, which reads as "not
+        // open" (the roster's honesty rule) - the gate then fails
+        // toward silence, never toward a fleet wake.
+        if (messages.every((m) => m.from_session === CHAT_CLI_SENDER) && !userWakeTabs().has(recipient)) continue;
         // Split the batch: a row is a re-nudge when it was already
         // wake-delivered (delivered_at stamp) or when this process sent it
         // and the stamp write failed (sentIds - the at-least-once retry

@@ -1,8 +1,8 @@
 /**
  * The chat namespace: a window on the cross-session chat. Read-only
  * everywhere except `chat broadcast`, the one deliberate write path: it
- * voices the human user (sentinel sender) and delivers through the
- * ordinary poller, with no open-tab requirement at write time. A
+ * voices the human user (sentinel sender), whose rows land in every
+ * non-stale inbox while the poller wakes only open-tab recipients. A
  * namespace is a Subcommand whose run dispatches a child registry; each
  * child was a case of chatCommand's switch before the registry
  * replaced it.
@@ -26,6 +26,7 @@ import {
   sanitizeCliSenderName,
   matchesHostSessionID,
   buildChatRosterJsonRow,
+  renderBroadcastReport,
   type ChatSessionRow,
   type ChatTailFilter,
   type ChatTailEvent,
@@ -431,17 +432,16 @@ const broadcast: Subcommand = {
       { long: "--project", short: null, description: "Narrow the audience to those projects (exact match; repeatable)." },
     ],
     notes: [
-      "You are not in the chat: delivered bodies carry a note saying so, and recipients answer you in their own session, not in chat. Delivery is the ordinary poll: open sessions are woken, tab-less and MCP sessions read at their next prompt; stale opencode sessions are skipped and named.",
+      "You are not in the chat: delivered bodies carry a note saying so, and recipients answer you in their own session, not in chat. Delivery wakes only OPEN sessions; tab-less and MCP sessions are not woken - they read the message at their next prompt - and stale opencode sessions are skipped. The report names each open-tab delivery and summarizes the rest (no-tab, mcp, skipped, out-of-scope) as counts.",
     ],
   }),
   async run(args, ctx) {
     // The one chat write path: the user speaking from a terminal. The
-    // sender is a sentinel (never a registered session), delivery rides
-    // the ordinary poller (waking open sessions; no tab requirement at
-    // write time), and the fence note in the body tells recipients the
-    // protocol. A typo'd flag must not go out to every session as
-    // message text, so unknown `--` tokens die loudly instead of
-    // joining the message.
+    // sender is a sentinel (never a registered session), delivery wakes
+    // only open-tab sessions (the poller's sender-kind gate), and the
+    // fence note in the body tells recipients the protocol. A typo'd
+    // flag must not go out to every session as message text, so unknown
+    // `--` tokens die loudly instead of joining the message.
     if (!chatEnabled(loadConfig(ctx.dbPath).config)) {
       console.error("error: cross-session chat is off (chat.enabled: false in the thatch config); nothing was sent.");
       process.exit(1);
@@ -522,26 +522,14 @@ const broadcast: Subcommand = {
       console.error(`error: broadcast refused: ${result.error}`);
       process.exit(1);
     }
-    // Per-recipient report. Liveness labels come from the post-write
-    // roster (names are never reused, so the join by name is stable);
-    // a concurrently vanished row just gets no label.
+    // Summarized report (renderBroadcastReport): named lines for the
+    // open-tab recipients - the sessions that matter and the only ones
+    // woken - and per-bucket counts for the fleet-scale rest. Liveness
+    // labels come from the post-write roster (names are never reused,
+    // so the join by name is stable).
     const rowsByName = new Map(ctx.db.listChatSessions().map((r) => [r.name, r]));
     const openTabs = chatOpenTabsProvider(() => ctx.db.chatTabClosures())();
-    const now = Date.now();
-    const label = (r: { name: string }): string => {
-      const row = rowsByName.get(r.name);
-      if (!row) return "";
-      if (row.host_kind === "mcp") return "mcp, reads at next prompt";
-      return chatLiveness(row, now, openTabs) === "open" ? "open" : "no tab, reads at next prompt";
-    };
-    const audience = result.recipients.length + result.skipped.length + result.outOfScope.length;
-    const scope = projects.length > 0 ? ` (projects: ${projects.join(", ")})` : "";
-    console.log(`Broadcast from ${result.senderName} to ${result.recipients.length} of ${audience} registered sessions${scope}:`);
-    for (const r of result.recipients) console.log(`  delivered: ${r.name} (${r.project ?? "no project"}) [${label(r)}]`);
-    for (const s of result.skipped) console.log(`  skipped (${s.reason}): ${s.name} (${s.project ?? "no project"})`);
-    for (const o of result.outOfScope) console.log(`  out of scope (project filter): ${o.name} (${o.project ?? "no project"})`);
-    if (result.deduped > 0) console.log(`  duplicate suppressed for ${result.deduped} recipient${result.deduped === 1 ? "" : "s"} (an identical unread broadcast stands)`);
-    if (result.parts > 1) console.log(`  sent as ${result.parts} parts per recipient (body exceeded the split length)`);
+    for (const line of renderBroadcastReport(result, { rowsByName, openTabs, projects })) console.log(line);
   },
 };
 

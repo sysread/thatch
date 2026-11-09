@@ -617,6 +617,10 @@ export async function createRuntime(input: {
 
   const chatPoller = new ChatPoller({
     store: db,
+    // The poller's open-tab signal for user-voiced broadcast batches: the
+    // same tab-state reader the roster and the broadcast fan-out use, so
+    // the wake gate and every render surface agree on who is open.
+    openTabs: chatOpenTabsProvider(() => db.chatTabClosures()),
     hostedSessions: () => {
       const now = Date.now();
       const hosted = hostedSessionIds({

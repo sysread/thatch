@@ -174,13 +174,18 @@ A window on the cross-session chat directory ([cross-session-chat.md](cross-sess
   `broadcastFromUser()` with `cliBroadcastFrame()`'s fence note
   prepended (the note tells each recipient that the message is the
   human user speaking, and that the recipient answers in its own
-  session instead of replying into chat), and prints a per-recipient
-  report (delivered with a `chatLiveness()` label, skipped by reason,
-  out-of-scope by the repeatable exact-match `--project` filter).
-  Delivery is the ordinary poll - open sessions wake, no tab
-  requirement at write time, `delivered_at` left to the wake
-  machinery; failures print plainly (`[thatch chat broadcast] failed:
-  ...`), matching the tail's friendly-failure treatment. Unknown flags
+  session instead of replying into chat), and prints a summarized
+  report (`renderBroadcastReport()` in `src/chat.ts`): open-tab
+  recipients named one line each - the `delivered: NAME (PROJECT)
+  [open]` shape is a consumer contract, parsed by tskmstr's board -
+  with no-tab and mcp recipients counted by delivery state, skips and
+  out-of-scope rows counted per project (the repeatable exact-match
+  `--project` filter), and the dedupe/split notes. Delivery is the
+  ordinary poll with the sender-kind wake gate: open sessions wake,
+  tab-less and mcp sessions are not woken and read at their next
+  prompt, `delivered_at` left to the wake machinery; failures print
+  plainly (`[thatch chat broadcast] failed: ...`), matching the tail's
+  friendly-failure treatment. Unknown flags
   die loudly rather than going out to every session as message text.
 
 ## Environment variables

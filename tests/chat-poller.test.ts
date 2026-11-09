@@ -126,6 +126,88 @@ describe("ChatPoller", () => {
     expect(deliveries[0].batch).toEqual({ fromUser: false, mixed: false });
   });
 
+  test("a user-only batch (the CLI broadcast) wakes only open-tab recipients", async () => {
+    // The incident class this gate exists for: one terminal FYI must not
+    // spend a model turn on every hosted session. A batch of ONLY
+    // CLI-sent rows wakes the recipient when its tab is open, and skips
+    // the wake (mail stays pending, budget untouched) when it is not.
+    raw.run(
+      `INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast, from_name, to_name)
+       VALUES ('cli', 'ses_b', 'fyi only', '${nowIso()}', 1, 'Jeff Ober', 'bob-00001')`,
+    );
+    gateOpen = true;
+    const tabs: string[] = [];
+    const gated = new ChatPoller({
+      store: db,
+      hostedSessions: () => hosted,
+      openTabs: () => new Set(tabs),
+      deliver: async (sessionID, senders, count, batch) => {
+        deliveries.push({ sessionID, senders, count, batch });
+      },
+      canDeliver: (sessionID) => gateOpen && hosted.includes(sessionID),
+      pollIntervalMs: 60_000,
+    });
+    try {
+      // Tab closed: no wake, no budget spent, the row still pending.
+      await gated.deliverPending();
+      expect(deliveries.length).toBe(0);
+      expect(db.chatWakeCount("ses_b", cutoffAgo(60))).toBe(0);
+      expect(db.pendingChatNotifications(["ses_b"], cutoffAgo(15)).length).toBe(1);
+      // Tab open: the same still-undelivered row wakes as a FIRST
+      // delivery (delivered_at was never stamped), user-voiced.
+      tabs.push("ses_b");
+      await gated.deliverPending();
+      expect(deliveries.length).toBe(1);
+      expect(deliveries[0].sessionID).toBe("ses_b");
+      expect(deliveries[0].batch).toEqual({ fromUser: true, mixed: false });
+    } finally {
+      gated.dispose();
+    }
+  });
+
+  test("a user-only batch wakes nobody without a tab signal (the fail-safe default)", async () => {
+    // No openTabs provider: no tab signal, which the roster rule reads
+    // as "not open". The gate fails toward silence, never toward a
+    // fleet wake - the default poller here has no provider.
+    raw.run(
+      `INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast, from_name, to_name)
+       VALUES ('cli', 'ses_b', 'fyi only', '${nowIso()}', 1, 'Jeff Ober', 'bob-00001')`,
+    );
+    gateOpen = true;
+    await poller.deliverPending();
+    expect(deliveries.length).toBe(0);
+    expect(db.pendingChatNotifications(["ses_b"], cutoffAgo(15)).length).toBe(1);
+  });
+
+  test("agent mail in the batch lifts the user-broadcast wake gate", async () => {
+    // One agent row makes the batch mixed: the agent message justifies
+    // the turn, and the CLI rows ride along in the same prompt - even
+    // with an (empty) tab signal that would hold a user-only batch.
+    db.sendChatMessage("ses_a", "bob-00001", "agent mail");
+    raw.run(
+      `INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast, from_name, to_name)
+       VALUES ('cli', 'ses_b', 'user words', '${nowIso()}', 1, 'Jeff Ober', 'bob-00001')`,
+    );
+    gateOpen = true;
+    const gated = new ChatPoller({
+      store: db,
+      hostedSessions: () => hosted,
+      openTabs: () => new Set<string>(),
+      deliver: async (sessionID, senders, count, batch) => {
+        deliveries.push({ sessionID, senders, count, batch });
+      },
+      canDeliver: (sessionID) => gateOpen && hosted.includes(sessionID),
+      pollIntervalMs: 60_000,
+    });
+    try {
+      await gated.deliverPending();
+      expect(deliveries.length).toBe(1);
+      expect(deliveries[0].batch).toEqual({ fromUser: true, mixed: true });
+    } finally {
+      gated.dispose();
+    }
+  });
+
   test("delivery failure leaves messages pending", async () => {
     // The production delivery path logs each failed delivery; the scope
     // swallows it so the expected failure does not leak into the output.
