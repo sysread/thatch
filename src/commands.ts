@@ -52,16 +52,6 @@ import {
 export const COMMANDS_ARTIFACTS_DIR = join(import.meta.dir, "..", "artifacts", "commands");
 
 /**
- * The wrap-up greenlight's host action, per host: v1 drives the TUI
- * (compaction via the "session_compact" legacy alias through
- * executeCommand, the exit via the "app.exit" keymap command through
- * /tui/publish). v2 calls session.compact on the plugin's promise domain
- * and emits the session-tab bridge's TUI-only exit-tab-closed event; the
- * runtime records the exiting session's watcher deaths before either host
- * action runs (src/runtime.ts).
- */
-
-/**
  * Shared wrap-up persistence checklist, spliced into both wrap-up artifacts
  * so the two commands cannot drift apart.
  */
@@ -216,28 +206,28 @@ export function actionDefs(): ActionDef[] {
   return defs;
 }
 
-/** The opencode command set: wrap-ups plus every action, as full file contents. */
+/**
+ * The opencode command set: the action commands as full file contents. The
+ * wrap-up commands (compact, exit) are NOT file-installed - they register
+ * in code (the CommandEditor in src/opencode/v2.ts), and a command FILE
+ * with the same name as a registered command would collide.
+ */
 export function opencodeCommandDefs(): { name: string; content: string }[] {
-  return ["compact", "exit", "defrag", "extract", "hygiene", "peer-review", "bug-intake", "refine", "reflect", "self-review", "whois"].map((name) => ({
+  return ["defrag", "extract", "hygiene", "peer-review", "bug-intake", "refine", "reflect", "self-review", "whois"].map((name) => ({
     name,
     content: interpolateTemplate(loadCommandTemplate(name)),
   }));
 }
 
-/** The action commands only - no wrap-ups (used where wrap-ups register in code). */
-export function opencodeActionCommandDefs(): { name: string; content: string }[] {
-  return opencodeCommandDefs().filter((d) => d.name !== "compact" && d.name !== "exit");
-}
-
 /**
  * The Claude Code command set: the actions minus the opencode-only ones.
- * The wrap-up commands are excluded too - their greenlight check needs the
- * plugin's command.execute.before arming and host action routes. Tool names
- * render in the MCP spelling.
+ * The wrap-up commands are not here either - their greenlight check needs
+ * the plugin's command arming and host action routes. Tool names render in
+ * the MCP spelling.
  */
 export function claudeCommandDefs(): { name: string; content: string }[] {
   return opencodeCommandDefs()
-    .filter((d) => d.name !== "compact" && d.name !== "exit" && !OPENCODE_ONLY_ACTIONS.has(d.name))
+    .filter((d) => !OPENCODE_ONLY_ACTIONS.has(d.name))
     .map((d) => ({ name: d.name, content: mcpSpelling(d.content) }));
 }
 
@@ -266,22 +256,20 @@ function syncCommandFiles(dir: string, defs: { name: string; content: string }[]
 }
 
 /**
- * Sync opencode's commands into <configHome>/opencode/command/thatch/.
- * defs overrides the set (hosts whose plugin API registers wrap-up commands
- * in code pass the action-only set - a registered command and a file with
- * the same name would collide).
+ * Sync opencode's action commands into <configHome>/opencode/command/thatch/.
+ * The wrap-ups never install as files (they register in code; see
+ * opencodeCommandDefs).
  */
-export function installOpencodeCommands(configHome: string, defs: { name: string; content: string }[] = opencodeCommandDefs()): string[] {
-  return syncCommandFiles(join(configHome, "opencode", "command", "thatch"), defs);
+export function installOpencodeCommands(configHome: string): string[] {
+  return syncCommandFiles(join(configHome, "opencode", "command", "thatch"), opencodeCommandDefs());
 }
 
 /**
- * Removes wrap-up command files left in the opencode command dir. Hosts
- * that register wrap-up commands in code (v2) pass the action-only set to
- * installOpencodeCommands, but files written by earlier v1 runs persist -
- * syncCommandFiles never removes - and a stale file collides with the
- * registered command (both versions share the config dir). Call this
- * before installing on such hosts. Idempotent: missing files are fine.
+ * Removes wrap-up command files left in the opencode command dir by
+ * pre-drop plugin runs (which file-installed the wrap-ups).
+ * syncCommandFiles never removes, so a stale file persists and collides
+ * with the registered command of the same name - both share the config
+ * dir. Called before every install. Idempotent: missing files are fine.
  */
 export function removeWrapUpCommandFiles(configHome: string): void {
   const dir = join(configHome, "opencode", "command", "thatch");

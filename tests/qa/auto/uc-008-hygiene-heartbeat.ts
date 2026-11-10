@@ -22,6 +22,8 @@ const useCase: UseCase = {
   name: "UC-008-hygiene-heartbeat",
   preconditions: [
     "- A store with: one memory not updated or recalled in 90+ days; one memory scoped to a git branch that no longer exists; two near-duplicate memories (similarity > 0.85)",
+    "- One memory scoped to a deleted branch whose entries are all archived (must NOT be named in the orphaned signal)",
+    "- One memory scoped to a branch that exists only as a remote-tracking ref (must NOT be flagged orphaned)",
     "- A second, clean store for the negative case",
   ].join("\n"),
   steps: [
@@ -34,6 +36,8 @@ const useCase: UseCase = {
     '- The report names three signals — pending duplicate pairs, stale-memory count, orphaned-branch memory count — and **only the non-zero ones**. A fully healthy store prints "Store is healthy." (or `null`) and the reminder omits the hygiene block entirely.',
     "- Both `reminder` shapes fold the hygiene block into the session-start text only when it is non-null.",
     "- Outside a git repo, the orphaned-branch check is **skipped** — a missing branch list would otherwise make everything look orphaned; stale and dup signals still report.",
+    "- A fully-archived branch (every entry archived) is **not** named in the orphaned signal: the branch enumeration excludes archived entries, matching the count, which also excludes them.",
+    "- A branch that exists only as a remote-tracking ref (pushed, PR open, no local checkout) is **not** flagged: the orphan check reads refs/heads AND refs/remotes, with the remote name stripped.",
     "- Signals are advisory: thatch never deletes or merges memories itself. The agent acts on the nudge to fix the store, by the same `memory_forget` / `dedup_mark_checked` tools as UC-002.",
   ].join("\n"),
 
@@ -62,6 +66,17 @@ const useCase: UseCase = {
     const branchEmb = await model.passageEmbed("work done on a deleted feature branch");
     db.remember(store, "deleted-branch-work", "work done on a deleted feature branch", branchEmb, "mock", { branch: "feature/deleted" });
 
+    // A memory on a deleted branch where every entry is archived. The branch
+    // name must stay out of the orphaned list: branchesInStore skips archived
+    // entries, so a fully-archived branch contributes no name and no count.
+    const archivedBranchEmb = await model.passageEmbed("consolidated history of finished work");
+    db.remember(store, "merged-branch-archive", "consolidated history of finished work", archivedBranchEmb, "mock", { branch: "feature/merged-archived", archived: true });
+
+    // A memory scoped to a branch that exists only as a remote-tracking ref
+    // (pushed, PR open, no local checkout). It must not be flagged orphaned.
+    const prOpenEmb = await model.passageEmbed("work on a pushed branch with an open pull request");
+    db.remember(store, "pr-open-work", "work on a pushed branch with an open pull request", prOpenEmb, "mock", { branch: "feature/pr-open" });
+
     db.close();
 
     // Backdate the stale memory's timestamps to 100 days ago. ThatchDB.remember
@@ -89,6 +104,10 @@ const useCase: UseCase = {
     await $`git config user.name test`.cwd(gitRepo).quiet();
     writeFileSync(join(gitRepo, "README"), "init");
     await $`git add -A && git commit -m init`.cwd(gitRepo).quiet();
+    // feature/pr-open exists ONLY as a remote-tracking ref, like a branch
+    // pushed with an open PR but never checked out locally. listBranches
+    // reads refs/heads and refs/remotes, so this branch counts as live.
+    await $`git update-ref refs/remotes/origin/feature/pr-open HEAD`.cwd(gitRepo).quiet();
 
     const db1 = new ThatchDB(dbPath);
     const report1 = await hygieneReport(db1, store, gitRepo);
@@ -108,6 +127,14 @@ const useCase: UseCase = {
     }
     if (!report1.includes("deleted branches")) {
       console.log(`  FAIL: report missing orphaned-branch signal: ${report1}`);
+      return "FAIL";
+    }
+    if (report1.includes("feature/merged-archived")) {
+      console.log(`  FAIL: fully-archived branch must stay out of the orphaned list: ${report1}`);
+      return "FAIL";
+    }
+    if (report1.includes("feature/pr-open")) {
+      console.log(`  FAIL: remote-only branch with an open PR must not be flagged orphaned: ${report1}`);
       return "FAIL";
     }
 

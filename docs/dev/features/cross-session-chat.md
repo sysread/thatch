@@ -1,6 +1,6 @@
 # Cross-Session Chat
 
-Unless noted, `client.*` names below are the opencode v1 mapping; the v2 equivalents and degrades are in [opencode-plugin.md](opencode-plugin.md).
+Behavior is described in runtime terms; the host-surface registrations and the HostCapabilities mapping are in [opencode-plugin.md](opencode-plugin.md).
 
 Cross-session chat lets independent opencode sessions on one machine message
 each other through thatch: sessions join a shared directory (automatically,
@@ -24,7 +24,7 @@ User-facing behavior is documented in
 - A shared SQLite directory and inbox in thatch.db, writable by any opencode
   process on the machine
 - A per-process poller that heartbeats hosted sessions and delivers wake
-  prompts via `client.session.promptAsync` with a synthetic part - the same
+  prompts as waking synthetic inbox items (`session.synthetic`) - the same
   mechanism watchers use
 - Anti-loop protection at two levels: prompt guidance (messages are
   informational, no reflexive auto-reply) and a hard per-recipient nudge
@@ -124,7 +124,7 @@ is RECLAIMED (names are owned by the session id, minted once, never
 renamed) and the row's heartbeat is refreshed - hosting is the
 heartbeat, so the serving harness beats and delivers for the row again.
 `-c/--continue` resolves no id on the command line, so the plugin
-resolves the same target the harness does: `client.session.list()`
+resolves the same target the harness does: `session.list({directory})`
 (directory-scoped, the plugin's client carries the directory), sorted by
 `time.updated` descending like the TUI does, first row without a
 `parentID`. That registration is not synchronous at init (the list call
@@ -147,7 +147,7 @@ mechanical barrier, a documented trust posture.
 
 Every exit path - `chat_unregister`, `session.deleted`, and a greenlit
 `/thatch/exit` (the plugin unregisters the exiting session before the
-host close-out - v1 publishes `app.exit`, v2 closes the session's own
+host close-out - the exit-tab-closed event closes the session's own
 tab - so the roster stops advertising a host that is about to vanish)
 - writes a
 `chat_leave_tombstones` row (with a `reason` naming the path: `exit` for
@@ -327,7 +327,8 @@ note, and the broadcast skip all call it, so they cannot disagree.
 Heartbeat age alone conflates presence with recency: a finished
 conversation stays fresh until its directory's instance stops beating it
 (days), and a closed tab leaves a fresh row. The refinement is a READ-ONLY
-second signal, `src/tab-state.ts`: at roster render and broadcast time,
+second signal, `src/tab-state.ts`: at roster render, broadcast, and
+poller delivery time,
 glob `<XDG_STATE_HOME>/opencode/*/tui/tabs.json` (one file per release
 channel - "latest" today, hence the glob), parse BOTH scope modes
 (`global.tabs` and per-path `cwd.*.tabs`; the scope depends on opencode's
@@ -390,6 +391,25 @@ and a count, pointer-only like watcher notifications, with the model calling
 `chat_read` for content. On success the poller stamps `delivered_at`
 (re-stamping on re-nudges resets the re-nudge timer).
 
+The sender-kind wake gate: a batch whose rows are ALL from the CLI
+sentinel (the human user's terminal broadcast) wakes the recipient only
+when a tab is open for it right now (the poller's `openTabs` option,
+fed by the same tab-state reader as the roster); a tab-less recipient
+keeps the mail unread and reads it at its next prompt, and when its
+tab reopens the still-undelivered row wakes as a first delivery,
+exempt from the nudge cap. Any agent-sent row in the batch lifts the
+gate - agent mail is a real message that justifies the turn, and the
+CLI rows ride along in the same prompt. No provider means no tab
+signal, which reads as "not open" (the roster's honesty rule): the
+gate fails toward silence, never toward a fleet wake. This gate closed
+the 2026-11-09 incident class - one terminal FYI woke roughly fifty
+idle hosted sessions, one model turn each machine-wide - and brought
+the poller in line with what the CLI broadcast's documentation had
+promised all along (open sessions wake; tab-less and MCP sessions read
+at their next prompt). Agent-sent mail is untouched: direct
+`chat_send` and the agent `chat_broadcast` (whose fan-out already
+requires an open tab) keep their wake semantics.
+
 The hard rate cap (default 6 per recipient per rolling hour) counts every
 wake prompt in the shared `chat_wakes` table, written at send time so a
 failed stamp cannot turn the cap into an uncounted re-delivery loop. The
@@ -406,21 +426,65 @@ Before any wake attempt runs, the delivery guard (`guardDelivery` in
 bound directory of every session it hosts - still exists. A deleted
 worktree (merged branch) would otherwise error every attempt, and opencode
 surfaces that error to the user as a toast. The guard skips the attempt
-with a `runtime:delivery` debug line instead, leaving the mail queued; the
-check is per attempt, so a worktree recreated at the same path resumes
-delivery. The existence check cannot say why a path is absent (deleted
-tree, broken symlink, parent permission), so any miss classifies as gone -
-deliberate, because surfacing non-ENOENT errors through the attempt would
-buy the toast back for no recovery the pending-and-retry cycle does not
-already provide. The guard wraps `promptSession` in
-`createRuntime`, which covers chat nudges, watcher notifications and death
-notices, rehydrate pings, chat echoes, and extraction dispatch at once;
-MCP hosts never build a runtime, so they are unaffected.
+with a `runtime:delivery` debug line instead; the check is per attempt, so
+a worktree recreated at the same path resumes delivery. The existence
+check cannot say why a path is absent (deleted tree, broken symlink,
+parent permission), so any miss classifies as gone - deliberate, because
+surfacing non-ENOENT errors through the attempt would buy the toast back
+for no recovery the pending-and-retry cycle does not already provide. The
+guard wraps `promptSession` in `createRuntime`, which covers chat nudges,
+watcher notifications and death notices, rehydrate pings, chat echoes, and
+extraction dispatch at once; MCP hosts never build a runtime, so they are
+unaffected.
 
-The hard brake: at most a fixed number of wake prompts per recipient per
-hour (default 6, in-memory on purpose - it is a loop guard, not accounting).
-Without it, two agents politely acknowledging each other would ping-pong
-forever, each wake triggering a reply that wakes the other.
+The skip is a typed rejection (`DeliverySkippedError` in
+`src/capabilities.ts`), never a silent success: a resolving skip made the
+chat delivery loop stamp mail delivered with no prompt ever sent - the
+wake-accepted-but-never-executed zombie (issue #25). Callers treat the
+rejection as "nothing was sent": the chat delivery loop keeps the mail
+pending and logs each failed cycle, and consecutive skips advance the
+wake-swallow detector's watch to condemnation (which releases the
+recipient's hosting - this closes the gap where the `session.moved` event
+was missed, e.g. a plugin reload across the move re-hosting the moved
+session at the old instance). The watcher registry's death scan is
+404-gated, so skips never declare a session's watchers dead. A wedged -
+not dead - recipient recovers through the same shape: the rejected wake
+left the mail pending, and the next cycle's retry lands once the session
+consumes prompts again.
+
+### Location switches and the wake-swallow detector
+
+A session moved mid-life between directories of one project (user
+`session_move`, the stranded-session sweep, the recovery dialog) is
+handed off: the old instance releases hosting on the `session.moved`
+event, the new instance adopts it, and mail delivery resumes from there
+(see [session-lifecycle.md](session-lifecycle.md), "session.moved"). The
+hand-off is what prevents the zombie: without it, the old instance kept
+stamp-delivering mail into a prompt path that no longer reached the
+session. As a second layer, the poller re-verifies each hosted session's
+current directory against `session_v2` in opencode.db (`reverifyDirectories`
+on the poller, every `THATCH_CHAT_DIRECTORY_REVERIFY_CYCLES` cycles,
+default 1) and releases move-aways the event path missed - a move across a
+plugin reload - failing open to the detector below when the db is
+unreadable; adoption stays event-driven.
+
+The detector is the safety net for the whole "wake accepted, turn never
+ran" class, whatever the cause. The poller arms a watch on every
+successful wake (`CHAT_SWALLOW_WATCH_MS`, default 5 minutes) and then
+reads the recipient's live activity time (`sessionGet`'s
+`time.updated`). A turn after the wake stamp resolves the watch. Silence
+counts one swallow: the first swallow logs and toasts loudly (the
+watcher-death-notice family), and `CHAT_SWALLOW_DEAD_COUNT` (default 3)
+consecutive silences condemn the recipient - the wiring site releases its
+hosting, so the instance stops spending wake budget on a prompt path that
+no longer consumes. An unreadable activity time (host unreachable,
+unknown session) drops the watch fail-open: the detector only judges when
+it can see. Watches survive un-hosting on purpose - after a location
+switch, the old instance is the only observer left.
+
+The rate cap is the anti-ping-pong loop guard: without it, two agents
+politely acknowledging each other would wake each other forever, each
+wake triggering a reply that wakes the other.
 
 ### Transcript echo
 
@@ -429,9 +493,9 @@ with the output block behind a default-off toggle - so without help, a chat
 exchange is invisible to the human watching the session. The plugin's
 `tool.execute.after` hook builds a short echo for the conversational events
 (`chatEchoText()` in `src/prompts.ts`: register, send, read, broadcast) and
-delivers it as a non-synthetic, `noReply` promptAsync part: rendered as a
-visible bubble in the transcript, no model turn started (the server's
-prompt path returns before the completion loop). Failed calls never echo;
+delivers it as a turn-free `noReply` prompt: rendered as a visible bubble in
+the transcript, no model turn started (the resume:false synthetic - the bubble
+materializes at the session's next turn's inbox delivery). Failed calls never echo;
 `chat_list` and `chat_unregister` stay on the muted tool line. Broadcasts
 echo their fan-out count with the clipped body.
 
@@ -440,14 +504,10 @@ also means later turns see the echo in context - a small duplication of the
 tool call it mirrors, accepted for visibility. Echo bodies are clipped
 (send: the body; read: the formatted inbox; broadcast: the body) so a
 bubble stays cheap. Echo delivery is fire-and-forget: a failure must never
-fail the tool call it follows. Because the opencode server fires the
-`chat.message` hook for every prompt part before the `noReply`
-early-return, the plugin's `chat.message` handler skips messages whose
-visible text is entirely `[chat]`-prefixed bubbles (`isChatEchoParts`) -
-otherwise every echo would run the nudge machinery for a message no model
-turn reads. The accepted edge: a real user message whose every visible
-part starts with the prefix is skipped the same way, losing that one turn's
-advisory nudges.
+fail the tool call it follows. The echo cannot re-enter the nudge
+machinery: it rides a `resume: false` synthetic, and the prompt hook never
+fires for synthetic inbox items (live-probed 2026-11-05), so no model turn
+and no nudge computation ever sees the echo as a prompt.
 
 ### The untrusted-content frame
 
@@ -519,13 +579,15 @@ rides in part 1 only, with each row still naming the sender through the
 Delivery is the store's `broadcastFromUser()` (both entry points share
 the `#fanOut` core): the cap check, split, single transaction,
 per-recipient dedupe, and name snapshots are byte-identical to the tool
-path, but `requireOpen` is false - the CLI has no tab signal to read,
-and the tab skip exists because a WAKE to a tab-less session is
-swallowed. A CLI row is delivered by the ordinary poller like any tool
-row: open opencode sessions are woken, RECENT opencode rows and MCP
-rows read their mail at the next prompt, and the wake nudge is
-user-voiced (`chatNotificationNudge`'s `fromUser` framing - the
-agent-mail "not user input" rule would be a lie here). STALE opencode
+path, but `requireOpen` is false - the mail itself lands in every
+non-stale inbox (rows are cheap, and every reader that misses the wake
+still gets its copy at the next prompt). A CLI row is delivered by the
+ordinary poller under the sender-kind wake gate (below): open opencode
+sessions are woken, RECENT opencode rows and MCP
+rows are NOT woken and read their mail at the next prompt, and the
+wake nudge is user-voiced (`chatNotificationNudge`'s `fromUser`
+framing - the agent-mail "not user input" rule would be a lie here).
+STALE opencode
 rows are still skipped and reported; a stale MCP row still receives.
 A repeatable `--project` flag narrows the audience by exact
 whole-value match against the registered project (the comparison
@@ -534,6 +596,17 @@ rows, land in the report's out-of-scope bucket so the omission is
 visible. `delivered_at` is never stamped by the CLI write: the
 wake/poll machinery owns delivery stamping. The tool's
 `chat_broadcast` surface is unchanged and cannot name its sender.
+
+The CLI report is summarized, not per-recipient
+(`renderBroadcastReport()` in `src/chat.ts`): the open-tab recipients -
+the sessions that matter and the only ones woken - are named one line
+each in the historical `delivered: NAME (PROJECT) [open]` shape (a
+consumer contract: jowi-dev/tskmstr's board parses delivered names off
+that prefix), while no-tab and mcp recipients, skips, and out-of-scope
+rows collapse into count lines by delivery state and per project. The
+per-recipient report once rendered a one-line terminal FYI as ~600
+lines (94 delivered plus ~490 stale skips, observed 2026-11-09); the
+counts keep the report fleet-scale-safe in both directions.
 
 ## Interactions with other features
 
@@ -577,7 +650,7 @@ wake analog is the existing hook channel.
 
 | Host        | Send/receive | New-mail signal                                        | Echo bubbles |
 |-------------|--------------|--------------------------------------------------------|--------------|
-| opencode    | yes          | promptAsync wake (idle-gated)                          | yes          |
+| opencode    | yes          | synthetic wake (idle-gated)                          | yes          |
 | claude code | yes          | Stop-hook reminder at turn end + flush-tools hook line | no           |
 | cursor      | yes          | flush-tools hook line + chat-notify follow-up at turn end | no        |
 
@@ -654,7 +727,9 @@ per hour, auto-row TTL 7 days, confirmed-close override window two
 staleness windows (`CHAT_TAB_CLOSED_OVERRIDE_MS` in `src/tab-state.ts`).
 Environment overrides: `THATCH_CHAT_SPLIT_PART_LEN`
 (auto-split part budget, default 2000, clamped 500..9000),
-`THATCH_CHAT_MAX_BODY_CHARS` (whole-body acceptance ceiling, default 20000), and
+`THATCH_CHAT_MAX_BODY_CHARS` (whole-body acceptance ceiling, default 20000),
+`THATCH_CHAT_DIRECTORY_REVERIFY_CYCLES` (poll cycles between hosted
+directory re-verifications, default 1, clamped 1..120), and
 `THATCH_OPENCODE_STATE_ROOT` (the open-tab reader's state root, tests and
 QA sandboxes only);
 the split constants are resolved once at module load and sanitized to positive integers
@@ -665,7 +740,8 @@ within their clamps - invalid values silently fall back to the default.
 - `src/chat.ts` - ChatStore (directory + inbox SQL, assigned-name draw:
   pool pick, slugify, counter bump, insert, prune, topic refresh, broadcast
   targeting), ChatPoller
-  (heartbeat, gated delivery, re-nudge, rate cap, hourly prune sweep),
+  (heartbeat, directory re-verification cadence, gated delivery, re-nudge,
+  rate cap, hourly prune sweep),
   staleness helper, chatLiveness (the open/recent/active/idle/stale
   verdicts)
 - `src/tab-state.ts` - the read-only open-tab reader: per-channel
@@ -677,11 +753,15 @@ within their clamps - invalid values silently fall back to the default.
   chat_name_counters and the auto column), the NOCASE collation migration
   and topic column migration, delegated methods
 - `src/tool-defs.ts` - the chat tool definitions
-- `src/runtime.ts` - poller construction, delivery closure, `-s` startup
+- `src/runtime.ts` - poller construction (including the directory
+  re-verification wiring: init check plus per-cycle callback), delivery
+  closure, `-s` startup
   registration (`osProcessArgs`, `startupSessionId` from `src/os-args.ts`), idle
   auto-registration + topic refresh, idle flush,
   session.deleted unregister, dispose, transcript echo in
   tool.execute.after
+- `src/session-db.ts` - the read-only opencode.db access the directory
+  re-verification reads (`sessionDirectories`)
 - `src/debug.ts` - the `THATCH_DEBUG` diagnostic log; `chat:startup` is
   the chat consumer
 - `src/prompts.ts` - `chatNotificationNudge()`, `chatEchoText()` /
@@ -696,9 +776,9 @@ within their clamps - invalid values silently fall back to the default.
 - `tests/qa/auto/uc-097-chat.ts` - full lifecycle against a mocked poller
 - `tests/qa/auto/uc-099-chat-cli.ts` - `chat list` roster and `chat tail`
   JSONL and `--pretty` contracts over a seeded DB
-- `tests/qa/auto/uc-128-chat-cli-broadcast.ts` - the CLI broadcast: report
-  buckets, fence note, sentinel rows, dedupe, and failure paths over a
-  seeded DB
+- `tests/qa/auto/uc-128-chat-cli-broadcast.ts` - the CLI broadcast:
+  summarized report (open tabs named, the rest counted), fence note,
+  sentinel rows, dedupe, and failure paths over a seeded DB
 - `tests/qa/auto/uc-116-chat-send-dedupe.ts` - a retried send is suppressed
 - `tests/qa/auto/uc-119-chat-split-long-messages.ts` - an oversized body is
   auto-split into marker-decorated parts

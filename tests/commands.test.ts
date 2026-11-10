@@ -1,8 +1,8 @@
 import { describe, test, expect } from "bun:test";
-import { mkdtempSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommandFiles, claudeCommandDefs, COMMANDS_ARTIFACTS_DIR, opencodeCommandDefs } from "../src/commands";
+import { installOpencodeCommands, removeWrapUpCommandFiles, claudeCommandDefs, COMMANDS_ARTIFACTS_DIR, opencodeCommandDefs } from "../src/commands";
 
 // The artifacts/commands templates are the source of truth for command
 // bodies. Two invariants keep them honest: every placeholder in every
@@ -21,23 +21,31 @@ describe("command artifacts", () => {
     }
   });
 
-  test("artifact set matches the command set exactly (both directions)", () => {
+  test("artifact set matches the command set (wrap-ups aside)", () => {
     const artifacts = new Set(readdirSync(COMMANDS_ARTIFACTS_DIR).filter((f) => f.endsWith(".md")).map((f) => f.replace(/\.md$/, "")));
     const commands = new Set(opencodeCommandDefs().map((d) => d.name));
     for (const name of commands) {
       expect(artifacts.has(name), `command ${name} has no artifacts/commands/${name}.md`).toBe(true);
     }
+    // The two wrap-up artifacts have no file-installed command def: the
+    // wrap-ups register in code (CommandEditor), and their bodies load
+    // through wrapUpCommandContent, not the install set.
+    const wrapUps = new Set(["compact", "exit"]);
     for (const name of artifacts) {
-      expect(commands.has(name), `artifact ${name}.md has no command (stale template)`).toBe(true);
+      expect(
+        commands.has(name) || wrapUps.has(name),
+        `artifact ${name}.md has no command (stale template)`,
+      ).toBe(true);
     }
   });
 });
 
 
-// The v1 -> v2 upgrade path: v1 installs wrap-up command FILES; v2
-// registers the wrap-ups in code and installs only the action files. The
-// stale files must be removed (a file and a registered command with the
-// same name collide), and the removal must tolerate a missing dir.
+// The pre-drop -> post-drop upgrade path: pre-drop installs wrote wrap-up
+// command FILES; the wrap-ups now register in code and only the action
+// files install. The stale files must be removed (a file and a registered
+// command with the same name collide), and the removal must tolerate a
+// missing dir.
 
 function fakeConfigHome(): string {
   const home = mkdtempSync(join(tmpdir(), "thatch-cmds-"));
@@ -45,20 +53,22 @@ function fakeConfigHome(): string {
 }
 
 describe("removeWrapUpCommandFiles", () => {
-  test("removes wrap-up files written by a v1-style install, keeps action files", () => {
+  test("removes wrap-up files left by a pre-drop install, keeps action files", () => {
     const configHome = fakeConfigHome();
-    installOpencodeCommands(configHome); // full set: actions + wrap-ups
+    installOpencodeCommands(configHome); // action files only
     const dir = join(configHome, "opencode", "command", "thatch");
+    // Simulate the pre-drop leftovers: wrap-up files the current install
+    // never writes but must clean (they collide with the registered
+    // wrap-up commands).
+    writeFileSync(join(dir, "compact.md"), "stale");
+    writeFileSync(join(dir, "exit.md"), "stale");
     expect(existsSync(join(dir, "compact.md"))).toBe(true);
     expect(existsSync(join(dir, "exit.md"))).toBe(true);
 
     removeWrapUpCommandFiles(configHome);
     expect(existsSync(join(dir, "compact.md"))).toBe(false);
     expect(existsSync(join(dir, "exit.md"))).toBe(false);
-    // Action files (installed when a defs set is passed) survive.
-    installOpencodeCommands(configHome, opencodeActionCommandDefs());
-    removeWrapUpCommandFiles(configHome);
-    const remaining = opencodeActionCommandDefs().map((d) => existsSync(join(dir, `${d.name}.md`)));
+    const remaining = opencodeCommandDefs().map((d) => existsSync(join(dir, `${d.name}.md`)));
     expect(remaining.length).toBeGreaterThan(0);
     expect(remaining.every(Boolean)).toBe(true);
   });
@@ -73,10 +83,10 @@ describe("removeWrapUpCommandFiles", () => {
     expect(() => removeWrapUpCommandFiles(configHome)).not.toThrow();
   });
 
-  test("the v2 action set itself never contains the wrap-up names", () => {
+  test("the install set never contains the wrap-up names", () => {
     // Guard the invariant the removal exists to protect: registering
     // thatch/compact in code while compact.md is on disk is the collision.
-    const names = opencodeActionCommandDefs().map((d) => d.name);
+    const names = opencodeCommandDefs().map((d) => d.name);
     expect(names).not.toContain("compact");
     expect(names).not.toContain("exit");
   });
@@ -84,7 +94,7 @@ describe("removeWrapUpCommandFiles", () => {
 
 describe("whois command", () => {
   test("opencode-only: in the opencode set, excluded from Claude Code's, description stays a quoted YAML scalar", () => {
-    const opencode = opencodeActionCommandDefs().find((d) => d.name === "whois");
+    const opencode = opencodeCommandDefs().find((d) => d.name === "whois");
     expect(opencode).toBeDefined();
     // The description contains ": " - it must be rendered quoted or the
     // frontmatter is invalid YAML (the yamlQuote gotcha).
@@ -101,7 +111,7 @@ describe("whois command", () => {
 
 describe("review-mode commands (peer-review, self-review)", () => {
   test("shared across hosts: both sets carry them, couching the review pipeline with mode rules", () => {
-    const opencode = opencodeActionCommandDefs();
+    const opencode = opencodeCommandDefs();
     const peer = opencode.find((d) => d.name === "peer-review");
     const self = opencode.find((d) => d.name === "self-review");
     expect(peer).toBeDefined();
@@ -123,7 +133,7 @@ describe("review-mode commands (peer-review, self-review)", () => {
     expect(peer!.content).toContain("org velocity");
     expect(peer!.content).toContain("Never report findings of the form");
     expect(self!.content).toContain("reputation");
-    expect(self!.content).toContain("three rounds");
+    expect(self!.content).toContain("drift guard at ten rounds");
     expect(self!.content).not.toContain("org velocity");
 
     // The post-synthesis adjudication is peer-mode only: self-review stays

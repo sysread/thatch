@@ -8,62 +8,58 @@ import { createRuntime } from "../runtime";
 import { enumerateSweepSessions } from "../session-db";
 import { wrapUpCommandContent, wrapUpCommandDescription } from "../commands";
 import { deriveTitle } from "../extraction";
-import { detectRepo, detectWorktreeKind } from "../git";
+import { detectRepo, detectWorktreeKind, pathExists } from "../git";
 import { chatEnabled, loadConfig } from "../config";
 import { EXIT_TAB_CLOSED_EVENT, SESSION_TAB_RPC, TAB_CLOSED_EVENT, TAB_OPENED_EVENT, TOAST_EVENT, buildSubordinatePrompt, tabClosedEventType, tabOpenedEventType } from "../session-tab-shared";
-import { TOOL_DEFS, trimHostContext, type HostToolContext, type SessionTabCloseInput, type SessionTabHost, type SessionTabSpawnInput, type SessionTabSpawnResult } from "../tool-defs";
+import { TOOL_DEFS, trimHostContext, type HostToolContext, type SessionTabCloseInput, type SessionTabHost, type SessionTabOpenInput, type SessionTabOpenResult, type SessionTabSpawnInput, type SessionTabSpawnResult } from "../tool-defs";
 import { deepPassthrough } from "../tool-schema";
 
-// The opencode v2 adapter (opencode 2.x, plugin API @opencode/plugin 2.x).
-// Loaded only by v2 hosts - the dual entry (src/index.ts) lazy-imports this
-// module so the v1 SDK's imports never evaluate under a v1 host.
+// The opencode v2 adapter (opencode 2.x, plugin API @opencode/plugin 2.x):
+// the only host adapter. src/index.ts lazy-imports this module so the SDK's
+// module side effects evaluate inside setup.
 //
-// Mappings against the v1 hook surface; the 2026-09-23 smoke run against a
-// real v2 binary plus the SDK dist types are the sources of truth
+// Mappings against the host's hook surface; the 2026-09-23 smoke run against
+// a real v2 binary plus the SDK dist types are the sources of truth
 // (docs/dev/features/opencode-plugin.md has the full capability table):
-// - tools: ToolEditor.add with the same thatch_ names. Input schemas are
-//   pre-converted to JSON Schema with our own zod, because v2's converter
-//   detects zod via `instanceof $ZodType` against ITS bundled zod copy and
-//   drops ours (leaving tools parameterless). String results wrap as
-//   { content }. The tool.hook execute.after hook feeds the same extraction
-//   buffer as v1's tool.execute.after.
+// - tools: ToolEditor.add with thatch_ names. Input schemas are
+//   pre-converted to JSON Schema with our own zod, because the host's
+//   converter detects zod via `instanceof $ZodType` against ITS bundled zod
+//   copy and drops ours (leaving tools parameterless). String results wrap
+//   as { content }. The tool.hook execute.after hook feeds the extraction
+//   buffer.
 // - system prompt: session.hook("context") mutates the request's system
 //   array; the runtime's plain strings convert to {type: "text", text}
 //   parts at the boundary.
 // - per-message nudges: the prompt hook computes the turn's injections;
 //   the context hook appends them to the outbound request's user message
-//   that matches the entry's prompt text (v2 wire Messages have no
-//   `parts` field). Injections stay out of the stored prompt text.
-// - noReply deliveries (chat echoes, session-start reminder): v2's prompt
-//   endpoint cannot suppress the model turn, so the runtime gates them off
-//   via capabilities.noReplyDelivery.
+//   that matches the entry's prompt text (wire Messages have no `parts`
+//   field). Injections stay out of the stored prompt text.
+// - noReply deliveries (chat echoes, session-start reminder, re-attach
+//   notice): routed to session.synthetic({ resume: false }) - a synthetic
+//   inbox item that does NOT wake execution (live-probed 2026-11-05; the
+//   message materializes in history at the next turn's inbox delivery).
 // - compaction: session.hook("compaction") marks the session AND injects
 //   the re-familiarization system context - the compaction request carries
-//   the same mutable `system` array the context hook mutates (v1 parity:
-//   v1's system.transform fires on compaction summaries too).
+//   the same mutable `system` array the context hook mutates.
 // - events: context.event.subscribe pump; the envelope is
-//   {type, data, location?}. Filtered client-side the way the v1 host
-//   filters server-side: events resolve to a directory (their own, the
-//   session cache, or session.get) and drop when it is not ours.
+//   {type, data, location?}. Events are filtered client-side by directory:
+//   they resolve to a directory (their own, the session cache, or
+//   session.get) and drop when it is not ours.
 // - TUI reach: the ONLY server-to-TUI channel is the rpc event bridge - the
 //   session-tab rpc definition is registered at setup and its events reach
 //   the TUI CLI plugin (the package's ./tui entrypoint), which drives the
 //   tab strip (ui.tabs) and shows toasts (ui.toast). Keymap-command pushes
 //   still have no surface.
 // - wrap-up actions: compact rides session.compact on the promise domain
-//   (upstream #52385, newer than the pinned dev types, so runtime-guarded);
-//   exit records the session's watcher deaths synchronously in the runtime
-//   and then emits the bridge's exit-tab-closed event, which the TUI plugin
-//   turns into closing the session's OWN tab (see exitHost in
-//   buildCapabilities).
+//   (upstream #52385); exit records the session's watcher deaths
+//   synchronously in the runtime and then emits the bridge's
+//   exit-tab-closed event, which the TUI plugin turns into closing the
+//   session's OWN tab (see exitHost in buildCapabilities).
 // - toasts ride the bridge's toast event (TUI plugin's ui.toast.show);
-//   extraction-child cleanup rides session.remove (upstream #52387, also
-//   runtime-guarded). tui commands, session list endpoints:
-//   no v2 surface reachable from a plugin - degrades as no-op/null.
-//   fetchStatuses returns {} because the wake gate treats an unknown session
-//   as idle; the event-fed status map inside the runtime does the gating.
-//   Session MESSAGES are readable via session.context (mapped into the v1
-//   shape), so the alert round-shape derivation works.
+//   extraction-child cleanup rides session.remove (upstream #52387). TUI
+//   keymap commands have no plugin surface and degrade as no-op. Session
+//   MESSAGES are readable via session.context (mapped into the runtime's
+//   {info, parts} shape), so the alert round-shape derivation works.
 
 type V2Context = Plugin.Context;
 type V2Cleanup = Plugin.Cleanup;
@@ -94,8 +90,8 @@ function messageText(message: { content: unknown }): string {
 // shape has a single drift point in this file.
 type ExitTabCloseEmitter = (data: { sessionID: string }) => Promise<unknown>;
 
-// Raw setup function: the dual entry (src/index.ts) owns the plugin id and
-// the merged default export; this adapter only implements the v2 setup.
+// Raw setup function: src/index.ts owns the plugin id and the default
+// export; this adapter implements the setup.
 export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   // Verified against the live binary: Location.Info {directory, project:
   // {directory, canonical}} - directory is the session dir (forwarded
@@ -132,8 +128,8 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     emitExitTabClose?: ExitTabCloseEmitter;
     emitToast?: (toast: ToastInput) => Promise<unknown>;
   } = {};
-  const capabilities = buildCapabilities(context, worktree, childSessions, tuiBridge);
-  const runtime = await createRuntime({ capabilities, directory, worktree, v2Tools: true });
+  const capabilities = buildCapabilities(context, directory, worktree, childSessions, tuiBridge);
+  const runtime = await createRuntime({ capabilities, directory, worktree });
   // Seed the forwarding set from rehydrated child bookkeeping: after a
   // reload, an in-flight extraction child's maps come back from the journal,
   // but this NEW adapter instance's childSessions set starts empty - without
@@ -186,8 +182,7 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     console.error("[thatch] opencode v2 rpc surface unavailable - session_tab tools will report unwired");
   }
 
-  // Tool registration: the same CoreContext the v1 adapter feeds to
-  // createTools, registered through the v2 ToolEditor instead.
+  // Tool registration: the shared CoreContext fed through the ToolEditor.
   //
   // The input schema is pre-converted to JSON Schema with our own zod:
   // v2's converter detects zod via `instanceof $ZodType` against ITS bundled
@@ -252,17 +247,17 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     }
   });
 
-  // Tool execution buffering: same feeder as v1's tool.execute.after. The
-  // hook payload carries the outcome; error-status calls are not buffered
-  // (matching v1, whose hook only fired on completed tool calls).
+  // Tool execution buffering: the extraction buffer's feeder. The hook
+  // payload carries the outcome; error-status calls are not buffered (the
+  // host's hook only fires on completed tool calls).
   const registerToolHook = await context.tool.hook("execute.after", async (hook) => {
     if (hook.status && hook.status !== "completed") return;
-    // The v2 execute.after hook's result is a Tool.Result: `content` may be
+    // The execute.after hook's result is a Tool.Result: `content` may be
     // a string or an array of content parts ({type: "text", text}, files,
-    // ...), and `output` is the tool's typed output value, not a title. v1's
-    // hook delivered {title, output} strings; here the title is derived
-    // from the tool name and args (the runtime pushes it through verbatim)
-    // and the content is flattened to the buffer's text line.
+    // ...), and `output` is the tool's typed output value, not a title;
+    // the title is derived from the tool name and args (the runtime
+    // pushes it through verbatim) and the content is flattened to the
+    // buffer's text line.
     const result = hook.result;
     const text = flattenToolContent(result?.content);
     await runtime.onToolExecuteAfter(
@@ -271,19 +266,18 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     );
   });
 
-  // Model-request hook (kind "primary" = every normal user turn; v2 also
-  // has a "generate" hook, but it fires only for the plugin-invoked
+  // Model-request hook (kind "primary" = every normal user turn; the host
+  // also has a "generate" hook, but it fires only for the plugin-invoked
   // session.generate sub-request - it never fires for normal prompts,
   // which the 2026-09-24 probe confirmed). Two jobs per model request:
-  // - system prompt: re-familiarization. The runtime pushes plain strings
-  //   (the v1 contract); v2's system parts are { type: "text", text }
-  //   objects, so convert at the boundary.
+  // - system prompt: re-familiarization. The runtime pushes plain strings;
+  //   the host's system parts are { type: "text", text } objects, so
+  //   convert at the boundary.
   // - per-turn nudges: append the prompt hook's stored injections to the
   //   OUTBOUND request's user message whose text matches the entry's
   //   stored prompt (see the binding check below). The stored user message
-  //   stays clean (v1 delivered nudges as TUI-hidden synthetic parts; v2's
-  //   prompt text IS the stored message), and the request is rebuilt per
-  //   round trip, so injecting here reproduces v1's
+  //   stays clean (the prompt text IS the stored message), and the request
+  //   is rebuilt per round trip, so injecting here gives
   //   persistent-synthetic-part semantics: the model sees the nudges on
   //   every call of the turn.
   // Per-turn nudge injections, keyed by session, then by the prompt text
@@ -317,10 +311,10 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
       }
       const pending = pendingInjections.get(request.sessionID);
       if (!pending?.size) return;
-      // Binding check: a stored v2 user message IS its prompt text (the
+      // Binding check: a stored user message IS its prompt text (the
       // prompt hook's injections are computed from it), so text equality
       // identifies the message an entry belongs to. Wire message ids are
-      // optional on the v2 Message schema and cannot be relied on here.
+      // optional on the Message schema and cannot be relied on here.
       //
       // The match searches the request's user messages for the LAST one
       // whose joined text equals the entry's prompt - it is not simply the
@@ -330,7 +324,7 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
       // user-role, but AT THE TAIL when it is not (mid-turn rounds), which
       // would make the reminder the last user message, fail the equality,
       // and silently drop every nudge for the turn. Injecting into the
-      // prompt's own message is v1's persistent-synthetic-part semantics.
+      // prompt's own message is the persistent-synthetic-part semantic.
       //
       // Entries are tried newest first: when several are pending for the
       // session, the latest prompt-hook run wins a text match.
@@ -423,34 +417,31 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
     },
   );
 
-  // Wrap-up slash commands register in code (v2 CommandEditor): execute
-  // arms the greenlight check and delivers the same prompt body the v1
-  // command file carries. The runtime removes stale wrap-up FILES and
-  // installs only the action files on v2 (a file and a registered command
-  // with the same name collide).
+  // Wrap-up slash commands register in code (CommandEditor): execute arms
+  // the greenlight check and delivers the command template's prompt body.
+  // The runtime removes stale wrap-up FILES and installs only the action
+  // files (a file and a registered command with the same name collide).
   const registerCommands = await context.command.transform((editor) => {
     for (const kind of ["compact", "exit"] as const) {
       editor.add({
         name: `thatch/${kind}`,
-        // Shared with the v1 command file's frontmatter so the two hosts'
-        // menu descriptions cannot drift.
+        // Shared with the wrap-up artifact's frontmatter so the menu
+        // description cannot drift from the template.
         description: wrapUpCommandDescription(kind),
         // The user's typed arguments ride invocation.prompt (a
-        // PromptInput.Prompt with a text field). v1's host expanded
-        // $ARGUMENTS from the command file; v2's session.prompt does no
+        // PromptInput.Prompt with a text field). session.prompt does no
         // template expansion, so substitute here - dropping the args
         // would store a bare template as the user message. The function
         // replacer keeps `$` sequences in the user's text ($$ stays $$ -
         // a string replacement would interpret them).
         execute: async ({ sessionID, prompt }: { sessionID: string; prompt?: { text?: string } }) => {
-          // Same arm the v1 command.execute.before hook runs - the wrap-up
-          // resolution happens on the session's next idle event.
+          // The wrap-up resolution happens on the session's next idle
+          // event.
           await runtime.onCommandExecuteBefore({ command: `thatch/${kind}`, sessionID });
           const args = typeof prompt?.text === "string" ? prompt.text : "";
           await capabilities.promptSession(
             sessionID,
             { parts: [{ type: "text", text: wrapUpCommandContent(kind).replace("$ARGUMENTS", () => args) }] },
-            "sync",
           );
         },
       });
@@ -458,11 +449,11 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   });
 
   // Bus events: raw SSE subscription, not directory-scoped. Filter
-  // client-side: drop events located elsewhere. v2's execution lifecycle
+  // client-side: drop events located elsewhere. The execution lifecycle
   // events (the idle signal) carry NO location, so the session's project is
   // resolved and cached: first from any event that does carry one, then
   // via the session API. A session whose directory cannot be resolved
-  // drops (same invisible-to-this-instance contract as v1's server filter).
+  // drops - it is invisible to this instance by contract.
   const sessionDirs = new Map<string, string>();
   const resolveSessionDir = async (sessionID: string): Promise<string | undefined> => {
     try {
@@ -480,9 +471,8 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
       for await (const event of context.event.subscribe({ signal: controller.signal })) {
         // Per-event isolation: a throw inside one handler must not end the
         // loop (a dead pump means no idle events, no extraction, and a
-        // frozen status map for the rest of the process). v1's host
-        // dispatched each hook invocation independently; this restores that
-        // blast radius.
+        // frozen status map for the rest of the process) - each event is
+        // handled with its own blast radius.
         try {
           // Narrow to the fields the pump consumes: the generated V2Event
           // union types each payload per-variant, and the runtime's
@@ -507,6 +497,24 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
           if (located.type === tabOpenedEventType) {
             const opened = (data ?? {}) as { sessionID?: string; directory?: string };
             if (opened.sessionID && opened.directory) sessionDirs.set(opened.sessionID, opened.directory);
+          }
+          if (located.type === "session.moved") {
+            // A session's project location changed. The bus routes this
+            // event to BOTH the old and the new location's instances (the
+            // only session event routed twice), so it must not go through
+            // the generic instance gate: at the old instance the payload's
+            // (new) directory fails the match and the release would never
+            // run. Route it straight to the runtime, which reacts on its
+            // own membership - release here if it moved away, adopt here
+            // if it moved in (the location-switch fix, issue #25).
+            const moved = (data ?? {}) as { sessionID?: string; location?: { directory?: string } };
+            if (moved.sessionID && moved.location?.directory) {
+              await runtime.onEvent({
+                type: "session.moved",
+                properties: { sessionID: moved.sessionID, directory: moved.location.directory },
+              });
+            }
+            continue;
           }
           let eventDir = located.location?.directory ?? (data.sessionID ? sessionDirs.get(data.sessionID) : undefined);
           if (!eventDir && data.sessionID) eventDir = await resolveSessionDir(data.sessionID);
@@ -576,17 +584,16 @@ export async function setup(context: V2Context): Promise<V2Cleanup | void> {
   };
 }
 
-// Map v2's SessionMessageInfo list into the v1 {info: {role}, parts} shape
-// the alert round-derivation
-// reads. The alert classifier reads ROLES (idle markers delimit rounds),
-// synthetic flags, and message-level errors from this mapping - tool names
-// are irrelevant to it (the real-work signal comes from live tool
-// bookkeeping), but they are preserved for other consumers. Assistant
-// messages carry their text in content parts; other message kinds carry a
-// plain text field (or none - those map to an empty part rather than
-// dropping the message, so role ordering survives). Synthetic deliveries
-// (nudges, task completions, watcher wake-ups) are their own message kind
-// on v2 and keep that role.
+// Map the host's SessionMessageInfo list into the {info: {role}, parts}
+// shape the alert round-derivation reads. The alert classifier reads ROLES
+// (idle markers delimit rounds), synthetic flags, and message-level errors
+// from this mapping - tool names are irrelevant to it (the real-work signal
+// comes from live tool bookkeeping), but they are preserved for other
+// consumers. Assistant messages carry their text in content parts; other
+// message kinds carry a plain text field (or none - those map to an empty
+// part rather than dropping the message, so role ordering survives).
+// Synthetic deliveries (nudges, task completions, watcher wake-ups) are
+// their own message kind and keep that role.
 export function mapSessionContextMessages(
   messages: unknown,
 ): { info: { role: string; error?: string }; parts: { type: string; text?: string; tool?: string; synthetic?: boolean }[] }[] {
@@ -636,34 +643,33 @@ export function flattenToolContent(content: unknown): string {
     .join("\n");
 }
 
-// Translate a v2 bus event into the v1-shaped event the runtime consumes.
-// v2's envelope is {type, data, location?} (payload in `data`); v1's was
-// {type, properties}. The runtime's session event taxonomy also moved:
+// Translate one raw bus event into the runtime's {type, properties} shape.
+// The bus envelope is {type, data, location?} (payload in `data`); the
+// runtime's event taxonomy is {type, properties}. Naming:
 // - the idle signal is the execution lifecycle (session.execution.*);
-//   session.status exists in v2's schema but nothing publishes it
-// - child-session errors surface as session.execution.failed, which v1
-//   called session.error
-// - compaction completion is session.compaction.ended (v1: session.compacted)
-// Events the runtime does not consume return null and are dropped.
-// Translate one raw v2 bus event into the runtime's {type, properties}
-// shape. Returns a LIST: a terminal execution event maps to the pair the
-// runtime's v1-shaped flow expects (session.error to record the failure +
-// session.status idle to deliver the verdict), because v2 publishes exactly
-// ONE terminal event per busy period - Succeeded, Interrupted, or Failed,
-// mutually exclusive (execution.ts "One terminal observation per busy
-// period") - while v1's halt always publishes session.error followed by
-// idle. Exported for tests: this is the seam where done/error alerts died
+//   session.status exists in the schema but nothing publishes it
+// - child-session errors surface as session.execution.failed, which the
+//   runtime calls session.error
+// - compaction completion is session.compaction.ended (the runtime:
+//   session.compacted)
+// Events the runtime does not consume return [] and are dropped.
+// Returns a LIST: a terminal execution event maps to the pair the runtime's
+// flow expects (session.error to record the failure + session.status idle
+// to deliver the verdict), because the host publishes exactly ONE terminal
+// event per busy period - Succeeded, Interrupted, or Failed, mutually
+// exclusive (execution.ts "One terminal observation per busy period") -
+// while the runtime's halt flow consumes session.error followed by idle.
+// Exported for tests: this is the seam where done/error alerts died
 // silently when the mapping lagged the host's turn model.
 export function translateEvent(located: { type: string; data?: any }): { type: string; properties: any }[] {
   const data = located.data ?? {};
   switch (located.type) {
     case "session.created":
-      // v2 publishes the v1-compat payload { sessionID, info: SessionInfo };
-      // the parent link lives at info.parentID (the task tool dispatches
-      // sub-agents with parentID), not at the payload top level. Without
-      // this, childToParent never populates on v2 and every child-session
-      // behavior (buffer drain, nudge suppression, child cleanup) silently
-      // only works on v1.
+      // The payload is { sessionID, info: SessionInfo }; the parent link
+      // lives at info.parentID (the task tool dispatches sub-agents with
+      // parentID), not at the payload top level. Without this, childToParent
+      // never populates and every child-session behavior (buffer drain,
+      // nudge suppression, child cleanup) silently breaks.
       return [{ type: "session.created", properties: { info: { id: data.sessionID, parentID: data.info?.parentID ?? data.parentID } } }];
     case "session.deleted":
       return [{ type: "session.deleted", properties: { info: { id: data.sessionID } } }];
@@ -674,7 +680,7 @@ export function translateEvent(located: { type: string; data?: any }): { type: s
     case "session.execution.interrupted": {
       // Interrupts are never success: name the reason so the alert state
       // machine can apply its silence rules. user = the human aborted
-      // (MessageAbortedError, v1's name for it - silent); shutdown = the
+      // (MessageAbortedError - silent); shutdown = the
       // process is leaving (nobody to notify); inactivity = the location-
       // activity sweeper evicted a quiet directory while work was still
       // executing (the one interrupt that genuinely needs a banner).
@@ -855,23 +861,48 @@ function buildSessionTabHost(input: {
       await input.emitTabClosed({ sessionID: spec.sessionID, chatName: spec.chatName });
       input.debug("session-tab", `tab-close emitted for ${spec.sessionID} (${spec.chatName ?? "unnamed"})`);
     },
+    // The session_tab_open tool's reopen flow: the dead-directory guard
+    // lives here because only the adapter can reach the session domain. A
+    // session whose directory is gone would open opencode's "Session
+    // location unavailable" dialog on the user's screen, so the tool
+    // refuses with the path instead. The result union (not a throw) keeps
+    // an EXPECTED user error off the failure path - unlike the spawn flow,
+    // nothing was created to narrate.
+    openTab: async (spec: SessionTabOpenInput): Promise<SessionTabOpenResult> => {
+      let info: { title?: string; location?: { directory?: string } } | undefined;
+      try {
+        // Broad catch (the resolveSessionDir idiom above): the pinned
+        // surface has no typed not-found error to narrow on.
+        info = await input.context.session.get({ sessionID: spec.sessionID });
+      } catch {
+        return {
+          ok: false,
+          error:
+            `No live session with id ${spec.sessionID}. It may have been deleted, or it lives on ` +
+            "another machine's daemon - list the chat roster (chat_list) or search sessions (session_search) to find the right target.",
+        };
+      }
+      const directory = info?.location?.directory;
+      if (!directory) {
+        return { ok: false, error: `Session ${spec.sessionID} returned no location - its tab cannot be opened.` };
+      }
+      if (!pathExists(directory)) {
+        return {
+          ok: false,
+          error:
+            `The session's directory no longer exists: ${directory} - its checkout was likely deleted ` +
+            '(a removed worktree or temp dir). Opening a tab for it would show opencode\'s "Session location unavailable" dialog, so the open was refused.',
+        };
+      }
+      await input.emitTabOpened({
+        sessionID: spec.sessionID,
+        directory,
+        coordinatorSessionID: spec.coordinatorSessionID,
+      });
+      input.debug("session-tab", `tab-open emitted for ${spec.sessionID} (${directory})`);
+      return { ok: true, directory, title: typeof info?.title === "string" ? info.title : null };
+    },
   };
-}
-
-// Runtime guard for promise-domain members newer than the pinned dev types
-// (compact - upstream #52385; remove - #52387): a typed call fails tsc
-// against the pin, and an unguarded cast crashes on an older host. Returns
-// the member as a callable, or undefined on the floor - the CALLER owns the
-// degrade (a log for user-requested actions like compact; silence for
-// best-effort ones like the child cleanup). The rpc registration guard in
-// setup is the same idiom at domain granularity and stays inline: it gates
-// a whole registration, not one call.
-export function optionalDomainMethod(
-  domain: object,
-  method: string,
-): ((input: unknown) => Promise<unknown>) | undefined {
-  const fn = (domain as Record<string, unknown>)[method];
-  return typeof fn === "function" ? (fn as (input: unknown) => Promise<unknown>) : undefined;
 }
 
 // The HostCapabilities implementation over the v2 promise context. Every
@@ -879,6 +910,7 @@ export function optionalDomainMethod(
 // runtime's callers treat those results as best-effort and log, never crash.
 function buildCapabilities(
   context: V2Context,
+  directory: string,
   worktree: string,
   childSessions: Set<string>,
   tuiBridge: {
@@ -886,63 +918,69 @@ function buildCapabilities(
     emitToast?: (toast: ToastInput) => Promise<unknown>;
   },
 ): HostCapabilities {
-  // Typed against the SDK's own SessionDomain: the shape errors the
-  // original cast (as unknown as {...}) suppressed are exactly what the
-  // review caught (message.list does not exist here; get takes
-  // {sessionID}). compact and remove DO exist on newer SDK builds but not
-  // on the pinned dev types - both calls go through optionalDomainMethod
-  // (above). Let the typecheck keep holding that line for the pinned
-  // surface.
+  // Typed against the SDK's own SessionDomain: the shape errors a cast
+  // (as unknown as {...}) would suppress are exactly what a review caught
+  // (message.list does not exist here; get takes {sessionID}). Let the
+  // typecheck keep holding that line.
   const session = context.session;
 
   return {
-    noReplyDelivery: false,
-    nativeCommands: true,
-    // The wake gate treats an unknown session as idle; the runtime's
-    // event-fed status map does the busy/retry gating on v2.
-    fetchStatuses: async () => ({}),
     sessionCreate: async (input) => {
-      // v2's session API has no parentID: create a TOP-LEVEL session in the
+      // The session API has no parentID: create a TOP-LEVEL session in the
       // parent's project directory (the runtime sets the child mapping
-      // eagerly - no session.created event carries it on v2). The wrapper
+      // eagerly - no session.created event carries it). The promise client
       // returns the created SessionInfo directly.
       const result = await session.create({ location: { directory: worktree }, title: input.title });
       const id = result?.id;
       // A shape mismatch must fail loudly: the runtime logs it and retries
       // extraction at the next idle. It must not silently corrupt the
       // child-session maps.
-      if (!id) throw new Error(`v2 session.create returned no id: ${JSON.stringify(result)?.slice(0, 200)}`);
+      if (!id) throw new Error(`session.create returned no id: ${JSON.stringify(result)?.slice(0, 200)}`);
       // Register for event forwarding: the child's events carry the project
       // directory, which the pump's directory filter would otherwise drop.
       childSessions.add(id);
       return { id };
     },
-    // Extraction child cleanup: upstream exposed session.remove on the
-    // promise domain (#52387), the same era as compact - guarded the same
-    // way (optionalDomainMethod; the pinned dev types predate the surface).
-    // An older host keeps the documented gap: the session picker accumulates
-    // one thatch-extraction entry per extraction, and "continue last session"
-    // (-c) logic that picks the newest top-level session lands in an
-    // extraction child after any session that triggered extraction,
-    // because the child is top-level and newer.
+    // Extraction child cleanup: session.remove on the promise domain
+    // (upstream #52387). Without it the session picker would accumulate
+    // one thatch-extraction entry per extraction, and "continue last
+    // session" (-c) logic that picks the newest top-level session would
+    // land in an extraction child, because the child is top-level and
+    // newer.
     sessionDelete: async (id: string) => {
-      const remove = optionalDomainMethod(session, "remove");
-      // Best-effort by the caller's contract: the floor degrades silently.
-      if (!remove) return;
-      await remove({ sessionID: id });
+      await session.remove({ sessionID: id });
     },
-    promptSession: async (sessionID, body, _mode) => {
-      // v2's prompt endpoint takes text, not parts, and has no synthetic /
+    promptSession: async (sessionID, body) => {
+      // The prompt endpoint takes text, not parts, and has no synthetic /
       // noReply semantics. Nudge injections ride the prompt hook.
       //
-      // Synthetic deliveries (watcher + chat wake nudges) route to v2's
-      // session.synthetic endpoint: a TUI-hidden message, matching v1's
-      // synthetic part. mode is v1-only (async = promptAsync vs sync =
-      // prompt); v2's prompt enqueues the message and returns while the
-      // model turn runs asynchronously, so the extraction background flag
-      // degrades: both modes enqueue the same way.
+      // noReply deliveries (chat echoes, session-start reminder, re-attach
+      // notice) route to session.synthetic with resume: false - the
+      // synthetic inbox item enqueues WITHOUT waking execution (live-probed
+      // 2026-11-05 against a real binary: no execution events, message
+      // materializes in history at the next turn's inbox delivery, prompt
+      // hook never fires for it). The visibility defers to the session's
+      // next turn - the README documents the delta.
+      //
+      // Synthetic deliveries WITH a wake (watcher + chat wake nudges) keep
+      // the waking synthetic (resume defaults true). The prompt endpoint
+      // enqueues the message and returns while the model turn runs
+      // asynchronously.
       const text = joinTextParts(body.parts);
-      if (!body.noReply && body.parts.length > 0 && body.parts.every((part) => part.synthetic)) {
+      // noReply deliveries route to the resume:false synthetic REGARDLESS
+      // of the parts' synthetic flags - the chat echo's part is
+      // deliberately non-synthetic (visible bubble + later turns see it in
+      // context), and routing it by flag would fall through to
+      // session.prompt: a real model turn that calls chat tools, which
+      // echoes again - the feedback loop the noReply flag exists to
+      // prevent.
+      if (body.noReply) {
+        await session.synthetic({ sessionID, text, resume: false });
+        return;
+      }
+      if (body.parts.length > 0 && body.parts.every((part) => part.synthetic)) {
+        // Waking synthetic (watcher + chat wake nudges): the inbox item
+        // wakes execution.
         await session.synthetic({ sessionID, text });
         return;
       }
@@ -954,7 +992,19 @@ function buildCapabilities(
       // the SessionInfo directly (the envelope is unwrapped).
       return (await session.get({ sessionID: id })) ?? null;
     },
-    sessionList: async () => null,
+    // Directory-scoped list: the -c continue-target resolution wants "most
+    // recent top-level session in THIS directory". Live-probed 2026-11-05
+    // against a real binary: unfiltered list is cross-directory; the
+    // {directory} filter scopes correctly; rows carry parentID and
+    // time.updated (epoch ms), which is the shape continuesLastSessionId
+    // sorts and filters on.
+    sessionList: async () => {
+      const result = await session.list({ directory });
+      return (
+        result?.data?.map((s: any) => ({ id: s.id, parentID: s.parentID, time: { updated: s.time?.updated } })) ??
+        null
+      );
+    },
     enumerateSessions: async () => {
       // The promise domain has no session list, and the strand sweep needs
       // machine-wide rows (dead-worktree sessions belong to no live
@@ -964,23 +1014,21 @@ function buildCapabilities(
       return enumerateSweepSessions();
     },
     sessionMove: async (id, directory) => {
-      // The pinned dev types carry move on the SessionDomain pick (the
-      // session_tab spawn flow uses it), so this is a typed call, unlike
-      // remove/compact above.
+      // Typed call on the SessionDomain (the session_tab spawn flow uses
+      // the same member).
       await session.move({ sessionID: id, directory });
     },
     sessionMessages: async (id) => {
-      // The pinned promise domain has no message-list endpoint (no `message`
-      // accessor; compact/remove exist on newer SDK builds but not here).
-      // `session.context` IS exposed and returns the session's message list
-      // (Array<SessionMessageInfo>); map into the v1 shape the alert
-      // round-derivation reads.
+      // The promise domain's session surface has no message-list endpoint,
+      // but `session.context` returns the session's message list
+      // (Array<SessionMessageInfo>); map into the {info, parts} shape the
+      // alert round-derivation reads.
       const result = await session.context({ sessionID: id });
       return mapSessionContextMessages(result);
     },
     showToast: async (toast: ToastInput) => {
-      // The toast rpc event is the only TUI feedback channel on v2 - the
-      // TUI plugin's ui.toast.show. Best-effort by contract (the runtime's
+      // The toast rpc event is the only TUI feedback channel - the TUI
+      // plugin's ui.toast.show. Best-effort by contract (the runtime's
       // call sites catch-and-ignore): a TUI-less environment (headless run,
       // still connecting) or an rpc-less SDK floor simply never shows it,
       // and that is the correct silent degrade, not an error.
@@ -989,22 +1037,14 @@ function buildCapabilities(
       await emit(toast);
     },
     compactSession: async (sessionID: string) => {
-      // Upstream exposed session.compact on the promise SessionDomain
-      // (#52385) - the same core compaction the built-in /compact runs.
-      // The pinned dev types predate that surface, so the call goes through
-      // optionalDomainMethod: an older host degrades to a logged no-op (the
-      // wrap-up checklist and flush still ran).
-      const compact = optionalDomainMethod(session, "compact");
-      if (!compact) {
-        console.error("[thatch] v2: compaction trigger unavailable; wrap-up checklist ran, compact skipped");
-        return;
-      }
-      await compact({ sessionID });
+      // session.compact on the promise SessionDomain (upstream #52385) -
+      // the same core compaction the built-in /compact runs.
+      await session.compact({ sessionID });
     },
     exitHost: async (sessionID: string) => {
       // Tab-scoped close (the close anomalyco/opencode#50984 asks for):
-      // the daemon hosts every tab, so app.exit would take down unrelated
-      // sessions. This emit is TUI-only - the runtime records the
+      // the daemon hosts every tab, so an app-wide exit would take down
+      // unrelated sessions. This emit is TUI-only - the runtime records the
       // session's watcher deaths synchronously BEFORE calling here, and
       // the pump deliberately never translates this event (a second
       // death pass would erase the durable death row the first one

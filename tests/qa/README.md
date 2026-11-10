@@ -48,9 +48,9 @@ mise run qa-live     # only live sessions
 mise run qa-dry-run  # list all without spawning
 ```
 
-Opencode-driven use cases run one leg per installed opencode major
-(`[v1]`/`[v2]` suffixed test names) when several are installed.
-`QA_HOSTS=v1` narrows to one major while iterating.
+Opencode-driven use cases resolve the opencode binary through the
+runner's discovery: a discovered v2 install wins over whatever PATH
+resolves (the plugin cannot load under a v1 binary).
 
 Override the model with `QA_MODEL=venice/<model-id>`.
 
@@ -80,15 +80,16 @@ Known coupling: the fixture PRE-COPIES skills from the real
 FIDELITY - the fixture's skill set must equal the live mirror's at run time
 (no floor, no count literal). A stale mirror therefore passes silently while
 exercising nothing new; refresh it after committing skill changes. Clear a
-stale master cache with `rm -rf "$TMPDIR/thatch-qa-master"`.
+stale master cache with `rm -rf "$TMPDIR"/thatch-qa-master-*` (the runner's
+roots are run-scoped; see the isolation section).
 
 ## Docker mode (the default `qa-auto`/`qa-live` targets)
 
 `mise run qa-auto` / `mise run qa-live` run through the
 `qa/opencode-sandbox` container: a pinned opencode v2 (2.0.23) with a
 throwaway XDG tree built per container. `mise run qa-host-auto` /
-`qa-host-live` run against the HOST binary instead (the CI-shaped mode and
-the v1-binary recipe). Details:
+`qa-host-live` run against the HOST binary instead (the CI-shaped
+mode). Details:
 
 - The image builds on first use (and on demand: `docker build -t
   thatch-qa-opencode qa/opencode-sandbox`).
@@ -96,9 +97,8 @@ the v1-binary recipe). Details:
   node_modules mount at their HOST paths, and every fixture env var passes
   into the container explicitly (`PATH` excepted - the image's own PATH
   finds its binary).
-- The matrix collapses to a single unlabeled v2 leg: the image pins v2, so
-  host-binary discovery does not apply. v1 coverage lives on
-  `qa-host-live`.
+- The docker leg runs a single unlabeled leg: the image pins opencode v2,
+  so host-binary discovery does not apply.
 - `startServe` use cases (UC-100) still spawn the serve process host-side.
 - **Serve mode** (a long-lived headless server for live-session
   experiments across plugin reloads): run the container with `serve
@@ -120,10 +120,10 @@ the v1-binary recipe). Details:
    barrel file uses that).
 2. Import `registerUseCase` and `UseCase` (and `QaContext` if automatable)
    from `../runner`. If the use case spawns opencode itself (custom `run`
-   that shells out, or a serve), declare `hosts: ["v1", "v2"]` so the
-   ordinary qa tasks run it against every discovered install - and build
-   the invocation with `opencodeRunArgs`, since the hosts disagree on
-   `run` flags.
+   that shells out, or a serve), set `spawnsOpencode: true` so the
+   runner resolves the opencode binary for it - and build `run`
+   invocations with `opencodeRunArgs` (it carries the `--standalone`
+   flag a fixture sandbox needs).
 3. Define the scenario with `name`, `preconditions`, `steps`, and
    `expected` as string arrays joined by `\n`.
 4. For automatable use cases, add a `run(ctx: QaContext)` function that
@@ -146,7 +146,15 @@ modules so their `test.concurrent()` calls register in one file, and
 
 ## Isolation
 
-Each use case runs inside a copy of the repo at `/tmp/thatch-qa/<name>/`.
+Each qa-auto process gets its own run-scoped roots: the master copy at
+`$TMPDIR/thatch-qa-master-<run-id>` and the fixture tree under
+`/tmp/thatch-qa/<run-id>/`. Two concurrent qa-auto runs (two worktrees
+gating at once) are therefore independent - one run's setup can never
+delete the other's live fixtures (`tests/qa-runner-isolation.test.ts`
+pins this with real concurrent subprocesses).
+
+Each use case runs inside a copy of the repo at
+`/tmp/thatch-qa/<run-id>/<name>/`.
 The copy is created via `git archive HEAD` (tracked files only) with
 `node_modules` symlinked from the real repo. Opencode's own npm deps and
 pre-installed skills are copied from `~/.config/opencode/`. Each copy has

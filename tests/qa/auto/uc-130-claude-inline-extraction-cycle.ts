@@ -119,7 +119,10 @@ const useCase: UseCase = {
         const dec = new TextDecoder();
         let buf = "";
         let acked = false;
-        const deadline = Date.now() + 15000;
+        // Expected: the stdio MCP server answers in ms once booted; boot
+        // itself spawns the CLI. 60s = expected x tens of headroom for a
+        // loaded runner.
+        const deadline = Date.now() + 60_000;
         while (Date.now() < deadline && !acked) {
           const { value, done } = await reader.read();
           if (done) break;

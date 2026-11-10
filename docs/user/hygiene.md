@@ -34,9 +34,13 @@ update it with `overwrite: true` or delete it with
 ### Orphaned branch memories
 
 Memories scoped to a git branch that no longer exists. The check
-cross-references the `branch` column against `git branch --list`. This
+cross-references the `branch` column against the repo's branches, both
+local and remote-tracking: a branch pushed with an open pull request but
+not checked out locally is not deleted, so it is not flagged. This
 check is skipped when the working directory is not a git repo, so it
-never produces false positives outside a repo.
+never produces false positives outside a repo. Archived memories are
+excluded: a branch whose memories are all archived does not appear,
+because a consolidated branch leaves only archived records behind.
 
 To fix orphaned memories, the agent can consolidate them into
 project-wide memories (re-save without the `branch` param) or archive

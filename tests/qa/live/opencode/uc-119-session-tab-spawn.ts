@@ -10,13 +10,9 @@ import { registerUseCase, type UseCase } from "../../runner";
  * docs/dev/features/session-tabs.md's record; this use case pins the
  * verifiable flow: the tool executes, the response names the subordinate's
  * chat registration, and the directory resolves to the requested path).
- *
- * v2-only by nature: the tool is v2Only (filtered on v1 + MCP), so the
- * hosts list asserts v2 rather than letting a v1 binary fail the run.
  */
 const useCase: UseCase = {
   name: "UC-119-session-tab-spawn",
-  hosts: ["v2"],
   preconditions: [
     "- thatch configured as a plugin in opencode v2 (the merged session-tab feature: thatch_session_tab exists)",
     "- Working directory is a git repo (the fixture: git init + a fake origin)",

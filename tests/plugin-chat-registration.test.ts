@@ -1,19 +1,21 @@
-// Chat auto-registration and tombstone tests from plugin.test.ts: idle,
-// prompt, and startup registration paths, the argv/session-resolution
-// helpers, and the session.deleted tombstone guarantee.
+// Chat auto-registration and tombstone tests from plugin.test.ts, re-based
+// onto the v2 harness (the drop-v1 plan's Phase A-prime): idle, prompt, and
+// startup registration paths, the argv/session-resolution helpers, and the
+// session.deleted tombstone guarantee. The v1 custom mock clients map to
+// makeContext option overrides; toasts ride the rpc bridge's toast event;
+// the -c continue resolution re-pins onto the db-read path
+// (mostRecentTopLevelSessionId reads opencode.db from OPENCODE_DB - the v2
+// plugin context has no session.list).
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { Database } from "bun:sqlite";
 import { rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  server,
-  setupPluginHarness,
-  teardownPluginHarness,
-} from "./mocks/plugin-harness";
+import { setup } from "../src/opencode/v2";
 import { EXTRACTION_CHILD_TITLE } from "../src/chat";
 import { saveConfig } from "../src/config";
 import { ThatchDB } from "../src/db";
+import { TOAST_EVENT } from "../src/session-tab-shared";
 import {
   osProcessArgs,
   startupSessionId,
@@ -21,79 +23,97 @@ import {
   continuesLastSessionFromArgv,
   continuesLastSessionId,
 } from "../src/index";
+import {
+  makeContext,
+  promptHook,
+  queueEvent,
+  rpcEmitted,
+  SESSION_DIR,
+  sessionListCalls,
+  sessionSyntheticCalls,
+  setupTestEnv,
+  teardownTestEnv,
+  waitFor,
+} from "./mocks/opencode-v2-harness";
 
-beforeAll(async () => {
-  await setupPluginHarness();
+// These tests pump async events through the v2 adapter harness; under a
+// loaded CI runner the pump can lag. Bun's default per-test timeout is 5s
+// with no margin for that (the 2026-11-03 fleet-contention CI reds). 90s =
+// expected (ms-scale pump handling) x ~900 headroom, above the harness
+// waitFor deadline so real hangs report the poll message.
+setDefaultTimeout(90_000);
+
+let cleanup: (() => Promise<void>) | undefined;
+
+beforeEach(() => {
+  setupTestEnv();
 });
 
-afterAll(() => {
-  teardownPluginHarness();
+afterEach(async () => {
+  if (cleanup) await cleanup();
+  cleanup = undefined;
+  await teardownTestEnv();
 });
+
+// The v2 bus envelope for a session event: payload in `data`, and a
+// location so the pump's directory filter routes it to this instance.
+const sessionEvent = (type: string, data: Record<string, unknown>) => ({
+  type,
+  location: { directory: SESSION_DIR },
+  data: { ...data },
+});
+
+// The parent's idle: v2's execution lifecycle event (the idle signal).
+const parentIdle = (sessionID: string) => sessionEvent("session.execution.succeeded", { sessionID });
+
+// Toasts ride the rpc bridge's toast event (data: the ToastInput).
+const toasts = () => rpcEmitted.filter((e) => e.name === TOAST_EVENT);
+const toastWith = (needle: string) => toasts().find((e) => String(e.data?.message).includes(needle));
+
+// The auto-register IIFE fetches the live title via session.get; these
+// tests vary only that title, so a factory keeps each test's variable
+// explicit. (On v1 the auto-register client was a custom mock; on v2 the
+// makeContext `get` override plays that role.)
+let arTitle = "New session - 2026-09-13T10:00:00Z";
+const autoRegisterContext = () => makeContext({ get: async () => ({ title: arTitle }) });
+
+const dbRow = (sessionID: string): { name: string; topic: string | null; last_seen: string } | undefined =>
+  new ThatchDB(process.env.THATCH_DB_PATH!).listChatSessions().find((r) => r.session_id === sessionID) as
+    | { name: string; topic: string | null; last_seen: string }
+    | undefined;
 
 describe("chat auto-registration (idle, prompt, startup)", () => {
-  // The auto-register IIFE fetches the live title via client.session.get;
-  // these tests vary only that title (and the settle beat for the
-  // fire-and-forget IIFE), so a factory keeps each test's variable explicit.
-  let arTitle = "New session - 2026-09-13T10:00:00Z";
-  const toastCalls: any[] = [];
-  const autoRegisterClient = () => ({
-    session: {
-      prompt: async () => {},
-      promptAsync: async () => {},
-      create: async () => ({ data: { id: "child_ar" } }),
-      delete: async () => {},
-      get: async () => ({ data: { title: arTitle } }),
-      status: async () => ({ data: {} }),
-    },
-    tui: { showToast: async (opts: any) => { toastCalls.push(opts); } },
-  });
-  // The IIFE is fire-and-forget; give the microtask queue a beat.
-  const settle = () => new Promise((r) => setTimeout(r, 20));
-
   test("first idle registers a top-level session with a pool-slug name; a later idle converges the topic", async () => {
-    const arHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-ar" } as any);
+    cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
 
     // First idle: placeholder title -> registers with a pool-slug base and
     // no topic.
-    await arHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_ar1", status: { type: "idle" } } } as any,
-    });
-    await settle();
-    const arDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-    const row1 = arDb.listChatSessions().find((r) => r.session_id === "ses_ar1");
-    expect(row1).toBeDefined();
-    expect(row1!.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
-    expect(row1!.topic).toBeNull();
+    await queueEvent(parentIdle("ses_ar1"));
+    await waitFor("first idle registration", () => dbRow("ses_ar1") !== undefined);
+    const row1 = dbRow("ses_ar1")!;
+    expect(row1.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
+    expect(row1.topic).toBeNull();
     // First registration toasts; it must not say anything on later idles.
-    const reg = toastCalls.find((t) => t.body.message.includes("registered in chat as"));
-    expect(reg).toBeDefined();
+    await waitFor("the registration toast", () => toastWith("registered in chat as") !== undefined);
 
     // The auto-titler lands a real title; the next idle must converge the
     // topic (and keep the name - names never re-slug).
     arTitle = "Fix the auth bug";
-    await arHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_ar1", status: { type: "idle" } } } as any,
-    });
-    await settle();
-    const row2 = arDb.listChatSessions().find((r) => r.session_id === "ses_ar1")!;
-    expect(row2.name).toBe(row1!.name);
-    expect(row2.topic).toBe("Fix the auth bug");
+    await queueEvent(parentIdle("ses_ar1"));
+    await waitFor("the topic convergence", () => dbRow("ses_ar1")!.topic === "Fix the auth bug");
+    const row2 = dbRow("ses_ar1")!;
+    expect(row2.name).toBe(row1.name);
 
     // chat_unregister tombstones; the NEXT idle must not re-register.
+    const arDb = new ThatchDB(process.env.THATCH_DB_PATH!);
     arDb.unregisterChatSession("ses_ar1");
     expect(arDb.hasChatLeaveTombstone("ses_ar1")).toBe(true);
-    await arHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_ar1", status: { type: "idle" } } } as any,
-    });
-    await settle();
-    expect(arDb.listChatSessions().find((r) => r.session_id === "ses_ar1")).toBeUndefined();
-    expect(arDb.hasChatLeaveTombstone("ses_ar1")).toBe(true);
     arDb.close();
-
-    arHooks.dispose?.();
+    await queueEvent(parentIdle("ses_ar1"));
+    // Negative wait: the pump's handler is async; settle before asserting.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(dbRow("ses_ar1")).toBeUndefined();
+    expect(new ThatchDB(process.env.THATCH_DB_PATH!).hasChatLeaveTombstone("ses_ar1")).toBe(true);
   });
 
   test("osProcessArgs reads this process's real command line", () => {
@@ -168,18 +188,12 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
     const configPath = join(dirname(process.env.THATCH_DB_PATH!), "config.json");
     saveConfig({ chat: { autoRegister: false } });
     try {
-      const arHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-ar2" } as any);
+      cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
 
-      await arHooks.event!({ event: {
-        type: "session.status",
-        properties: { sessionID: "ses_ar2", status: { type: "idle" } } } as any,
-      });
-      await settle();
-      const arDb2 = new ThatchDB(process.env.THATCH_DB_PATH!);
-      expect(arDb2.listChatSessions().find((r) => r.session_id === "ses_ar2")).toBeUndefined();
-      arDb2.close();
-
-      arHooks.dispose?.();
+      await queueEvent(parentIdle("ses_ar2"));
+      // Negative wait: the pump's handler is async; settle before asserting.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(dbRow("ses_ar2")).toBeUndefined();
     } finally {
       // The config file is shared across this suite's tests (one dbDir):
       // restore the default (no file) even on failure, so later tests
@@ -201,47 +215,38 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
     seedDb.close();
     new Database(process.env.THATCH_DB_PATH!).run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_resume'");
 
-    const promptAsyncs: any[] = [];
-    const resumeClient = {
-      ...autoRegisterClient(),
-      session: {
-        ...autoRegisterClient().session,
-        get: async () => ({ data: { title: "Continued session" } }),
-        promptAsync: async (args: any) => {
-          promptAsyncs.push(args);
-        },
-      },
-    };
     const argvSave = process.argv;
     process.argv = [...argvSave, "-s", "ses_resume"];
-    let resumeHooks: Awaited<ReturnType<typeof server>> | undefined;
     try {
-      resumeHooks = await server({ client: resumeClient, worktree: "/tmp/thatch-resume" } as any);
-      await settle();
-      const row = new ThatchDB(process.env.THATCH_DB_PATH!).listChatSessions().find((r) => r.session_id === "ses_resume");
-      expect(row).toBeDefined();
+      cleanup = (await setup(makeContext({ get: async () => ({ title: "Continued session" }) }) as any)) as () => Promise<void>;
+      await waitFor("the -s startup registration", () => dbRow("ses_resume") !== undefined);
+      const row = dbRow("ses_resume")!;
       // Same row, SAME NAME (owned by the session id), heartbeat fresh again.
-      expect(row!.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
-      expect(Date.now() - Date.parse(row!.last_seen)).toBeLessThan(60_000);
-      expect(row!.topic).toBe("Continued session");
-      // The asleep-mail woke it at init.
-      const wake = promptAsyncs.find((p) => p.path.id === "ses_resume");
-      expect(wake).toBeDefined();
-      expect(JSON.stringify(wake.body)).toContain("1 unread message from resender-00001");
-      const stamp = new Database(process.env.THATCH_DB_PATH!)
-        .query("SELECT delivered_at FROM chat_messages WHERE to_session = 'ses_resume'")
-        .get() as any;
-      expect(stamp?.delivered_at).not.toBeNull();
+      expect(row.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
+      expect(Date.now() - Date.parse(row.last_seen)).toBeLessThan(60_000);
+      expect(row.topic).toBe("Continued session");
+      // The asleep-mail woke it at init - a WAKING synthetic (no resume
+      // key; a noReply delivery would carry resume: false).
+      await waitFor("the asleep-mail wake", () =>
+        sessionSyntheticCalls.some((c: any) => c?.sessionID === "ses_resume" && String(c?.text).includes("1 unread message from resender-00001")),
+      );
+      const wake = sessionSyntheticCalls.find((c: any) => c?.sessionID === "ses_resume");
+      expect(wake?.resume).toBeUndefined();
+      // The delivery stamp is written after the wake resolves; poll for it.
+      const stamped = (): boolean =>
+        ((new Database(process.env.THATCH_DB_PATH!)
+          .query("SELECT delivered_at FROM chat_messages WHERE to_session = 'ses_resume'")
+          .get() as any)?.delivered_at ?? null) !== null;
+      await waitFor("the asleep-mail delivery stamp", () => stamped());
+      expect(stamped()).toBe(true);
       // The reclaim announcement waits for the first prompt - the TUI is
       // not connected at init, so an immediate toast would drop silently.
-      expect(toastCalls.some((t) => t.body.message.includes("rejoined chat as"))).toBe(false);
-      await resumeHooks["chat.message"]!({ sessionID: "ses_resume", messageID: "msg_resume" } as any, promptOutput("msg_resume"));
-      const rejoin = toastCalls.find((t) => t.body.message.includes("rejoined chat as"));
-      expect(rejoin).toBeDefined();
-      expect(rejoin!.body.message).toContain(row!.name);
+      expect(toastWith("rejoined chat as")).toBeUndefined();
+      await promptHook!({ sessionID: "ses_resume", messageID: "msg_resume", prompt: { text: "hello, what is your chat name?" } });
+      await waitFor("the rejoin toast", () => toastWith("rejoined chat as") !== undefined);
+      expect(toastWith("rejoined chat as")!.data.message).toContain(row.name);
     } finally {
       process.argv = argvSave;
-      resumeHooks?.dispose?.();
     }
   });
 
@@ -250,16 +255,13 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
     saveConfig({ chat: { autoRegister: false } });
     const argvSave = process.argv;
     process.argv = [...argvSave, "-s", "ses_noauto"];
-    let hooks: Awaited<ReturnType<typeof server>> | undefined;
     try {
-      hooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-noauto" } as any);
-      await settle();
-      const db = new ThatchDB(process.env.THATCH_DB_PATH!);
-      expect(db.listChatSessions().find((r) => r.session_id === "ses_noauto")).toBeUndefined();
-      db.close();
+      cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
+      // Negative wait: the pump's handler is async; settle before asserting.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(dbRow("ses_noauto")).toBeUndefined();
     } finally {
       process.argv = argvSave;
-      hooks?.dispose?.();
       rmSync(configPath);
     }
   });
@@ -275,17 +277,14 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
     seedDb.close();
     const argvSave = process.argv;
     process.argv = [...argvSave, "-s", "ses_left"];
-    let hooks: Awaited<ReturnType<typeof server>> | undefined;
     try {
-      hooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-left" } as any);
-      await settle();
-      const db = new ThatchDB(process.env.THATCH_DB_PATH!);
-      expect(db.listChatSessions().find((r) => r.session_id === "ses_left")).toBeUndefined();
-      expect(db.hasChatLeaveTombstone("ses_left")).toBe(true);
-      db.close();
+      cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
+      // Negative wait: the pump's handler is async; settle before asserting.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(dbRow("ses_left")).toBeUndefined();
+      expect(new ThatchDB(process.env.THATCH_DB_PATH!).hasChatLeaveTombstone("ses_left")).toBe(true);
     } finally {
       process.argv = argvSave;
-      hooks?.dispose?.();
     }
   });
 
@@ -301,18 +300,12 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
     seedDb.close();
     const argvSave = process.argv;
     process.argv = [...argvSave, "-s", "ses_restore"];
-    let hooks: Awaited<ReturnType<typeof server>> | undefined;
     try {
-      hooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-restore" } as any);
-      await settle();
-      const db = new ThatchDB(process.env.THATCH_DB_PATH!);
-      const row = db.listChatSessions().find((r) => r.session_id === "ses_restore");
-      expect(row).toBeDefined();
-      expect(db.hasChatLeaveTombstone("ses_restore")).toBe(false);
-      db.close();
+      cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
+      await waitFor("the restore-rejoin registration", () => dbRow("ses_restore") !== undefined);
+      expect(new ThatchDB(process.env.THATCH_DB_PATH!).hasChatLeaveTombstone("ses_restore")).toBe(false);
     } finally {
       process.argv = argvSave;
-      hooks?.dispose?.();
     }
   });
 
@@ -325,160 +318,43 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
     seedDb.close();
     const argvSave = process.argv;
     process.argv = [...argvSave, "-s", "ses_explicit"];
-    let hooks: Awaited<ReturnType<typeof server>> | undefined;
     try {
-      hooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-explicit" } as any);
-      await settle();
-      const db = new ThatchDB(process.env.THATCH_DB_PATH!);
-      expect(db.listChatSessions().find((r) => r.session_id === "ses_explicit")).toBeUndefined();
-      expect(db.hasChatLeaveTombstone("ses_explicit")).toBe(true);
-      db.close();
+      cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
+      // Negative wait: the pump's handler is async; settle before asserting.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(dbRow("ses_explicit")).toBeUndefined();
+      expect(new ThatchDB(process.env.THATCH_DB_PATH!).hasChatLeaveTombstone("ses_explicit")).toBe(true);
     } finally {
       process.argv = argvSave;
-      hooks?.dispose?.();
     }
-  });
-
-  test("-c resume reclaims the most recent top-level session at startup", async () => {
-    // `opencode -c` continues the most recent top-level session in this
-    // directory. The plugin resolves the same target through the SDK at
-    // init, so the row's heartbeat is fresh and the poller hosts it before
-    // the user's first prompt - the roster shows it Active immediately.
-    const seedDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-    seedDb.registerChatSession("ses_cont", "thatch-continue", "Continued last", "opencode");
-    seedDb.close();
-    new Database(process.env.THATCH_DB_PATH!).run(
-      "UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_cont'",
-    );
-
-    const contClient = {
-      ...autoRegisterClient(),
-      session: {
-        ...autoRegisterClient().session,
-        // Directory-scoped list; the child is newer but must never be
-        // picked (children are not top-level sessions).
-        list: async () => ({
-          data: [
-            { id: "ses_cont_child", parentID: "ses_cont", time: { updated: 300 } },
-            { id: "ses_cont", time: { updated: 200 } },
-          ],
-        }),
-        get: async () => ({ data: { title: "Continued last" } }),
-      },
-    };
-    const argvSave = process.argv;
-    process.argv = [...argvSave, "-c"];
-    let contHooks: Awaited<ReturnType<typeof server>> | undefined;
-    try {
-      contHooks = await server({ client: contClient, worktree: "/tmp/thatch-cont" } as any);
-      await settle();
-      const row = new ThatchDB(process.env.THATCH_DB_PATH!)
-        .listChatSessions()
-        .find((r) => r.session_id === "ses_cont");
-      expect(row).toBeDefined();
-      // Same row, same never-reused name shape, heartbeat fresh again,
-      // topic converged from the title fetch.
-      expect(row!.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
-      expect(Date.now() - Date.parse(row!.last_seen)).toBeLessThan(60_000);
-      expect(row!.topic).toBe("Continued last");
-      // The child session must not have been registered instead.
-      const childRow = new ThatchDB(process.env.THATCH_DB_PATH!)
-        .listChatSessions()
-        .find((r) => r.session_id === "ses_cont_child");
-      expect(childRow).toBeUndefined();
-    } finally {
-      process.argv = argvSave;
-      contHooks?.dispose?.();
-    }
-  });
-
-  test("-c startup registration honors a leave tombstone and chat.autoRegister: false", async () => {
-    // Tombstone case: seed a left session; -c resolves it but must not
-    // re-register it. The client's list mock resolves it as the continue
-    // target, so the tombstone (not a missing list) is what blocks.
-    const seedDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-    seedDb.registerChatSession("ses_cont_left", "thatch-continue", null, "opencode", "leaver");
-    seedDb.unregisterChatSession("ses_cont_left");
-    seedDb.close();
-
-    const contLeftClient = {
-      ...autoRegisterClient(),
-      session: {
-        ...autoRegisterClient().session,
-        list: async () => ({ data: [{ id: "ses_cont_left", time: { updated: 1 } }] }),
-      },
-    };
-    const configPath = join(dirname(process.env.THATCH_DB_PATH!), "config.json");
-    const argvSave = process.argv;
-    let hooks: Awaited<ReturnType<typeof server>> | undefined;
-    try {
-      process.argv = [...argvSave, "-c"];
-      hooks = await server({ client: contLeftClient, worktree: "/tmp/thatch-cont-left" } as any);
-      await settle();
-      const db = new ThatchDB(process.env.THATCH_DB_PATH!);
-      expect(db.listChatSessions().find((r) => r.session_id === "ses_cont_left")).toBeUndefined();
-      expect(db.hasChatLeaveTombstone("ses_cont_left")).toBe(true);
-      db.close();
-      hooks.dispose?.();
-      hooks = undefined;
-
-      // autoRegister: false case: a -c restart must not register either.
-      saveConfig({ chat: { autoRegister: false } });
-      hooks = await server({ client: contLeftClient, worktree: "/tmp/thatch-cont-noauto" } as any);
-      await settle();
-      const db2 = new ThatchDB(process.env.THATCH_DB_PATH!);
-      expect(db2.listChatSessions().find((r) => r.session_id === "ses_cont_left")).toBeUndefined();
-      db2.close();
-    } finally {
-      process.argv = argvSave;
-      hooks?.dispose?.();
-      rmSync(configPath);
-    }
-  });
-
-  // Reuses the client factory and toast sink (above): the prompt path
-  // registers with the same pool-name model and the same quiet toast.
-  const promptOutput = (id: string, text = "hello, what is your chat name?"): any => ({
-    message: { id },
-    parts: [{ type: "text", text }],
   });
 
   test("chat.message registers an unregistered top-level session before the model runs", async () => {
-    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr" } as any);
-    try {
-      const regToastsBefore = toastCalls.filter((t) => t.body.message.includes("registered in chat as")).length;
-      await prHooks["chat.message"]!({ sessionID: "ses_pr1", messageID: "msg_pr1" } as any, promptOutput("msg_pr1"));
-      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-      const row = prDb.listChatSessions().find((r) => r.session_id === "ses_pr1");
-      expect(row).toBeDefined();
-      expect(row!.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
-      // Placeholder title at prompt time - the topic converges on idle.
-      expect(row!.topic).toBeNull();
+    cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
+    await promptHook!({ sessionID: "ses_pr1", messageID: "msg_pr1", prompt: { text: "hello, what is your chat name?" } });
+    const row = dbRow("ses_pr1");
+    expect(row).toBeDefined();
+    expect(row!.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
+    // Placeholder title at prompt time - the topic converges on idle.
+    expect(row!.topic).toBeNull();
+    expect(toastWith("registered in chat as")).toBeDefined();
 
-      // Second prompt: touch, not a second registration - one toast total.
-      await prHooks["chat.message"]!({ sessionID: "ses_pr1", messageID: "msg_pr2" } as any, promptOutput("msg_pr2", "second prompt"));
-      const regToasts = toastCalls.filter((t) => t.body.message.includes("registered in chat as"));
-      expect(regToasts.length).toBe(regToastsBefore + 1);
-      prDb.close();
-    } finally {
-      prHooks.dispose?.();
-    }
+    // Second prompt: touch, not a second registration - one toast total.
+    await promptHook!({ sessionID: "ses_pr1", messageID: "msg_pr2", prompt: { text: "second prompt" } });
+    expect(toasts().filter((e) => String(e.data?.message).includes("registered in chat as")).length).toBe(1);
   });
 
   test("chat.message does not register a sub-agent child session", async () => {
-    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr-child" } as any);
-    try {
-      await prHooks.event!({ event: {
-        type: "session.created",
-        properties: { info: { id: "ses_pr_child", parentID: "ses_pr_parent" } } } as any,
-      });
-      await prHooks["chat.message"]!({ sessionID: "ses_pr_child", messageID: "msg_child" } as any, promptOutput("msg_child", "child prompt"));
-      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-      expect(prDb.listChatSessions().find((r) => r.session_id === "ses_pr_child")).toBeUndefined();
-      prDb.close();
-    } finally {
-      prHooks.dispose?.();
-    }
+    cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
+    await queueEvent(sessionEvent("session.created", {
+      sessionID: "ses_pr_child",
+      info: { id: "ses_pr_child", parentID: "ses_pr_parent" },
+    }));
+    await promptHook!({ sessionID: "ses_pr_child", messageID: "msg_child", prompt: { text: "child prompt" } });
+    // The child's session.created link is set by the async pump handler;
+    // settle before asserting.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(dbRow("ses_pr_child")).toBeUndefined();
   });
 
   test("first idle does not register a sub-agent child session", async () => {
@@ -487,23 +363,16 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
     // registered a roster row on its terminal idle - the "thatch-extraction"
     // corpse flood (September 2026). Children are machinery, not chat
     // participants, on BOTH registration paths.
-    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr-child-idle" } as any);
-    try {
-      await prHooks.event!({ event: {
-        type: "session.created",
-        properties: { info: { id: "ses_idle_child", parentID: "ses_idle_parent" } } } as any,
-      });
-      // The child's run ends: its terminal idle must not register it.
-      await prHooks.event!({ event: {
-        type: "session.status",
-        properties: { sessionID: "ses_idle_child", status: { type: "idle" } } } as any,
-      });
-      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-      expect(prDb.listChatSessions().find((r) => r.session_id === "ses_idle_child")).toBeUndefined();
-      prDb.close();
-    } finally {
-      prHooks.dispose?.();
-    }
+    cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
+    await queueEvent(sessionEvent("session.created", {
+      sessionID: "ses_idle_child",
+      info: { id: "ses_idle_child", parentID: "ses_idle_parent" },
+    }));
+    // The child's run ends: its terminal idle must not register it.
+    await queueEvent(parentIdle("ses_idle_child"));
+    // Negative wait: the pump's handler is async; settle before asserting.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(dbRow("ses_idle_child")).toBeUndefined();
   });
 
   test("machinery marker blocks auto-registration on both paths and self-heals a corpse row", async () => {
@@ -514,29 +383,22 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
     // (written by triggerExtraction at child creation) closes that window:
     // it must block the prompt path, and the idle path must also delete a
     // corpse row an earlier race already registered.
-    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-machinery" } as any);
-    try {
-      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-      prDb.markChatMachinery("ses_mach", "extraction");
+    cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
+    const machDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    machDb.markChatMachinery("ses_mach", "extraction");
 
-      // Prompt path: the marker alone refuses registration (no row, no
-      // tombstone - this session never left, it was never a participant).
-      await prHooks["chat.message"]!({ sessionID: "ses_mach", messageID: "msg_mach" } as any, promptOutput("msg_mach"));
-      expect(prDb.listChatSessions().find((r) => r.session_id === "ses_mach")).toBeUndefined();
+    // Prompt path: the marker alone refuses registration (no row, no
+    // tombstone - this session never left, it was never a participant).
+    await promptHook!({ sessionID: "ses_mach", messageID: "msg_mach", prompt: { text: "hello" } });
+    expect(dbRow("ses_mach")).toBeUndefined();
 
-      // Idle path, corpse variant: a row exists from the mapping-less race.
-      // The marker short-circuits registration AND deletes the corpse.
-      prDb.registerChatSession("ses_mach", "thatch-machinery", EXTRACTION_CHILD_TITLE, "opencode");
-      await prHooks.event!({ event: {
-        type: "session.status",
-        properties: { sessionID: "ses_mach", status: { type: "idle" } } } as any,
-      });
-      await settle();
-      expect(prDb.listChatSessions().find((r) => r.session_id === "ses_mach")).toBeUndefined();
-      prDb.close();
-    } finally {
-      prHooks.dispose?.();
-    }
+    // Idle path, corpse variant: a row exists from the mapping-less race.
+    // The marker short-circuits registration AND deletes the corpse.
+    machDb.registerChatSession("ses_mach", "thatch-machinery", EXTRACTION_CHILD_TITLE, "opencode");
+    machDb.close();
+    await queueEvent(parentIdle("ses_mach"));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(dbRow("ses_mach")).toBeUndefined();
   });
 
   test("idle auto-register skips a session titled as the extraction child even without a marker", async () => {
@@ -544,19 +406,15 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
     // was never written: the fetched title alone refuses registration.
     const savedTitle = arTitle;
     arTitle = EXTRACTION_CHILD_TITLE;
-    const arHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-ar-title" } as any);
     try {
-      await arHooks.event!({ event: {
-        type: "session.status",
-        properties: { sessionID: "ses_title_mach", status: { type: "idle" } } } as any,
-      });
-      await settle();
-      const arDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-      expect(arDb.listChatSessions().find((r) => r.session_id === "ses_title_mach")).toBeUndefined();
-      arDb.close();
+      cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
+      await queueEvent(parentIdle("ses_title_mach"));
+      // Negative wait: the auto-register IIFE runs after session.get;
+      // settle before asserting.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(dbRow("ses_title_mach")).toBeUndefined();
     } finally {
       arTitle = savedTitle;
-      arHooks.dispose?.();
     }
   });
 
@@ -565,68 +423,53 @@ describe("chat auto-registration (idle, prompt, startup)", () => {
     // chat_unregister tool's leave): a deliberate leave persists - the
     // restored session's next prompt does NOT undo it. Only an explicit
     // chat_register rejoin clears it.
-    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr-left" } as any);
-    try {
-      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-      prDb.registerChatSession("ses_pr_left", "thatch-pr", null, "opencode", "leaver");
-      prDb.unregisterChatSession("ses_pr_left");
-      await prHooks["chat.message"]!({ sessionID: "ses_pr_left", messageID: "msg_left" } as any, promptOutput("msg_left"));
-      expect(prDb.listChatSessions().find((r) => r.session_id === "ses_pr_left")).toBeUndefined();
-      expect(prDb.hasChatLeaveTombstone("ses_pr_left")).toBe(true);
-      prDb.close();
-    } finally {
-      prHooks.dispose?.();
-    }
+    cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
+    const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    prDb.registerChatSession("ses_pr_left", "thatch-pr", null, "opencode", "leaver");
+    prDb.unregisterChatSession("ses_pr_left");
+    await promptHook!({ sessionID: "ses_pr_left", messageID: "msg_left", prompt: { text: "hello" } });
+    expect(dbRow("ses_pr_left")).toBeUndefined();
+    expect(prDb.hasChatLeaveTombstone("ses_pr_left")).toBe(true);
+    prDb.close();
   });
 
   test("chat.message restore-rejoin clears an exit tombstone and registers", async () => {
     // A restored session's first real user message clears the wrap-up
     // exit's tombstone (the host is back) and rejoins the directory.
-    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr-restore" } as any);
-    try {
-      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-      prDb.registerChatSession("ses_pr_restore", "thatch-pr", null, "opencode", "restorer");
-      prDb.unregisterChatSession("ses_pr_restore", "exit");
-      expect(prDb.hasChatLeaveTombstone("ses_pr_restore")).toBe(true);
-      await prHooks["chat.message"]!({ sessionID: "ses_pr_restore", messageID: "msg_restore" } as any, promptOutput("msg_restore"));
-      const row = prDb.listChatSessions().find((r) => r.session_id === "ses_pr_restore");
-      expect(row).toBeDefined();
-      expect(prDb.hasChatLeaveTombstone("ses_pr_restore")).toBe(false);
-      prDb.close();
-    } finally {
-      prHooks.dispose?.();
-    }
+    cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
+    const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    prDb.registerChatSession("ses_pr_restore", "thatch-pr", null, "opencode", "restorer");
+    prDb.unregisterChatSession("ses_pr_restore", "exit");
+    expect(prDb.hasChatLeaveTombstone("ses_pr_restore")).toBe(true);
+    await promptHook!({ sessionID: "ses_pr_restore", messageID: "msg_restore", prompt: { text: "hello" } });
+    const row = dbRow("ses_pr_restore");
+    expect(row).toBeDefined();
+    expect(prDb.hasChatLeaveTombstone("ses_pr_restore")).toBe(false);
+    prDb.close();
   });
 
   test("chat.message restore-rejoin clears a deleted-reason tombstone (resumed subordinate)", async () => {
     // session.deleted tombstones are "deleted" reason: a dispatched
     // subordinate is deleted routinely, and resuming one should rejoin on
     // the next prompt rather than stay roster-deaf forever.
-    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr-deleted" } as any);
-    try {
-      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-      prDb.registerChatSession("ses_pr_deleted", "thatch-pr", null, "opencode", "deleted");
-      prDb.unregisterChatSession("ses_pr_deleted", "deleted");
-      await prHooks["chat.message"]!({ sessionID: "ses_pr_deleted", messageID: "msg_deleted" } as any, promptOutput("msg_deleted"));
-      expect(prDb.listChatSessions().find((r) => r.session_id === "ses_pr_deleted")).toBeDefined();
-      expect(prDb.hasChatLeaveTombstone("ses_pr_deleted")).toBe(false);
-      prDb.close();
-    } finally {
-      prHooks.dispose?.();
-    }
+    cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
+    const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    prDb.registerChatSession("ses_pr_deleted", "thatch-pr", null, "opencode", "deleted");
+    prDb.unregisterChatSession("ses_pr_deleted", "deleted");
+    await promptHook!({ sessionID: "ses_pr_deleted", messageID: "msg_deleted", prompt: { text: "hello" } });
+    expect(dbRow("ses_pr_deleted")).toBeDefined();
+    expect(prDb.hasChatLeaveTombstone("ses_pr_deleted")).toBe(false);
+    prDb.close();
   });
 
   test("chat.message registration honors chat.autoRegister: false", async () => {
     const configPath = join(dirname(process.env.THATCH_DB_PATH!), "config.json");
     saveConfig({ chat: { autoRegister: false } });
-    const prHooks = await server({ client: autoRegisterClient(), worktree: "/tmp/thatch-pr-noauto" } as any);
     try {
-      await prHooks["chat.message"]!({ sessionID: "ses_pr_noauto", messageID: "msg_noauto" } as any, promptOutput("msg_noauto"));
-      const prDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-      expect(prDb.listChatSessions().find((r) => r.session_id === "ses_pr_noauto")).toBeUndefined();
-      prDb.close();
+      cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
+      await promptHook!({ sessionID: "ses_pr_noauto", messageID: "msg_noauto", prompt: { text: "hello" } });
+      expect(dbRow("ses_pr_noauto")).toBeUndefined();
     } finally {
-      prHooks.dispose?.();
       rmSync(configPath);
     }
   });
@@ -637,44 +480,111 @@ describe("session.deleted tombstones auto-registration", () => {
     // Register via a first idle, then delete the session in the TUI: the
     // session.deleted handler must tombstone, so a late/second idle event
     // cannot silently re-register a dead session.
-    const dlClient = {
-      session: {
-        prompt: async () => {},
-        promptAsync: async () => {},
-        create: async () => ({ data: { id: "child_dl" } }),
-        delete: async () => {},
-        get: async () => ({ data: { title: "Doomed Session" } }),
-        status: async () => ({ data: {} }),
-      },
-      tui: { showToast: async () => {} },
-    };
-    const dlHooks = await server({ client: dlClient, worktree: "/tmp/thatch-dl" } as any);
+    cleanup = (await setup(autoRegisterContext() as any)) as () => Promise<void>;
 
-    await dlHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_dl1", status: { type: "idle" } } } as any,
-    });
-    await new Promise((r) => setTimeout(r, 20));
-    const dlDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-    expect(dlDb.listChatSessions().find((r) => r.session_id === "ses_dl1")).toBeDefined();
+    await queueEvent(parentIdle("ses_dl1"));
+    await waitFor("the first idle registration", () => dbRow("ses_dl1") !== undefined);
 
     // User deletes the session in the TUI.
-    await dlHooks.event!({ event: {
-      type: "session.deleted",
-      properties: { info: { id: "ses_dl1" } } } as any,
-    });
-    expect(dlDb.listChatSessions().find((r) => r.session_id === "ses_dl1")).toBeUndefined();
-    expect(dlDb.hasChatLeaveTombstone("ses_dl1")).toBe(true);
+    await queueEvent(sessionEvent("session.deleted", { sessionID: "ses_dl1" }));
+    await waitFor("the tombstone", () => dbRow("ses_dl1") === undefined);
+    expect(new ThatchDB(process.env.THATCH_DB_PATH!).hasChatLeaveTombstone("ses_dl1")).toBe(true);
 
     // A straggler idle event (the in-flight IIFE's race window, or a late
     // duplicate) must not resurrect the row.
-    await dlHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_dl1", status: { type: "idle" } } } as any,
+    await queueEvent(parentIdle("ses_dl1"));
+    // Negative wait: the pump's handler is async; settle before asserting.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(dbRow("ses_dl1")).toBeUndefined();
+  });
+});
+
+// -c startup chat registration, re-pinned onto the v2 session.list path
+// (the drop-v1 plan's A-prime fix: the adapter's sessionList scopes
+// session.list by this instance's directory - live-probed 2026-11-05 - so
+// the continue-target resolution works on v2 exactly as v1's client.list
+// did).
+describe("-c startup chat registration (v2 session.list path)", () => {
+  // The IIFE is fire-and-forget; give the microtask queue a beat.
+  const settle = () => new Promise((r) => setTimeout(r, 50));
+
+  test("-c resume reclaims the most recent top-level session at startup", async () => {
+    // `opencode -c` continues the most recent top-level session in this
+    // directory. The plugin resolves the same target through the v2
+    // session.list, so the row's heartbeat is fresh and the poller hosts it
+    // before the user's first prompt - the roster shows it Active
+    // immediately.
+    const seedDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    seedDb.registerChatSession("ses_cont", "thatch-continue", "Continued last", "opencode");
+    seedDb.close();
+    new Database(process.env.THATCH_DB_PATH!).run(
+      "UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_cont'",
+    );
+
+    // Directory-scoped list; the child is newer but must never be picked
+    // (children are not top-level sessions). The adapter passes this
+    // instance's directory as the filter (v1's client.list semantics).
+    const contContext = makeContext({
+      get: async () => ({ title: "Continued last" }),
+      list: async () => ({
+        data: [
+          { id: "ses_cont_child", parentID: "ses_cont", time: { updated: 300 } },
+          { id: "ses_cont", time: { updated: 200 } },
+        ],
+        cursor: {},
+      }),
     });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(dlDb.listChatSessions().find((r) => r.session_id === "ses_dl1")).toBeUndefined();
-    dlDb.close();
-    dlHooks.dispose?.();
+    const argvSave = process.argv;
+    try {
+      process.argv = [...argvSave, "-c"];
+      cleanup = (await setup(contContext as any)) as () => Promise<void>;
+      await settle();
+      // The adapter scoped the query to THIS instance's directory (the
+      // v1-semantics pin).
+      expect(sessionListCalls[0]?.directory).toBe(SESSION_DIR);
+      const row = dbRow("ses_cont");
+      expect(row).toBeDefined();
+      // Same row, same never-reused name shape, heartbeat fresh again,
+      // topic converged from the title fetch.
+      expect(row!.name).toMatch(/^[\p{L}\p{N}-]+-\d{5}$/u);
+      expect(Date.now() - Date.parse(row!.last_seen)).toBeLessThan(60_000);
+      // The newer child session is not registered (not top-level).
+      expect(dbRow("ses_cont_child")).toBeUndefined();
+    } finally {
+      process.argv = argvSave;
+    }
+  });
+
+  test("-c startup registration honors a leave tombstone and chat.autoRegister: false", async () => {
+    // Tombstone case: seed a left session; -c resolves it but must not
+    // re-register it. The list resolves it as the continue target, so the
+    // tombstone (not a missing list) is what blocks.
+    const seedDb = new ThatchDB(process.env.THATCH_DB_PATH!);
+    seedDb.registerChatSession("ses_cont_left", "thatch-continue", null, "opencode", "leaver");
+    seedDb.unregisterChatSession("ses_cont_left");
+    seedDb.close();
+
+    const contLeftContext = makeContext({
+      list: async () => ({ data: [{ id: "ses_cont_left", time: { updated: 1 } }], cursor: {} }),
+    });
+    const configPath = join(dirname(process.env.THATCH_DB_PATH!), "config.json");
+    const argvSave = process.argv;
+    try {
+      process.argv = [...argvSave, "-c"];
+      cleanup = (await setup(contLeftContext as any)) as () => Promise<void>;
+      await settle();
+      expect(dbRow("ses_cont_left")).toBeUndefined();
+      expect(new ThatchDB(process.env.THATCH_DB_PATH!).hasChatLeaveTombstone("ses_cont_left")).toBe(true);
+
+      // autoRegister: false case: a -c restart must not register either.
+      cleanup = undefined;
+      saveConfig({ chat: { autoRegister: false } });
+      cleanup = (await setup(contLeftContext as any)) as () => Promise<void>;
+      await settle();
+      expect(dbRow("ses_cont_left")).toBeUndefined();
+    } finally {
+      process.argv = argvSave;
+      rmSync(configPath, { force: true });
+    }
   });
 });

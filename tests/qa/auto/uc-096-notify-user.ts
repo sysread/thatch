@@ -62,6 +62,12 @@ const useCase: UseCase = {
     const dbDir = mkdtempSync(join(tmpdir(), "thatch-uc096-"));
     const prevDbPath = process.env.THATCH_DB_PATH;
     process.env.THATCH_DB_PATH = join(dbDir, "thatch.db");
+    // This use case exercises the dispatcher composition in-process through
+    // the mock spawner, which the suite's THATCH_NO_NOTIFY=1 suppression
+    // (tests/clean-env.ts) would no-op. Lift the guard for the run and
+    // restore it in the finally so the rest of the suite stays suppressed.
+    const prevNoNotify = process.env.THATCH_NO_NOTIFY;
+    delete process.env.THATCH_NO_NOTIFY;
     try {
       const recorded: string[] = [];
       const ok: SpawnResult = { exitCode: 0, stderr: "" };
@@ -208,6 +214,7 @@ const useCase: UseCase = {
     } finally {
       if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
       else process.env.THATCH_DB_PATH = prevDbPath;
+      if (prevNoNotify !== undefined) process.env.THATCH_NO_NOTIFY = prevNoNotify;
       rmSync(dbDir, { recursive: true, force: true });
     }
   },

@@ -73,15 +73,16 @@ interface CompiledTool {
 export function compileTools(opts?: { bundled?: boolean }): Map<string, CompiledTool> {
   const map = new Map<string, CompiledTool>();
   for (const def of TOOL_DEFS) {
-    // v2-only tools ride v2 plugin surfaces (session move, rpc emit) with
-    // no MCP equivalent - never expose them. opencodeDbOnly tools read
-    // opencode.db - wrong corpus on ANY Claude Code server (bundled
-    // included). opencodeOnly tools (the watch registry family) serve on
-    // the BUNDLED server only: it wires ctx.watchers and the mod's timer
-    // is its poller/delivery; the standalone server has no registry and
-    // no delivery channel. bundledOnly tools are wired through the
-    // PLUGIN-regime bundled server's CoreContext only.
-    if (def.v2Only || def.opencodeDbOnly) continue;
+    // opencodeDbOnly tools read opencode.db - wrong corpus on ANY Claude
+    // Code server (bundled included). opencodeOnly tools split by server:
+    // the watch family (bundledServable) serves on the BUNDLED server only
+    // (it wires ctx.watchers; the mod's timer is its poller/delivery; the
+    // standalone server has no registry and no delivery channel), while
+    // the rest - the archaeology trio, the session-tab bridge family,
+    // exit/compact - stay fenced on every MCP server. bundledOnly tools
+    // are wired through the PLUGIN-regime bundled server's CoreContext
+    // only.
+    if (def.opencodeDbOnly) continue;
     if (def.bundledOnly && !opts?.bundled) continue;
     if (def.opencodeOnly && !(opts?.bundled && def.bundledServable)) continue;
     const schema = z.object(def.args);

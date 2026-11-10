@@ -7,12 +7,24 @@ export interface ToolInteraction {
 }
 
 /**
+ * The file-target arg across host spellings: opencode v1 used camelCase
+ * (filePath), Claude Code/Cursor use snake_case (file_path), and opencode
+ * v2's built-in read/edit/write name it `path`. Only the read/edit/write
+ * cases consume the value, so the generic `path` key cannot leak into any
+ * other tool's summary - a tool must be named read/edit/write for this
+ * chain to matter at all.
+ */
+function fileArg(args: Record<string, unknown>): unknown {
+  return args.filePath ?? args.file_path ?? args.path;
+}
+
+/**
  * Summarize a tool's args to a single human-readable string. Used by both the
  * opencode plugin (in-process) and the Claude Code CLI (file-backed queue) so
  * the payload the agent ultimately receives has the same shape from either path.
  */
 function summarizeArgs(tool: string, args: Record<string, unknown>): string {
-  const file = args.filePath ?? args.file_path;
+  const file = fileArg(args);
   switch (tool.toLowerCase()) {
     case "read":
       return `file: ${file}`;
@@ -38,7 +50,7 @@ function summarizeArgs(tool: string, args: Record<string, unknown>): string {
  * Kept short so the JSON payload stays scannable across ~20 buffered entries.
  */
 export function deriveTitle(tool: string, args: Record<string, unknown>): string {
-  const file = args.filePath ?? args.file_path;
+  const file = fileArg(args);
   switch (tool.toLowerCase()) {
     case "read":
     case "edit":
@@ -127,8 +139,9 @@ export interface ExecuteUnwrap {
  * buffer excludes them because buffering the pipeline's own traffic feeds
  * the nudge with its own exhaust (the dispatch/ack loops, September 2026);
  * the alert classifier excludes them because a round made of only these
- * did nothing the user asked for. "task" is v1's dispatch tool, "subagent"
- * v2's, "agent" the MCP-path spelling - match all three, never one name.
+ * did nothing the user asked for. "task" and "subagent" are the host's
+ * dispatch-tool spellings across SDK generations, "agent" the MCP-path
+ * spelling - match all three, never one name.
  */
 export function isMetaToolName(tool: string): boolean {
   const t = tool.toLowerCase();

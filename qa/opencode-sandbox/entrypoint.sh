@@ -14,15 +14,13 @@ export XDG_STATE_HOME=/qa/state
 INITIAL_CWD=$(pwd)
 mkdir -p "$XDG_CONFIG_HOME/opencode/plugins/thatch" "$XDG_DATA_HOME" "$XDG_STATE_HOME" /qa/work
 
-# The thatch plugin shim, in DIRECTORY form: the v2 TUI's plugin discovery
+# The thatch plugin shim, in DIRECTORY form: the TUI's plugin discovery
 # loads directories/symlinks and SKIPS plain files, so the ./tui entrypoint
-# (the tab-strip driver) only loads from the directory shape. The container
-# is v2-only (the image pins v2), so v1's file-only discovery does not
-# apply here. Absolute paths: a plugin file's relative imports resolve from
-# its own directory - ./src/index would never load. Dual-shape index: v2's
-# server-side loader reads the default export (merged {id, setup, server}).
+# (the tab-strip driver) only loads from the directory shape. Absolute
+# paths: a plugin file's relative imports resolve from its own directory -
+# ./src/index would never load. The v2 server-side loader reads the default
+# export ({id, setup}); named exports are ignored.
 cat >"$XDG_CONFIG_HOME/opencode/plugins/thatch/index.ts" <<'SHIM'
-export { server } from "/app/thatch/src/index";
 export { default } from "/app/thatch/src/index";
 SHIM
 cat >"$XDG_CONFIG_HOME/opencode/plugins/thatch/tui.ts" <<'TUI'

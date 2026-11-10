@@ -299,6 +299,20 @@ describe("tool-defs execute functions", () => {
     expect(result).not.toContain("Normal (archived)");
     expect(result).toContain("Old (archived)");
   });
+
+  test("memory_list renders the branch marker for an empty-string scope", async () => {
+    // A legacy row can carry branch = '' (written before normalization).
+    // The render must show the scoping that exists, not silently hide it:
+    // invisibility is what let such rows sit untended in real stores.
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const list = TOOL_DEFS.find((t) => t.name === "memory_list")!;
+    await remember.execute({ label: "Scoped", content: "Content", branch: "feature/x" }, ctx);
+    const raw = new Database(dbPath);
+    raw.run("UPDATE entries SET branch = '' WHERE label = 'Scoped'");
+    raw.close();
+    const result = await list.execute({}, ctx);
+    expect(result).toContain("Scoped (branch:)");
+  });
 });
 
 describe("formatAge", () => {

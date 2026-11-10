@@ -113,48 +113,27 @@ them locally with `mise run qa-live`.
 | `qa-auto` | `bin/qa-run auto` | Run automatable only (fast, no LLM). Pass UC names as args to select a subset. |
 | `qa-live` | `bin/qa-run live` | Run live only (spawns opencode, costs tokens). Pass UC names as args to select a subset. |
 
-### The opencode version matrix (default behavior)
+### The opencode binary (single-host)
 
-Every task that runs opencode-driven use cases runs one leg per
-DISCOVERED opencode install, with test names suffixed
-(`UC-001-memory-roundtrip [v1]`, `UC-001-memory-roundtrip [v2]`) when
-there are several. There is no separate matrix command - the ordinary
-tasks just do the matrix based on what is available.
+The plugin requires opencode 2, so the QA subsystem is single-host:
+opencode-driven use cases (live default-run ones, and automatable ones
+whose `run` spawns the binary - UC-100 spawns `opencode serve`, UC-098
+spawns run; those set `spawnsOpencode: true` on the `UseCase`) resolve
+the binary through discovery.
 
 Discovery (tests/qa/binaries.ts) asks the package manager where its
 formulas are installed (`brew --prefix opencode`, `brew --prefix
 opencode-v2`), falls back to the PATH-resolved binary, validates each
-candidate by running `--version`, tags it by major (`v1`, `v2` - the
-version output decides, not the formula name), and dedups candidates
-that resolve to the same binary. A machine with one install runs
-single-leg with unsuffixed names, so single-binary setups behave
-exactly as they did before the matrix existed.
+candidate by running `--version`, and tags it by major (the version
+output decides, not the formula name). Only a `v2`-tagged install is a
+usable host - a discovered v1 binary is never selected (the plugin cannot
+load under it); when one is found its bin dir is prepended to the
+fixture PATH, otherwise the PATH binary runs as-is.
 
-A use case opts into or restricts the matrix with `hosts: ["v1"]` /
-`["v2"]` / `["v1", "v2"]` on the `UseCase`:
-
-- Live use cases (no custom `run`) are matrixed by default - the default
-  `runViaOpencode` path spawns opencode by definition.
-- Automatable use cases keep a single leg unless they declare `hosts` -
-  the fast suite is not doubled for cases that never touch opencode.
-  Declare `hosts` when a custom `run` spawns opencode itself (UC-098) or
-  drives a serve (UC-100).
-
-`QA_HOSTS=v1` (comma-separated) narrows the legs when iterating against
-one major; a value matching no discovered install registers nothing
-with an explanatory line.
-
-Legs get separate fixtures (the fixture directory is keyed by test name
-suffix) because hosts cannot share one: a v2 session db in a shared
-fixture fails the v1 leg's serve with "Database is not empty and has no
-session table".
-
-The v1 and v2 `run` CLIs disagree on flags (v1 has `--dir`, which v2
-dropped; v2 needs `--standalone` to skip the background daemon, which a
-fixture sandbox must not boot). `opencodeRunArgs(ctx, prompt)` in the
-runner builds the right invocation per leg by version-detecting the
-binary the leg's PATH selects; `runViaOpencode` and UC-098's custom runs
-go through it.
+`opencode run` needs `--standalone` (the default run waits on the shared
+background daemon, which a fixture sandbox must not boot).
+`opencodeRunArgs(ctx, prompt)` in the runner builds the invocation;
+`runViaOpencode` and UC-098's custom runs go through it.
 
 The `qa` task runs auto first via `&&`. Auto failures stop before live runs.
 The `qa-live` task does not use `--concurrent` — live sessions are
@@ -174,17 +153,30 @@ reviewing coverage without spawning sessions.
 
 ### Isolation model
 
-The runner creates a **master copy** of the repo at `/tmp/thatch-qa/master/`
-via `git archive HEAD` (tracked files only — no `.git`, no `node_modules`, no
-untracked artifacts). `node_modules` is symlinked from the real repo to share
+The runner creates a **master copy** of the repo via `git archive HEAD`
+(tracked files only — no `.git`, no `node_modules`, no untracked artifacts).
+`node_modules` is symlinked from the real repo to share
 deps including the HF embedding model cache. opencode's own npm deps
 (`~/.config/opencode/node_modules/`) are copied into the master so each use
 case has them without a warm-up session.
 
+Both the master copy and the fixture tree are **run-scoped**: every qa-auto
+process gets its own `$TMPDIR/thatch-qa-master-<run-id>` master and
+`/tmp/thatch-qa/<run-id>/` fixture root (run id = pid + timestamp). Two
+concurrent qa-auto runs (two worktrees gating at once) are therefore fully
+independent — before this, the second run's master setup `rmSync`'d the
+shared roots and deleted the first run's live fixtures mid-test, surfacing
+as `SQLiteError: disk I/O error` (UC-100), exit-1 saves (UC-131), and empty
+CLI output (UC-132/130). `tests/qa-runner-isolation.test.ts` pins this
+contract with real concurrent subprocesses. Dead runs' roots are reclaimed
+by an age-based GC (older than 24h) on the next run's setup.
+
 Each use case gets a per-use-case copy of the master via `createFixture(name)`,
 with isolated `HOME`, `XDG_CONFIG_HOME`, `THATCH_DB_PATH`, and
-`THATCH_QUEUE_DIR` environment variables. The repo is read-only during QA —
-sessions run inside `/tmp/thatch-qa/<uc-name>/` copies.
+`THATCH_QUEUE_DIR` environment variables, plus `THATCH_NO_NOTIFY=1` so no
+fixture subprocess (opencode included) can fire a real desktop notification
+on the host mid-run. The repo is read-only during QA —
+sessions run inside `/tmp/thatch-qa/<run-id>/<uc-name>/` copies.
 
 The `qa` skill (`.opencode/skills/qa/SKILL.md`) instructs the
 LLM on how to execute a single use case in the isolated directory. The skill's
@@ -263,6 +255,6 @@ No separate QA docs directory exists. QA use cases live in `tests/qa/` as execut
 5. **Use cases self-register via `registerUseCase`** — no central registry to
    maintain. Add a new `.ts` file and import it from the barrel.
 6. **The repo is read-only during QA.** Sessions run inside
-   `/tmp/thatch-qa/<uc-name>/` copies created from `git archive HEAD`.
+   `/tmp/thatch-qa/<run-id>/<uc-name>/` copies created from `git archive HEAD`.
 7. **The 20-minute test timeout is the agent-session budget, not test
    execution time.** Reducing it will cause live use cases to time out.

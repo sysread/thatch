@@ -479,6 +479,7 @@ export class ThatchDB {
     `);
 
     this.#migrateColumns();
+    this.#migrateEmptyBranchScope();
     this.#migrateChatNameCollation();
     this.#migrateChatTopic();
     this.#migrateChatHostKind();
@@ -603,6 +604,17 @@ export class ThatchDB {
     }
   }
 
+  // Rows written before branch-scope normalization can carry branch = ''
+  // (an agent passed an empty string - a detached HEAD yields "" from
+  // git branch --show-current). An empty string passes the IS NOT NULL
+  // filters, so such rows inflated hygiene's orphaned-branch list while
+  // memory_list rendered no branch marker for them. Git refnames cannot be
+  // empty, so '' is never a legitimate scope; normalize to unscoped.
+  // Idempotent: a second open matches zero rows.
+  #migrateEmptyBranchScope(): void {
+    this.#db.run("UPDATE entries SET branch = NULL WHERE branch = ''");
+  }
+
   // A chat_sessions table created before the NOCASE uniqueness change has a
   // case-SENSITIVE unique constraint, which let "Landru" and "landru"
   // coexist as distinct identities. SQLite cannot ALTER a column
@@ -706,7 +718,10 @@ export class ThatchDB {
     this.ensureStore(store);
 
     const blob = new Uint8Array(embedding.buffer, embedding.byteOffset, embedding.byteLength);
-    const branch = opts?.branch ?? null;
+    // branch: "" is not a scope - git refnames cannot be empty, and a
+    // detached HEAD yields "" from git branch --show-current, so an agent
+    // reading it can pass the empty string by accident. Store unscoped.
+    const branch = opts?.branch || null;
     const confidence = opts?.confidence ?? null;
     const archived = opts?.archived === true ? 1 : (opts?.archived === false ? 0 : null);
     const now = new Date().toISOString();
@@ -1379,10 +1394,12 @@ export class ThatchDB {
     return row?.n ?? 0;
   }
 
-  /** Distinct branches that scoped memories reference in a store. */
+  /** Distinct branches with at least one non-archived entry. Fully-archived
+   * branches are excluded so hygiene's orphaned list agrees with
+   * entryCountForBranches, which also skips archived entries. */
   branchesInStore(store: string): string[] {
     return this.#db
-      .query("SELECT DISTINCT branch FROM entries WHERE store = ? AND branch IS NOT NULL ORDER BY branch")
+      .query("SELECT DISTINCT branch FROM entries WHERE store = ? AND archived = 0 AND branch IS NOT NULL ORDER BY branch")
       .all(store)
       .map((r: any) => r.branch);
   }

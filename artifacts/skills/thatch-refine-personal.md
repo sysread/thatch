@@ -26,9 +26,7 @@ below; where they disagree, these win.
   cheap to build and cheaper to rewrite; run the loop only when the plan
   touches something expensive to get wrong (persistent state, a
   hard-to-reverse migration, hours of build effort).
-- **Fewer rounds.** One quiet review round is enough consensus. The cap
-  drops from three rounds to two; a personal plan that has not converged
-  by then should just be built or abandoned.
+- **Fewer rounds.** One quiet review round is enough consensus. The lighter bar stands; the drift-guard cap does not drop - type deltas relax consensus requirements, never the guard. A personal plan still producing meaningful findings at round ten has the same problem a team plan does.
 - **Degraded review is fine.** If the host cannot dispatch sub-agents, a
   same-context self-review pass is usually enough. Saying so out loud, as
   the core skill requires, is still worthwhile but the stakes are lower.

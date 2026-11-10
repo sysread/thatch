@@ -9,7 +9,7 @@ The store persists memories keyed by label, scoped to a project store or the sha
 - Stores memories keyed by label within a store. The store name is auto-detected from the git remote — the `owner/repo` slug — or falls back to `"global"` for cross-project knowledge.
 - Semantic search via cosine similarity over BGE-small-en-v1.5 embeddings (384 dimensions, ~34 MB). The model runs locally and is lazy-loaded.
 - Six tools: `memory_remember`, `memory_recall`, `memory_list`, `memory_show`, `memory_forget`, and `store_list`. All are defined in `src/tool-defs.ts`.
-- Branch scoping. Memories can be scoped to a git branch for work-in-progress context, or left unscoped for project-wide knowledge. Branch-scoped memories are recalled alongside project-wide ones when the branch matches.
+- Branch scoping. Memories can be scoped to a git branch for work-in-progress context, or left unscoped for project-wide knowledge. Branch-scoped memories are recalled alongside project-wide ones when the branch matches. An empty branch string is not a scope: `remember` coerces `""` to unscoped (git refnames are never empty), and renderers show any non-null scope so no scoping is invisible.
 - Confidence grading on a 1–10 scale, stored per memory.
 - Archived flag. Archived memories are long-term records excluded from search and hygiene by default. Pass `includeArchived: true` to surface them.
 - Write-time duplicate detection. When a new memory is similar to existing ones (cosine ≥ 0.85), the save returns a warning listing the near-duplicates. The save always proceeds — the warning asks the agent to reconcile, never blocks.
@@ -84,9 +84,8 @@ right parameter and, for show/forget, how to find exact labels
 (`memory_list` or `memory_recall`, then retry with the label copied in
 full) instead of the call dying at validation. When the call MISNAMES the
 key, the near-miss reaches the guard (unknown keys survive host
-validation: the MCP validator clone deep-passthroughs, the opencode v2
-plugin's declared schema permits them, and the opencode v1 host forwards
-raw input by its own implementation), and the guard answers with the
+validation: the MCP validator clone deep-passthroughs and the opencode
+plugin's declared schema permits them), and the guard answers with the
 correction: "you passed 'labels'; did you mean
 'label'?" - teach-only, the misnamed key's value is never applied.
 Optionality is what makes the teaching reachable: on the
@@ -149,7 +148,7 @@ The tool layer hardcodes `[repo, "global"]` as the default search scope. This me
 
 The `archived` column is an integer flag: `0` (default) is live, `1` is archived.
 
-- `search()`, `findDuplicates()`, and the stale-entry count in hygiene all filter `WHERE archived = 0`.
+- `search()`, `findDuplicates()`, and the hygiene queries (`staleEntryCount`, `branchesInStore`) all filter `WHERE archived = 0`.
 - To search archived memories: pass `includeArchived: true` to `memory_recall`.
 - To archive: write with `archived: true`. To unarchive: write with `archived: false`.
 - Updating an already-archived memory requires an explicit `archived` parameter. The guard prevents accidental unarchival — the caller must consciously pass `archived: true` to keep it archived or `archived: false` to unarchive it.

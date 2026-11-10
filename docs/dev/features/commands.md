@@ -89,13 +89,18 @@ in the package), as templates with `${...}` placeholders:
 An unresolved placeholder throws at load rather than passing through
 (the REVIEW_COMMON lesson: a silent passthrough once corrupted skill
 bodies). `tests/commands.test.ts` pins both directions: every template's
-placeholders resolve, and the artifact set matches the command set exactly.
+placeholders resolve, and the artifact set matches the command set (the
+two wrap-up templates aside - they are consumed through
+`wrapUpCommandContent`, not the install set).
 
-- `actionDefs(tool)` returns the action set with bodies rendered for one
-  host. Actions needing plugin-only capabilities are marked `opencodeOnly`
+- `actionDefs()` returns the action set with rendered bodies. Actions
+  needing plugin-only capabilities are marked `opencodeOnly`
   (`extract` and `whois`: they need the invoking session's identity).
-- `opencodeCommandDefs()` = wrap-up templates + all actions. Synced by the
-  plugin at init into `$XDG_CONFIG_HOME/opencode/command/thatch/`
+- `opencodeCommandDefs()` = all actions, wrap-ups NOT included (they
+  register in code through the CommandEditor; a command FILE with the
+  same name as a registered command would collide, and
+  `removeWrapUpCommandFiles` cleans files left by pre-drop runs). Synced
+  by the plugin at init into `$XDG_CONFIG_HOME/opencode/command/thatch/`
   (`installOpencodeCommands`), content-compare, self-healing.
 - `claudeCommandDefs()` = actions minus `opencodeOnly`. Synced by
   `thatch setup --claude` (`installClaudeCommands`) into
@@ -108,8 +113,8 @@ placeholders resolve, and the artifact set matches the command set exactly.
   commands' `$ARGUMENTS`.
 
 A parity-guard test asserts the three sets are the same actions minus the
-documented exclusions: opencode = Claude Code set + `compact`, `exit`,
-`extract`, `whois`; MCP prompts = Claude Code's set.
+documented exclusions: opencode = Claude Code set + `extract`, `whois`;
+MCP prompts = Claude Code's set.
 
 ## The extract action and session IDs
 

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 
 /**
- * UC-133: the plugin regime's bundled server - stage tool + disabled-mod
+ * UC-142: the plugin regime's bundled server - stage tool + disabled-mod
  * warning (docs/plans/claude-code-holistic-integration.md, Step A).
  *
  * Automatable: the bundled server is `thatch mcp --bundled` - same stdio
@@ -17,7 +17,7 @@ import { registerUseCase, type UseCase, type QaContext } from "../runner";
  */
 
 const useCase: UseCase = {
-  name: "UC-133-plugin-stage-server",
+  name: "UC-142-plugin-stage-server",
   preconditions: [
     "- No live host needed: the bundled server is a stdio JSON-RPC process on an isolated THATCH_DB_PATH",
   ].join("\n"),

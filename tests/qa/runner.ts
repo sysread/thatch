@@ -1,5 +1,5 @@
 import { $ } from "bun";
-import { cpSync, copyFileSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -12,13 +12,66 @@ import { tmpdir } from "node:os";
  * assertions. Manual-only use cases set `manualOnly: true` and are skipped.
  */
 
-// Master copy lives outside /tmp/ so opencode sessions (which have
+// Run-scoped roots. The run id keeps concurrent qa-auto PROCESSES (two
+// worktrees gating at once, CI plus a local run) from destroying each
+// other: the old shared /tmp/thatch-qa + thatch-qa-master roots meant the
+// second process's master setup (rmSync of both roots) deleted the first
+// process's LIVE fixtures mid-test. Reproduced 2026-11-05 by overlapping
+// two qa-run invocations: UC-131's CLI died with "SQLiteError: disk I/O
+// error" (the db file unlinked under it) - the same signature seen in
+// that week's UC-100 flakes, and the empty-CLI-output shape that hit
+// UC-132/130. Fixtures stay under /tmp/thatch-qa/ for compatibility with
+// bun test --concurrent (os.tmpdir() paths caused unexplained hangs);
+// the master copy stays outside /tmp/ so opencode sessions (which have
 // external_directory "/tmp/**": "allow" in the master config) cannot
-// delete or corrupt it. Fixtures live under /tmp/thatch-qa/ for
-// compatibility with bun test --concurrent (os.tmpdir() paths caused
-// unexplained hangs).
-const MASTER_ROOT = join(tmpdir(), "thatch-qa-master");
-const QA_ROOT = "/tmp/thatch-qa";
+// delete or corrupt it.
+const RUN_ID = `${process.pid}-${Date.now().toString(36)}`;
+const MASTER_ROOT = join(tmpdir(), `thatch-qa-master-${RUN_ID}`);
+export const QA_ROOT = join("/tmp", "thatch-qa", RUN_ID);
+const QA_ROOT_PARENT = "/tmp/thatch-qa";
+// Per-UC result journal: one JSONL line per use-case completion (name, leg,
+// verdict, timestamp, plus the failure output head on non-PASS). Written
+// because a mid-stream failure is otherwise unidentifiable: results live
+// only in stdout, and a truncated capture (the 2026-11-05 flake chase)
+// loses the failing UC's name while fixture dirs carry no failure markers.
+// Lives in the run-scoped root, so it dies with the run's cleanup and
+// never accumulates across runs.
+export const RESULT_JOURNAL = join(QA_ROOT, "results.jsonl");
+
+export function journalResult(line: {
+  uc: string;
+  leg?: string | null;
+  result: string;
+  output?: string;
+}): void {
+  try {
+    mkdirSync(QA_ROOT, { recursive: true });
+    appendFileSync(
+      RESULT_JOURNAL,
+      JSON.stringify({ at: new Date().toISOString(), ...line, ...(line.output ? { output: line.output.slice(0, 2000) } : {}) }) + "\n",
+    );
+  } catch {
+    // The journal is evidence, not a gate: a write failure must never fail
+    // a use case.
+  }
+}
+
+/**
+ * Runs a use-case body, journaling a THREW line (with the error head) if
+ * it throws, then rethrowing. The crash path is the journal's most
+ * important case: a timed-out or crashed UC leaves no completion-path
+ * write, so without this guard the failing name exists only in stdout -
+ * one truncated capture away from being lost.
+ */
+export async function journalGuarded<T>(meta: { uc: string; leg?: string | null }, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    const head = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
+    journalResult({ ...meta, result: "THREW", output: head });
+    throw err;
+  }
+}
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 export const MODEL = process.env.QA_MODEL ?? "venice/z-ai-glm-5-3-flash";
 const DRY_RUN = process.env.QA_DRY_RUN === "1";
@@ -66,13 +119,13 @@ export interface UseCase {
    */
   userDoc?: string;
   /**
-   * Which opencode majors this use case applies to, as tags from the QA
-   * matrix's binary discovery ("v1", "v2"). Default: every discovered
-   * host. Only meaningful for use cases that touch opencode - an
-   * automatable use case with no custom-opencode run keeps a single leg
-   * regardless.
+   * True when a custom `run` function spawns the opencode binary itself
+   * (a serve process, an `opencode run` invocation) - the runner then
+   * resolves the opencode binary the same way it does for live use cases.
+   * Use cases with no custom run always spawn opencode and need not set
+   * this.
    */
-  hosts?: string[];
+  spawnsOpencode?: boolean;
   /**
    * Custom run function. If omitted, defaults to runViaOpencode.
    * Automatable use cases override this with direct CLI assertions.
@@ -125,6 +178,7 @@ async function doEnsureMaster(): Promise<void> {
     rmSync(MASTER_ROOT, { recursive: true, force: true });
     mkdirSync(masterDir, { recursive: true });
     mkdirSync(QA_ROOT, { recursive: true });
+    gcStaleRunRoots();
     return Promise.resolve();
   });
 
@@ -177,22 +231,16 @@ async function doEnsureMaster(): Promise<void> {
       // plugin file's own directory (.opencode/plugins/), not the project
       // root, so "./src/index" never loads - the plugin silently fails to
       // import and every in-session thatch tool/poller is missing. Same
-      // pattern as the real global config's plugin file. Dual-shape: the
-      // named export serves v1 hosts; the default re-export (merged
-      // {id, setup, server}) serves v2 hosts, which validate only the
-      // default export of the module they load.
+      // pattern as the real global config's plugin file.
       //
-      // FILE shape on purpose, though real installs on v2 should use the
-      // directory form (see docs/user/setup.md): v1 auto-discovers only
-      // files (config/plugin.ts globs "{plugin,plugins}/*.{ts,js}" - a
-      // directory shim is invisible and the fixture's plugin never loads,
-      // which deterministically kills UC-100's chat canary on v1), and v2
-      // auto-discovers files AND directories (source-directory.ts), so
-      // shipping both shapes here would die on "duplicate instance plugin
-      // ids". The QA suite is headless - no TUI process ever loads the
-      // ./tui entrypoint - so the directory form buys QA nothing. TUI-side
-      // loading is verified by the live smoke, not here.
-      `export { server } from ${JSON.stringify(join(masterDir, "src", "index"))};\nexport { default } from ${JSON.stringify(join(masterDir, "src", "index"))};\n`,
+      // FILE shape on purpose, though real installs should use the
+      // directory form (see docs/user/setup.md): the QA suite is headless
+      // - no TUI process ever loads the ./tui entrypoint - so the
+      // directory form buys QA nothing, and the file shape keeps the
+      // fixture's plugin out of v2's directory auto-discovery (a directory
+      // shim plus this file would die on "duplicate instance plugin ids").
+      // TUI-side loading is verified by the live smoke, not here.
+      `export { default } from ${JSON.stringify(join(masterDir, "src", "index"))};\n`,
     );
     return Promise.resolve();
   });
@@ -237,6 +285,41 @@ async function doEnsureMaster(): Promise<void> {
 }
 
 // --- Per-use-case fixture ---------------------------------------------------
+
+/**
+ * Reclaims run roots left by DEAD qa-auto processes. Every process gets its
+ * own root (the run id), so cleanup must never touch a sibling run's root -
+ * that deletion was the concurrent-run fixture wipe. Age is the liveness
+ * test instead of pids (a pid can be reused): no qa-auto run survives 24h,
+ * since each use case is capped at 20 minutes. Best-effort: a failed GC
+ * only leaves files behind.
+ */
+function gcStaleRunRoots(): void {
+  const staleMs = 24 * 60 * 60 * 1000;
+  const candidates: string[] = [];
+  try {
+    for (const entry of readdirSync(QA_ROOT_PARENT)) {
+      candidates.push(join(QA_ROOT_PARENT, entry));
+    }
+    for (const entry of readdirSync(tmpdir())) {
+      // "thatch-qa-master" (no suffix) is the legacy shared-root name from
+      // before the run-scoped fix - reclaim it too.
+      if (entry === "thatch-qa-master" || entry.startsWith("thatch-qa-master-")) candidates.push(join(tmpdir(), entry));
+    }
+  } catch {
+    return; // a missing parent means nothing to reclaim
+  }
+  for (const candidate of candidates) {
+    try {
+      if (candidate === QA_ROOT || candidate === MASTER_ROOT) continue;
+      if (Date.now() - statSync(candidate).mtimeMs > staleMs) {
+        rmSync(candidate, { recursive: true, force: true });
+      }
+    } catch {
+      // Somebody else is mid-setup on their own root; leave it alone.
+    }
+  }
+}
 
 export async function createFixture(name: string): Promise<QaContext> {
   const masterDir = MASTER_ROOT;
@@ -317,6 +400,12 @@ export async function createFixture(name: string): Promise<QaContext> {
     env: {
       THATCH_DB_PATH: join(dir, "thatch.db"),
       THATCH_QUEUE_DIR: join(dir, "queue"),
+      // Machine-level dispatch suppression for the fixture's subprocesses
+      // (opencode run/serve children included): a runtime path that reaches
+      // the real notify dispatcher must not banner or speak on the host
+      // mid-QA-run. The temp-HOME/XDG sandboxing cannot contain osascript,
+      // so the dispatcher-level kill switch is the containment.
+      THATCH_NO_NOTIFY: "1",
       // Full plugin debug log into the fixture (debug.log beside the db):
       // the serve process's stdout/stderr pipes are never drained, so this
       // is the only window into plugin-side failures during a run.
@@ -328,9 +417,14 @@ export async function createFixture(name: string): Promise<QaContext> {
       XDG_CACHE_HOME: join(dir, "home", ".cache"),
       HOME: join(dir, "home"),
       OPENCODE_TEST_HOME: join(dir, "home"),
+      // v2 still honors this one (server-process.ts). The v1-only pair
+      // _EXTERNAL_SKILLS / _DEFAULT_PLUGINS was removed: v2 dropped both
+      // flags, and the isolation they provided on v1 is structural here -
+      // the fixture-scoped HOME/XDG dirs above are the only skills/plugins
+      // source v2 discovery sees (v2's default plugins are compiled-in
+      // built-ins no env var disables; coexisting with them is the
+      // realistic coverage).
       OPENCODE_DISABLE_CLAUDE_CODE: "1",
-      OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
-      OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
       // opencode v2's serve always runs password-protected (random when
       // unset); a fixed one lets the runner's client authenticate. v1
       // ignores both the env var and the header.
@@ -345,11 +439,9 @@ export async function createFixture(name: string): Promise<QaContext> {
 
 /**
  * Builds the `opencode run` invocation for the host binary that ctx.env's
- * PATH selects. The majors disagree on flags: v1 has --dir (v2 dropped it -
- * the project resolves from the working directory, so cwd is the common
- * spelling), and v2 needs --standalone because its default run waits on the
- * shared background daemon, which an isolated fixture sandbox must not boot
- * or reuse. Both accept --model/--auto.
+ * PATH selects. `--standalone` is required because the default run waits
+ * on the shared background daemon, which an isolated fixture sandbox must
+ * not boot or reuse. `--model`/`--auto` pass through.
  *
  * QA_DOCKER=1 runs the same invocation inside the qa/opencode-sandbox
  * container instead of the host binary: the fixture dir and the master copy
@@ -364,11 +456,7 @@ export function opencodeRunArgs(ctx: QaContext, prompt: string): { args: string[
   // Exact "1": QA_DOCKER=0 must disable, not enable (a bare truthy check
   // would read the string "0" as on).
   const docker = process.env.QA_DOCKER === "1";
-  // The docker image pins opencode v2 - the host's binary (possibly absent,
-  // possibly v1) is irrelevant to what actually runs.
-  const major = docker ? 2 : serveMajorVersion(ctx.env);
-  const base = major >= 2 ? ["opencode", "run", "--standalone"] : ["opencode", "run"];
-  const args = [...base, "--model", MODEL, "--auto", prompt];
+  const args = ["opencode", "run", "--standalone", "--model", MODEL, "--auto", prompt];
   if (!docker) return { args, cwd: ctx.dir };
   ensureQaDockerImage();
   const mounts = [ctx.dir, MASTER_ROOT];
@@ -458,7 +546,7 @@ Evidence:
   const timeoutMs = 1_190_000; // 19 min 50s — just under the 20-min test timeout
 
   const { args, cwd } = opencodeRunArgs(ctx, prompt);
-  const proc = Bun.spawn(args, {
+  const proc = spawnWatched(args, {
     cwd,
     env: ctx.env,
     stdout: "pipe",
@@ -481,11 +569,15 @@ Evidence:
 
     if (status !== "PASS") {
       console.log(`  ${uc.name}: ${status}\n  Output: ${output.slice(0, 2000)}`);
+      // The evidence line: registerLeg's result line names the failure,
+      // this one carries the session output that explains it.
+      journalResult({ uc: uc.name, result: `output:${status}`, output });
     }
 
     return status;
   } catch (err) {
     console.log(`  ${uc.name}: FAIL (opencode session error: ${err})`);
+    journalResult({ uc: uc.name, result: "output:FAIL", output: `opencode session error: ${err}` });
     return "FAIL";
   } finally {
     clearTimeout(timer);
@@ -498,83 +590,56 @@ Evidence:
 import { test } from "bun:test";
 
 /**
- * One registration leg: a test to register and, in matrix mode, the host
- * binDir that gets prepended to the fixture PATH so `opencode` resolves to
- * that install. label is null in single-binary mode (the test keeps the
- * bare use-case name).
+ * One registration leg: the test to register and, when a discovered v2
+ * binary exists, its binDir prepended to the fixture PATH so `opencode`
+ * resolves to that install.
  */
 interface MatrixLeg {
-  label: string | null;
   binDir?: string;
 }
 
 /**
- * The registration legs for one use case. Opencode-driven use cases (live
- * default-run ones, and automatable ones that declare hosts - UC-100 spawns
- * `opencode serve`, UC-098 spawns run) get one leg per DISCOVERED opencode
- * install, names suffixed (" [v1]"/" [v2]") when there are several.
- * Automatable use cases that never touch opencode keep a single leg so the
- * fast suite is not doubled for no information. QA_HOSTS=v1,v2 narrows the
- * legs when iterating against one major.
+ * The registration leg for one use case. Opencode-driven use cases (live
+ * default-run ones, and automatable ones whose run spawns the binary -
+ * UC-100 spawns `opencode serve`, UC-098 spawns run) resolve the opencode
+ * binary: a discovered v2 install wins (its binDir is prepended to the
+ * fixture PATH); with none discovered the PATH binary is used as-is.
+ * Automatable use cases that never touch opencode keep a single leg.
  */
 function matrixLegs(uc: UseCase): MatrixLeg[] {
   if (process.env.QA_DOCKER === "1") {
     // The docker image pins opencode v2, so host-binary discovery does not
-    // apply: the matrix collapses to a single unlabeled leg through the
-    // container. (A v1 docker leg would need a v1-pinned image - not built.)
-    return [{ label: null }];
+    // apply: the single leg runs through the container.
+    return [{}];
   }
-  const spawnsOpencode = !uc.run || uc.hosts !== undefined;
-  if (!spawnsOpencode) return [{ label: null }];
-  const discovered = discoverHostBinaries();
-  const requested = uc.hosts ?? discovered.map((h) => h.tag);
-  let applicable = discovered.filter((h) => requested.includes(h.tag));
-  const narrow = process.env.QA_HOSTS?.split(",").map((s) => s.trim()).filter(Boolean);
-  if (narrow?.length) {
-    applicable = applicable.filter((h) => narrow.includes(h.tag));
-    if (applicable.length === 0) {
-      console.log(`  [qa] QA_HOSTS=${narrow.join(",")} matches none of the discovered installs (${discovered.map((h) => h.tag).join(", ") || "none"}) - nothing to run`);
-      return [];
-    }
-  }
-  if (applicable.length === 0) {
-    if (uc.hosts !== undefined) {
-      // A declared hosts list is an assertion about which majors the use
-      // case covers; silently running the PATH binary instead would test
-      // the wrong major.
-      console.log(`  [qa] ${uc.name}: declared hosts (${uc.hosts.join(", ")}) match no discovered install (${discovered.map((h) => h.tag).join(", ") || "none"}) - not registered`);
-      return [];
-    }
-    return [{ label: null }];
-  }
-  if (applicable.length === 1) {
-    // Single install: keep the bare test name so single-binary machines
-    // see the same names as before.
-    return [{ label: null, binDir: applicable[0].binDir }];
-  }
-  return applicable.map((h) => ({ label: h.tag, binDir: h.binDir }));
+  const spawnsOpencode = !uc.run || uc.spawnsOpencode === true;
+  if (!spawnsOpencode) return [{}];
+  // The plugin requires opencode 2: a discovered v1 binary is an unusable
+  // host, never selected - only the v2 tag is.
+  const v2 = discoverHostBinaries().find((h) => h.tag === "v2");
+  return [{ binDir: v2?.binDir }];
 }
 
 /**
  * Register a use case as a concurrent bun test. Handles dry-run skipping,
- * manual-only marking, fixture setup, result assertion - and one
- * registration per applicable discovered opencode install when several are
- * present (test names gain a " [v1]"/" [v2]" suffix).
+ * manual-only marking, fixture setup, and result assertion.
  */
 export function registerUseCase(uc: UseCase): void {
   for (const leg of matrixLegs(uc)) registerLeg(uc, leg);
 }
 
 function registerLeg(uc: UseCase, leg: MatrixLeg): void {
-  const testName = leg.label ? `${uc.name} [${leg.label}]` : uc.name;
+  const testName = uc.name;
   test.concurrent(testName, async () => {
     if (DRY_RUN) {
       console.log(`  [DRY RUN] ${testName} — skipped`);
+      journalResult({ uc: uc.name, result: "DRY-RUN-SKIPPED" });
       return;
     }
 
     if (uc.manualOnly) {
       console.log(`  [MANUAL] ${testName} — skipped`);
+      journalResult({ uc: uc.name, result: "MANUAL-ONLY" });
       return;
     }
 
@@ -584,23 +649,29 @@ function registerLeg(uc: UseCase, leg: MatrixLeg): void {
       const check = await $`command -v opencode`.quiet().nothrow();
       if (check.exitCode !== 0) {
         console.log(`  [MANUAL] ${testName} — skipped (opencode not on PATH)`);
+        journalResult({ uc: uc.name, result: "MANUAL-ONLY", output: "opencode not on PATH" });
         return;
       }
     }
 
     await ensureMaster();
-    // The fixture dir is keyed by name: matrix legs of one use case must
-    // not share it - a v2-migrated session db in a shared fixture would
-    // fail the v1 leg's serve with "Database is not empty and has no
-    // session table".
-    const ctx = await createFixture(leg.label ? `${uc.name}-${leg.label}` : uc.name);
+    const ctx = await createFixture(uc.name);
     if (leg.binDir) {
       ctx.env.PATH = `${leg.binDir}:${ctx.env.PATH}`;
     }
     const runFn = uc.run ?? ((c: QaContext) => runViaOpencode(uc, c));
-    const result = await runFn(ctx);
-
-    console.log(`  ${testName}: ${result}`);
+    // The crash path journals too: a THROWN test (waitFor timeout, an
+    // assertion escape) must still name itself in the journal - the crash
+    // is exactly when the name matters most, and the completion-path write
+    // below never runs (the 2026-11-09 UC-100 timeout was only in the
+    // tee'd stdout). The deliberate FAIL/PARTIAL rethrow happens AFTER the
+    // guard so it cannot double-journal.
+    const result = await journalGuarded({ uc: uc.name }, async () => {
+      const r = await runFn(ctx);
+      console.log(`  ${testName}: ${r}`);
+      journalResult({ uc: uc.name, result: r });
+      return r;
+    });
 
     if (result === "FAIL" || result === "PARTIAL") {
       throw new Error(`${testName}: ${result}`);
@@ -624,72 +695,114 @@ export function checkEnv(): void {
 
 // --- Cleanup info ----------------------------------------------------------
 
+/**
+ * This process's run-scoped roots, for introspection (the concurrency pin
+ * test asserts two concurrent runner processes get disjoint roots, and that
+ * one run's master setup cannot delete another run's fixtures).
+ */
+export function qaPaths(): { qaRoot: string; masterRoot: string } {
+  return { qaRoot: QA_ROOT, masterRoot: MASTER_ROOT };
+}
+
 export function printCleanupNotice(): void {
   if (!DRY_RUN) {
-    console.log(`\nQA artifacts left in ${QA_ROOT} and ${MASTER_ROOT}`);
-    console.log(`Remove with: rm -rf ${QA_ROOT}`);
+    console.log(`\nQA artifacts left in ${QA_ROOT} and ${MASTER_ROOT} (run-scoped roots)`);
+    console.log(`Remove ALL runs' artifacts with: rm -rf ${QA_ROOT_PARENT} ${tmpdir()}/thatch-qa-master-*`);
   }
 }
 
 // --- Serve-mode plumbing (multi-session use cases) ---------------------------
 
-import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 import { OpenCode as OpenCodeV2 } from "@opencode/client/promise";
 import { discoverHostBinaries } from "./binaries";
 
-/** Fixed serve credential: v2's serve requires basic auth; v1 ignores it. */
+/** Fixed serve credential: the serve process requires basic auth. */
 const SERVE_PASSWORD = "thatch-qa-password";
 
+// --- Orphan reaping ---------------------------------------------------------
+
 /**
- * The serve-mode client, version-matched to the `opencode` binary on PATH:
- * v2 declared a breaking server-API change (v1's SDK client gets 405s from
- * a v2 server), so a v2 binary gets the v2 SDK client wrapped in the v1
- * method/response shapes the use cases are written against. The wrap-up
- * call sites only use session.create/prompt/messages/delete.
+ * A hard-killed runner (pkill, OOM kill, crash) never runs the per-UC
+ * cleanup - those handlers live in the test process - so its opencode
+ * children survive as orphans: full LLM sessions plus serve and MCP
+ * subprocesses grinding through their whole pipeline with no parent to stop
+ * them (the 2026-11-05 OOM incident: four detached UC sessions, one at
+ * 2.8 GB, after a runner kill). Every opencode spawn therefore gets a
+ * WATCHDOG SIBLING: a detached shell that kill-trees the child (deepest
+ * first, so no child re-parents its own subtree while dying) the moment
+ * this runner's pid dies. The watchdog is itself orphaned by the kill but
+ * stays alive to do the reaping; it exits on its own once either side is
+ * gone, so a normally-finished child leaves nothing behind.
  */
-function v2ClientAsV1(client: ReturnType<typeof OpenCodeV2.make>, directory: string): OpencodeClient {
-  const textOf = (body: any) => (body?.parts ?? []).map((p: any) => p?.text ?? "").join("\n\n");
-  const partsOf = (message: any) =>
-    message.type === "assistant"
-      ? (message.content ?? [])
-          .filter((c: any) => c.type === "text")
-          .map((c: any) => ({ type: "text", text: c.text ?? "" }))
-      : [{ type: "text", text: message.text ?? "" }];
-  return {
-    session: {
-      create: async (input: any) => ({ data: await client.session.create({ ...input?.body, location: { directory } }) }),
-      prompt: async (input: any) => ({ data: await client.session.prompt({ sessionID: input.path.id, text: textOf(input.body) }) }),
-      messages: async (input: any) => {
-        const result = await client.message.list({ sessionID: input.path.id });
-        return { data: result.data.map((m: any) => ({ info: { role: m.type }, parts: partsOf(m) })) };
-      },
-      delete: async (input: any) => ({ data: await client.session.remove({ sessionID: input.path.id }) }),
-    },
-  } as unknown as OpencodeClient;
+const spawnedChildren = new Set<{ pid: number; kill: (signal?: number) => void }>();
+
+// Every runner spawn pipes both streams (the two call sites read them);
+// pinning the option shape keeps the returned Subprocess's stderr typed as
+// the ReadableStream the callers construct Response() from.
+type PipeSpawnOptions = {
+  cwd?: string;
+  env: Record<string, string | undefined>;
+  stdout: "pipe";
+  stderr: "pipe";
+};
+
+function spawnWatched(args: string[], opts: PipeSpawnOptions): Bun.Subprocess<"ignore", "pipe", "pipe"> {
+  const proc = Bun.spawn(args, { ...opts, stdin: "ignore" });
+  spawnedChildren.add(proc);
+  const watchdog = Bun.spawn(
+    [
+      "sh",
+      "-c",
+      `runner=$1; child=$2
+kill_tree() {
+  p=$1
+  for c in $(pgrep -P "$p" 2>/dev/null); do kill_tree "$c"; done
+  kill -9 "$p" 2>/dev/null
+}
+while kill -0 "$runner" 2>/dev/null && ps -p "$child" >/dev/null 2>&1; do sleep 2; done
+if ! kill -0 "$runner" 2>/dev/null; then kill_tree "$child"; fi`,
+      "thatch-qa-watchdog",
+      String(process.pid),
+      String(proc.pid),
+    ],
+    { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
+  );
+  (watchdog as unknown as { unref?: () => void }).unref?.();
+  return proc;
 }
 
-function serveMajorVersion(env?: Record<string, string>): number {
-  // env-aware so a matrix leg detects the binary its fixture PATH selects,
-  // not whatever the test process's own PATH resolves first.
-  const result = Bun.spawnSync(["opencode", "--version"], ...(env ? [{ env }] : []));
-  // Output: "opencode v2.0.15" - the first dotted number is the major.
-  return Number.parseInt(result.stdout.toString().match(/(\d+)\.\d+/)?.[1] ?? "1", 10);
+// Belt-and-suspenders for the graceful paths: an exit-handler sweep (the
+// watchdog above covers only the hard-kill class). Reap and let the test
+// framework's own shutdown continue - no process.exit here.
+for (const signal of ["exit", "SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    for (const child of spawnedChildren) {
+      try { child.kill(9); } catch { /* already dead */ }
+    }
+  });
 }
 
+/**
+ * The serve-mode client: the v2 promise client (OpenCode.make) pointed at
+ * the serve process, authenticated and directory-scoped through headers.
+ * Use cases call it with the promise-domain input shapes (session.create
+ * takes `{title}`, prompt takes `{sessionID, text}`, message.list takes
+ * `{sessionID}`).
+ */
 export interface ServeHandle {
   /** Base URL the serve process listens on. */
   url: string;
-  /** SDK client for driving sessions over HTTP. */
-  client: OpencodeClient;
+  /** The v2 promise client for driving sessions over HTTP. */
+  client: ReturnType<typeof OpenCodeV2.make>;
   /** Kills the serve process. Call in a finally block. */
   stop: () => void;
 }
 
 /**
- * Start a long-lived `opencode serve` on the fixture and return an SDK
- * client for it. Unlike `opencode run` one-shots - which die at turn end,
- * taking the plugin's chat poller with them - a serve process hosts
- * sessions across many turns, so it is the only way to observe wake
+ * Start a long-lived `opencode serve` on the fixture and return the
+ * promise client for it. Unlike `opencode run` one-shots - which die at
+ * turn end, taking the plugin's chat poller with them - a serve process
+ * hosts sessions across many turns, so it is the only way to observe wake
  * delivery between two real sessions.
  *
  * The port is picked up front and readiness is polled over HTTP rather
@@ -703,12 +816,16 @@ export async function startServe(ctx: QaContext): Promise<ServeHandle> {
   const url = `http://127.0.0.1:${port}`;
   // serve takes no project flag: it boots project-free and loads the
   // instance per request via the x-opencode-directory header, which the
-  // SDK client below sends from the `directory` option.
-  const proc = Bun.spawn(
+  // client below sends.
+  const proc = spawnWatched(
     ["opencode", "serve", "--hostname", "127.0.0.1", "--port", String(port)],
     { env: ctx.env, stdout: "pipe", stderr: "pipe" },
   );
-  const deadline = Date.now() + 60_000;
+  // Readiness deadline: an opencode serve boots in ~5-10s on an idle
+  // machine. GitHub CI runners under fleet contention have measured 6x
+  // wall-time degradation this week, so the budget is expected x 10
+  // headroom, not a bare round number.
+  const deadline = Date.now() + 120_000;
   for (;;) {
     if (proc.exitCode !== null) {
       const err = await new Response(proc.stderr).text();
@@ -722,26 +839,16 @@ export async function startServe(ctx: QaContext): Promise<ServeHandle> {
     }
     if (Date.now() > deadline) {
       proc.kill();
-      throw new Error(`startServe: serve did not become reachable at ${url} within 60s`);
+      throw new Error(`startServe: serve did not become reachable at ${url} within 120s`);
     }
     await new Promise((r) => setTimeout(r, 1_000));
   }
-  const client =
-    serveMajorVersion(ctx.env) >= 2
-      ? v2ClientAsV1(
-          OpenCodeV2.make({
-            baseUrl: url,
-            headers: {
-              Authorization: `Basic ${btoa(`opencode:${SERVE_PASSWORD}`)}`,
-              "x-opencode-directory": ctx.dir,
-            },
-          }),
-          ctx.dir,
-        )
-      : createOpencodeClient({
-          baseUrl: url,
-          directory: ctx.dir,
-          headers: { Authorization: `Basic ${btoa(`opencode:${SERVE_PASSWORD}`)}` },
-        });
+  const client = OpenCodeV2.make({
+    baseUrl: url,
+    headers: {
+      Authorization: `Basic ${btoa(`opencode:${SERVE_PASSWORD}`)}`,
+      "x-opencode-directory": ctx.dir,
+    },
+  });
   return { url, client, stop: () => { try { proc.kill(); } catch { /* already dead */ } } };
 }

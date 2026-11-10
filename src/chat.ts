@@ -6,6 +6,7 @@ import { basename, dirname, join } from "node:path";
 import { CHAT_NAME_POOL } from "./chat-names";
 import type { ThatchDB } from "./db";
 import { withDidYouMean } from "./fuzzy";
+import { DeliverySkippedError } from "./capabilities";
 
 /**
  * Cross-session chat: opt-in messaging between live opencode sessions on one
@@ -408,6 +409,20 @@ export const CHAT_RENUDGE_MINUTES = 15;
  *  when it is spent - a message's first delivery is the recipient's actual
  *  inbox and delivers regardless. */
 export const CHAT_MAX_NUDGES_PER_HOUR = 6;
+// Wake-swallow detector: how long after a wake prompt the poller waits
+// before judging it (a healthy session turns within seconds), and how many
+// consecutive no-activity observations condemn the recipient. The detector
+// exists because a prompt can be accepted without ever executing - the
+// observed case is a session whose project location switched mid-life, but
+// the detector catches the whole class (issue #25).
+export const CHAT_SWALLOW_WATCH_MS = 5 * 60_000;
+export const CHAT_SWALLOW_DEAD_COUNT = 3;
+
+// Directory re-verification cadence: run the hosted-set directory check on
+// every Nth poll cycle. Default 1 (every 30s cycle) - the check is one
+// point lookup per hosted session against opencode.db's primary key, so
+// "every cycle" is the cheap option, and a faster catch beats a stale host.
+export const CHAT_DIRECTORY_REVERIFY_CYCLES = envChatInt("THATCH_CHAT_DIRECTORY_REVERIFY_CYCLES", 1, 1, 120);
 
 /** Human-readable age of an ISO timestamp: "45s ago", "5m ago", "3h ago",
  *  "2d ago". Shared by the CLI roster and the chat_list tool so both
@@ -611,36 +626,21 @@ export function splitChatRoster(rows: ChatSessionRow[], now = Date.now(), staleC
 
 /**
  * The wake-delivery gate, shared by the chat poller and the watcher
- * registry: can this session be woken with a prompt right now? Three
- * layers - the compacting set, the event-fed status map (cheap pre-filter
- * for KNOWN busy/retry states), and the server's authoritative live status
- * map. ABSENCE from the event-fed map is not evidence of busy: the `-s`
- * startup session is hosted from init, before it has emitted any status
- * event, so absence falls through to the live check. A gate that rejected
- * on absence would leave that session mail-deaf - beating fine, never
- * woken - until its first turn. The live
- * map only carries ACTIVE sessions - the server deletes idle entries - so
- * absent means idle there; busy/retry fails closed, as does an unreachable
- * server (the mail stays pending and retries).
+ * registry: can this session be woken with a prompt right now? Two
+ * layers - the compacting set and the event-fed status map. ABSENCE from
+ * the map is not evidence of busy: the `-s` startup session is hosted
+ * from init, before it has emitted any status event, so a gate that
+ * rejected on absence would leave that session mail-deaf - beating fine,
+ * never woken - until its first turn.
  */
 export function createWakeGate(deps: {
   isCompacting: (sessionID: string) => boolean;
   mappedStatus: (sessionID: string) => string | undefined;
-  fetchStatuses: () => Promise<Record<string, { type?: string } | undefined>>;
-  onStatusError?: (sessionID: string, err: unknown) => void;
-}): (sessionID: string) => Promise<boolean> {
-  return async (sessionID: string) => {
+}): (sessionID: string) => boolean {
+  return (sessionID) => {
     if (deps.isCompacting(sessionID)) return false;
     const mapped = deps.mappedStatus(sessionID);
-    if (mapped === "busy" || mapped === "retry") return false;
-    try {
-      const statuses = await deps.fetchStatuses();
-      const live = statuses[sessionID];
-      return !live || live.type === "idle";
-    } catch (err) {
-      deps.onStatusError?.(sessionID, err);
-      return false;
-    }
+    return mapped !== "busy" && mapped !== "retry";
   };
 }
 
@@ -767,6 +767,104 @@ export interface BroadcastResult {
   outOfScope: BroadcastRecipient[];
   deduped: number;
   parts: number;
+}
+
+/** One broadcast recipient's delivery state at report time, from the
+ *  post-write roster: "open" (opencode row, fresh heartbeat, a tab open
+ *  now - the only state a user-voiced broadcast wakes), "mcp" (reads at
+ *  its next prompt), "no tab" (fresh opencode row, tab closed or
+ *  unknown - reads at its next prompt), or "gone" (the roster row
+ *  vanished between the write and the report). */
+export type BroadcastDeliveryKind = "open" | "mcp" | "no tab" | "gone";
+
+export function broadcastDeliveryKind(
+  row: ChatSessionRow | undefined,
+  openTabs: ReadonlySet<string>,
+  now: number,
+): BroadcastDeliveryKind {
+  if (!row) return "gone";
+  if (row.host_kind === "mcp") return "mcp";
+  return chatLiveness(row, now, openTabs) === "open" ? "open" : "no tab";
+}
+
+/**
+ * Renders the CLI broadcast report: named lines for the recipients that
+ * matter (the open tabs - also the only ones the poller wakes for a
+ * user-voiced batch), and count lines for every other bucket. The
+ * per-recipient line-per-session report once turned a one-line terminal
+ * FYI into ~600 lines (94 delivered plus ~490 stale skips, observed
+ * 2026-11-09), so the bulk is summarized: skipped rows count per
+ * project, out-of-scope rows count per project, and no-tab and mcp
+ * recipients count by delivery state. The named `delivered: NAME
+ * (PROJECT) [open]` lines keep their historical shape - a downstream
+ * parser (jowi-dev/tskmstr's board) reads delivered names off exactly
+ * that prefix.
+ *
+ * `rowsByName` is the post-write roster keyed by display name (names
+ * are never reused, so the join is stable); `openTabs` and `now` are
+ * the same single-sample liveness inputs the roster render uses.
+ * `projects` is the caller's --project list, echoed in the header when
+ * non-empty.
+ */
+export function renderBroadcastReport(
+  result: BroadcastResult,
+  opts: { rowsByName: Map<string, ChatSessionRow>; openTabs: ReadonlySet<string>; projects: string[]; now?: number },
+): string[] {
+  const now = opts.now ?? Date.now();
+  const lines: string[] = [];
+  const audience = result.recipients.length + result.skipped.length + result.outOfScope.length;
+  const scope = opts.projects.length > 0 ? ` (projects: ${opts.projects.join(", ")})` : "";
+  lines.push(`Broadcast from ${result.senderName} to ${result.recipients.length} of ${audience} registered sessions${scope}:`);
+  const open: BroadcastRecipient[] = [];
+  const gone: BroadcastRecipient[] = [];
+  let noTab = 0;
+  let mcp = 0;
+  for (const r of result.recipients) {
+    const kind = broadcastDeliveryKind(opts.rowsByName.get(r.name), opts.openTabs, now);
+    if (kind === "open") open.push(r);
+    else if (kind === "gone") gone.push(r);
+    else if (kind === "mcp") mcp++;
+    else noTab++;
+  }
+  for (const r of open) lines.push(`  delivered: ${r.name} (${r.project ?? "no project"}) [open]`);
+  for (const r of gone) lines.push(`  delivered: ${r.name} (${r.project ?? "no project"}) [no longer registered]`);
+  if (noTab > 0) lines.push(`  delivered to ${noTab} session${noTab === 1 ? "" : "s"} with no open tab (read at next prompt)`);
+  if (mcp > 0) lines.push(`  delivered to ${mcp} mcp session${mcp === 1 ? "" : "s"} (read at next prompt)`);
+  // Skips and out-of-scope rows summarize per project: the section is
+  // fleet-scale (hundreds of rows on a busy machine), and the project
+  // breakdown is the part a human acts on. Projects render
+  // alphabetically, rows with no project last, so repeated runs of the
+  // same broadcast produce identical output.
+  const skippedLines = countByProject(result.skipped.map((s) => [s.reason, s.project] as const)).flatMap(([reason, groups]) =>
+    groups.map(([project, n]) => `  - ${n} ${reason} session${n === 1 ? "" : "s"} ${project === null ? "with no project" : `in ${project}`}`),
+  );
+  if (skippedLines.length > 0) lines.push("Skipped:", ...skippedLines);
+  const outOfScopeLines = countByProject(result.outOfScope.map((o) => ["out of scope", o.project] as const)).flatMap(([, groups]) =>
+    groups.map(([project, n]) => `  - ${n} session${n === 1 ? "" : "s"} ${project === null ? "with no project" : `in ${project}`}`),
+  );
+  if (outOfScopeLines.length > 0) lines.push("Out of scope (project filter):", ...outOfScopeLines);
+  if (result.deduped > 0) lines.push(`  duplicate suppressed for ${result.deduped} recipient${result.deduped === 1 ? "" : "s"} (an identical unread broadcast stands)`);
+  if (result.parts > 1) lines.push(`  sent as ${result.parts} parts per recipient (body exceeded the split length)`);
+  return lines;
+}
+
+/** Groups (key, project) pairs into sorted per-project counts: one
+ *  [key, [project, count][]] entry per distinct key, projects
+ *  alphabetical with null-project rows last. Pure - the report render
+ *  is deterministic for the same input. */
+function countByProject(pairs: ReadonlyArray<readonly [string, string | null]>): Array<[string, Array<[string | null, number]>]> {
+  const byKey = new Map<string, Map<string | null, number>>();
+  for (const [key, project] of pairs) {
+    const groups = byKey.get(key) ?? new Map<string | null, number>();
+    groups.set(project, (groups.get(project) ?? 0) + 1);
+    byKey.set(key, groups);
+  }
+  return [...byKey.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, groups]) => [
+      key,
+      [...groups.entries()].sort((a, b) => (a[0] === null ? 1 : b[0] === null ? -1 : a[0].localeCompare(b[0]))),
+    ]);
 }
 
 export class ChatStore {
@@ -1176,11 +1274,12 @@ export class ChatStore {
    * sentinel (CHAT_CLI_SENDER, never a registered row) carrying an
    * explicit from_name, so no registration exists to look up or spoof.
    * The write itself performs no wake and stamps no delivered_at: the
-   * ordinary poller then delivers the rows exactly as it delivers tool
-   * rows (waking open sessions), and RECENT opencode rows (fresh
-   * heartbeat, tab closed) and MCP rows read their mail at the next
-   * prompt. requireOpen is false - the CLI has no tab signal, and a
-   * delivery that waits for the next prompt needs none. STALE rows are
+   * ordinary poller then delivers the rows (ChatPoller's sender-kind
+   * wake gate: user-voiced batches wake only open-tab sessions), and
+   * RECENT opencode rows (fresh heartbeat, tab closed) and MCP rows
+   * read their mail at the next prompt. requireOpen is false - the CLI
+   * has no tab signal, and a delivery that waits for the next prompt
+   * needs none. STALE rows are
    * still skipped and reported: a dead host never reads the mail.
    * `projects` (exact whole-value matches against the registered
    * project) narrows the fan-out; rows outside the filter - including
@@ -2445,6 +2544,14 @@ export interface ChatPollerOptions {
    *  context injection. Undeliverable messages stay pending and retry on
    *  later cycles. */
   canDeliver: (sessionID: string) => boolean | Promise<boolean>;
+  /** Open-tab session ids at delivery time (the tab-state reader,
+   *  src/tab-state.ts). A batch whose rows are ALL from the CLI sentinel
+   *  (the human user's terminal broadcast) wakes a recipient only when
+   *  this set contains it; every other recipient keeps the mail unread
+   *  and reads it at the next prompt. Omitted means no tab signal, which
+   *  by the roster's honesty rule reads as "not open": user-voiced
+   *  batches then wake nobody. */
+  openTabs?: () => ReadonlySet<string>;
   /** Poll interval. Default 30s - frequent enough that wake prompts feel
    *  prompt, cheap enough that the shared DB sees only a couple of light
    *  statements per cycle per process. */
@@ -2459,6 +2566,39 @@ export interface ChatPollerOptions {
    *  shared DB (chat_wakes), so it survives reloads and is visible to
    *  other processes. */
   maxNudgesPerHour?: number;
+  /** Epoch ms of the recipient's last turn activity (its session info's
+   *  time.updated), or null when the host cannot say. Arms the wake-swallow
+   *  detector: a wake that produces no turn is a swallowed prompt - the
+   *  observed cause is a session whose project location switched mid-life,
+   *  but the detector catches the whole class. Omit to disable the
+   *  detector (test fakes without a session surface). */
+  sessionActivity?: (sessionID: string) => Promise<number | null>;
+  /** Loud surfacing for a detected swallow (console + toast at the wiring
+   *  site). Fires once per watch, before the condemned count is reached. */
+  onSwallow?: (sessionID: string, detail: { wakeAt: number }) => Promise<void>;
+  /** The recipient is condemned: M consecutive swallows. The wiring site
+   *  un-hosts it (drops it from this instance's hosted sets) so a moved
+   *  session's old instance stops spending wake budget on undeliverable
+   *  prompts. */
+  onSwallowDead?: (sessionID: string) => void;
+  /** How long after a wake the detector waits before its first judgment.
+   *  Default CHAT_SWALLOW_WATCH_MS (5 minutes). */
+  swallowWatchMs?: number;
+  /** Consecutive no-activity observations that condemn the recipient.
+   *  Default CHAT_SWALLOW_DEAD_COUNT (3). */
+  swallowDeadCount?: number;
+  /** Periodic directory re-verification, run on poll cycles before
+   *  delivery. The wiring site reads each hosted session's current
+   *  directory from opencode.db and releases the ones that moved away -
+   *  the event-free cleanup for a move the `session.moved` handler never
+   *  saw (a move across a plugin reload). The callback fails open
+   *  internally (an unreadable host db verifies nothing), so the poller
+   *  just invokes it unguarded. */
+  reverifyDirectories?: () => void;
+  /** Run reverifyDirectories on every Nth poll cycle. Default
+   *  CHAT_DIRECTORY_REVERIFY_CYCLES (1 - the check is one point lookup per
+   *  hosted session, cheap enough for every cycle). */
+  reverifyEveryCycles?: number;
 }
 
 /**
@@ -2489,9 +2629,18 @@ export function hostedSessionIds(options: {
   statusKeys: Iterable<string>;
   resumedSessions: Iterable<string>;
   rehostedSessions: Iterable<string>;
+  /** Sessions that moved INTO this instance's directory (session.moved
+   *  adoption). Hosted so the destination instance picks up mail delivery
+   *  immediately instead of waiting for the session's first turn. */
+  movedInSessions?: Iterable<string>;
   exclude: Iterable<string>;
 }): string[] {
-  const hosted = [...options.statusKeys, ...options.resumedSessions, ...options.rehostedSessions];
+  const hosted = [
+    ...options.statusKeys,
+    ...options.resumedSessions,
+    ...options.rehostedSessions,
+    ...(options.movedInSessions ?? []),
+  ];
   const excluded = new Set(options.exclude);
   return [...new Set(hosted)].filter((id) => !excluded.has(id));
 }
@@ -2514,10 +2663,12 @@ export function unexpiredGraceRehosts(grace: Map<string, number>, now: number): 
 }
 
 export class ChatPoller {
-  #opts: Required<ChatPollerOptions>;
+  #opts: ChatPollerOptions & Required<Pick<ChatPollerOptions, "pollIntervalMs" | "renudgeMinutes" | "maxNudgesPerHour" | "swallowWatchMs" | "swallowDeadCount" | "reverifyEveryCycles">>;
   #timer: ReturnType<typeof setInterval> | null = null;
   #polling = false;
   #delivering = false;
+  /** Poll cycle counter, for the every-Nth-cycle directory re-verification. */
+  #cycles = 0;
   /** Per-recipient ids this process wake-prompted whose delivered_at stamp
    *  did not land. Their retries are budget-bound re-nudges, not exempt
    *  first deliveries. Cleared by dispose; the DB stamp takes over for
@@ -2529,12 +2680,30 @@ export class ChatPoller {
   /** Last TTL prune epoch ms. Auto-registered rows are pruned hourly, not
    *  every cycle - the prune is a maintenance sweep, not delivery. */
   #lastPrune = 0;
+  /** Wake-swallow watches, per recipient this process wake-prompted:
+   *  epoch ms of the last wake, consecutive failed-to-wake observations,
+   *  and whether the loud warning has fired (also tracked separately in
+   *  #swallowWarned so it survives condemnation). `fromSkip` marks a watch
+   *  armed by a DeliverySkippedError (nothing was sent): the skip is
+   *  definitive evidence for that cycle, so the activity-time judgment in
+   *  #checkSwallows only applies to watches armed by a successful wake.
+   *  A watch survives un-hosting deliberately: after a location-switch
+   *  hand-off this instance is the only observer left, and the detector is
+   *  what surfaces the black hole. */
+  #wakeWatch = new Map<string, { wakeAt: number; swallows: number; warned: boolean; fromSkip: boolean }>();
+  /** Recipients whose swallow warning already fired this process lifetime
+   *  - the once-per-recipient rule outlives the watch (a condemned and
+   *  later re-armed recipient must not re-toast every three cycles). */
+  #swallowWarned = new Set<string>();
 
   constructor(opts: ChatPollerOptions) {
     this.#opts = {
       pollIntervalMs: CHAT_POLL_INTERVAL_MS,
       renudgeMinutes: CHAT_RENUDGE_MINUTES,
       maxNudgesPerHour: CHAT_MAX_NUDGES_PER_HOUR,
+      swallowWatchMs: CHAT_SWALLOW_WATCH_MS,
+      swallowDeadCount: CHAT_SWALLOW_DEAD_COUNT,
+      reverifyEveryCycles: CHAT_DIRECTORY_REVERIFY_CYCLES,
       ...opts,
     };
   }
@@ -2565,6 +2734,8 @@ export class ChatPoller {
     this.stop();
     this.#sentIds.clear();
     this.#budgetLogged.clear();
+    this.#wakeWatch.clear();
+    this.#swallowWarned.clear();
   }
 
   /**
@@ -2583,6 +2754,14 @@ export class ChatPoller {
     try {
       const hosted = this.#opts.hostedSessions();
       this.#opts.store.heartbeatChatSessions(hosted);
+      this.#cycles += 1;
+      // Directory re-verification runs BEFORE delivery: a hosted session
+      // whose project directory moved away is released first, so this same
+      // cycle cannot spend a wake prompt on a session this instance can no
+      // longer reach. One check per N cycles (default every cycle).
+      if (this.#opts.reverifyDirectories && this.#cycles % this.#opts.reverifyEveryCycles === 0) {
+        this.#opts.reverifyDirectories();
+      }
       await this.deliverPending();
       // Hourly sweep: drop auto-registered rows whose host died more than
       // CHAT_AUTO_TTL_DAYS ago, plus the unread mail addressed to sessions
@@ -2599,10 +2778,81 @@ export class ChatPoller {
         // chat_wakes stays an hour of accounting rather than a history.
         this.#opts.store.pruneChatWakes?.(isoMinutesAgo(60));
       }
+      await this.#checkSwallows();
     } catch (err) {
       console.error(`[thatch] chat poll failed: ${err}`);
     } finally {
       this.#polling = false;
+    }
+  }
+
+  /**
+   * Wake-swallow detector (issue #25). A wake prompt can be accepted
+   * without ever executing - the observed cause is a session whose project
+   * location switched mid-life, leaving the old instance prompting into a
+   * pipeline that no longer consumes. For every armed watch past the
+   * window, one live read of the session's activity time decides: a turn
+   * after the wake stamp resolves the watch; silence counts one swallow.
+   * The first silence surfaces loudly; M consecutive silences condemn the
+   * recipient (un-hosted by the wiring site). An unreadable activity time
+   * (host unreachable, unknown session) drops the watch fail-open: the
+   * detector only judges when it can see. Watches armed by a guard skip
+   * (fromSkip) are not judged here - the skip itself was the cycle's
+   * evidence.
+   */
+  async #checkSwallows(): Promise<void> {
+    if (!this.#opts.sessionActivity || !this.#opts.onSwallow) return;
+    for (const [recipient, watch] of this.#wakeWatch) {
+      if (watch.fromSkip) continue;
+      if (Date.now() - watch.wakeAt < this.#opts.swallowWatchMs) continue;
+      const activity = await this.#opts.sessionActivity(recipient).catch(() => null);
+      if (activity === null) {
+        this.#wakeWatch.delete(recipient);
+        continue;
+      }
+      if (activity >= watch.wakeAt) {
+        // Healthy: the wake produced a turn.
+        this.#wakeWatch.delete(recipient);
+        continue;
+      }
+      this.#recordSwallow(recipient, watch.wakeAt, false);
+    }
+  }
+
+  /**
+   * Counts one failed-to-wake observation against the recipient's watch:
+   * a guard skip (fromSkip - nothing was sent) or a silent window after a
+   * successful wake. Warns once per recipient per process lifetime; at
+   * swallowDeadCount consecutive failures the watch is consumed and the
+   * recipient condemned (the wiring site releases its hosting). A later
+   * successful wake resets the count - the wedged-session case: the mail
+   * retried, the session woke, nobody was condemned.
+   */
+  #recordSwallow(recipient: string, wakeAt: number, fromSkip: boolean): void {
+    if (!this.#opts.onSwallow) return;
+    const prev = this.#wakeWatch.get(recipient);
+    const watch = {
+      wakeAt,
+      swallows: fromSkip ? (prev?.fromSkip ? prev.swallows + 1 : 1) : (prev?.swallows ?? 0) + 1,
+      warned: prev?.warned ?? false,
+      fromSkip,
+    };
+    if (!this.#swallowWarned.has(recipient)) {
+      this.#swallowWarned.add(recipient);
+      watch.warned = true;
+      this.#opts.onSwallow(recipient, { wakeAt: watch.wakeAt }).catch(() => {
+        // Surfacing is best-effort; the condemnation path still runs.
+      });
+    }
+    if (watch.swallows >= this.#opts.swallowDeadCount) {
+      this.#wakeWatch.delete(recipient);
+      try {
+        this.#opts.onSwallowDead?.(recipient);
+      } catch (err) {
+        console.error(`[thatch] swallow condemnation failed for ${recipient}: ${err}`);
+      }
+    } else {
+      this.#wakeWatch.set(recipient, watch);
     }
   }
 
@@ -2640,8 +2890,29 @@ export class ChatPoller {
         byRecipient.set(msg.to_session, queue);
       }
 
+      // Open-tab snapshot for the user-broadcast wake gate, resolved at
+      // most once per pass and only when a user-only batch appears.
+      let openTabs: ReadonlySet<string> | null = null;
+      const userWakeTabs = () => (openTabs ??= this.#opts.openTabs?.() ?? new Set<string>());
+
       for (const [recipient, messages] of byRecipient) {
         if (!(await this.#opts.canDeliver(recipient))) continue;
+        // Sender-kind wake gate: a batch that is entirely the human
+        // user's CLI broadcast wakes only open-tab recipients. A terminal
+        // broadcast is one-way FYI traffic; waking every hosted session
+        // for it spends a model turn per recipient machine-wide
+        // (observed 2026-11-09: one one-line broadcast, roughly fifty
+        // woken idle sessions). The mail itself still lands in every
+        // inbox - rows are cheap, and a tab-less session reads at its
+        // next prompt (the hook's pending line surfaces it); when its
+        // tab reopens, the still-undelivered row wakes then as a first
+        // delivery, exempt from the nudge cap. Any agent-sent row in the
+        // batch lifts the gate: agent mail is a real message that
+        // justifies the turn, and the CLI rows ride along in the same
+        // prompt. No provider means no tab signal, which reads as "not
+        // open" (the roster's honesty rule) - the gate then fails
+        // toward silence, never toward a fleet wake.
+        if (messages.every((m) => m.from_session === CHAT_CLI_SENDER) && !userWakeTabs().has(recipient)) continue;
         // Split the batch: a row is a re-nudge when it was already
         // wake-delivered (delivered_at stamp) or when this process sent it
         // and the stamp write failed (sentIds - the at-least-once retry
@@ -2679,6 +2950,12 @@ export class ChatPoller {
           // keeping the loop bounded by the same budget.
           this.#opts.store.recordChatWake(recipient);
           this.#opts.store.markChatDelivered(deliverRows.map((m) => m.id));
+          // Arm (or re-arm) the wake-swallow watch: the next poll cycles
+          // check that this wake actually produced a turn. A successful
+          // prompt is a new regime - the consecutive-failure count resets
+          // (the warning flag stays, once per recipient per process).
+          const prev = this.#wakeWatch.get(recipient);
+          this.#wakeWatch.set(recipient, { wakeAt: Date.now(), swallows: 0, warned: prev?.warned ?? false, fromSkip: false });
         } catch (err) {
           // The prompt went out but a later write failed: mark the ids as
           // sent so the next cycle counts the retry against the cap
@@ -2690,6 +2967,13 @@ export class ChatPoller {
             for (const m of deliverRows) marked.add(m.id);
             this.#sentIds.set(recipient, marked);
           }
+          // A guard skip (DeliverySkippedError) sent nothing, so the mail
+          // above stays pending AND the skip advances the swallow watch:
+          // consecutive skips condemn the recipient and release its
+          // hosting, closing the gap where the session.moved event was
+          // missed (a plugin reload across the move re-hosts the moved
+          // session at the old instance, whose directory may be gone).
+          if (err instanceof DeliverySkippedError) this.#recordSwallow(recipient, Date.now(), true);
           console.error(`[thatch] chat delivery to ${recipient} failed: ${err}`);
         }
       }

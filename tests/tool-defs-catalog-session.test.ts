@@ -11,7 +11,8 @@ setupToolDefsHarness();
 
 describe("TOOL_DEFS", () => {
   test("exports the full tool catalog", () => {
-    expect(TOOL_DEFS.length).toBe(45);
+    // 41 shared + session_tab_open (main) + the four plugin-regime tools.
+    expect(TOOL_DEFS.length).toBe(46);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -58,11 +59,12 @@ describe("TOOL_DEFS", () => {
       "chat_broadcast",
       "chat_status",
       "session_tab",
+      "session_tab_open",
       "session_tab_close",
     ]);
   });
 
-  test("only the session, watch, and chat tools are opencode-only", () => {
+  test("only the session, watch, and session-tab tools are opencode-only", () => {
     const opencodeOnly = TOOL_DEFS.filter((t) => t.opencodeOnly).map((t) => t.name);
     expect(opencodeOnly).toEqual([
       "get_session_info",
@@ -75,42 +77,34 @@ describe("TOOL_DEFS", () => {
       "watch_command_create",
       "watch_list",
       "watch_cancel",
+      "session_tab",
+      "session_tab_open",
+      "session_tab_close",
     ]);
   });
 
-  test("opencode prompt lists every tool; the v2-only one only when v2Tools is set", () => {
+  test("the opencode prompt lists every tool, session-tab tools included", () => {
     // The Tools section is what enumerates the surface (skill-list lines
     // elsewhere can mention tool names - slice the section for precision).
     const toolsSection = (prompt: string) =>
       prompt.slice(prompt.indexOf("Tools:"), prompt.indexOf("## Stores"));
-    // The v1 runtime renders the base prompt: session_tab must NOT be listed
-    // there (the tool does not exist on v1 - a prompt listing a nonexistent
-    // tool is the first-call-mistake class).
-    const base = systemPrompt("test/repo");
+    const prompt = systemPrompt("test/repo");
     for (const def of TOOL_DEFS) {
-      if (def.v2Only || def.bundledOnly) {
-        expect(toolsSection(base)).not.toContain(`thatch_${def.name}`);
-      } else {
-        expect(toolsSection(base)).toContain(`thatch_${def.name}`);
-      }
-    }
-    // The v2 adapter sets v2Tools: the full list appears - EXCEPT
-    // bundledOnly tools, which are never opencode prompt surface (they
-    // belong to the plugin regime's bundled server only).
-    const v2 = systemPrompt("test/repo", true, true);
-    for (const def of TOOL_DEFS) {
+      // bundledOnly tools are never opencode prompt surface - they belong
+      // to the plugin regime's bundled server only; everything else
+      // (session-tab tools, the archaeology trio included) is listed.
       if (def.bundledOnly) {
-        expect(toolsSection(v2)).not.toContain(`thatch_${def.name}`);
+        expect(toolsSection(prompt)).not.toContain(`thatch_${def.name}`);
       } else {
-        expect(toolsSection(v2)).toContain(`thatch_${def.name}`);
+        expect(toolsSection(prompt)).toContain(`thatch_${def.name}`);
       }
     }
   });
 
-  test("MCP prompts list shared tools but not opencode-only or v2-only ones", () => {
+  test("MCP prompts list shared tools but not opencode-only ones", () => {
     const prompt = claudeInstructions();
     for (const def of TOOL_DEFS) {
-      if (def.opencodeOnly || def.v2Only || def.bundledOnly) {
+      if (def.opencodeOnly || def.bundledOnly) {
         expect(prompt).not.toContain(`mcp__thatch__${def.name}`);
       } else {
         expect(prompt).toContain(`mcp__thatch__${def.name}`);

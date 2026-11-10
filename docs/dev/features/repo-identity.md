@@ -67,8 +67,9 @@ more call.
 
 `resolveSpawnCwd(dir, cache)` returns the directory when it exists, else
 the validated main checkout from the cache, else null. Worktrees share
-`refs/heads` and config with the main checkout -- only HEAD and the index
-are per-worktree -- so git reads are equivalent from either. Consumers:
+refs (heads and remotes) and config with the main checkout -- only HEAD
+and the index are per-worktree -- so git reads are equivalent from
+either. Consumers:
 
 - `listBranches` falls back to the main checkout instead of returning
   `[]` (which made hygiene skip the orphaned-branch check).

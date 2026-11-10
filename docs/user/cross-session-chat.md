@@ -106,10 +106,15 @@ thatch chat broadcast "deploy halted" --project acme/payments
 ```
 
 The message goes out under your name (from `git config user.name` or
-your OS username), to every live session - open sessions wake on their
-next poll, tab-less and Claude Code/Cursor sessions read it at their
+your OS username), to every live session. Only OPEN sessions are woken
+(a broadcast is one-way FYI traffic - waking every idle session on the
+machine for it is exactly what thatch does not do); tab-less and
+Claude Code/Cursor sessions are not woken and read it at their
 next prompt, and stale opencode sessions (whose host process is gone)
-are skipped and named in the report.
+are skipped. The report names each open-tab delivery on its own line
+and summarizes the rest as counts: no-tab and mcp recipients by
+delivery state, and skipped and out-of-scope sessions per project -
+a broadcast to a fleet-scale directory stays a handful of lines.
 Repeat `--project` to narrow the audience to those projects.
 
 You are not joining the chat: every delivered message carries a note
@@ -218,6 +223,36 @@ and a greenlit `/thatch/exit` unregisters the session too: the plugin
 removes the row itself when the exit greenlight (the model's `thatch_exit`
 tool call) passes, so other sessions stop
 addressing mail to a session that is closing out.
+
+## Moving a session between directories
+
+A session can change its working directory mid-life: you move it with
+`session_move`, thatch's self-heal relocates it out of a deleted
+worktree, or opencode's "session location unavailable" dialog recovers it.
+Wake delivery follows the session. The opencode instance at the old
+directory hands the session off and the instance at the new directory
+picks mail delivery up from there - mail that queued during the move is
+delivered once the session is adopted, not lost and not falsely marked
+read.
+
+If a wake cannot be attempted at all (the old instance's directory is
+gone), the mail is never marked delivered: it stays pending and retries
+every cycle, loudly. That is also what a temporarily wedged session
+sees - one failed or swallowed wake does not give up on it, and the next
+retry lands once the session consumes prompts again.
+
+If a wake prompt is accepted but the session never actually turns (the
+failure mode the hand-off exists to prevent, and one a broken prompt path
+can still cause), thatch says so loudly: a warning toast plus a log line
+name the session, and if it keeps happening the old instance stops
+trying to wake that session at all. If you see the "swallowed its wake
+prompt" toast for a session you expected to be alive, restart or reopen
+that session - it is not processing prompts.
+
+The poller also re-checks each hosted session's directory against
+opencode's own database every cycle, so a session that moved while the
+plugin was reloading is handed off within seconds instead of waiting for
+the swallow detector.
 
 ## Turning chat off
 

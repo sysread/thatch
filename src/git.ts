@@ -286,22 +286,39 @@ export async function detectRepo(cwd?: string, cache?: RepoPathCache): Promise<s
 }
 
 /**
- * Local branch names in the given directory's repository. Used to detect
- * branch-scoped memories whose branch no longer exists. Returns [] outside
- * a git repo - callers must treat that as "unknown", not "no branches",
- * or every branch-scoped memory would look orphaned. Falls back to the
- * cached main checkout when the worktree was deleted: refs/heads is shared
- * across worktrees, so the branch list is identical from either.
+ * Branch names visible in the given directory's repository: local branches
+ * plus remote-tracking branches with the remote name stripped. The orphan
+ * check consumes this, and a branch that exists only on a remote (pushed,
+ * PR open, no local checkout) is not deleted - a local-only view would
+ * false-flag it. Stale tracking refs merely delay flagging a truly-deleted
+ * branch until prune, which is the safe direction for an advisory nudge.
+ * Returns [] outside a git repo - callers must treat that as "unknown",
+ * not "no branches", or every branch-scoped memory would look orphaned.
+ * Falls back to the cached main checkout when the worktree was deleted:
+ * refs are shared across worktrees, so the branch list is identical from
+ * either.
  */
 export async function listBranches(cwd: string, cache?: RepoPathCache): Promise<string[]> {
   const dir = (await resolveSpawnCwd(cwd, cache)) ?? cwd;
   // The format string is interpolated because Bun's shell parser rejects
   // bare parentheses in template literals.
-  const fmt = "%(refname:short)";
+  const fmt = "%(refname)";
   try {
-    const out = await $`git for-each-ref --format=${fmt} refs/heads`.cwd(dir).quiet();
+    const out = await $`git for-each-ref --format=${fmt} refs/heads refs/remotes`.cwd(dir).quiet();
     if (out.exitCode !== 0) return [];
-    return out.stdout.toString().split("\n").map((s) => s.trim()).filter(Boolean);
+    const names = new Set<string>();
+    for (const ref of out.stdout.toString().split("\n").map((s) => s.trim()).filter(Boolean)) {
+      if (ref.startsWith("refs/heads/")) {
+        names.add(ref.slice("refs/heads/".length));
+        continue;
+      }
+      // refs/remotes/<remote>/<branch>: strip only the remote-name segment,
+      // branch names may contain slashes. <remote>/HEAD points at the
+      // default branch, not a branch itself.
+      const m = ref.match(/^refs\/remotes\/[^/]+\/(.+)$/);
+      if (m && m[1] !== "HEAD") names.add(m[1]);
+    }
+    return [...names];
   } catch {
     return [];
   }

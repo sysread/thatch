@@ -4,6 +4,11 @@
 # strips the `background` parameter from its schema entirely, forcing
 # synchronous sub-agent dispatch. Also set in bashrc for global coverage.
 OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS = "true"
+# Machine-level notification suppression for everything the gates spawn
+# (bun test, QA fixtures and their opencode subprocesses). The bun preload
+# (tests/clean-env.ts) and the QA fixture env set this too; this covers any
+# other child of a mise task.
+THATCH_NO_NOTIFY = "1"
 
 [tools]
 bun = "1.3.14"
@@ -41,8 +46,8 @@ description = "Bump version, commit, tag, and push (args: patch|minor|major)"
 run = "bin/release"
 
 [tasks.qa]
-description = "Run QA use-case scenarios in isolated temp environments (auto first, then live). Opencode-driven use cases run one leg per installed opencode major."
-run = "bun test tests/qa/auto/index.test.ts --concurrent --max-concurrency 5 && bun test tests/qa/live/index.test.ts"
+description = "Run QA use-case scenarios in isolated temp environments (auto first, then live). Opencode-driven use cases resolve the opencode binary through the runner's discovery (a discovered v2 install wins over PATH). Auto-suite concurrency defaults to 2 (QA_CONCURRENCY=N overrides; see bin/qa-run)."
+run = "bin/qa-run auto && bin/qa-run live"
 
 [tasks.qa-dry-run]
 description = "List QA use cases without spawning opencode sessions"
@@ -57,11 +62,11 @@ description = "Run live-session QA use cases inside the docker sandbox (spawns o
 run = "QA_DOCKER=1 bin/qa-run live"
 
 [tasks.qa-host-auto]
-description = "Run automatable QA against the HOST opencode binary (no docker) - the CI-shaped mode and the v1-binary recipe: PATH=\"$(brew --cellar)/opencode/1.18.32/bin:$PATH\" mise run qa-host-auto."
+description = "Run automatable QA against the HOST opencode binary (no docker) - the CI-shaped mode."
 run = "bin/qa-run auto"
 
 [tasks.qa-host-live]
-description = "Run live-session QA against the HOST opencode binary (no docker). v1 coverage lives here: PATH=\"$(brew --cellar)/opencode/1.18.32/bin:$PATH\" mise run qa-host-live."
+description = "Run live-session QA against the HOST opencode binary (no docker)."
 run = "bin/qa-run live"
 
 [tasks.qa-host-live-claude]

@@ -3,9 +3,8 @@ import { dirname } from "node:path";
 
 /**
  * Discovery of the opencode binaries installed on this machine, for the QA
- * matrix: the opencode-driven use cases run once per
- * discovered install instead of once against whatever the PATH happens to
- * resolve first.
+ * runner: opencode-driven use cases resolve the binary through this
+ * discovery instead of whatever the PATH happens to resolve first.
  *
  * Discovery asks the package manager where its formulas are installed
  * (`brew --prefix <formula>`), so it follows real installs rather than
@@ -15,13 +14,17 @@ import { dirname } from "node:path";
  * the major tag, so a future `opencode` formula shipping 3.x tags itself
  * v3 without changes here.
  *
+ * Only v2-tagged binaries are usable hosts (the plugin requires opencode
+ * 2; a discovered v1 binary is never selected by the runner), but the
+ * tags stay honest here so the discovery log names what the machine has.
+ *
  * Everything here is SYNCHRONOUS on purpose: registerUseCase must register
  * its per-host tests during bun's module evaluation, and a test registered
  * from a promise callback can land after the collector has moved on.
  */
 
 export interface HostBinary {
-  /** Major tag: "v1", "v2", ... UseCase.hosts values match these. */
+  /** Major tag: "v1", "v2", ... */
   tag: string;
   /** Full version string from --version, e.g. "1.18.32". */
   version: string;
@@ -115,12 +118,12 @@ export function pathCandidateDir(): Candidate | null {
  * Pure tag-and-dedup over candidate bin dirs: runs `--version` on each
  * candidate's binary, tags by major, and dedups two ways - by real path
  * (brew's opt prefix and the PATH entry can resolve to the same cellar
- * keg) and by MAJOR (the matrix runs one leg per major; two installs
- * sharing a major would otherwise produce duplicate `[v2]` labels and
- * colliding fixture dirs). When a major has several installs the newest
- * version wins - the most representative binary of that major's current
- * state. An unparseable --version drops the candidate - a binary that
- * cannot state its version cannot be asserted about.
+ * keg) and by MAJOR (the runner selects at most one binary per major, so
+ * two installs sharing a major would be indistinguishable choices). When
+ * a major has several installs the newest version wins - the most
+ * representative binary of that major's current state. An unparseable
+ * --version drops the candidate - a binary that cannot state its version
+ * cannot be asserted about.
  */
 export function tagBinaries(candidates: Candidate[], env?: Record<string, string>): HostBinary[] {
   const byTag = new Map<string, HostBinary>();

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { eventMatchesInstance, flattenToolContent, mapSessionContextMessages, optionalDomainMethod, translateEvent } from "../src/opencode/v2";
+import { eventMatchesInstance, flattenToolContent, mapSessionContextMessages, translateEvent } from "../src/opencode/v2";
 import { PROJECT_DIR, SESSION_DIR } from "./mocks/opencode-v2-harness";
 
 // Pure v2 mapping functions: no mocked context, no env, no db. The three
@@ -27,28 +27,6 @@ describe("translateEvent session.created parentID", () => {
       data: { sessionID: "ses_child", parentID: "ses_parent" },
     });
     expect(event.properties.info.parentID).toBe("ses_parent");
-  });
-});
-
-describe("optionalDomainMethod", () => {
-  // The SDK-floor guard for promise-domain members newer than the pinned
-  // dev types (compact, remove): present -> callable, absent -> undefined,
-  // and never mistakes a non-function member for one.
-  test("returns a present member as a callable", async () => {
-    const calls: any[] = [];
-    const fn = optionalDomainMethod({ compact: async (input: any) => { calls.push(input); return "ok"; } }, "compact");
-    expect(fn).toBeTypeOf("function");
-    await fn!({ sessionID: "ses_floor" });
-    expect(calls).toEqual([{ sessionID: "ses_floor" }]);
-  });
-
-  test("returns undefined for an absent member (the older-SDK floor)", () => {
-    expect(optionalDomainMethod({}, "compact")).toBeUndefined();
-    expect(optionalDomainMethod({ remove: undefined }, "remove")).toBeUndefined();
-  });
-
-  test("returns undefined for a non-function member", () => {
-    expect(optionalDomainMethod({ compact: "not a function" }, "compact")).toBeUndefined();
   });
 });
 

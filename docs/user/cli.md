@@ -4,9 +4,18 @@ Thatch ships with a command-line tool for inspecting and writing
 memories and running maintenance tasks outside the agent. It requires
 `bun` on your PATH.
 
-`thatch --help` (or `-h`) prints the full command list and exits 0.
-The flag works anywhere in the command line: `thatch chat list -h`
-shows help instead of running the command.
+`thatch --help` (or `-h`, or `thatch help`) prints the command list
+and exits 0. Help is per command: put the help flag after a subcommand
+to see that command's own page, with its usage line, flags, and notes.
+
+```bash
+thatch --help            # the command list
+thatch chat list --help  # the chat list page: flags and what they do
+thatch help chat list    # the same page, by name
+```
+
+A help flag before the subcommand (`thatch -h chat list`) shows the
+command list instead.
 
 ## Memory inspection
 
@@ -65,6 +74,9 @@ One behavior is inherited from the tool on purpose: overwriting a
 branch-scoped memory WITHOUT `--branch` keeps the old branch scope.
 To promote a branch-scoped memory to project-wide, forget it and save
 it again without `--branch`, then check with `thatch show`.
+Passing an empty `--branch` value (for example, a script reading a
+detached HEAD) saves the memory unscoped, the same as omitting the
+flag: an empty branch name is never a git ref.
 
 ## Maintenance
 
@@ -182,11 +194,14 @@ sessions it came from you, that you are not a chat session and will not
 read replies there, and that they should act in their own session and
 report back to you there - never by replying into thatch chat.
 
-The message reaches open sessions on their next poll, and tab-less and
-Claude Code/Cursor sessions at their next prompt; stale opencode
-sessions (host process gone) are skipped and named. Repeat `--project`
-to narrow the audience (exact project match); everyone outside the
-filter is listed as out of scope. The report names each delivery. Your
+The message reaches OPEN sessions with a wake on their next poll;
+tab-less and Claude Code/Cursor sessions are not woken - they read it
+at their next prompt - and stale opencode sessions (host process gone)
+are skipped. The report names each open-tab delivery and summarizes
+the rest as counts (no-tab, mcp, skipped per project, and - with a
+filter - out-of-scope per project), so a broadcast to a large directory
+prints a handful of lines, not one per session. Repeat `--project`
+to narrow the audience (exact project match). Your
 name comes from `git config user.name` (or your OS username), so
 sessions see who is speaking. Sessions cannot reply into chat to reach
 you - the fence note directs them to their own user instead.

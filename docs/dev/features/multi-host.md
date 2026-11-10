@@ -46,23 +46,23 @@ wrapping---prefixing, transport, session hooks---lives outside the core.
 
 ## The three paths
 
-### opencode plugin (`src/opencode/v1.ts` + `src/opencode/v2.ts`)
+### opencode plugin (`src/opencode/v2.ts`)
 
-Runs inside opencode's Bun runtime as a loaded plugin. No setup command is
-needed---opencode discovers the plugin from `opencode.json` and loads it at
-startup.
+Runs inside opencode's Bun runtime as a loaded plugin (opencode 2.1+). No
+setup command is needed---opencode discovers the plugin from
+`opencode.json` and loads it at startup.
 
-**System prompt**: injected at runtime via the
-`experimental.chat.system.transform` hook. The hook calls `systemPrompt(repo)`
-and pushes the result into `output.system` every turn. No files are written.
+**System prompt**: injected at runtime via the `session.hook("context")`
+registration. The hook calls `systemPrompt(repo)` and pushes the result
+into the request's system array every turn. No files are written.
 The repo name is baked in at runtime, so the prompt always reflects the current
 worktree. Identity detection reads the session's own directory (not just the
 framework worktree) and recovers from the `repo_paths` cache when that
 directory was deleted - see [repo-identity.md](repo-identity.md).
 
-**Tools**: registered through opencode's `tool()` wrapper in `src/tools.ts`,
-which adds the `thatch_` prefix. The agent sees `thatch_memory_remember`,
-`thatch_memory_recall`, etc.
+**Tools**: registered through the promise context's ToolEditor in
+`src/opencode/v2.ts`, which adds the `thatch_` prefix. The agent sees
+`thatch_memory_remember`, `thatch_memory_recall`, etc.
 
 **Skills**: installed to `$XDG_CONFIG_HOME/opencode/skills` at plugin init.
 Both the shared skill array and the opencode-only skill array are installed.
@@ -249,13 +249,12 @@ works on Claude Code and Cursor).
 
 | File | Role |
 |------|------|
-| `src/index.ts` | dual-shape plugin entry (merged default export loads on opencode v1 and v2) |
-| `src/opencode/v1.ts` + `src/opencode/v2.ts` | host adapters: hooks (v1) vs promise-context domains (v2) |
+| `src/index.ts` | plugin entry (default export `{ id, setup }`) |
+| `src/opencode/v2.ts` | the host adapter: promise-context domains (tools, commands, hooks, event pump), HostCapabilities implementation |
 | `src/runtime.ts` | shared plugin runtime: nudges, system prompt injection, session events |
 | `src/mcp.ts` | MCP server (shared by Claude Code and Cursor)---stdio JSON-RPC, tool dispatch |
 | `src/setup.ts` | Setup installer for Claude Code and Cursor---markers, hooks, skills |
 | `src/prompts.ts` | All three system prompt variants---`systemPrompt()`, `claudeInstructions()`, `cursorInstructions()` |
-| `src/tools.ts` | Thin opencode tool wrappers---imports tool-defs, adds `thatch_` prefix via `tool()` |
 | `src/tool-defs.ts` | Single source of truth for all tool definitions---name, description, zod schema, execute, `opencodeOnly` flag |
 | `bin/thatch` | CLI hook commands for MCP hosts---`reminder`, `buffer-tool`, `flush-tools`, `setup` |
 

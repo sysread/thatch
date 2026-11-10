@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { join } from "node:path";
 import { setup } from "../src/opencode/v2";
 import { TOAST_EVENT, tabClosedEventType, tabOpenedEventType } from "../src/session-tab-shared";
@@ -18,6 +18,13 @@ import {
   toolAfterHook,
   waitFor,
 } from "./mocks/opencode-v2-harness";
+
+// These tests pump async events through the v2 adapter harness; under a
+// loaded CI runner the pump can lag. Bun's default per-test timeout is 5s
+// with no margin for that (the 2026-11-03 fleet-contention CI reds). 90s =
+// expected (ms-scale pump handling) x ~900 headroom, above the harness
+// waitFor deadline so real hangs report the poll message.
+setDefaultTimeout(90_000);
 
 // The v2 adapter's bus-event pump: instance/directory filtering, tab rpc
 // routing (open caching, close routing by the closed session's own
@@ -43,10 +50,12 @@ describe("opencode v2 adapter", () => {
 
     // Buffer an interaction so the matching idle event triggers direct
     // extraction (session.create) - the observable for "the runtime got it".
+    // Real v2 built-in shape: lowercase tool name, file arg `path` - the
+    // v2 read/edit/write plugins declare path, not filePath/file_path.
     await toolAfterHook!({
-      tool: "Read",
+      tool: "read",
       sessionID: "ses_v2_new",
-      input: { file_path: "/src/app.ts" },
+      input: { path: "/src/app.ts" },
       status: "completed",
       result: { content: "const x = 1;" },
     });
@@ -113,9 +122,9 @@ describe("opencode v2 adapter", () => {
     // directory caches the subordinate here, so its later location-less
     // idle event routes to this instance and drives extraction.
     await toolAfterHook!({
-      tool: "Read",
+      tool: "read",
       sessionID: "ses_sub_local",
-      input: { file_path: "/src/app.ts" },
+      input: { path: "/src/app.ts" },
       status: "completed",
       result: { content: "const x = 1;" },
     });
@@ -194,9 +203,12 @@ describe("opencode v2 adapter", () => {
     // ...and the death row carries the targets for the coordinator pickup.
     const death = check.runtimeStateAll().find((r) => r.kind === "watcher_death" && r.sessionID === "ses_sub_close");
     expect((death?.value as any)?.targets).toContain("acme/widgets#7");
-    // No delivery of any kind went to a session: the busy coordinator's
-    // closed gate means no push, and no arbitrary peer is ever consulted.
-    expect(sessionSyntheticCalls).toEqual([]);
+    // No DEATH delivery of any kind went to a session: the busy
+    // coordinator's closed gate means no push, and no arbitrary peer is
+    // ever consulted. (The synthetic recorder also carries the re-attach
+    // notices the noReply fix restored for rehydrated sessions - those are
+    // not death traffic, so the assertion scopes to the death text.)
+    expect(sessionSyntheticCalls.filter((c: any) => String(c?.text).includes("acme/widgets#7"))).toEqual([]);
     expect(sessionPromptCalls).toEqual([]);
     // The user's banner still fired (source-labeled toast).
     expect(rpcEmitted.some((e) => e.name === TOAST_EVENT && String(e.data?.message).includes("watcher died"))).toBe(true);
@@ -245,8 +257,14 @@ describe("opencode v2 adapter", () => {
     await waitFor("the death push to the coordinator", () =>
       sessionSyntheticCalls.some((c: any) => c?.sessionID === "ses_coord" && String(c?.text).includes("acme/widgets#9")),
     );
-    // The push went ONLY to the coordinator.
-    expect(sessionSyntheticCalls.length).toBe(1);
+    // The push went ONLY to the coordinator: exactly one death push, and
+    // no death traffic to anyone else (the other synthetic calls are the
+    // re-attach notices the noReply fix restored for rehydrated sessions).
+    const push = sessionSyntheticCalls.filter((c: any) => String(c?.text).includes("acme/widgets#9"));
+    expect(push.length).toBe(1);
+    // The death push is a WAKING synthetic (the coordinator must run a
+    // turn to act) - no resume:false on it.
+    expect(push[0]?.resume).toBeUndefined();
     expect(sessionPromptCalls).toEqual([]);
     await waitFor("death row deleted after the successful push", () => {
       const check = new ThatchDB(join(dbDir, "test.db"));
@@ -290,8 +308,11 @@ describe("opencode v2 adapter", () => {
     await waitFor("the death banner", () =>
       rpcEmitted.some((e) => e.name === TOAST_EVENT && String(e.data?.message).includes("watcher died")),
     );
-    // No prompt of any kind: an arbitrary peer is never the recipient.
-    expect(sessionSyntheticCalls).toEqual([]);
+    // No DEATH prompt of any kind: an arbitrary peer is never the
+    // recipient. (The synthetic recorder also carries the re-attach
+    // notices the noReply fix restored - not death traffic; scope to the
+    // death text.)
+    expect(sessionSyntheticCalls.filter((c: any) => String(c?.text).includes("acme/widgets#10"))).toEqual([]);
     expect(sessionPromptCalls).toEqual([]);
     await waitFor("death row deleted after the banner-only attempt", () => {
       const check = new ThatchDB(join(dbDir, "test.db"));
@@ -358,9 +379,9 @@ describe("opencode v2 adapter", () => {
 
     // A subsequent event for a session whose get succeeds still lands.
     await toolAfterHook!({
-      tool: "Read",
+      tool: "read",
       sessionID: "ses_v2_alive",
-      input: { file_path: "/src/app.ts" },
+      input: { path: "/src/app.ts" },
       status: "completed",
       result: { content: "const x = 1;" },
     });
@@ -370,5 +391,46 @@ describe("opencode v2 adapter", () => {
       data: { sessionID: "ses_v2_alive" },
     });
     await waitFor("extraction after a handler throw", () => sessionCreateCalls.length === 1);
+  });
+
+  test("pump: session.moved releases a hosted session that moved away and adopts one that moved in", async () => {
+    // The location-switch fix (issue #25): the bus routes the moved event
+    // to BOTH the old and the new directory's instances, so the pump must
+    // bypass the generic instance gate for it and hand it straight to the
+    // runtime. The hosted journal row is the observable: the move-away
+    // prunes the moved session, the move-in adds the newcomer durably.
+    const { ThatchDB } = await import("../src/db");
+    // Seed the hosted journal BEFORE setup: a same-pid same-directory row
+    // rehydrates into rehostedSessions, so this instance hosts ses_moved
+    // from the first beat.
+    const seed = new ThatchDB(join(dbDir, "test.db"));
+    seed.runtimeStatePut("hosted", SESSION_DIR, ["ses_moved"], SESSION_DIR);
+    seed.close();
+
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+
+    // Moved AWAY: this instance must release it (the journal row loses the
+    // id, so no future reload re-hosts it and no wake is prompted through
+    // this instance's dead-directory guard again).
+    await queueEvent({
+      type: "session.moved",
+      data: { sessionID: "ses_moved", location: { directory: "/tmp/thatch-v2-test-elsewhere" } },
+    });
+    // Moved IN: this instance must adopt it (the journal row gains the id
+    // durably, before any poller tick).
+    await queueEvent({
+      type: "session.moved",
+      data: { sessionID: "ses_newcomer", location: { directory: SESSION_DIR } },
+    });
+    await waitFor("session.moved bookkeeping landed", () => {
+      const check = new ThatchDB(join(dbDir, "test.db"));
+      try {
+        const row = check.runtimeStateAll().find((r) => r.kind === "hosted" && r.sessionID === SESSION_DIR);
+        const ids = Array.isArray(row?.value) ? (row!.value as string[]) : [];
+        return !ids.includes("ses_moved") && ids.includes("ses_newcomer");
+      } finally {
+        check.close();
+      }
+    });
   });
 });

@@ -40,7 +40,7 @@ directly for conversation-derived knowledge.
 After every tool execution, non-`thatch_*` tool calls are buffered for
 later extraction, except harness meta-tools (below).
 
-**opencode** — `tool.execute.after` hook (v1) / `tool.hook` (v2) in `src/runtime.ts`:
+**opencode** — the `tool.hook("execute.after")` registration in `src/runtime.ts`:
 
 - In-memory ring buffer per session (`ExtractionPipeline` in
   `src/extraction.ts`)
@@ -91,7 +91,7 @@ timed-out accepted entries to pending:
    gates re-triggering while a child runs
 2. Peeks the buffer to count pending interactions
 3. Creates a child session via
-   `client.session.create({ parentID, title: "thatch-extraction" })`
+   `session.create({ title: "thatch-extraction" })` (top-level in the project directory; the runtime records the parent link)
 4. The `session.created` event fires, populating `childToParent` and
    `parentSnapshots` (a snapshot of the full pending buffer at dispatch
    time — journal-recovery data only; claims subsumed the snapshot drain)
@@ -297,7 +297,7 @@ The payload fetch is the delivery record:
 |------|----------------|
 | `src/extraction.ts` | In-memory ring buffer (`ExtractionPipeline`), shared payload builders (`buildExtractionPayload`, `deriveTitle`, `summarizeArgs`) |
 | `src/extract-queue.ts` | File-backed JSONL queue for MCP hosts |
-| `src/runtime.ts` | opencode hooks: `tool.execute.after`, `session.status` idle (direct extraction trigger), `session.created`, `session.error`, `session.deleted`, `chat.message` (recall/prediction/behavior nudges; no extraction nudge) -- shared by the v1/v2 adapters |
+| `src/runtime.ts` | opencode registrations: `tool.hook("execute.after")`, session idle (direct extraction trigger), `session.created`, `session.error`, `session.deleted`, the prompt hook (recall/prediction/behavior nudges; no extraction nudge) |
 | `bin/thatch` | `buffer-batch`, `buffer-tool`, `flush-tools` subcommands |
 | `src/prompts.ts` | `extractionNudge` (with escalation), `extractionDirectPrompt` |
 

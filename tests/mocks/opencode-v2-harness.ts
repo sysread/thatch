@@ -4,15 +4,15 @@ import { join } from "node:path";
 import { makeV2Harness, type V2Harness } from "./v2-harness";
 
 // The v2 adapter's contract fixtures: a mocked v2 promise context (plain
-// objects, call-recording arrays - the house pattern from
-// tests/mocks/plugin-harness.ts) driving the real runtime through the adapter. The
-// context itself comes from the shared harness (tests/mocks/v2-harness.ts,
-// which also serves the QA use cases and registers the transformers mock);
-// makeContext below just rebinds this module's recorders onto the new
-// harness's live arrays so the opencode-v2-*.test.ts part files keep their
-// ergonomic names. Every recorder is an exported `let`: an importing part
-// file's name aliases the live value at read time (rebound by each
-// makeContext call), never a snapshot.
+// objects, call-recording arrays - the house pattern) driving the real
+// runtime through the adapter. The context itself comes from the shared
+// harness (tests/mocks/v2-harness.ts, which also serves the QA use cases
+// and registers the transformers mock); makeContext below just rebinds
+// this module's recorders onto the new harness's live arrays so the
+// opencode-v2-*.test.ts part files keep their ergonomic names. Every
+// recorder is an exported `let`: an importing part file's name aliases the
+// live value at read time (rebound by each makeContext call), never a
+// snapshot.
 
 export const SESSION_DIR = "/tmp/thatch-v2-test-session";
 export const PROJECT_DIR = "/tmp/thatch-v2-test-project";
@@ -23,6 +23,9 @@ export let dbDir: string;
 export let promptHook: HookFn | undefined;
 export let contextHook: HookFn | undefined;
 export let toolAfterHook: HookFn | undefined;
+// The v2 compaction hook (session.hook("compaction")): marks the session
+// compacting AND injects the re-familiarization system context.
+export let compactionHook: HookFn | undefined;
 export let addedCommands: { name: string; execute: (input: any) => Promise<void> }[];
 export let addedTools: {
   name: string;
@@ -34,6 +37,7 @@ export let sessionPromptCalls: any[];
 export let sessionSyntheticCalls: any[];
 export let sessionCreateCalls: any[];
 export let sessionGetCalls: any[];
+export let sessionListCalls: any[];
 export let sessionCompactCalls: any[];
 export let sessionRemoveCalls: any[];
 export let sessionMoveCalls: any[];
@@ -54,13 +58,11 @@ export function makeContext(options?: {
   context?: (input: any) => Promise<any>;
   location?: { directory: string; project: { directory: string; canonical: string } };
   move?: (input: any) => Promise<any>;
-  // A session.compact member (upstream #52385). Absent by default so the
-  // default context models the older SDK floor the adapter must guard.
-  compact?: boolean;
-  // A session.remove member (upstream #52387), same floor rule as compact.
-  remove?: boolean;
-  // Omit the rpc domain entirely: the older SDK floor without the
-  // session-tab surface.
+  // A session.list override (the -c continue-target surface). Defaults to
+  // an empty page; the recorded calls live in sessionListCalls.
+  list?: (input: any) => Promise<any>;
+  // Omit the rpc domain entirely: an SDK floor without the session-tab
+  // surface.
   omitRpc?: boolean;
 }) {
   currentHarness = makeV2Harness(SESSION_DIR, {
@@ -76,12 +78,14 @@ export function makeContext(options?: {
   promptHook = (input: any) => currentHarness.hooks["prompt"]!(input);
   contextHook = (input: any) => currentHarness.hooks["context"]!(input);
   toolAfterHook = (input: any) => currentHarness.hooks["execute.after"]!(input);
+  compactionHook = (input: any) => currentHarness.hooks["compaction"]!(input);
   addedCommands = currentHarness.commands;
   addedTools = currentHarness.addedTools;
   sessionPromptCalls = currentHarness.calls.prompt;
   sessionSyntheticCalls = currentHarness.calls.synthetic;
   sessionCreateCalls = currentHarness.calls.create;
   sessionGetCalls = currentHarness.calls.get;
+  sessionListCalls = currentHarness.calls.list;
   sessionCompactCalls = currentHarness.calls.compact;
   sessionRemoveCalls = currentHarness.calls.remove;
   sessionMoveCalls = currentHarness.calls.move;
@@ -97,9 +101,14 @@ export async function queueEvent(event: any): Promise<void> {
   return currentHarness.queue(event);
 }
 
-/** Polls until `fn` is truthy (the pump's handlers are async); 5s deadline. */
+/**
+ * Polls until `fn` is truthy (the pump's handlers are async). Deadline is
+ * expected (ms-scale pump handling) x 300 headroom for loaded runners; the
+ * test files using this helper set setDefaultTimeout above it, so a real
+ * hang reports THIS message, not bun's "(timeout)".
+ */
 export async function waitFor(desc: string, fn: () => unknown): Promise<void> {
-  const end = Date.now() + 5000;
+  const end = Date.now() + 30_000;
   while (!fn()) {
     if (Date.now() > end) throw new Error(`timed out waiting for: ${desc}`);
     await new Promise((r) => setTimeout(r, 25));

@@ -178,6 +178,48 @@ export function enumerateSweepSessions(): SweepEnumeration | null {
   }
 }
 
+/**
+ * Reads the current project directory for specific v2 sessions - the ground
+ * truth for the chat hosting directory re-verification (a hosted session
+ * whose row directory no longer matches the hosting instance's directory has
+ * moved away, whether or not its `session.moved` event was observed). One
+ * point lookup per id on session_v2's primary key, so the cost scales with
+ * the hosted set, not the database. Returns null when the db is missing or
+ * unreadable - callers treat null (and an absent id) as "cannot verify, do
+ * nothing". A database without v2 session tables returns {} (a successful
+ * read of a world with no movable sessions); a vanished row is the
+ * session.deleted path's business, not the mover's.
+ */
+export function sessionDirectories(sessionIDs: string[]): Record<string, string> | null {
+  if (sessionIDs.length === 0) return {};
+  const dbPath = resolveOpencodeDbPath();
+  if (!dbPath) return null;
+  let db: Database;
+  try {
+    db = new Database(dbPath, { readonly: true });
+  } catch {
+    return null;
+  }
+  try {
+    // A v1-era database has no v2 sessions at all: that is a successful
+    // read with an empty answer ("nothing can have moved"), not a failure -
+    // returning {} keeps the caller's unreadable-db log silent on legacy
+    // hosts.
+    if (!hasV2SessionTables(db)) return {};
+    const placeholders = sessionIDs.map(() => "?").join(", ");
+    const rows = db
+      .query(`SELECT id, directory FROM session_v2 WHERE id IN (${placeholders})`)
+      .all(...sessionIDs) as { id: string; directory: string }[];
+    const out: Record<string, string> = {};
+    for (const r of rows) out[r.id] = r.directory;
+    return out;
+  } catch {
+    return null;
+  } finally {
+    db.close();
+  }
+}
+
 export interface SessionRow {
   id: string;
   title: string;

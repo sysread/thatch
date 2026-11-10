@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import {
   ExtractionPipeline,
+  deriveTitle,
   unwrapExecuteThatchCalls,
   planJournalPrune,
   EXTRACTION_JOURNAL_KINDS,
@@ -179,6 +180,45 @@ describe("ExtractionPipeline", () => {
     expect(parsed.interactions[6].args).toContain("foo"); // default (JSON.stringify)
   });
 
+  test("buildPayload covers the opencode v2 path arg spelling", () => {
+    const pipeline = new ExtractionPipeline();
+
+    // opencode v2's built-in file tools declare the arg as `path`, so the
+    // v2 adapter buffers { path } where v1 sent filePath and Claude Code
+    // sends file_path.
+    const interactions = [
+      { tool: "read", sessionID: "s", args: { path: "/src/app.ts" }, title: "t", output: "o" },
+      { tool: "edit", sessionID: "s", args: { path: "/src/app.ts" }, title: "t", output: "o" },
+      { tool: "write", sessionID: "s", args: { path: "/src/app.ts" }, title: "t", output: "o" },
+    ];
+
+    const payload = pipeline.buildPayload(interactions, "test/repo");
+    const parsed = JSON.parse(payload);
+
+    expect(parsed.interactions[0].args).toBe("file: /src/app.ts"); // read
+    expect(parsed.interactions[1].args).toBe("file: /src/app.ts"); // edit
+    expect(parsed.interactions[2].args).toBe("file: /src/app.ts"); // write
+  });
+
+  test("a path arg does not leak into non-file tools' summaries", () => {
+    const pipeline = new ExtractionPipeline();
+
+    // `path` is a generic key. Only tools named read/edit/write may read
+    // it as the file target: every other case ignores it, and the default
+    // branch serializes the whole args, so a path arg still survives
+    // there without being relabeled as a file.
+    const interactions = [
+      { tool: "list", sessionID: "s", args: { path: "/src" }, title: "t", output: "o" },
+      { tool: "grep", sessionID: "s", args: { pattern: "foo", path: "/src" }, title: "t", output: "o" },
+    ];
+
+    const payload = pipeline.buildPayload(interactions, "test/repo");
+    const parsed = JSON.parse(payload);
+
+    expect(parsed.interactions[0].args).toBe('{"path":"/src"}'); // default branch
+    expect(parsed.interactions[1].args).toBe("pattern: foo"); // grep branch, path ignored
+  });
+
   test("buildPayload truncates long output", () => {
     const pipeline = new ExtractionPipeline();
 
@@ -192,6 +232,16 @@ describe("ExtractionPipeline", () => {
 
     expect(parsed.interactions[0].output.length).toBeLessThan(600);
     expect(parsed.interactions[0].output).toContain("...");
+  });
+});
+
+describe("deriveTitle", () => {
+  test("derives the basename from every host's file-arg spelling", () => {
+    expect(deriveTitle("read", { filePath: "/src/app.ts" })).toBe("app.ts"); // opencode v1
+    expect(deriveTitle("Read", { file_path: "/src/app.ts" })).toBe("app.ts"); // Claude Code/Cursor
+    expect(deriveTitle("read", { path: "/src/app.ts" })).toBe("app.ts"); // opencode v2
+    expect(deriveTitle("edit", { path: "/src/app.ts" })).toBe("app.ts");
+    expect(deriveTitle("write", { path: "/src/app.ts" })).toBe("app.ts");
   });
 });
 

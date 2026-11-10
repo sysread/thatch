@@ -28,20 +28,20 @@ import {
   type ToolInteraction,
 } from "./extraction";
 import { createAlerts, alertDelivery, deriveRoundShape, isNoWorkTool, replyRequestID } from "./alerts";
-import { mostRecentTopLevelSessionId } from "./session-db";
+import { mostRecentTopLevelSessionId, sessionDirectories } from "./session-db";
 import type { CoreContext } from "./tool-defs";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
-import { installOpencodeCommands, opencodeActionCommandDefs, removeWrapUpCommandFiles } from "./commands";
+import { installOpencodeCommands, removeWrapUpCommandFiles } from "./commands";
 import { hygieneReport } from "./hygiene";
 import { seedDefaultBehaviors } from "./seed-behaviors";
 import { startVersionChecker, stopVersionChecker, getVersionChecker, readOnDiskVersion, compareSemver } from "./version-check";
 import { WatcherRegistry, ghApiRun, ghAvailable, runWatchedCommand, watcherTarget, withCwdFallback, type Watcher, type WatcherEvent } from "./watchers";
-import { watcherNotificationNudge, watcherRearmNotice, watcherDeathNotice, chatNotificationNudge, chatEchoText, isChatEchoParts } from "./prompts";
+import { watcherNotificationNudge, watcherRearmNotice, watcherDeathNotice, chatNotificationNudge, chatEchoText } from "./prompts";
 import { ChatPoller, createWakeGate, EXTRACTION_CHILD_TITLE, hostedSessionIds, isDefaultSessionTitle, isMachinerySessionTitle, nowIso, unexpiredGraceRehosts } from "./chat";
 import { chatEnabled, chatAutoRegister, loadConfig, notificationDefaults } from "./config";
 import { sendNotification } from "./notify";
 import { osProcessArgs, startupSessionId, continuesLastSessionFromArgv, continuesLastSessionId } from "./os-args";
-import type { HostCapabilities } from "./capabilities";
+import { type HostCapabilities, DeliverySkippedError } from "./capabilities";
 import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
@@ -160,29 +160,35 @@ export function directoryAvailable(path: string): boolean {
   return existsSync(path);
 }
 
+// Re-exported for the guard's callers and tests; the class lives in
+// capabilities.ts (runtime.ts imports chat.ts, so chat.ts cannot import
+// the class from here).
+export { DeliverySkippedError } from "./capabilities";
+
 /**
  * The delivery guard: wraps the host's promptSession so a wake attempt
  * never runs against a session whose directory has been deleted. The
  * attempt itself would error, and opencode surfaces that failure to the
- * user as a toast. Skipping instead leaves the pending mail queued - the
- * check runs fresh on every attempt, so a worktree recreated at the same
- * path (or a session revived in a live directory) resumes delivery with
- * nothing lost. This covers every wake site at once because chat nudges,
- * watcher notifications, watcher death notices, rehydrate pings, chat
- * echoes, and extraction-child dispatch all funnel through promptSession,
- * and a host instance is bound to its sessions' own directory.
+ * user as a toast. Skipping instead REJECTS with a DeliverySkippedError -
+ * the check runs fresh on every attempt, so a worktree recreated at the
+ * same path (or a session revived in a live directory) resumes delivery
+ * with nothing lost. This covers every wake site at once because chat
+ * nudges, watcher notifications, watcher death notices, rehydrate pings,
+ * chat echoes, and extraction-child dispatch all funnel through
+ * promptSession, and a host instance is bound to its sessions' own
+ * directory.
  */
 export function guardDelivery(
   promptSession: HostCapabilities["promptSession"],
   directory: string,
   debug: DebugLog,
 ): HostCapabilities["promptSession"] {
-  return (sessionID, body, mode) => {
+  return (sessionID, body) => {
     if (!directoryAvailable(directory)) {
       debug("runtime:delivery", `skipped wake to ${sessionID}: directory ${directory} no longer exists`);
-      return Promise.resolve();
+      return Promise.reject(new DeliverySkippedError(sessionID, directory));
     }
-    return promptSession(sessionID, body, mode);
+    return promptSession(sessionID, body);
   };
 }
 
@@ -239,15 +245,8 @@ export async function createRuntime(input: {
   capabilities: HostCapabilities;
   directory: string;
   worktree: string;
-  /**
-   * True on the opencode v2 adapter: the system prompt's Tools list then
-   * includes the v2-only session-tab tool. v1 and MCP hosts omit it - the
-   * tool does not exist there, and a prompt listing a nonexistent tool is
-   * the first-call-mistake class.
-   */
-  v2Tools?: boolean;
 }): Promise<ThatchRuntime> {
-  const { capabilities, directory, worktree, v2Tools } = input;
+  const { capabilities, directory, worktree } = input;
   // The opencode server's cwd is wherever the server happened to start;
   // `worktree` is the project this plugin instance actually serves.
   // `directory` is the session's own directory - on resume after the
@@ -377,20 +376,17 @@ export async function createRuntime(input: {
 
   // The proactive-prompt gate, shared by both delivery registries (watchers
   // and chat). Two layers, in cost order: the compacting set and the
-  // event-fed sessionStatus map answer cheaply, and a final check verifies
-  // against the server's live status - the map is only as fresh as the
-  // event stream, and a stale "idle" turns a wake into mid-turn context
-  // injection (observed live: a session read mail mid-burst, contradicted
-  // its own in-flight plan, and looped).
+  // event-fed sessionStatus map. ABSENCE from the map is not evidence of
+  // busy: the `-s` startup session is hosted from init, before it has
+  // emitted any status event, so a gate that rejected on absence would
+  // leave that session mail-deaf - beating fine, never woken - until its
+  // first turn. (A live server-side status check used to back this map;
+  // it died with the v1 host, whose status endpoint it read. The map is
+  // only as fresh as the event stream - a stale "idle" can wake into a
+  // mid-turn session, an accepted residual.)
   const canPromptSession = createWakeGate({
     isCompacting: (sessionID) => compacting.has(sessionID),
     mappedStatus: (sessionID) => sessionStatus.get(sessionID),
-    fetchStatuses: async () => {
-      return (await caps.fetchStatuses()) ?? {};
-    },
-    onStatusError: (sessionID, err) => {
-      console.error(`[thatch] status check failed for ${sessionID}: ${err}`);
-    },
   });
 
   // In-memory watcher registry for proactive event notifications (GitHub PR
@@ -501,7 +497,6 @@ export async function createRuntime(input: {
       await caps.promptSession(
         coordinatorSessionID,
         { parts: [{ type: "text", text: watcherDeathNotice(death.targets, { name: death.chatName, sessionID: deadSessionID }, { rearmsOnResume: false }), synthetic: true }] },
-        "async",
       );
       if (disposed) return;
       db.runtimeStateDelete("watcher_death", deadSessionID);
@@ -538,7 +533,6 @@ export async function createRuntime(input: {
             { type: "text", text: watcherNotificationNudge(events[0]?.target ?? "watched target", events, watchers.pollSeconds), synthetic: true },
           ],
         },
-        "async",
       );
       // Toast: the notification part is TUI-hidden, so without this the
       // user watching the session sees the model wake up with no visible
@@ -569,6 +563,7 @@ export async function createRuntime(input: {
         statusKeys: sessionStatus.keys(),
         resumedSessions,
         rehostedSessions: [...rehostedSessions, ...unexpiredGraceRehosts(rehostGrace, Date.now())],
+        movedInSessions: movedInSessions,
         exclude: childToParent.keys(),
       }).includes(sessionID),
     onSessionDeath: (deadSessionID, death) => {
@@ -622,12 +617,17 @@ export async function createRuntime(input: {
 
   const chatPoller = new ChatPoller({
     store: db,
+    // The poller's open-tab signal for user-voiced broadcast batches: the
+    // same tab-state reader the roster and the broadcast fan-out use, so
+    // the wake gate and every render surface agree on who is open.
+    openTabs: chatOpenTabsProvider(() => db.chatTabClosures()),
     hostedSessions: () => {
       const now = Date.now();
       const hosted = hostedSessionIds({
         statusKeys: sessionStatus.keys(),
         resumedSessions: resumedSessions,
         rehostedSessions: [...rehostedSessions, ...unexpiredGraceRehosts(rehostGrace, now)],
+        movedInSessions: movedInSessions,
         exclude: childToParent.keys(),
       });
       // The journal NEVER SHRINKS within a process lifetime: a plugin
@@ -652,7 +652,6 @@ export async function createRuntime(input: {
         {
           parts: [{ type: "text", text: chatNotificationNudge(senders, count, batch), synthetic: true }],
         },
-        "async",
       );
       try {
         await caps.showToast({
@@ -665,6 +664,47 @@ export async function createRuntime(input: {
       }
     },
     canDeliver: canPromptSession,
+    // Wake-swallow detector (issue #25): a wake whose recipient never turns
+    // surfaces loudly, then condemns the recipient - releaseSessionHosting
+    // drops it from this instance's hosted sets so a moved session's old
+    // instance stops prompting into a pipeline that no longer consumes.
+    sessionActivity: async (sessionID) => {
+      try {
+        const info = await caps.sessionGet(sessionID);
+        const raw = info?.time?.updated;
+        if (typeof raw === "number") return raw;
+        if (typeof raw === "string") {
+          const ms = Date.parse(raw);
+          return Number.isNaN(ms) ? null : ms;
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    },
+    onSwallow: async (sessionID, { wakeAt }) => {
+      console.error(
+        `[thatch] chat wake swallowed: session ${sessionID} was woken at ${new Date(wakeAt).toISOString()} but no turn followed - ` +
+          `it may have moved to another directory or stopped consuming prompts`,
+      );
+      try {
+        await caps.showToast({
+          message: `💬 chat: session ${sessionID} swallowed its wake prompt - it may be unreachable after a location switch`,
+          variant: "warning",
+          duration: 6000,
+        });
+      } catch {
+        // TUI may not be connected. Best-effort.
+      }
+    },
+    onSwallowDead: (sessionID) => releaseSessionHosting(sessionID, "swallow detector"),
+    // Periodic directory re-verification (issue #25 fast path): each cycle
+    // re-reads the hosted sessions' directories from opencode.db and
+    // releases the ones that moved away, even when no session.moved event
+    // was observed. The closure references verifyHostedDirectories, defined
+    // below with the rest of the location-switch bookkeeping - same TDZ
+    // shape as onSwallowDead above.
+    reverifyDirectories: () => verifyHostedDirectories("poll cycle"),
   });
   // With chat disabled the tools refuse, so the poller would only heartbeat
   // sessions and burn wake budget against a feature the user turned off.
@@ -1093,13 +1133,10 @@ export async function createRuntime(input: {
     debug("runtime:rehydrate", `restored ${counts}`);
     // Ping the restored sessions directly: the reload/restart happened
     // outside their event stream, so without this the sessions would not
-    // know the plugin is back. Synthetic + noReply on v1 renders a visible
-    // bubble and starts no model turn. On v2 there is no turn-free delivery
-    // (a noReply body falls through to session.prompt: a real message and a
-    // model turn in every restored session on every file save), so v2 skips
-    // the notice entirely - the re-hosted poller's mail delivery is the
-    // wake there.
-    if (chatOn && caps.noReplyDelivery) {
+    // know the plugin is back. The noReply delivery starts no model turn:
+    // a resume:false synthetic (materializes at the next turn's inbox
+    // delivery - no wake; live-probed 2026-11-05).
+    if (chatOn) {
       for (const sessionID of rehydratedSessions) {
         void caps
           .promptSession(
@@ -1114,7 +1151,6 @@ export async function createRuntime(input: {
               ],
               noReply: true,
             },
-            "async",
           )
           .catch(() => {
             // The session may be gone (restart prune edge) - the poller's
@@ -1123,6 +1159,101 @@ export async function createRuntime(input: {
       }
     }
   }
+
+  // Location-switch bookkeeping (issue #25). A v2 session's project location
+  // can change mid-life (the user's session_move, the strand sweep's
+  // self-heal, the location-unavailable recovery dialog); the move publishes
+  // a session.moved bus event routed to BOTH the old and the new directory's
+  // instances. Each instance acts on its own membership:
+  //   - the OLD instance releases hosting (status map, rehost sets, and the
+  //     hosted journal row). Without the release it keeps heartbeating and
+  //     "delivering" mail through its own directory guard - which silently
+  //     skips when the old directory was deleted, while the delivery loop
+  //     stamps the mail delivered. That is the zombie-session black hole:
+  //     wake stamps written, no prompt sent, no turn ever runs.
+  //   - the NEW instance adopts the session into hosting so mail delivery
+  //     resumes from there without waiting for the session's first turn.
+  // Both halves are idempotent and no-op for sessions this instance never
+  // hosted (child sessions are excluded - they are never hosted).
+  const movedInSessions = new Set<string>();
+  const releaseSessionHosting = (sessionID: string, reason: string): void => {
+    sessionStatus.delete(sessionID);
+    rehostGrace.delete(sessionID);
+    rehostedSessions.delete(sessionID);
+    resumedSessions.delete(sessionID);
+    movedInSessions.delete(sessionID);
+    // Prune the hosted journal row (keyed by this instance's directory) so a
+    // plugin reload's rehydration cannot resurrect the released session.
+    const hostedRow = db.runtimeStateAll().find((r) => r.kind === "hosted" && r.sessionID === directory);
+    if (hostedRow && Array.isArray(hostedRow.value)) {
+      const ids = hostedRow.value as string[];
+      const next = ids.filter((sid) => sid !== sessionID);
+      if (next.length !== ids.length) db.runtimeStatePut("hosted", directory, next, directory);
+    }
+    debug("runtime:move", `released hosting for ${sessionID} (${reason})`);
+  };
+  const adoptSessionHosting = (sessionID: string): void => {
+    if (childToParent.has(sessionID)) return;
+    movedInSessions.add(sessionID);
+    // Merge into the hosted journal eagerly: adoption is durable before the
+    // poller's first tick, so a reload in between re-hosts the newcomer.
+    // The poller's next hosted-set write produces the identical row.
+    const hostedRow = db.runtimeStateAll().find((r) => r.kind === "hosted" && r.sessionID === directory);
+    const ids = hostedRow && Array.isArray(hostedRow.value) ? (hostedRow.value as string[]) : [];
+    if (!ids.includes(sessionID)) db.runtimeStatePut("hosted", directory, [...ids, sessionID], directory);
+    debug("runtime:move", `adopted moved-in session ${sessionID}`);
+  };
+
+  // Directory re-verification (issue #25 fast path). The session.moved
+  // handler above only releases hosting when its bus event arrives; a
+  // session that moved while the plugin was reloading (or between the move
+  // and the reloaded instance's first event drain) misses the event, and the
+  // rehydrated hosted set then carries it at the OLD directory - the wake
+  // swallow detector's eventual condemnation is the only cleanup, ~3 silent
+  // wakes later. opencode.db holds the ground truth: session_v2.directory is
+  // the session's current project location. Verifying the hosted set against
+  // it releases a moved-away session immediately, at init (rehydration has
+  // restored the journal above by this point) and on every poll cycle after
+  // (wired into the poller as reverifyDirectories).
+  //
+  // This is a release-only cleanup: it never ADOPTS a session whose row
+  // points here - move-in adoption stays with the session.moved handler,
+  // which learns the destination directory from the event. Fail-open: an
+  // unreadable host db verifies nothing, logged at most hourly rather than
+  // once per cycle - the swallow detector remains the backstop. A MISSING
+  // row verifies nothing either: a session the db no longer knows is the
+  // session.deleted path's business.
+  let lastReverifyLog = 0;
+  const verifyHostedDirectories = (reason: string): void => {
+    const hosted = hostedSessionIds({
+      statusKeys: sessionStatus.keys(),
+      resumedSessions: resumedSessions,
+      rehostedSessions: [...rehostedSessions, ...unexpiredGraceRehosts(rehostGrace, Date.now())],
+      movedInSessions: movedInSessions,
+      exclude: childToParent.keys(),
+    });
+    if (hosted.length === 0) return;
+    const currentDirs = sessionDirectories(hosted);
+    if (!currentDirs) {
+      const now = Date.now();
+      if (now - lastReverifyLog > 3_600_000) {
+        lastReverifyLog = now;
+        console.error(`[thatch] chat directory re-verification skipped: opencode.db unreadable (${reason})`);
+      }
+      return;
+    }
+    const instanceDirectory = directory ?? worktree;
+    for (const id of hosted) {
+      const current = currentDirs[id];
+      if (current && current !== instanceDirectory) {
+        releaseSessionHosting(id, `${reason}: session directory moved to ${current}`);
+      }
+    }
+  };
+  // The init check: a reload that happened across a move drops the stale
+  // hosting now, before the poller's first cycle could wake a session this
+  // instance can no longer reach.
+  verifyHostedDirectories("plugin init");
 
   // Dormant watcher recovery (watcher-continuity fast-follow). A restart
   // keeps foreign-pid watcher journal rows instead of pruning them (see the
@@ -1307,31 +1438,28 @@ export async function createRuntime(input: {
   // for the pump to repopulate the status map, then finalize any restored
   // child that is no longer running. A child genuinely mid-turn keeps its
   // own idle event, and the finalize is idempotent if both paths race.
+  // Liveness reads the event-fed map only (the host exposes no live status
+  // endpoint to plugins; a child that emitted no status event during the
+  // window reads as idle and finalizes - the idempotent finalize makes
+  // that safe).
   const reconcileRestoredChildren = async () => {
     if (restoredChildren.size === 0) return;
     // The reload window: how long to let the event pump repopulate the
     // status map before judging a restored child "no longer running".
     // Read at call time (not module load) so the test suite can shorten it
-    // per server() instance instead of waiting out the production 10s.
+    // per setup() instance instead of waiting out the production 10s.
     const windowMs = Number(process.env.THATCH_CHILD_RECONCILE_MS) || 10_000;
     await new Promise<void>((resolve) => {
       const t = setTimeout(resolve, windowMs);
       t.unref?.();
     });
-    // Dispose (a v2 plugin reload or process exit) may have closed the db
+    // Dispose (a plugin reload or process exit) may have closed the db
     // during the window; finalizing into it would throw on the journal
     // write. The reloaded instance's own reconciler owns the rows now.
     if (disposed) return;
-    let live: Record<string, { type: string }> = {};
-    try {
-      live = (await caps.fetchStatuses()) ?? {};
-    } catch {
-      // Map-only liveness then - the event-fed statuses are the fallback.
-    }
     for (const [childId, parentId] of restoredChildren) {
       const mapped = sessionStatus.get(childId);
-      const remote = live[childId]?.type;
-      if (remote === "busy" || remote === "retry" || mapped === "busy" || mapped === "retry") continue;
+      if (mapped === "busy" || mapped === "retry") continue;
       restoredChildren.delete(childId);
       await finishExtractionChild(childId, parentId);
     }
@@ -1397,6 +1525,13 @@ export async function createRuntime(input: {
         if (disposed) return;
         try {
           await caps.sessionMove?.(m.id, m.to);
+          // Eager release (L3 of the location-switch fix): this instance
+          // just performed the move itself - the strongest possible move
+          // signal. Un-host immediately instead of waiting for the
+          // session.moved event round-trip (the sweep may have moved a
+          // session this instance still hosted; idempotent when it did
+          // not).
+          releaseSessionHosting(m.id, "strand-sweep move");
           moved++;
         } catch (err) {
           debug("strand-sweep", `move failed for ${m.id} (${trigger}): ${err}`);
@@ -1485,20 +1620,21 @@ export async function createRuntime(input: {
     console.error(`[thatch] skill install failed: ${err}`);
   }
 
-  // Same for the wrap-up slash commands: synced into the global config dir on
+  // Same for the action slash commands: synced into the global config dir on
   // every load so template updates self-heal. Config is loaded before plugins
   // during server startup, so a first-ever install lands on the next start.
-  // Hosts that register commands natively (v2) get the action commands as
-  // files only - the wrap-ups register in code (onCommandExecuteBefore), and a file with
-  // the same name as a registered command would collide.
+  // The wrap-ups are NOT installed as files - they register in code
+  // (onCommandExecuteBefore arming via the CommandEditor), and a file with
+  // the same name as a registered command would collide. Files written by
+  // pre-drop runs (which installed the wrap-ups) are removed first.
   try {
-    if (caps.nativeCommands) removeWrapUpCommandFiles(configHome);
-    installOpencodeCommands(configHome, caps.nativeCommands ? opencodeActionCommandDefs() : undefined);
+    removeWrapUpCommandFiles(configHome);
+    installOpencodeCommands(configHome);
   } catch (err) {
     console.error(`[thatch] command install failed: ${err}`);
   }
 
-  const sys = systemPrompt(repo, chatOn, v2Tools);
+  const sys = systemPrompt(repo, chatOn);
   const compact = compactionContext(repo);
 
   // Direct extraction: create a child session linked to the parent and prompt
@@ -1525,7 +1661,6 @@ export async function createRuntime(input: {
     const promptText = extractionDirectPrompt(batch.length, parentID);
 
     const result = await caps.sessionCreate({
-      parentID,
       title: EXTRACTION_CHILD_TITLE,
     });
     // session.created event fires here, setting childToParent and
@@ -1542,10 +1677,10 @@ export async function createRuntime(input: {
     // it can only ever refer to this machinery session, and it ages out
     // with the auto-row TTL.
     db.markChatMachinery(childId, "extraction");
-    // v2's session API cannot create a CHILD session (no parentID in its
+    // The session API cannot create a CHILD session (no parentID in its
     // create input), so the adapter returns a top-level session and no
     // session.created event carries the parent mapping. Set both here
-    // eagerly; on v1 the event sets the same values (idempotent).
+    // eagerly (idempotent).
     if (!childToParent.has(childId)) {
       childToParent.set(childId, parentID);
       parentSnapshots.set(childId, [...extraction.peek(parentID)]);
@@ -1577,7 +1712,6 @@ export async function createRuntime(input: {
           {
             parts: [{ type: "text", text: promptText }],
           },
-          "async",
         );
       } catch (err) {
         console.error(`[thatch] extraction child prompt failed: ${err}`);
@@ -1594,7 +1728,6 @@ export async function createRuntime(input: {
           {
             parts: [{ type: "text", text: promptText }],
           },
-          "sync",
         )
         .catch((err: unknown) => {
           console.error(`[thatch] extraction child failed: ${err}`);
@@ -1846,23 +1979,21 @@ export async function createRuntime(input: {
       // message parts. Plugin tools render as muted one-line entries with
       // the output hidden behind a default-off TUI toggle, so without this
       // the human watching a session never sees the conversation happen.
-      // Delivery is a non-synthetic noReply promptAsync: the part renders
-      // as a visible bubble and starts no model turn (the server's prompt
-      // path returns before the completion loop). Non-synthetic also means
-      // later turns see the echo in context - a small duplication of the
-      // tool call it mirrors, accepted for visibility. Fire-and-forget: an
-      // echo failure must never fail the tool call it follows.
+      // Delivery is a noReply prompt: the part renders as a visible bubble
+      // and starts no model turn (a resume:false synthetic). Non-synthetic
+      // also means later turns see the echo in context - a small
+      // duplication of the tool call it mirrors, accepted for visibility.
+      // Fire-and-forget: an echo failure must never fail the tool call it
+      // follows.
       if (input.tool.startsWith("thatch_chat_")) {
         const echo = chatEchoText(
           input.tool,
           (input.args ?? {}) as Record<string, unknown>,
           typeof output.output === "string" ? output.output : "",
         );
-        // noReply hosts only: on a host whose prompt endpoint starts a real
-        // model turn, delivering the echo would create a turn that calls
-        // chat tools, which echoes again - the loop the noReply flag exists
-        // to prevent.
-        if (echo && caps.noReplyDelivery) {
+        // noReply delivery is structural on this host (the resume:false
+        // synthetic), so every echo delivers turn-free.
+        if (echo) {
           void caps
             .promptSession(
               input.sessionID,
@@ -1870,7 +2001,6 @@ export async function createRuntime(input: {
                 noReply: true,
                 parts: [{ type: "text", text: echo }],
               },
-              "async",
             )
             .catch((err) => {
               // The echo must never fail the tool call, but a silent catch
@@ -1881,10 +2011,11 @@ export async function createRuntime(input: {
         }
         return;
       }
-      // "task" is v1's dispatch tool and "subagent" is v2's - a dispatch
-      // buffers itself otherwise, and the nudge then fires on the pipeline's
-      // own exhaust (the subagent-dispatch loop, sibling of the
-      // execute-wrapped-ack loop below). isMetaToolName owns the set.
+      // "task" and "subagent" are the host's dispatch tool spellings ("agent"
+      // the MCP-path spelling) - a dispatch buffers itself otherwise, and
+      // the nudge then fires on the pipeline's own exhaust (the
+      // subagent-dispatch loop, sibling of the execute-wrapped-ack loop
+      // below). isMetaToolName owns the set.
       if (isMetaToolName(input.tool)) return;
       // Code Mode execute calls: when the code wraps thatch_* invocations,
       // run the wrapped tools' hook semantics and never buffer the call
@@ -1968,13 +2099,6 @@ export async function createRuntime(input: {
     },
 
     onChatMessage: async (input, output) => {
-      // Chat transcript echoes are non-synthetic noReply parts, so they
-      // arrive here like any user message - but no model turn ever reads
-      // them, and the nudge machinery would embed and scan their text for
-      // nothing (and fire spurious toasts when thresholds cross). Skip
-      // them entirely.
-      if (isChatEchoParts(output.parts)) return;
-
       // Dormant watcher recovery: a resumed session's first message re-arms
       // its restarted watchers and hears about dead ones (see
       // scanDormantWatchers). Injected as synthetic parts - the same path
@@ -2268,6 +2392,22 @@ export async function createRuntime(input: {
       }
       if (event.type === "permission.replied") {
         alerts.permissionResolved(event.properties.sessionID, replyRequestID(event.properties));
+        return;
+      }
+      if (event.type === "session.moved") {
+        // A session's project location changed (user session_move, strand
+        // sweep self-heal, location-unavailable recovery dialog). The v2
+        // bus routes this event to both the old and the new directory's
+        // instances, so each instance reacts on its own membership: release
+        // when it moved away, adopt when it moved here. See the
+        // location-switch bookkeeping block for why the release is the
+        // black hole's fix.
+        const sessionID = event.properties.sessionID as string | undefined;
+        const toDirectory = event.properties.directory as string | undefined;
+        if (sessionID && toDirectory) {
+          if (toDirectory === directory) adoptSessionHosting(sessionID);
+          else releaseSessionHosting(sessionID, "session.moved to another directory");
+        }
         return;
       }
       if (event.type === "session.created") {
@@ -2635,12 +2775,11 @@ export async function createRuntime(input: {
       if (event.type !== "session.created") return;
       const id = event.properties.info.id;
 
-      // noReply hosts only: a host without noReply delivery would turn the
-      // reminder into a real model turn replying to itself. The system
-      // prompt (onSystemTransform) still carries the essentials everywhere.
-      // The gate precedes the hygiene scan so v2 sessions (and any other
-      // noReply-less host) do not pay a DB + repo scan for a skipped report.
-      if (!caps.noReplyDelivery) return;
+      // The reminder rides a noReply delivery (a resume:false synthetic -
+      // no model turn replying to itself). The system prompt
+      // (onSystemTransform) carries the essentials on every request too.
+      // The gate precedes the hygiene scan so a non-chat host does not pay
+      // a DB + repo scan for a skipped report.
 
       let hygiene: string | null = null;
       try {
@@ -2656,7 +2795,6 @@ export async function createRuntime(input: {
             noReply: true,
             parts: [{ type: "text", text: sessionStartReminder(repo, hygiene), synthetic: true }],
           },
-          "sync",
         );
       } catch (err) {
         console.error(`[thatch] session-start reminder failed: ${err}`);

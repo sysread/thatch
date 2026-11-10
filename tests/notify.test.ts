@@ -1,10 +1,24 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sendNotification, spokenText, applyTonePrefix, capSpokenLine, capSourceLabel, SPOKEN_LINE_MAX, defaultSpawner, type Spawner, type SpawnResult } from "../src/notify";
+import { sendNotification, notifySuppressed, spokenText, applyTonePrefix, capSpokenLine, capSourceLabel, SPOKEN_LINE_MAX, defaultSpawner, type Spawner, type SpawnResult } from "../src/notify";
 import { saveConfig } from "../src/config";
 import { TOOL_DEFS, type CoreContext } from "../src/tool-defs";
+
+// The suite bootstrap (tests/clean-env.ts) forces THATCH_NO_NOTIFY=1 so no
+// test can fire a real banner or speak. These tests exercise the dispatcher
+// composition itself through an injected spawner, which the guard would
+// no-op - so the guard is lifted for this file and restored after (bun
+// shares one process across all test files; other files keep the guard).
+let prevNoNotify: string | undefined;
+beforeAll(() => {
+  prevNoNotify = process.env.THATCH_NO_NOTIFY;
+  delete process.env.THATCH_NO_NOTIFY;
+});
+afterAll(() => {
+  if (prevNoNotify !== undefined) process.env.THATCH_NO_NOTIFY = prevNoNotify;
+});
 
 // All command execution goes through an injectable spawner, so no test ever
 // fires a real banner or speaks out loud.
@@ -247,6 +261,42 @@ describe("sendNotification on unsupported platforms", () => {
     expect(cmds.length).toBe(0);
     expect(result).toContain("[unsupported]");
     expect(result).toContain("win32");
+  });
+});
+
+describe("THATCH_NO_NOTIFY suppression", () => {
+  test("THATCH_NO_NOTIFY=1 dispatches nothing and returns a suppression line", async () => {
+    process.env.THATCH_NO_NOTIFY = "1";
+    try {
+      const cmds: string[] = [];
+      const result = await sendNotification({ message: "m", channel: "both", platform: "darwin" }, mockSpawner(new Map(), cmds));
+      expect(cmds.length).toBe(0);
+      expect(result).toContain("[suppressed]");
+      expect(result).toContain("THATCH_NO_NOTIFY");
+    } finally {
+      delete process.env.THATCH_NO_NOTIFY;
+    }
+  });
+
+  test("any value other than exact 1 leaves dispatch enabled", async () => {
+    // "Exact 1" parity with the other boolean knobs (QA_DOCKER etc.): a bare
+    // truthy check would read "0" as on.
+    for (const value of ["0", "false", ""]) {
+      process.env.THATCH_NO_NOTIFY = value;
+      try {
+        const cmds: string[] = [];
+        await sendNotification({ message: "m", channel: "banner", platform: "darwin" }, mockSpawner(new Map(), cmds));
+        expect(cmds.length).toBe(1);
+      } finally {
+        delete process.env.THATCH_NO_NOTIFY;
+      }
+    }
+  });
+
+  test("notifySuppressed reads the passed environment, not only process.env", () => {
+    expect(notifySuppressed({ THATCH_NO_NOTIFY: "1" })).toBe(true);
+    expect(notifySuppressed({})).toBe(false);
+    expect(notifySuppressed({ THATCH_NO_NOTIFY: "0" })).toBe(false);
   });
 });
 

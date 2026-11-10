@@ -69,14 +69,44 @@ review, stop and hand the synthesized report to the chat loop instead.
 Every finding, highlight, and technique note is presented in this exact shape:
 
 ```
-# Finding <#> of <total> (<severity> * <class/lens> * <blocker/non-blocker>)
+# Finding <x> of <y> (<severity> * <class/lens> * <blocker/non-blocker>) | Highlights: <N> | Technique: <M>
 
 **Location:** <file path> @ <line number>
 **Shape:** <the kind of problem: missing test, poorly phrased comment, race condition, unnecessary complexity, inconsistent naming, and so on>
 **Description:** <plain-English description, written for a reader who has not read the delta. Lead with what breaks, who it affects, and the blast radius.>
 
+Review tally: <kept>/<adjudicated>
+
 Choose your adventure: (k)eep • (d)rop • (r)eframe • (v)erify • (e)laborate • (a)bort • (p)ost as draft
 ```
+
+The header counters cover all three sections of the walkthrough, not
+just the current one. The header changes shape as the phases proceed:
+
+- Findings phase: `# Finding <x> of <y> (...) | Highlights: <N> | Technique: <M>`
+- Highlights phase: `# Highlight <x> of <N> | Technique: <M>`
+- Technique phase: `# Technique <x> of <M>`
+
+`<y>` is ALL defect findings across every severity and class - never
+the count of the current severity batch (a HIGH plus NIT mix is one
+series, not two). `<N>` and `<M>` are the queued sections' totals,
+reminders of what is still coming; a segment drops entirely when its
+total is zero - never emit `| Highlights: 0`. A confirmatory-only
+technique note gated out before presentation decrements M first, so
+the header carries the post-gating count. Only one counter ever
+advances per message, and each header must follow from the one before
+it.
+
+The tally line rides every template, one line above the verdict
+line, so the user sees the running state without hunting for it. The
+denominator is the number of items already adjudicated (verdicts on
+merit: keep or drop) across ALL three sections, NEVER the total
+number of findings - it grows as the walkthrough proceeds. The
+numerator is how many of those the user kept. Verify and elaborate do
+not advance the tally (they are not verdicts on merit); a
+re-presented reframe counts when it lands its final verdict, not
+twice. A bulk ruling ("skip the rest", post-as-draft remainder)
+advances the denominator by everything it covered, in one step.
 
 The verdict line is plain text in the chat message, part of the finding
 presentation. Never route the verdict options through the host's interactive

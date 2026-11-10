@@ -79,6 +79,35 @@ describe("hygieneReport", () => {
     expect(report).not.toContain("feature/live");
   });
 
+  test("fully-archived branches stay out of the orphaned list", async () => {
+    await gitInit(dir, ["feature/live"]);
+    db.remember(repo, "alive", "content", emb, "m", { branch: "feature/live" });
+    db.remember(repo, "orphan-1", "content", new Float32Array([1, 0, 0, 0]), "m", { branch: "feature/dead" });
+    // feature/gone is deleted AND every entry on it is archived: it must not
+    // appear by name, and the count must cover only feature/dead.
+    db.remember(repo, "orphan-archived", "content", new Float32Array([0, 1, 0, 0]), "m", {
+      branch: "feature/gone",
+      archived: true,
+    });
+
+    const report = await hygieneReport(db, repo, dir);
+    expect(report).toContain("1 memory scoped to deleted branches (feature/dead)");
+    expect(report).not.toContain("feature/gone");
+    expect(report).not.toContain("feature/live");
+  });
+
+  test("branches that exist only on a remote are not orphaned", async () => {
+    await gitInit(dir, ["feature/local"]);
+    // feature/pr-open exists only as a remote-tracking ref: pushed, PR open,
+    // no local checkout. listBranches must see it, or the memory gets
+    // false-flagged as scoped to a deleted branch.
+    await $`git update-ref refs/remotes/origin/feature/pr-open HEAD`.cwd(dir).quiet();
+    db.remember(repo, "pr-open", "content", emb, "m", { branch: "feature/pr-open" });
+
+    const report = await hygieneReport(db, repo, dir);
+    expect(report).toBeNull();
+  });
+
   test("skips the branch check outside a git repo", async () => {
     db.remember(repo, "scoped", "content", emb, "m", { branch: "feature/anything" });
     // dir is not a git repo → listBranches returns [] → check must not run,

@@ -74,10 +74,12 @@ describe("opencode v2 adapter", () => {
     // as the user message - injecting there would echo any injection into
     // the visible transcript). There is no extraction nudge on opencode at
     // all any more - extraction is plugin-driven at idle.
+    // Real v2 built-in shape: lowercase tool name, file arg `path` - the
+    // v2 read/edit/write plugins declare path, not filePath/file_path.
     await toolAfterHook!({
-      tool: "Read",
+      tool: "read",
       sessionID: "ses_v2_nudge",
-      input: { file_path: "/src/app.ts" },
+      input: { path: "/src/app.ts" },
       status: "completed",
       result: { content: "const x = 1;" },
     });
@@ -348,9 +350,9 @@ describe("opencode v2 adapter", () => {
     // prompt must fire no extraction nudge (matching v1, whose hook only
     // fired on completed calls).
     await toolAfterHook!({
-      tool: "Read",
+      tool: "read",
       sessionID: "ses_v2_err",
-      input: { file_path: "/src/app.ts" },
+      input: { path: "/src/app.ts" },
       status: "error",
       error: { message: "boom" },
     });

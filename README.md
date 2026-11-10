@@ -12,11 +12,18 @@ services; everything runs on your machine.
 
 ## Install
 
-**OpenCode** - add the plugin to `opencode.jsonc`; it installs on next start:
+**OpenCode** - add the plugin to `opencode.jsonc`; it installs on next start.
+Requires opencode 2.1 or newer:
 
 ```jsonc
 { "plugin": ["@jeffober/thatch"] }
 ```
+
+Upgrading from a pre-2.x-only release: any hand-written plugin shim that
+re-exports the plugin's old named `server` export fails to load after this
+version - replace it with a plain re-export of the default export (see the
+[setup guide](https://github.com/sysread/thatch/wiki/Guide%3A-Setup)) or
+delete the shim and let the package install above do the work.
 
 **Claude Code** - paste into a session:
 
@@ -26,7 +33,7 @@ services; everything runs on your machine.
 ```
 
 Older Claude Code versions or enterprise policies that disable mods:
-`npm install -g @jeffober/thatch && thatch setup --claude --hooks`.
+`npm install -g @jeffober/thatch && thatch setup --claude`.
 Requires [Bun](https://bun.sh) on PATH.
 
 **Cursor**:
@@ -66,7 +73,8 @@ The embedding model downloads once at first use and is cached per user
 - **Prediction engine** -- a statistical model of your decision-making preferences; strong predictions apply silently, ambiguous ones surface.
 - **Behavior engine** -- the agent codifies its own operational rules ("when X, I do Y") that auto-fire in similar situations.
 - **Extraction** -- durable facts are pulled from the session's tool activity automatically; nobody has to remember to save.
-- **Cross-session chat** -- your agent sessions message each other under assigned, never-reused names; idle sessions get woken; mail is framed as untrusted content.
+- **Conversation search** -- search past opencode conversations by substring or regex and retrieve full messages, including complete tool inputs and outputs; also available as CLI subcommands (`thatch session list/get/transcript/search`) with JSONL output built for `jq`.
+- **Cross-session chat** -- your agent sessions message each other under assigned, never-reused names; idle sessions get woken by agent mail, while a terminal broadcast (`thatch chat broadcast`) wakes only sessions with an open tab and leaves the rest to read at their next prompt; mail is framed as untrusted content.
 - **Watchers** -- the agent watches a GitHub PR, a branch, or a local command and gets prompted when something happens; notifications carry pointers, never external content.
 - **Slash commands** -- `/thatch/defrag`, `/thatch/extract`, `/thatch/hygiene`, `/thatch/reflect`, `/thatch/refine`, `/thatch/self-review`, `/thatch/peer-review`, `/thatch/whois`, and the wrap-ups `/thatch/compact` and `/thatch/exit` (a pre-flight checklist before compaction or exit); see the [user guide](https://github.com/sysread/thatch/wiki/Guide%3A-Overview).
 - **Notifications** -- desktop banner and spoken voice on macOS and Linux, plus automatic alerts when the LLM pauses for your input or finishes real work; tune it all in a hand-editable config file the agent manages for you.

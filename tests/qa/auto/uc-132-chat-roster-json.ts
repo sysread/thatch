@@ -35,8 +35,9 @@ const useCase: UseCase = {
     "  host id in host_id - the join works without the caller learning the",
     "  hash scheme. An MCP row matches from the raw host id; case of the",
     "  caller's id does not matter.",
-    "- Step 3: the text table is byte-identical with the new flags absent,",
-    "  --host-id in text mode renders the matching rows through the same",
+    "- Step 3: the text table is identical across runs with the new flags",
+    "  absent (relative-age tokens normalized: they derive from wall-clock",
+    "  time), --host-id in text mode renders the matching rows through the same",
     "  table, and a no-match lookup prints a diagnostic line (JSON prints",
     "  nothing).",
   ].join("\n"),
@@ -95,16 +96,16 @@ const useCase: UseCase = {
       if (mcpEcho.unread !== 1) failures.push("lookup row should carry the unread count");
     }
 
-    // Step 3a: the text table with the new flags absent. The AGE column
-    // ages between runs (time passes), so byte-equality is not the pin -
-    // STRUCTURE is: same line count across runs, and no machine-contract
-    // wording.
+    // Step 3a: the text table is byte-identical with the new flags absent.
+    // The relative age cell ("3s ago") is derived from wall-clock time and
+    // can tick between the two invocations, so the age tokens are normalized
+    // out before comparing: the pin is that the flags do not change the
+    // table, not that time stands still between runs.
+    const ageStable = (s: string) => s.replace(/\d+[smhd] ago/g, "X ago");
     const textDefault = await run(["chat", "list", "--stale", "all"]);
     const textDefault2 = await run(["chat", "list", "--stale", "all"]);
-    const lines1 = textDefault.stdout.toString().split("\n").filter((l) => l.trim()).length;
-    const lines2 = textDefault2.stdout.toString().split("\n").filter((l) => l.trim()).length;
-    if (lines1 !== lines2) {
-      failures.push(`text output structure changed across runs (${lines1} vs ${lines2} lines)`);
+    if (ageStable(textDefault.stdout.toString()) !== ageStable(textDefault2.stdout.toString())) {
+      failures.push("text output is not deterministic across runs");
     }
     if (textDefault.stdout.toString().includes("--json") || textDefault.stdout.toString().includes("host_id")) {
       failures.push("text output should not advertise the machine contract");

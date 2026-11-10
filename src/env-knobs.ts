@@ -92,6 +92,12 @@ export const ENV_KNOBS: EnvKnob[] = [
     default: "1440 (24 hours)",
   },
   {
+    name: "THATCH_CHAT_DIRECTORY_REVERIFY_CYCLES",
+    description:
+      "Poll cycles between the chat poller's hosted directory re-verifications against opencode.db (clamped to 1..120).",
+    default: "1 (every 30s cycle)",
+  },
+  {
     name: "THATCH_CHILD_RECONCILE_MS",
     description: "How often the runtime reconciles background extraction child sessions, in milliseconds.",
     default: "10000",
@@ -141,6 +147,12 @@ export const ENV_KNOBS: EnvKnob[] = [
     description:
       "Project directory pin written into MCP configs by setup; resolves the project (and its database) instead of trusting the working directory.",
     default: "host project dir or cwd",
+  },
+  {
+    name: "THATCH_NO_NOTIFY",
+    description:
+      "Kill switch for desktop notifications: set to 1 and every dispatch (banner and voice) becomes a logged no-op. Test and QA runs set this; export it to silence thatch notifications entirely.",
+    default: "off (notifications send)",
   },
   {
     name: "THATCH_OPENCODE_STATE_ROOT",

@@ -1,6 +1,7 @@
 # Development
 
-Feature docs describe behavior in opencode v1 `client.*` terms; the opencode v2 equivalents and degrades are catalogued in [features/opencode-plugin.md](features/opencode-plugin.md).
+The opencode integration is v2-only (the plugin requires opencode 2.1+);
+its hook surface and capability mapping are catalogued in [features/opencode-plugin.md](features/opencode-plugin.md).
 
 ## Architecture
 
@@ -40,25 +41,24 @@ Shared core
   └── vector-math.ts  → blobToVector + cosineSimilarity helpers
 
 OpenCode plugin path
-  ├── index.ts        → dual-shape plugin entry: merged default export
-  │                     ({id, setup, server}) loads on opencode v1 AND v2;
-  │                     lazy-imports the adapter matching the host
-  ├── opencode/v1.ts  → v1 adapter: @opencode-ai/plugin hooks object
-  ├── opencode/v2.ts  → v2 adapter: @opencode/plugin promise-context domains
-  ├── opencode/tui-plugin.ts → v2 TUI CLI plugin (./tui entrypoint):
+  ├── index.ts        → plugin entry: default export {id, setup}; the
+  │                     host's module validator reads only the default
+  │                     export and lazy-imports the adapter inside setup
+  ├── opencode/v2.ts  → the adapter: @opencode/plugin promise-context
+  │                     domains (tools, commands, hooks, event pump) and
+  │                     the HostCapabilities implementation
+  ├── opencode/tui-plugin.ts → TUI CLI plugin (./tui entrypoint):
   │                     consumes the session-tab rpc events, drives ui.tabs
   ├── session-tab-shared.ts → SDK-free cross-entry contract: session-tab rpc
   │                     definition, subordinate prompt builder, validators
   ├── capabilities.ts → HostCapabilities seam: the host operations the
-  │                     runtime needs; capabilitiesFromClient bridges the
-  │                     v1 SDK client
+  │                     runtime needs (implemented over the promise
+  │                     context in opencode/v2.ts)
   ├── runtime.ts      → shared plugin runtime: nudges, system prompt
   │                     injection, session events, extraction triggers,
   │                     child-session bookkeeping (host-agnostic)
   ├── os-args.ts      → pure argv/OS-command-line helpers (startup session
   │                     resolution; SDK-free)
-  ├── tools.ts        → thin opencode tool() wrappers (v1); tool-defs.ts
-  │                     owns buildCoreContext (shared per-call context)
   ├── extraction.ts   → in-memory ring buffer + shared payload builders
   ├── watchers.ts     → in-memory watcher registry + poller (opencode-only,
   │                     event-driven PR notifications delivered as prompts)
@@ -85,14 +85,13 @@ bin/thatch             → CLI: stores|list|show|forget|search|remember|mcp|remi
 
 | Module | Responsibility |
 |--------|---------------|
-| `tool-defs.ts` | **Single source of truth** for all tools. Each tool has a name, description, zod schema (args), and execute function. Framework-agnostic — neither opencode nor MCP specific. |
-| `tools.ts` | Thin opencode wrappers. `buildCoreContext` constructs the shared per-call context; `createTools` wraps each tool-def in opencode's `tool()` with a `thatch_` prefix (v1 only). |
+| `tool-defs.ts` | **Single source of truth** for all tools. Each tool has a name, description, zod schema (args), and execute function. Framework-agnostic — neither opencode nor MCP specific. `buildCoreContext` constructs the shared per-call context. |
 | `mcp.ts` | Stdio JSON-RPC 2.0 server. Compiles zod schemas to JSON Schema via `z.toJSONSchema()` for `tools/list`. Validates args via `z.object().parse()` in `tools/call`. All logging to stderr (stdout is the transport). |
-| `index.ts` | Dual-shape OpenCode plugin entry: the merged default export (`{ id, setup, server }`) loads on opencode v1 (reads `default.server`) and v2 (reads `default.setup`, strips excess keys). Lazy-imports the host adapter so each host's SDK resolves only under its own runtime. |
-| `opencode/v1.ts` + `opencode/v2.ts` | Host adapters. v1 builds HostCapabilities from the PluginInput client and returns the hooks object; v2 registers through the promise-context domains (ToolEditor, session.hook, event.subscribe) and degrades the surfaces v2 lacks. v2 also wires the session-tab host flow (create -> move -> chat-register -> rpc emit -> prompt) through the `CoreContext.sessionTabHost` seam. |
-| `opencode/tui-plugin.ts` | The v2 TUI CLI plugin (the package's `./tui` entrypoint): listens for `rpc.thatch-tabs.tab-opened` and `rpc.thatch-tabs.tab-closed` events and opens/closes the subordinate session's tab via `ui.tabs.open`/`ui.tabs.close`. See [features/session-tabs.md](features/session-tabs.md). |
-| `capabilities.ts` | The `HostCapabilities` seam: the host operations the shared runtime needs (session create/prompt/get/list/messages/delete, toast, compaction trigger, session close-out - app exit on v1, the session's own tab on v2). `capabilitiesFromClient` bridges the v1 SDK client. |
-| `runtime.ts` | Shared plugin runtime: wires DB, model, extraction; the nudge tiers, system prompt injection, session event handling, child-session bookkeeping, wrap-up resolution. Host-agnostic: consumed by both adapters. |
+| `index.ts` | OpenCode plugin entry: the default export `{ id, setup }` is the whole plugin surface (the host's module validator ignores named exports). The adapter is lazy-imported inside `setup`. |
+| `opencode/v2.ts` | The host adapter. Registers through the promise-context domains (ToolEditor, session.hook, event.subscribe, CommandEditor) and implements HostCapabilities over the promise context. Wires the session-tab host flow (create -> move -> chat-register -> rpc emit -> prompt) through the `CoreContext.sessionTabHost` seam, plus the reopen flow (sessionGet + dead-directory guard -> tab-opened emit) behind the same seam. |
+| `opencode/tui-plugin.ts` | The TUI CLI plugin (the package's `./tui` entrypoint): listens for `rpc.thatch-tabs.tab-opened` and `rpc.thatch-tabs.tab-closed` events and opens/closes the subordinate session's tab via `ui.tabs.open`/`ui.tabs.close`. See [features/session-tabs.md](features/session-tabs.md). |
+| `capabilities.ts` | The `HostCapabilities` seam: the host operations the shared runtime needs (session create/prompt/get/list/enumerate/move/messages/delete, toast, compaction trigger, session close-out - the session's own tab). Implemented over the promise context in `opencode/v2.ts`. |
+| `runtime.ts` | Shared plugin runtime: wires DB, model, extraction; the nudge tiers, system prompt injection, session event handling, child-session bookkeeping, wrap-up resolution. Host-agnostic: consumed by the adapter. |
 | `os-args.ts` | Pure argv / OS-command-line helpers for startup session resolution (`-s`/`-c`). SDK-free. |
 | `setup.ts` | `thatch setup --claude` / `--cursor` installer. Writes MCP config (`.mcp.json` / `.cursor/mcp.json`), appends to CLAUDE.md / AGENTS.md (idempotent), installs hooks in settings.json / hooks.json, installs skills. |
 | `hygiene.ts` | Hygiene report: pending dedup pairs, stale count, orphaned branch memories. Shared by the plugin's session-start hook and the CLI's `thatch reminder` command. |
@@ -111,8 +110,8 @@ bin/thatch             → CLI: stores|list|show|forget|search|remember|mcp|remi
 | `chat-names.ts` | The static display-name pool for the chat directory: whimsical geek-culture names in fnord's Nomenclater style, baked in so name assignment never costs a model call. The pool is the fallback base for registrations with no usable session title. |
 | `tab-state.ts` | Read-only open-tab reader for the chat roster: globs every opencode channel's `tabs.json` (global + cwd scopes), subtracts fresh confirmed tab closes, and composes the provider the roster surfaces and broadcast targeting consume. Degrades to an empty set - never a false OPEN. See [features/cross-session-chat.md](features/cross-session-chat.md). |
 | `sideband.ts` | Unix domain socket server + client. The MCP server (long-lived, warm model) runs `SidebandServer` so one-shot hook processes can ask it to embed a prompt and search for matches without loading the model themselves. Handles three methods: `match` (recall nudge), `predictions` (prediction auto-fire), and `behaviors` (behavior auto-fire). Socket path is a hash of the DB path — both processes compute it independently. |
-| `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, prompt-aware recall nudge (`recallNudge` / `claudeRecallNudge`), prediction nudge (`predictionNudge`), behavior nudge (`behaviorNudge`), prediction verb selection (`predictionVerb`), watcher notification (`watcherNotificationNudge`), version warning (`versionWarningNudge`), chat wake notification (`chatNotificationNudge`), chat transcript echo text and echo recognizer (`chatEchoText` / `isChatEchoParts`), Claude Code CLAUDE.md instructions, Cursor AGENTS.md instructions, Claude Code hook text. Also the prompt cores (`defragCore`, `hygieneCore`, `reflectCore`, `extractionCore`) - host-agnostic behavior instruction bodies shared by nudges and `/thatch` commands, parameterized by a `ToolNamer` for per-host tool spellings. See [features/commands.md](features/commands.md). |
-| `commands.ts` | Slash-command registry and sync. Command bodies load from `artifacts/commands/<name>.md` templates (the same artifacts layout as skills); a `${...}` placeholder resolves at load - `${TOOL:name}` for the host's tool spelling, `${CORE:name}` for the nudge-backed prompt cores (defrag, extract, hygiene, reflect, so nudge and command wording cannot drift), `${COUCHING:...}` for the text shared by the review-mode commands (target and pipeline couchings), and `${CHECKLIST}` for the wrap-up scaffolding - and an unresolved placeholder throws instead of passing through. `actionDefs(tool)` renders the actions; the wrap-ups (compact, exit) assemble their frontmatter in code so the description stays single-sourced in `wrapUpCommandDescription`. Renderers produce full command files for opencode (`installOpencodeCommands`, synced by the plugin at init) and Claude Code (`installClaudeCommands`, synced by setup); `compilePrompts` in `mcp.ts` exposes the same actions as MCP prompts for Cursor. A parity-guard test pins the three sets to the documented exclusions. See [features/commands.md](features/commands.md). |
+| `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, prompt-aware recall nudge (`recallNudge` / `claudeRecallNudge`), prediction nudge (`predictionNudge`), behavior nudge (`behaviorNudge`), prediction verb selection (`predictionVerb`), watcher notification (`watcherNotificationNudge`), version warning (`versionWarningNudge`), chat wake notification (`chatNotificationNudge`), chat transcript echo text (`chatEchoText`), Claude Code CLAUDE.md instructions, Cursor AGENTS.md instructions, Claude Code hook text. Also the prompt cores (`defragCore`, `hygieneCore`, `reflectCore`, `extractionCore`) - host-agnostic behavior instruction bodies shared by nudges and `/thatch` commands, parameterized by a `ToolNamer` for per-host tool spellings. See [features/commands.md](features/commands.md). |
+| `commands.ts` | Slash-command registry and sync. Command bodies load from `artifacts/commands/<name>.md` templates (the same artifacts layout as skills); a `${...}` placeholder resolves at load - `${CORE:name}` for the nudge-backed prompt cores (defrag, extract, hygiene, reflect, so nudge and command wording cannot drift), `${COUCHING:...}` for the text shared by the review-mode commands (target and pipeline couchings), and `${CHECKLIST}` for the wrap-up scaffolding - and an unresolved placeholder throws instead of passing through. `actionDefs()` renders the actions; the wrap-ups (compact, exit) are not file-installed (they register in code through the CommandEditor) and their template bodies load through `wrapUpCommandContent` / `wrapUpCommandDescription`. Renderers produce full command files for opencode (`installOpencodeCommands`, action files only, synced by the plugin at init) and Claude Code (`installClaudeCommands`, synced by setup); `compilePrompts` in `mcp.ts` exposes the same actions as MCP prompts for Cursor. A parity-guard test pins the three sets to the documented exclusions. See [features/commands.md](features/commands.md). |
 | `skills.ts` | `SKILL.md` content for all thatch skills, plus the installer. Skills are split into `SHARED_SKILLS` (everything that works on all three hosts: the memory workflows, the review specialists — whose roster comes from `REVIEW_SPECIALISTS` in prompts.ts — plus the synthesizer, adjudicate, context, followup, and response skills, the walkthrough and archaeology skills, the refinement family, the writing skills, and verification/export) and `OPENCODE_ONLY_SKILLS` (the code-review coordinator and thatch-coordination — they need sub-agent support, so they are not installed for Claude Code or Cursor). `installSkills(dir, skills)` defaults to `SHARED_SKILLS`; the opencode plugin passes `[...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]`. |
 | `scoring-engine.ts` | Generic four-table scoring engine with Bayesian confidence. Shared base for prediction and behavior engines — each wraps it with table-specific names. |
 | `prediction.ts` | Thin wrapper around `ScoringEngine` with prediction-specific table names. |
@@ -123,20 +122,18 @@ bin/thatch             → CLI: stores|list|show|forget|search|remember|mcp|remi
 
 ## Plugin hooks
 
-The v1 adapter (`src/opencode/v1.ts`) registers these opencode integration
-points; the v2 adapter routes its domain hooks into the same shared runtime
-methods. The v1 hook shapes:
+The adapter (`src/opencode/v2.ts`) registers these opencode integration
+points; every one of them routes into a shared runtime method:
 
-| Hook | What it does |
+| Registration | What it does |
 |------|-------------|
-| `experimental.chat.system.transform` | Appends the thatch system prompt (store names, usage rules). |
-| `experimental.session.compacting` | Marks the session as compacting and appends re-familiarization context so a compacted session still knows thatch exists. |
-| `command.execute.before` | Arms the wrap-up greenlight check: `/thatch/compact` and `/thatch/exit` mark their session in `pendingWrapUp`. The model greenlights by calling the kind's zero-arg tool (`thatch_compact` / `thatch_exit`, which flips and journals the arm's `greenlit` flag); idles before that call leave the arm alone, and the next idle after greenlit deletes the arm and runs the host action (compact: v1 `session_compact` via `executeCommand`, v2 `session.compact` on the promise domain; exit: record the session's watcher deaths, unregister it from chat, then close on the host - v1 `app.exit` via `publish`, v2 the exit-tab-closed rpc event closing the session's own tab). See [features/session-lifecycle.md](features/session-lifecycle.md). |
-| `experimental.compaction.autocontinue` | Clears the compacting flag so `chat.message` nudges resume. Without this, nudges that instruct tool calls would fire during summary generation where tools are blocked. The `chat.message` hook also clears the flag if it fires for a session still in the compacting set but the incoming message has no compaction-type part — this handles compaction failure, where the session would otherwise be stuck with nudges off forever. |
-| `tool.execute.after` | Buffers every non-`thatch_*` tool call into the session's extraction buffer, except harness meta-tools (skill/task/agent/subagent are excluded — buffering them creates a feedback loop where the nudge triggers a dispatch, which gets buffered, which triggers another nudge). Memory writes (`thatch_memory_remember`) and `thatch_extraction_done` drain the buffer and reset the missed-nudge counter. For child sessions (`childToParent.has(sessionID)`), also tracks metrics: `remember` with `overwrite:false` → new++, `overwrite:true` → updated++, `forget` → deleted++. For `thatch_chat_*` tool calls, builds the transcript echo (`chatEchoText`) and posts it as a visible non-synthetic `noReply` part. This is a plugin hook, NOT a bus event — do not move it into the `event` handler; the event bus has no such event and it will silently never fire. |
-| `chat.message` | Recall nudge: embeds the user's prompt text with the in-process warm model, searches `db.search()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55). The same embedding also feeds the prediction auto-fire (`db.scorePredictionNudge`, injects `[thatch] User decision model`) and the behavior auto-fire (`db.scoreBehaviorNudge`, injects `[thatch] Situational behaviors`). All three nudges fire independently in separate try/catch blocks with separate synthetic parts. There is deliberately NO extraction nudge here - extraction is plugin-driven at session idle (see the extraction feature doc); the old model-driven handshake raced its own state machine and was removed. Chat transcript echoes (non-synthetic `noReply` parts whose text is entirely `[chat]`-prefixed bubbles) are skipped before any tier — no model turn reads them, so nudging them wastes an embedding. Skipped entirely while the session is compacting (tool calls are blocked during summary generation), and for task-dispatched sub-agent sessions (`childToParent` without `extractionChildren`) - their tool lists may exclude the thatch tools and their work is driven by the dispatch prompt. |
-| `event` | Subscribes to all session bus events. `session.created`: records `childToParent` + `parentSnapshots` (shallow copy of the parent's buffer for snapshot-aware drain), then sends the session-start reminder via `client.session.prompt` carrying the hygiene heartbeat (pending dedup pairs, stale count, orphaned branch memories) when any signal is non-zero. `session.status`: records the session's live status for the watcher and chat delivery gates; on idle, if the session is a child, drains its snapshot, fires a toast with `childMetrics`, and deletes the child session; if the session is a parent with pending tool interactions and not already extracting, calls `triggerExtraction` to create a direct-extraction child, then flushes pending watcher events and pending chat mail (the session just became deliverable). `session.error`: requeues the parent's buffer (child died without draining). `session.deleted`: cleans up `childToParent`, `parentSnapshots`, `childMetrics`, and `extracting`, cancels the session's watchers, and unregisters it from the chat directory (the crash path — a dead process fires no event — is covered by heartbeat staleness). `session.compacted`: clears the compacting flag so `chat.message` nudges resume. |
-| `dispose` | Stops the version checker, the watcher poller, and the chat poller, closes the DB. |
+| `session.hook("context")` | Appends the thatch system prompt (store names, usage rules) to the request's system array; also appends the turn's stored nudge injections to the outbound user message matching their prompt text (the prompt hook computed them - see the prompt row). |
+| `session.hook("compaction")` | Marks the session as compacting and appends re-familiarization context so a compacted session still knows thatch exists. |
+| `command.transform` (CommandEditor) | Registers the wrap-up commands in code. `/thatch/compact` and `/thatch/exit` arm the greenlight check: the model greenlights by calling the kind's zero-arg tool (`thatch_compact` / `thatch_exit`, which flips and journals the arm's `greenlit` flag); idles before that call leave the arm alone, and the next idle after greenlit deletes the arm and runs the host action (compact: `session.compact` on the promise domain; exit: record the session's watcher deaths, unregister it from chat, then emit the exit-tab-closed rpc event closing the session's own tab). See [features/session-lifecycle.md](features/session-lifecycle.md). |
+| `tool.hook("execute.after")` | Buffers every non-`thatch_*` tool call into the session's extraction buffer, except harness meta-tools (skill/task/agent/subagent are excluded — buffering them creates a feedback loop where the nudge triggers a dispatch, which gets buffered, which triggers another nudge). Memory writes (`thatch_memory_remember`) and `thatch_extraction_done` drain the buffer and reset the missed-nudge counter. For child sessions (`childToParent.has(sessionID)`), also tracks metrics: `remember` with `overwrite:false` → new++, `overwrite:true` → updated++, `forget` → deleted++. For `thatch_chat_*` tool calls, builds the transcript echo (`chatEchoText`) and posts it as a visible non-synthetic noReply delivery. This is a plugin hook, NOT a bus event — do not move it into the `event` handler; the event bus has no such event and it will silently never fire. |
+| `session.hook("prompt")` | Recall nudge: embeds the user's prompt text with the in-process warm model, searches `db.search()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55). The same embedding also feeds the prediction auto-fire (`db.scorePredictionNudge`, injects `[thatch] User decision model`) and the behavior auto-fire (`db.scoreBehaviorNudge`, injects `[thatch] Situational behaviors`). All three nudges fire independently in separate try/catch blocks with separate synthetic parts. There is deliberately NO extraction nudge here - extraction is plugin-driven at session idle (see the extraction feature doc); the old model-driven handshake raced its own state machine and was removed. Skipped entirely while the session is compacting (tool calls are blocked during summary generation), and for task-dispatched sub-agent sessions (`childToParent` without `extractionChildren`) - their tool lists may exclude the thatch tools and their work is driven by the dispatch prompt. |
+| `event.subscribe` (bus pump) | Subscribes to all session bus events, filtered client-side by directory. `session.created`: records `childToParent` + `parentSnapshots` (shallow copy of the parent's buffer for snapshot-aware drain), then sends the session-start reminder via `promptSession` (a resume:false synthetic) carrying the hygiene heartbeat (pending dedup pairs, stale count, orphaned branch memories) when any signal is non-zero. `session.execution.*` (translated to the runtime's busy/idle taxonomy): records the session's live status for the watcher and chat delivery gates; on idle, if the session is a child, drains its snapshot, fires a toast with `childMetrics`, and deletes the child session; if the session is a parent with pending tool interactions and not already extracting, calls `triggerExtraction` to create a direct-extraction child, then flushes pending watcher events and pending chat mail (the session just became deliverable). `session.error` (from `session.execution.failed`): requeues the parent's buffer (child died without draining). `session.deleted`: cleans up `childToParent`, `parentSnapshots`, `childMetrics`, and `extracting`, cancels the session's watchers, and unregisters it from the chat directory (the crash path — a dead process fires no event — is covered by heartbeat staleness). `session.compaction.ended`: clears the compacting flag so prompt-hook nudges resume. |
+| cleanup (returned from `setup`) | Stops the version checker, the watcher poller, and the chat poller, closes the DB. Idempotent - the host auto-reloads plugins on file change. |
 
 Hook failures are logged with a `[thatch]` prefix — never swallowed silently.
 Two of these hooks were dead for weeks because failures were invisible.
@@ -170,9 +167,9 @@ Two of these hooks were dead for weeks because failures were invisible.
    only shared.
 8. **Tool definitions are the single source of truth.** `tool-defs.ts` defines
    each tool once (name, zod schema, execute function). The opencode plugin
-   wraps them in `tool()` with a `thatch_` prefix; the MCP server wraps them
-   in `z.object()` for validation and `z.toJSONSchema()` for the protocol.
-   Adding a tool means adding one entry to `TOOL_DEFS`.
+   registers each through the ToolEditor with a `thatch_` prefix; the MCP
+   server wraps them in `z.object()` for validation and `z.toJSONSchema()`
+   for the protocol. Adding a tool means adding one entry to `TOOL_DEFS`.
 9. **Proactive save is prompt-instructed, not hook-driven.** All three system
    prompts include a "Before Responding" section instructing the agent to
    check for durable knowledge (via `thatch_memory_recall` for dedup, then
@@ -379,10 +376,12 @@ behavior cycle (agent-driven, self-graded)
 - `recall_count`, `last_recalled_at`, and `archived` are added to pre-existing
   databases by an idempotent column migration at init (`PRAGMA table_info` +
   `ALTER TABLE`). The `archived` column is `INTEGER NOT NULL DEFAULT 0` (0 =
-  live, 1 = archived); search, dedup, and staleness queries all exclude
-  archived entries by default. A second init migration rebuilds a
+  live, 1 = archived); search, dedup, and hygiene queries (staleness,
+  orphaned-branch enumeration) all exclude archived entries by default. A
+  second init migration rebuilds a
   pre-NOCASE `chat_sessions` table to enforce case-insensitive name
-  uniqueness (see [features/database.md](features/database.md)).
+  uniqueness, and a third normalizes legacy empty-string branch scopes to
+  unscoped (see [features/database.md](features/database.md)).
 - Embeddings are raw Float32Array bytes. Serialization honors
   `byteOffset`/`byteLength` — transformers.js can return views into larger
   tensor buffers, and serializing the whole backing buffer corrupts vectors.

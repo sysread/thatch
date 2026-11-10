@@ -83,6 +83,23 @@ describe("listBranches", () => {
     expect(branches.length).toBe(2); // default branch + feature/x
   });
 
+  test("includes remote-tracking branches without the remote prefix", async () => {
+    await gitInit();
+    await shell("git branch feature/x");
+    // A branch pushed with an open PR but never checked out locally exists
+    // only as a remote-tracking ref.
+    await shell("git update-ref refs/remotes/origin/remote-only HEAD");
+    // origin/HEAD is a pointer at the default branch, not a branch itself.
+    await shell("git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/remote-only");
+    // The same branch local and remote resolves to one name.
+    await shell("git update-ref refs/remotes/origin/feature/x HEAD");
+    const branches = await listBranches(cwd);
+    expect(branches).toContain("remote-only");
+    expect(branches).not.toContain("origin/remote-only");
+    expect(branches).not.toContain("HEAD");
+    expect(branches.filter((b) => b === "feature/x").length).toBe(1);
+  });
+
   test("returns empty outside a git repo", async () => {
     expect(await listBranches(cwd)).toEqual([]);
   });

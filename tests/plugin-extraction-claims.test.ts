@@ -1,26 +1,52 @@
 // Part of the former plugin.test.ts "plugin entry" describe, split by
-// topic: watcher journal reconcile and extraction claim-scoping races.
-// The wiring tests live in plugin-entry.test.ts, the buffering + payload
-// handshake in plugin-extraction.test.ts, and the direct-extraction child
-// lifecycle in plugin-extraction-direct.test.ts.
+// topic, re-based onto the v2 harness (the drop-v1 plan's Phase A-prime):
+// watcher journal reconcile and extraction claim-scoping races. The wiring
+// tests live in plugin-entry.test.ts, the buffering + payload handshake in
+// plugin-extraction.test.ts, and the direct-extraction child lifecycle in
+// plugin-extraction-direct.test.ts.
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdirSync } from "node:fs";
-import {
-  server,
-  setupPluginHarness,
-  teardownPluginHarness,
-} from "./mocks/plugin-harness";
+import { describe, test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
+import { setup } from "../src/opencode/v2";
 import { ThatchDB } from "../src/db";
+import {
+  addedTools,
+  makeContext,
+  PROJECT_DIR,
+  queueEvent,
+  SESSION_DIR,
+  setupTestEnv,
+  teardownTestEnv,
+  toolAfterHook,
+} from "./mocks/opencode-v2-harness";
 
-let hooks: Awaited<ReturnType<typeof server>>;
+// These tests pump async events through the v2 adapter harness; under a
+// loaded CI runner the pump can lag. Bun's default per-test timeout is 5s
+// with no margin for that (the 2026-11-03 fleet-contention CI reds). 90s =
+// expected (ms-scale pump handling) x ~900 headroom, above the harness
+// waitFor deadline so real hangs report the poll message.
+setDefaultTimeout(90_000);
 
-beforeAll(async () => {
-  hooks = await setupPluginHarness();
+let cleanup: (() => Promise<void>) | undefined;
+
+beforeEach(() => {
+  setupTestEnv();
 });
 
-afterAll(() => {
-  teardownPluginHarness();
+afterEach(async () => {
+  if (cleanup) await cleanup();
+  cleanup = undefined;
+  await teardownTestEnv();
+});
+
+// The v2 Tool.Result carries the tool's text in `content`.
+const textOf = (r: unknown): string => String((r as any)?.content ?? "");
+
+// The v2 bus envelope for a session event: payload in `data`, and a
+// location so the pump's directory filter routes it to this instance.
+const sessionEvent = (type: string, data: Record<string, unknown>) => ({
+  type,
+  location: { directory: SESSION_DIR },
+  data: { ...data },
 });
 
 describe("plugin entry", () => {
@@ -34,6 +60,7 @@ describe("plugin entry", () => {
     // pid), but the live registry the tools query is empty. Before the
     // reconcile, watch_list said "No active watchers" and watch_cancel "No
     // watcher in this session" while the orphaned poller kept delivering.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const watcher = {
       id: "watch_selfheal",
       source: "branch" as const,
@@ -48,29 +75,33 @@ describe("plugin entry", () => {
       state: { headSha: "aaaa1111aaaa1111", checkRuns: {}, workflowRuns: {} },
     };
     const jdb = new ThatchDB(process.env.THATCH_DB_PATH!);
-    jdb.runtimeStatePut("watchers", "ses_selfheal", [watcher], "/tmp/thatch-test-worktree");
+    jdb.runtimeStatePut("watchers", "ses_selfheal", [watcher], PROJECT_DIR);
+
+    const watchList = addedTools.find((t) => t.name === "thatch_watch_list")!;
+    const watchCancel = addedTools.find((t) => t.name === "thatch_watch_cancel")!;
 
     // watch_list self-heals: the journaled watcher is hydrated and listed.
-    const listed = await (hooks as any).tool.thatch_watch_list.execute({}, { sessionID: "ses_selfheal" });
-    expect(listed).toContain("watch_selfheal");
-    expect(listed).toContain("acme/widgets@main");
+    const listed = await watchList.execute({}, { sessionID: "ses_selfheal", agent: "general" });
+    expect(textOf(listed)).toContain("watch_selfheal");
+    expect(textOf(listed)).toContain("acme/widgets@main");
 
     // watch_cancel self-heals too: the rehydrated watcher is cancelable.
-    const cancelled = await (hooks as any).tool.thatch_watch_cancel.execute(
-      { id: "watch_selfheal" }, { sessionID: "ses_selfheal" },
+    const cancelled = await watchCancel.execute(
+      { id: "watch_selfheal" }, { sessionID: "ses_selfheal", agent: "general" },
     );
-    expect(cancelled).toContain("[cancelled] watch_selfheal");
+    expect(textOf(cancelled)).toContain("[cancelled] watch_selfheal");
 
     // Cancel re-journals the empty list - the row is gone, the entry does
     // not resurrect on the next call.
-    const listed2 = await (hooks as any).tool.thatch_watch_list.execute({}, { sessionID: "ses_selfheal" });
-    expect(listed2).toBe("No active watchers.");
+    const listed2 = await watchList.execute({}, { sessionID: "ses_selfheal", agent: "general" });
+    expect(textOf(listed2)).toBe("No active watchers.");
   });
 
   test("reconcile leaves cross-process (dormant) journal rows to the runtime scan", async () => {
     // A row journaled by a DEAD process (a real restart's leftover) must
     // NOT be hydrated by the tool path: its baseline needs the revalidation
     // that only scanDormantWatchers performs.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const watcher = {
       id: "watch_dormant",
       source: "branch" as const,
@@ -92,8 +123,9 @@ describe("plugin entry", () => {
     // row at the end regardless.
     jdb.runtimeStatePut("watchers", "ses_dormant", [watcher], "/tmp/not-the-runtime-dir", foreignPid);
 
-    const listed = await (hooks as any).tool.thatch_watch_list.execute({}, { sessionID: "ses_dormant" });
-    expect(listed).toBe("No active watchers.");
+    const watchList = addedTools.find((t) => t.name === "thatch_watch_list")!;
+    const listed = await watchList.execute({}, { sessionID: "ses_dormant", agent: "general" });
+    expect(textOf(listed)).toBe("No active watchers.");
     jdb.runtimeStateDelete("watchers", "ses_dormant");
   });
 
@@ -101,12 +133,14 @@ describe("plugin entry", () => {
     // A command watcher: its baseline (`false`, exit 1) is not yet met, so
     // the create registers it. (Command watchers need no gh; branch
     // watchers would fetch a baseline over the network.) The command runs
-    // with cwd = the harness's worktree, which nothing else creates.
-    mkdirSync("/tmp/thatch-test-worktree", { recursive: true });
-    const created = await (hooks as any).tool.thatch_watch_command_create.execute(
-      { command: "false" }, { sessionID: "ses_live" },
+    // with cwd = the harness's project directory, which the test env
+    // creates.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const watchCreate = addedTools.find((t) => t.name === "thatch_watch_command_create")!;
+    const created = await watchCreate.execute(
+      { command: "false" }, { sessionID: "ses_live", agent: "general" },
     );
-    expect(created).toContain("[watching]");
+    expect(textOf(created)).toContain("[watching]");
     const stale = {
       id: "watch_stale",
       source: "branch" as const,
@@ -121,14 +155,15 @@ describe("plugin entry", () => {
       state: { headSha: "cccc3333cccc3333", checkRuns: {}, workflowRuns: {} },
     };
     const jdb = new ThatchDB(process.env.THATCH_DB_PATH!);
-    jdb.runtimeStatePut("watchers", "ses_live", [stale], "/tmp/thatch-test-worktree");
+    jdb.runtimeStatePut("watchers", "ses_live", [stale], PROJECT_DIR);
 
-    const listed = await (hooks as any).tool.thatch_watch_list.execute({}, { sessionID: "ses_live" });
+    const watchList = addedTools.find((t) => t.name === "thatch_watch_list")!;
+    const listed = await watchList.execute({}, { sessionID: "ses_live", agent: "general" });
     // The LIVE watcher survives the reconcile (hydrate never clobbers), and
     // the journaled stale definition legitimately rehydrates alongside it -
     // the journal is reconciled INTO the registry, never over it.
-    expect(listed).toContain("cmd:");
-    expect(listed).toContain("watch_stale");
+    expect(textOf(listed)).toContain("cmd:");
+    expect(textOf(listed)).toContain("watch_stale");
     // Tidy up: the seeded row must not leak into later tests (this file
     // shares one db across tests).
     jdb.runtimeStateDelete("watchers", "ses_live");
@@ -142,77 +177,98 @@ describe("plugin entry", () => {
     // idle signal dropped the WHOLE accepted set and the extractor's
     // payload fetch came back empty - silent loss, and the nudge loop
     // Jeff saw for a week.
-    await hooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_race", callID: "rc1", args: { command: "git log" } },
-      { title: "log", output: "abc123 the real interaction", metadata: {} },
-    );
-    await hooks["tool.execute.after"]!(
-      { tool: "thatch_extraction_done", sessionID: "ses_race", callID: "rc2", args: {} },
-      { title: "ack", output: "[acknowledged]", metadata: {} },
-    );
-    await hooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "ses_specialist", parentID: "ses_race" } } } as any,
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_race",
+      input: { command: "git log" },
+      status: "completed",
+      result: { content: "abc123 the real interaction" },
     });
-    await hooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_specialist", status: { type: "idle" } } } as any,
+    await toolAfterHook!({
+      tool: "thatch_extraction_done",
+      sessionID: "ses_race",
+      input: {},
+      status: "completed",
+      result: { content: "[acknowledged]" },
     });
+    await queueEvent(sessionEvent("session.created", {
+      sessionID: "ses_specialist",
+      info: { id: "ses_specialist", parentID: "ses_race" },
+    }));
+    await queueEvent(sessionEvent("session.execution.succeeded", {
+      sessionID: "ses_specialist",
+    }));
 
-    const served = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+    const payloadTool = addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
+    const served = await payloadTool.execute(
       { session_id: "ses_race" },
-      { sessionID: "ses_extractor" },
+      { sessionID: "ses_extractor", agent: "general" },
     );
-    expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("abc123");
+    expect(textOf(served)).toContain("abc123");
   });
 
   test("completion consumes only the completing child's claimed delivery", async () => {
-    await hooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_two", callID: "t1", args: { command: "cmd A" } },
-      { title: "A", output: "interaction A", metadata: {} },
-    );
-    await hooks["tool.execute.after"]!(
-      { tool: "thatch_extraction_done", sessionID: "ses_two", callID: "t2", args: {} },
-      { title: "ack", output: "[acknowledged]", metadata: {} },
-    );
-    await hooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "ses_ext1", parentID: "ses_two" } } } as any,
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_two",
+      input: { command: "cmd A" },
+      status: "completed",
+      result: { content: "interaction A" },
     });
+    await toolAfterHook!({
+      tool: "thatch_extraction_done",
+      sessionID: "ses_two",
+      input: {},
+      status: "completed",
+      result: { content: "[acknowledged]" },
+    });
+    await queueEvent(sessionEvent("session.created", {
+      sessionID: "ses_ext1",
+      info: { id: "ses_ext1", parentID: "ses_two" },
+    }));
+    const payloadTool = addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
     // Fetch through the TOOL (not the after-hook): the execute path records
     // the fetcher's claim - the delivery record completion consumes.
-    await (hooks as any).tool.thatch_get_extraction_payload.execute(
+    await payloadTool.execute(
       { session_id: "ses_two" },
-      { sessionID: "ses_ext1" },
+      { sessionID: "ses_ext1", agent: "general" },
     );
 
     // New exhaust accumulates while extractor 1 works; extractor 2 fetches
     // and its claim covers the delivered set.
-    await hooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_two", callID: "t4", args: { command: "cmd B" } },
-      { title: "B", output: "interaction B", metadata: {} },
-    );
-    await hooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "ses_ext2", parentID: "ses_two" } } } as any,
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_two",
+      input: { command: "cmd B" },
+      status: "completed",
+      result: { content: "interaction B" },
     });
-    await (hooks as any).tool.thatch_get_extraction_payload.execute(
+    await queueEvent(sessionEvent("session.created", {
+      sessionID: "ses_ext2",
+      info: { id: "ses_ext2", parentID: "ses_two" },
+    }));
+    await payloadTool.execute(
       { session_id: "ses_two" },
-      { sessionID: "ses_ext2" },
+      { sessionID: "ses_ext2", agent: "general" },
     );
 
     // Extractor 1 finishes: only ITS delivery (interaction A) completes.
-    await hooks["tool.execute.after"]!(
-      { tool: "thatch_extraction_done", sessionID: "ses_ext1", callID: "t6", args: {} },
-      { title: "ack", output: "[acknowledged]", metadata: {} },
-    );
+    await toolAfterHook!({
+      tool: "thatch_extraction_done",
+      sessionID: "ses_ext1",
+      input: {},
+      status: "completed",
+      result: { content: "[acknowledged]" },
+    });
 
     // Interaction B survives extractor 1's completion.
-    const served = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+    const served = await payloadTool.execute(
       { session_id: "ses_two" },
-      { sessionID: "ses_ext3" },
+      { sessionID: "ses_ext3", agent: "general" },
     );
-    const text = typeof served === "string" ? served : JSON.stringify(served);
+    const text = textOf(served);
     expect(text).toContain("interaction B");
     expect(text).not.toContain("interaction A");
   });
@@ -224,36 +280,47 @@ describe("plugin entry", () => {
     // parent's own buffer, so pending never drained and the same count
     // re-fired forever. Now the pipeline does not depend on the parent's
     // ack at all: the child's fetch + completion drains the parent.
-    await hooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_mistarget", callID: "mt1", args: { command: "ls" } },
-      { title: "list", output: "file.txt", metadata: {} },
-    );
-    await hooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "ses_mistarget_child", parentID: "ses_mistarget" } } } as any,
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_mistarget",
+      input: { command: "ls" },
+      status: "completed",
+      result: { content: "file.txt" },
     });
+    await queueEvent(sessionEvent("session.created", {
+      sessionID: "ses_mistarget_child",
+      info: { id: "ses_mistarget_child", parentID: "ses_mistarget" },
+    }));
     // Parent acks with the CHILD's id (the mis-target). Must not drop or
     // strand anything.
-    await hooks["tool.execute.after"]!(
-      { tool: "thatch_extraction_done", sessionID: "ses_mistarget", callID: "mt2", args: { session_id: "ses_mistarget_child" } },
-      { title: "ack", output: "[acknowledged]", metadata: {} },
-    );
+    await toolAfterHook!({
+      tool: "thatch_extraction_done",
+      sessionID: "ses_mistarget",
+      input: { session_id: "ses_mistarget_child" },
+      status: "completed",
+      result: { content: "[acknowledged]" },
+    });
+    const payloadTool = addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
     // The child fetches with no id (auto-resolves to the parent) and
     // completes with no id.
-    const served = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+    const served = await payloadTool.execute(
       {},
-      { sessionID: "ses_mistarget_child" },
+      { sessionID: "ses_mistarget_child", agent: "general" },
     );
-    expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("file.txt");
-    await hooks["tool.execute.after"]!(
-      { tool: "thatch_extraction_done", sessionID: "ses_mistarget_child", callID: "mt3", args: {} },
-      { title: "ack", output: "[acknowledged]", metadata: {} },
-    );
-    const drained = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+    expect(textOf(served)).toContain("file.txt");
+    await toolAfterHook!({
+      tool: "thatch_extraction_done",
+      sessionID: "ses_mistarget_child",
+      input: {},
+      status: "completed",
+      result: { content: "[acknowledged]" },
+    });
+    const drained = await payloadTool.execute(
       { session_id: "ses_mistarget" },
-      { sessionID: "ses_mistarget_other" },
+      { sessionID: "ses_mistarget_other", agent: "general" },
     );
-    expect(typeof drained === "string" ? drained : JSON.stringify(drained)).not.toContain("file.txt");
+    expect(textOf(drained)).not.toContain("file.txt");
   });
 
   test("an extraction child's fetch resolves to its parent's queue automatically", async () => {
@@ -264,41 +331,49 @@ describe("plugin entry", () => {
     // linked child retargets to the parent's buffer. This is the safety
     // net for a child that mis-parrots the ID from its dispatch prompt;
     // the prompt still carries the explicit ID.
-    await hooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_autoparent", callID: "ap1", args: { command: "ls" } },
-      { title: "list", output: "file.txt", metadata: {} },
-    );
-    await hooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "ses_autoparent_child", parentID: "ses_autoparent" } } } as any,
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_autoparent",
+      input: { command: "ls" },
+      status: "completed",
+      result: { content: "file.txt" },
     });
+    await queueEvent(sessionEvent("session.created", {
+      sessionID: "ses_autoparent_child",
+      info: { id: "ses_autoparent_child", parentID: "ses_autoparent" },
+    }));
 
+    const payloadTool = addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
     // Child fetches with NO session_id: resolves to its own session, which
     // the provider retargets to the parent via childToParent.
-    const served = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+    const served = await payloadTool.execute(
       {},
-      { sessionID: "ses_autoparent_child" },
+      { sessionID: "ses_autoparent_child", agent: "general" },
     );
-    expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("file.txt");
+    expect(textOf(served)).toContain("file.txt");
 
     // Same with the child's OWN id passed explicitly (mis-parrot shape).
-    const served2 = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+    const served2 = await payloadTool.execute(
       { session_id: "ses_autoparent_child" },
-      { sessionID: "ses_autoparent_child" },
+      { sessionID: "ses_autoparent_child", agent: "general" },
     );
-    expect(typeof served2 === "string" ? served2 : JSON.stringify(served2)).toContain("file.txt");
+    expect(textOf(served2)).toContain("file.txt");
 
     // The child's no-arg extraction_done (parentID known via
     // childToParent) completes its claim - the parent's buffer drains.
-    await hooks["tool.execute.after"]!(
-      { tool: "thatch_extraction_done", sessionID: "ses_autoparent_child", callID: "ap2", args: {} },
-      { title: "ack", output: "[acknowledged]", metadata: {} },
-    );
-    const drained = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+    await toolAfterHook!({
+      tool: "thatch_extraction_done",
+      sessionID: "ses_autoparent_child",
+      input: {},
+      status: "completed",
+      result: { content: "[acknowledged]" },
+    });
+    const drained = await payloadTool.execute(
       { session_id: "ses_autoparent" },
-      { sessionID: "ses_autoparent_other" },
+      { sessionID: "ses_autoparent_other", agent: "general" },
     );
-    expect(typeof drained === "string" ? drained : JSON.stringify(drained)).not.toContain("file.txt");
+    expect(textOf(drained)).not.toContain("file.txt");
   });
 
   test("wrap-up shape: parent-side fetch plus no-save extraction_done completes its own claim", async () => {
@@ -307,45 +382,61 @@ describe("plugin entry", () => {
     // no memory, so the ack is the only completion signal for the parent's
     // self-claim. Before this branch completed claims, the entries sat
     // held for 15 minutes and were needlessly re-extracted.
-    await hooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_wrapup", callID: "w1", args: { command: "cmd W" } },
-      { title: "W", output: "interaction W", metadata: {} },
-    );
-    const served = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_wrapup",
+      input: { command: "cmd W" },
+      status: "completed",
+      result: { content: "interaction W" },
+    });
+    const payloadTool = addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
+    const served = await payloadTool.execute(
       {},
-      { sessionID: "ses_wrapup" },
+      { sessionID: "ses_wrapup", agent: "general" },
     );
-    expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("interaction W");
-    await hooks["tool.execute.after"]!(
-      { tool: "thatch_extraction_done", sessionID: "ses_wrapup", callID: "w2", args: {} },
-      { title: "ack", output: "[acknowledged]", metadata: {} },
-    );
-    const drained = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+    expect(textOf(served)).toContain("interaction W");
+    await toolAfterHook!({
+      tool: "thatch_extraction_done",
+      sessionID: "ses_wrapup",
+      input: {},
+      status: "completed",
+      result: { content: "[acknowledged]" },
+    });
+    const drained = await payloadTool.execute(
       {},
-      { sessionID: "ses_wrapup" },
+      { sessionID: "ses_wrapup", agent: "general" },
     );
-    expect(typeof drained === "string" ? drained : JSON.stringify(drained)).not.toContain("interaction W");
+    expect(textOf(drained)).not.toContain("interaction W");
   });
 
   test("parent-side direct fetch plus memory write completes its own claim", async () => {
-    await hooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_direct", callID: "d1", args: { command: "cmd C" } },
-      { title: "C", output: "interaction C", metadata: {} },
-    );
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_direct",
+      input: { command: "cmd C" },
+      status: "completed",
+      result: { content: "interaction C" },
+    });
+    const payloadTool = addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
     // The parent fetches its own payload (no sub-agent) and then saves.
-    const served = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+    const served = await payloadTool.execute(
       { session_id: "ses_direct" },
-      { sessionID: "ses_direct" },
+      { sessionID: "ses_direct", agent: "general" },
     );
-    expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("interaction C");
-    await hooks["tool.execute.after"]!(
-      { tool: "thatch_memory_remember", sessionID: "ses_direct", callID: "d2", args: {} },
-      { title: "save", output: "[saved]", metadata: {} },
-    );
-    const drained = await (hooks as any).tool.thatch_get_extraction_payload.execute(
+    expect(textOf(served)).toContain("interaction C");
+    await toolAfterHook!({
+      tool: "thatch_memory_remember",
+      sessionID: "ses_direct",
+      input: {},
+      status: "completed",
+      result: { content: "[saved]" },
+    });
+    const drained = await payloadTool.execute(
       { session_id: "ses_direct" },
-      { sessionID: "ses_direct" },
+      { sessionID: "ses_direct", agent: "general" },
     );
-    expect(typeof drained === "string" ? drained : JSON.stringify(drained)).not.toContain("interaction C");
+    expect(textOf(drained)).not.toContain("interaction C");
   });
 });

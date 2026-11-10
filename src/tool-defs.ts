@@ -245,6 +245,26 @@ export interface SessionTabCloseInput {
   chatName: string | null;
 }
 
+/** Input to SessionTabHost.openTab - the resolved reopen target plus the
+ *  routing anchor. */
+export interface SessionTabOpenInput {
+  /** The session whose tab should open (resolved id). */
+  sessionID: string;
+  /** The calling session's id - the tab-open event's routing anchor (the
+   *  window holding the caller's tab acts first, like a spawn). */
+  coordinatorSessionID: string;
+}
+
+/**
+ * The openTab result is a union, not a throw: a dead target (stale roster
+ * row, aged-out worktree) is an EXPECTED user error the calling model can
+ * act on, unlike the spawn flow's mid-flight throw - which narrates a
+ * stranded CREATED session, and openTab creates nothing to narrate.
+ */
+export type SessionTabOpenResult =
+  | { ok: true; directory: string; title: string | null }
+  | { ok: false; error: string };
+
 /**
  * The v2-only host surface behind thatch_session_tab +
  * thatch_session_tab_close. Implementation lives in src/opencode/v2.ts; the
@@ -260,14 +280,20 @@ export interface SessionTabHost {
    *  toward the TUI: the strip close is requested, not acked (windows not
    *  showing the tab no-op it). */
   closeTab(input: SessionTabCloseInput): Promise<void>;
+  /** Reopens a tab for an EXISTING session: emits the tab-opened rpc event
+   *  (the spawn's event, unchanged) behind the dead-directory guard - only
+   *  the adapter can reach the session domain, so the live-session lookup
+   *  and the fs check on the session's directory happen here. Fire-and-
+   *  forget toward the TUI like closeTab: the open is requested, not acked. */
+  openTab(input: SessionTabOpenInput): Promise<SessionTabOpenResult>;
 }
 
 /**
- * A tool definition - the single source of truth shared by the opencode plugin
- * wrapper (tools.ts) and the MCP server (mcp.ts). The `args` field is a ZodRawShape
- * (a plain object of Zod types), which opencode's `tool()` accepts directly and
- * the MCP server wraps in `z.object()` for validation (a deep-passthrough clone,
- * so typo'd keys survive into the accept-then-teach guards) and
+ * A tool definition - the single source of truth shared by the opencode
+ * plugin registration (src/opencode/v2.ts) and the MCP server (mcp.ts).
+ * The `args` field is a ZodRawShape (a plain object of Zod types), which
+ * the MCP server wraps in `z.object()` for validation (a deep-passthrough
+ * clone, so typo'd keys survive into the accept-then-teach guards) and
  * `z.toJSONSchema()` for the protocol response.
  */
 export interface ToolDef {
@@ -276,9 +302,10 @@ export interface ToolDef {
   args: Record<string, z.ZodType>;
   execute(args: Record<string, unknown>, ctx: CoreContext, host?: HostToolContext): Promise<string>;
   /**
-   * When true, the tool exists only on the opencode plugin path and the MCP
-   * server filters it out of tools/list. Used for tools that depend on host
-   * capabilities MCP hosts lack (e.g. session identity).
+   * When true, the tool exists only on the opencode plugin path and the
+   * MCP server filters it out of tools/list. Used for tools that depend on
+   * host capabilities MCP hosts lack (e.g. session identity, or the
+   * session-tab bridge's create/move/prompt/emit flow).
    */
   opencodeOnly?: boolean;
   /**
@@ -313,15 +340,6 @@ export interface ToolDef {
    * host-action state, which no MCP surface has.
    */
   bundledServable?: boolean;
-  /**
-   * When true, the tool exists only on the opencode v2 adapter path: the v1
-   * adapter's createTools and the MCP server filter it out. Used for tools
-   * whose host needs ride v2-only plugin surfaces (e.g. the session-tab
-   * tool's create/move/prompt/emit flow). The def carries v2Only only -
-   * never also opencodeOnly - so the opencodeOnly name assertions are
-   * untouched and each filter site tests `opencodeOnly || v2Only`.
-   */
-  v2Only?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -402,7 +420,9 @@ function formatEntry(
 
   const parts: string[] = [];
   let meta = `[${entry.store}]`;
-  if (entry.branch) meta += ` branch:${entry.branch}`;
+  // Non-null check, not truthiness: a row scoped to branch = '' must render
+  // its marker, or the scoping exists in the DB but is invisible everywhere.
+  if (entry.branch != null) meta += ` branch:${entry.branch}`;
   if (entry.confidence) meta += ` confidence:${entry.confidence}`;
   if (entry.archived) meta += " archived:true";
   meta += ` created:${entry.created_at}`;
@@ -412,7 +432,7 @@ function formatEntry(
 
 function formatRecallResult(entry: MemoryRow & { _score: number }): string {
   let meta = `store:${entry.store}`;
-  if (entry.branch) meta += ` branch:${entry.branch}`;
+  if (entry.branch != null) meta += ` branch:${entry.branch}`;
   if (entry.confidence) meta += ` confidence:${entry.confidence}`;
   if (entry.archived) meta += " archived:true";
   const score = entry._score.toFixed(3);
@@ -676,7 +696,7 @@ const listDef: ToolDef = {
     return entries
       .map((e) => {
         let line = `[${store}] ${e.label}`;
-        if (e.branch) line += ` (branch:${e.branch})`;
+        if (e.branch != null) line += ` (branch:${e.branch})`;
         if (e.confidence) line += ` (c:${e.confidence})`;
         if (e.archived) line += " (archived)";
         line += ` (${e.updated_at})`;
@@ -2354,7 +2374,9 @@ const watchCancelDef: ToolDef = {
  * "[registered] NAME" and "[sent] to NAME (session-id prefix)" shapes, the
  * "[broadcast] to N session[s]" fan-out header, and the exact
  * "Inbox empty." sentinel that suppresses the read echo. Reformat them in
- * the same change as chatEchoText and its tests.
+ * the same change as chatEchoText and the tests that pin these shapes
+ * (the echo describe in tests/chat-echo.test.ts and the echo-delivery
+ * pins in tests/plugin-entry.test.ts).
  */
 
 /**
@@ -2931,12 +2953,12 @@ const chatStatusDef: ToolDef = {
  * The def validates everything it can locally (title, exactly-one location
  * arg, directory existence, worktree-repo identity) and delegates the host
  * flow - chat registration, session creation, the move, the rpc emit, and
- * prompt delivery - to the v2 adapter through the sessionTabHost seam.
+ * prompt delivery - to the adapter through the sessionTabHost seam.
  * chatName resolution for the preamble happens here because the tool has
  * the db handle; the adapter receives it ready-made.
  *
- * v2Only: the whole flow rides v2 plugin surfaces (session.move, rpc emit)
- * with no v1 or MCP equivalent.
+ * opencodeOnly: the whole flow rides plugin host surfaces (session.move,
+ * rpc emit) with no MCP equivalent.
  */
 const sessionTabDef: ToolDef = {
   name: "session_tab",
@@ -2973,7 +2995,7 @@ const sessionTabDef: ToolDef = {
       "tab opens in this window's strip regardless of where the directory is.",
     ),
   },
-  v2Only: true,
+  opencodeOnly: true,
   async execute(args, ctx, host) {
     if (!host) {
       return "Session tabs are unavailable: this host did not provide a session context.";
@@ -3024,6 +3046,89 @@ const sessionTabDef: ToolDef = {
 };
 
 /**
+ * Opens a TUI tab for an EXISTING session - the reopen half of the
+ * session-tab lifecycle (spawn -> supervise -> close -> reopen). opencode
+ * reaps tabs by age while the session lives on, and the strip's reopen
+ * stack only reaches recent closes; this tool reaches any live session by
+ * chat name or id. It reuses the spawn's tab-opened rpc event UNCHANGED
+ * (same payload shape, same coordinator-anchored routing - see
+ * docs/plans/session-tab-open-tool.md), so the TUI half is unaware a
+ * second emitter exists. Tab-level only: nothing is created, prompted, or
+ * deleted, and the already-open case is a silent idempotent no-op.
+ *
+ * The def validates the target locally and delegates the host flow - the
+ * live-session lookup, the dead-directory guard, and the emit - to the
+ * adapter through the sessionTabHost seam, the same pattern as the spawn
+ * and close tools. opencodeOnly: same surfaces as the spawn tool.
+ */
+const sessionTabOpenDef: ToolDef = {
+  name: "session_tab_open",
+  description:
+    "Open a TUI tab for an EXISTING session (opencode v2 only). Use when a session's tab " +
+    "was closed (opencode reaps tabs by age) but the session is still alive: a coordinator " +
+    "reopening a dispatched subordinate's tab, or reopening a session found via " +
+    "thatch_session_search. The tab opens UNFOCUSED in this window's strip; nothing is " +
+    "created or prompted - tab-level only, and a tab that is already open stays put. " +
+    "The target is the session's chat name (from the spawn tool's response or the chat " +
+    "roster) or its session id.",
+  args: {
+    session: z.string().min(1).describe(
+      "Which session's tab to open: its chat name (e.g. 'bishop-the-synthetic-00001') or its session id (ses_...).",
+    ),
+  },
+  opencodeOnly: true,
+  async execute(args, ctx, host) {
+    if (!host) {
+      return "Session tabs are unavailable: this host did not provide a session context.";
+    }
+    if (!ctx.sessionTabHost) {
+      return "Session tabs are unavailable: this host did not wire the session-tab surface (opencode v2 only).";
+    }
+    const target = resolveTabTarget(ctx.db, args.session as string);
+    if (!target.ok) return target.error;
+    const result = await ctx.sessionTabHost.openTab({
+      sessionID: target.sessionID,
+      coordinatorSessionID: host.sessionID,
+    });
+    if (!result.ok) return result.error;
+    return [
+      `Tab open requested for ${target.chatName ? `${target.chatName} (${target.sessionID})` : target.sessionID}.`,
+      `  directory: ${result.directory}`,
+      ...(result.title ? [`  title: ${result.title}`] : []),
+      "",
+      "The tab opens unfocused in this window's strip. If it did not appear (headless run, tabs " +
+        "disabled, or the TUI was still connecting), the session is unaffected - it is still there.",
+    ].join("\n");
+  },
+};
+
+/**
+ * Shared target resolution for session_tab_open + session_tab_close: chat
+ * name first (roster names are unique), then a raw ses_ id - so the
+ * coordinator can paste either from its task list and neither tool cares
+ * which it got. A miss suggests near-miss roster names (same source
+ * chat_send suggests from). Lives here rather than session-tab-shared.ts:
+ * that module is the TUI-imported cross-entry contract and must stay free
+ * of db concerns.
+ */
+function resolveTabTarget(db: ThatchDB, raw: string): { ok: true; sessionID: string; chatName: string | null } | { ok: false; error: string } {
+  const target = raw.trim();
+  const row = db.findChatSession(target);
+  const sessionID = row?.session_id ?? (target.startsWith("ses_") ? target : "");
+  if (!sessionID) {
+    return {
+      ok: false,
+      error: withDidYouMean(
+        `No registered session matches "${target}" - pass the subordinate's chat name (from the spawn response) or its session id.`,
+        target,
+        db.listChatSessions().map((s) => s.name),
+      ),
+    };
+  }
+  return { ok: true, sessionID, chatName: row?.name ?? null };
+}
+
+/**
  * Closes a subordinate session's TUI tab. The counterpart of
  * thatch_session_tab: the coordinator's cleanup half of the supervision
  * lifecycle (spawn -> supervise -> verify -> close). Tab-level only - the
@@ -3033,8 +3138,8 @@ const sessionTabDef: ToolDef = {
  * session's watchers immediately.
  *
  * The target resolves name-first (chat names are unique) then by session
- * id - so the coordinator can paste either from its task list. v2Only:
- * same surfaces as the spawn tool.
+ * id - so the coordinator can paste either from its task list.
+ * opencodeOnly: same surfaces as the spawn tool.
  */
 const sessionTabCloseDef: ToolDef = {
   name: "session_tab_close",
@@ -3049,7 +3154,7 @@ const sessionTabCloseDef: ToolDef = {
       "(e.g. 'bishop-the-synthetic-00001') or its session id (ses_...).",
     ),
   },
-  v2Only: true,
+  opencodeOnly: true,
   async execute(args, ctx, host) {
     if (!host) {
       return "Session tabs are unavailable: this host did not provide a session context.";
@@ -3057,23 +3162,11 @@ const sessionTabCloseDef: ToolDef = {
     if (!ctx.sessionTabHost) {
       return "Session tabs are unavailable: this host did not wire the session-tab surface (opencode v2 only).";
     }
-    const target = (args.session as string).trim();
-    const row = ctx.db.findChatSession(target);
-    const sessionID = row?.session_id ?? (target.startsWith("ses_") ? target : "");
-    if (!sessionID) {
-      // Suggest close chat names from the roster (same source chat_send
-      // suggests from), git-strict: a far-off target (e.g. an unregistered
-      // ses_ id) adds no suggestion line.
-      return withDidYouMean(
-        `No registered session matches "${target}" - pass the subordinate's chat name (from the spawn response) or its session id.`,
-        target,
-        ctx.db.listChatSessions().map((s) => s.name),
-      );
-    }
-    const chatName = row?.name ?? null;
-    await ctx.sessionTabHost.closeTab({ sessionID, chatName });
+    const target = resolveTabTarget(ctx.db, args.session as string);
+    if (!target.ok) return target.error;
+    await ctx.sessionTabHost.closeTab({ sessionID: target.sessionID, chatName: target.chatName });
     return [
-      `Tab close requested for ${chatName ? `${chatName} (${sessionID})` : sessionID}.`,
+      `Tab close requested for ${target.chatName ? `${target.chatName} (${target.sessionID})` : target.sessionID}.`,
       "The tab closes in windows showing it (the session itself is untouched -",
       "the user can reopen the tab). Cross-session chat history is unaffected.",
     ].join("\n");
@@ -3268,6 +3361,7 @@ export const TOOL_DEFS: ToolDef[] = [
   chatBroadcastDef,
   chatStatusDef,
   sessionTabDef,
+  sessionTabOpenDef,
   sessionTabCloseDef,
 ];
 
@@ -3320,9 +3414,10 @@ export function buildCoreContext(
 }
 
 /**
- * Trim opencode's per-call ToolContext to the host-agnostic fields the
- * shared definitions know about. Both adapters do this same two-field trim;
- * tests and MCP paths pass no host context.
+ * Trim the host's per-call tool context to the host-agnostic fields the
+ * shared definitions know about (the adapter does this same two-field
+ * trim at its registration boundary); tests and MCP paths pass no host
+ * context.
  */
 export function trimHostContext(
   hostContext: { sessionID: string; agent: string } | undefined,

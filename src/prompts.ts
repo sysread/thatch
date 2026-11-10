@@ -165,7 +165,7 @@ silently; memory maintenance is not user-facing. For a deep staleness check
 of a specific memory, load the thatch-memory-verify skill.`;
 }
 
-export function systemPrompt(repo: string, chatEnabled = true, v2Tools = false): string {
+export function systemPrompt(repo: string, chatEnabled = true): string {
   return `# Persistence
 
 Thatch provides persistent memory across opencode sessions. Use it to persist
@@ -188,7 +188,7 @@ Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
         thatch_chat_status, thatch_exit (zero args; closes the session after
         /thatch/exit armed it - the checklist in that command tells you when
         to call it), thatch_compact (zero args; starts compaction after
-        /thatch/compact armed it - same checklist protocol)${v2Tools ? `\n        thatch_session_tab (opencode v2 only - spawn a detached subordinate\n        LLM session in a new TUI tab and supervise it over cross-session chat)\n        thatch_session_tab_close (opencode v2 only - close a dispatched\n        subordinate's tab when its task is verified and done)` : ""}
+        /thatch/compact armed it - same checklist protocol)\n        thatch_session_tab (opencode only - spawn a detached subordinate\n        LLM session in a new TUI tab and supervise it over cross-session chat)\n        thatch_session_tab_open (opencode only - reopen a TUI tab for an\n        EXISTING session: chat name or session id; tab-level only)\n        thatch_session_tab_close (opencode only - close a dispatched\n        subordinate's tab when its task is verified and done)
 
 Argument shapes (one object argument, never a bare positional string):
 - thatch_memory_remember({ content, ... }) - content carries the information; label is optional (derived from the content's first heading or line)
@@ -593,11 +593,12 @@ Cross-session chat works with the identity your thatch hook assigned
 (pass its printed name as \`as\`).`
     : `get_session_info, session_search,
 session_get, watch_create, watch_branch_create, watch_command_create,
-watch_list, watch_cancel, exit, compact, session_tab, and
+watch_list, watch_cancel, exit, compact, session_tab,
+session_tab_open, and
 session_tab_close are intentionally absent:
 they are opencode-only (MCP hosts
 have no session concept, session database, or proactive-prompt channel),
-so do not expect them here. session_tab and session_tab_close
+so do not expect them here. session_tab, session_tab_open, and session_tab_close
 additionally require opencode
 v2 (TUI session tabs). On MCP hosts, cross-session chat works with
 the identity your thatch hook assigned (pass its printed name as \`as\`);
@@ -1422,9 +1423,9 @@ function clip(text: string, max: number): string {
  * typed.
  */
 
-/** The transcript-echo marker: stamped by every chatEchoText return and
- *  matched by isChatEchoParts. One constant so the compiler enforces the
- *  keep-in-sync rule this pair depends on. */
+/** The transcript-echo marker: stamped by every chatEchoText return so the
+ *  echo text is recognizable at a glance. One constant so the compiler
+ *  enforces the keep-in-sync rule the pair below depends on. */
 export const CHAT_ECHO_PREFIX = "[chat] ";
 
 export function chatEchoText(tool: string, args: Record<string, unknown>, output: string): string | null {
@@ -1467,8 +1468,8 @@ export function chatEchoText(tool: string, args: Record<string, unknown>, output
  * the model's own context. The frame exists only at output time - the
  * persisted message rows are untouched.
  *
- * Paired with the wake nudge's anti-loop rule and the isChatEchoParts skip;
- * the three together are the injection-hygiene story for the chat feature.
+ * Paired with the wake nudge's anti-loop rule; the two together are the
+ * injection-hygiene story for the chat feature.
  */
 export function chatInboxFrame(lines: string[], count: number): string {
   return [
@@ -1482,26 +1483,4 @@ export function chatInboxFrame(lines: string[], count: number): string {
     ...lines,
     `===[ end chat inbox ]===`,
   ].join("\n");
-}
-
-/**
- * True when a message's visible text is entirely chat transcript echo
- * bubbles. The echo is delivered as a non-synthetic noReply part, and the
- * opencode server fires the chat.message hook for every prompt part before
- * the noReply early-return - so without this check, every echo would run
- * the full nudge machinery (an embedding plus recall, prediction, and
- * behavior scans) and attach nudge parts to a message that never gets a
- * model turn.
- *
- * The "[chat] " prefix is the only signal available: noReply is not visible
- * in the hook payload, so a structural check is impossible. The same
- * literal is stamped by chatEchoText above - keep the two in sync. The
- * accepted false positive: a genuine user message whose every visible part
- * starts with the prefix is skipped too (one turn loses its advisory
- * nudges; nothing is swallowed and the next ordinary message restores
- * them).
- */
-export function isChatEchoParts(parts: unknown[]): boolean {
-  const visible = (parts as any[]).filter((p) => p?.type === "text" && !p?.synthetic);
-  return visible.length > 0 && visible.every((p) => typeof p.text === "string" && p.text.startsWith(CHAT_ECHO_PREFIX));
 }

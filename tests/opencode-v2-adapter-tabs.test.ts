@@ -289,6 +289,140 @@ describe("opencode v2 adapter", () => {
     }
   });
 
+  test("session_tab_open: resolves the target, guards the directory, emits the spawn's event", async () => {
+    // Seed the chat roster with a session, then reopen it by NAME. The
+    // session.get override returns a live location (dbDir exists - the
+    // test sandbox), so the guard passes and the emit fires.
+    const { ThatchDB } = await import("../src/db");
+    cleanup = (await setup(
+      makeContext({
+        get: async (input: any) =>
+          input?.sessionID === "ses_still_alive"
+            ? { title: "Still alive", location: { directory: dbDir } }
+            : undefined,
+      }) as any,
+    )) as () => Promise<void>;
+    const db = new ThatchDB(join(dbDir, "test.db"));
+    try {
+      db.registerChatSession("ses_still_alive", "test-owner/test-repo", null, "opencode", null, null);
+      const row = db.findChatSession("ses_still_alive");
+      const tool = addedTools.find((t) => t.name === "thatch_session_tab_open")!;
+      const raw = await tool.execute(
+        { session: row?.name },
+        { sessionID: "ses_coordinator", agent: "build" },
+      );
+      const result = typeof raw === "string" ? raw : (raw as any)?.content;
+      // The spawn's event, unchanged: same name, same payload shape
+      // (resolved id, the session's CURRENT directory, the calling
+      // session's id as the routing anchor).
+      expect(rpcEmitted).toEqual([
+        { name: "tab-opened", data: { sessionID: "ses_still_alive", directory: dbDir, coordinatorSessionID: "ses_coordinator" } },
+      ]);
+      expect(result).toContain("Tab open requested");
+      expect(result).toContain(`${row?.name} (ses_still_alive)`);
+      expect(result).toContain(`directory: ${dbDir}`);
+      expect(result).toContain("title: Still alive");
+      // The open is requested, not guaranteed (ephemeral event, like a
+      // spawn's).
+      expect(result).toContain("If it did not appear");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("session_tab_open raw-id target: resolves without a roster row", async () => {
+    // The librarian flow: session_search returns session ids, not chat
+    // names - a raw ses_ id must resolve the same way close's does.
+    cleanup = (await setup(
+      makeContext({
+        get: async (input: any) =>
+          input?.sessionID === "ses_found_by_search"
+            ? { title: "Found", location: { directory: dbDir } }
+            : undefined,
+      }) as any,
+    )) as () => Promise<void>;
+    const tool = addedTools.find((t) => t.name === "thatch_session_tab_open")!;
+    const raw = await tool.execute(
+      { session: "ses_found_by_search" },
+      { sessionID: "ses_coordinator", agent: "build" },
+    );
+    const result = typeof raw === "string" ? raw : (raw as any)?.content;
+    expect(rpcEmitted).toEqual([
+      { name: "tab-opened", data: { sessionID: "ses_found_by_search", directory: dbDir, coordinatorSessionID: "ses_coordinator" } },
+    ]);
+    expect(result).toContain("ses_found_by_search");
+  });
+
+  test("session_tab_open refuses a dead directory without emitting", async () => {
+    // The REQUIRED guard: a session whose directory is gone would open
+    // opencode's "Session location unavailable" dialog on the user's
+    // screen - the tool refuses with the path instead, and nothing emits.
+    cleanup = (await setup(
+      makeContext({
+        get: async () => ({ title: "Ghost", location: { directory: join(dbDir, "deleted-worktree") } }),
+      }) as any,
+    )) as () => Promise<void>;
+    const tool = addedTools.find((t) => t.name === "thatch_session_tab_open")!;
+    const raw = await tool.execute(
+      { session: "ses_dead_dir" },
+      { sessionID: "ses_coordinator", agent: "build" },
+    );
+    const result = typeof raw === "string" ? raw : (raw as any)?.content;
+    expect(result).toContain("no longer exists");
+    expect(result).toContain("deleted-worktree");
+    expect(rpcEmitted).toEqual([]);
+  });
+
+  test("session_tab_open: a session.get rejection and an absent location both refuse without emitting", async () => {
+    // Two "unusable response" shapes, one outcome: the broad catch (no
+    // typed not-found class on the pinned surface) and the defensive
+    // location read (the harness mock's default get returns no location -
+    // the shape a shape-drift could produce).
+    cleanup = (await setup(
+      makeContext({
+        get: async (input: any) => {
+          if (input?.sessionID === "ses_throws") throw new Error("session not found");
+          return { title: "No location here" };
+        },
+      }) as any,
+    )) as () => Promise<void>;
+    const tool = addedTools.find((t) => t.name === "thatch_session_tab_open")!;
+    const rawThrown = await tool.execute(
+      { session: "ses_throws" },
+      { sessionID: "ses_coordinator", agent: "build" },
+    );
+    expect(typeof rawThrown === "string" ? rawThrown : (rawThrown as any)?.content).toContain("No live session with id ses_throws");
+    const rawBare = await tool.execute(
+      { session: "ses_bare" },
+      { sessionID: "ses_coordinator", agent: "build" },
+    );
+    expect(typeof rawBare === "string" ? rawBare : (rawBare as any)?.content).toContain("returned no location");
+    expect(rpcEmitted).toEqual([]);
+  });
+
+  test("session_tab_open miss suggests near-miss roster names", async () => {
+    // Same miss behavior as close (the shared resolver): a near-miss chat
+    // name gets the did-you-mean line.
+    const { ThatchDB } = await import("../src/db");
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const db = new ThatchDB(join(dbDir, "test.db"));
+    try {
+      db.registerChatSession("ses_sub_open", "test-owner/test-repo", null, "opencode", null, null);
+      const name = db.findChatSession("ses_sub_open")!.name!;
+      const tool = addedTools.find((t) => t.name === "thatch_session_tab_open")!;
+      const raw = await tool.execute(
+        { session: name.slice(0, -1) },
+        { sessionID: "ses_coordinator", agent: "build" },
+      );
+      const result = typeof raw === "string" ? raw : (raw as any)?.content;
+      expect(result).toContain("No registered session matches");
+      expect(result).toContain("Did you mean");
+      expect(rpcEmitted).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
   test("session_tab degrade: no session context and no seam refuse cleanly", async () => {
     const { buildCoreContext } = await import("../src/tool-defs");
     const { ThatchDB } = await import("../src/db");
@@ -305,6 +439,12 @@ describe("opencode v2 adapter", () => {
       const closeDef = TOOL_DEFS.find((d) => d.name === "session_tab_close")!;
       expect(await closeDef.execute({ session: "ses_x" }, ctx, undefined)).toContain("did not provide a session context");
       expect(await closeDef.execute({ session: "ses_x" }, ctx, { sessionID: "s", agent: "build" })).toContain(
+        "did not wire the session-tab surface",
+      );
+      // The open tool too.
+      const openDef = TOOL_DEFS.find((d) => d.name === "session_tab_open")!;
+      expect(await openDef.execute({ session: "ses_x" }, ctx, undefined)).toContain("did not provide a session context");
+      expect(await openDef.execute({ session: "ses_x" }, ctx, { sessionID: "s", agent: "build" })).toContain(
         "did not wire the session-tab surface",
       );
     } finally {

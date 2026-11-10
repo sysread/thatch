@@ -36,26 +36,31 @@ here first. These are the things that have already cost time.
   entry clears all verdicts involving it. Both make a pair eligible for
   re-reporting by `find_duplicates`. This is intended.
 - **Archived memories are excluded by default.** `search`, `findDuplicates`,
-  and `staleEntryCount` all filter `WHERE archived = 0`. To search archived
+  `staleEntryCount`, and `branchesInStore` all filter `WHERE archived = 0`. To
+  search archived
   memories, pass `includeArchived: true` to `thatch_memory_recall`. To archive
   a memory, write it with `archived: true`; to unarchive, `archived: false`.
+- **`branch: ""` is not a scope.** An empty branch string passed the
+  `IS NOT NULL` hygiene filters, so such rows inflated the orphaned-branch
+  list, while every renderer's truthiness check hid the branch marker: the
+  rows were counted but invisible to the memory tools. `remember` now
+  coerces `""` to unscoped and an init migration repairs legacy rows; the
+  renderers show any non-null scope. Git refnames are never empty, so `""`
+  is never legitimate.
 - **Updating an archived memory requires explicit `archived` param.** If the
   entry is already archived and a `remember` call omits the `archived` param,
-  the tool returns an error (`db.ts:585`). Pass `archived: true` to keep it
+  the tool returns an error (the archived guard in `remember`, `src/db.ts`).
+  Pass `archived: true` to keep it
   archived or `archived: false` to unarchive. This guard prevents accidental
   unarchival via an unrelated content update.
 
 ## Hooks (opencode)
 
-- **`tool.execute.after` is a plugin hook, NOT a bus event.** It must stay on
-  the hook object returned by `server`. Moving it into the `event` handler
-  (where `session.created` lives) silently never fires it — the event bus has
-  no such event. This was dead for weeks because the failure was invisible.
-- **`client.tui.executeCommand` only accepts legacy alias names**
-  (`session_compact`, `agent_cycle`, ...). Unknown commands publish
-  `{command: undefined}` and silently no-op — no error surfaces. For TUI
-  commands without an alias (e.g. `app.exit`), publish
-  `tui.command.execute` directly via `client.tui.publish`.
+- **`tool.execute.after` is a plugin hook registration, NOT a bus event.** It
+  must stay in the `tool.hook("execute.after")` registration. Moving it into
+  the event pump (where `session.created` lives) silently never fires it —
+  the event bus has no such event. This was dead for weeks because the
+  failure was invisible.
 - **Command markdown written by the plugin is invisible until the next server
   start.** opencode loads config (including command discovery) before
   plugins, so `installOpencodeCommands` self-heals on every load but a
@@ -189,7 +194,7 @@ here first. These are the things that have already cost time.
   skips this reads and writes the developer's real
   `~/.config/thatch/config.json`. See `tests/notify.test.ts` for the
   save-and-restore pattern. The same rule is sharper for tests that boot
-  `server()` directly: without `THATCH_DB_PATH` + `XDG_CONFIG_HOME` isolation
+  the adapter directly: without `THATCH_DB_PATH` + `XDG_CONFIG_HOME` isolation
   the boot rehydrates from, and its boot sweeps mutate, the developer's real
   `thatch.db` - the strand sweep deletes sessions through the host and the
   journal sweep deletes `runtime_state` rows. Backstop: the
@@ -198,9 +203,9 @@ here first. These are the things that have already cost time.
   an un-isolated boot lands in a throwaway db. That covers omission, not
   removal - a test that actively DELETES the vars at runtime undoes the
   default (env is read at call time). Every harness helper
-  (`tests/mocks/plugin-harness.ts`, the `startServer` helpers in
-  `state-persistence.test.ts`) sets and restores both; copy one rather than
-  hand-rolling a boot.
+  (`tests/mocks/opencode-v2-harness.ts`'s setupTestEnv, the `startServer`
+  helpers in `state-persistence.test.ts`) sets and restores both; copy one
+  rather than hand-rolling a boot.
 - **osascript exits 0 even when macOS drops the banner.** Focus/Do Not Disturb
   or missing notification permission silently swallow it. `notify_user` result
   text therefore reports command success only; never interpret exit 0 as
@@ -222,20 +227,6 @@ prose end marker stopped matching, and setup could never update the block
 again while `checkSetup` reported `markers-broken` on every session. Rule:
 never use file content as its own delimiter; agents will reword it. The
 legacy-prose detection constants exist only to migrate old installs.
-
-## The dual-shape plugin entry: named `server` + v2 default export silently breaks v1
-
-opencode v1's plugin loader (`readV1Plugin`, identical across 1.18.x) reads
-ONLY `mod.default`. A module that exports a named `server` plus a v2-shaped
-default `{ id, setup }` (no `server` inside the default) makes v1 throw on
-load - and the host swallows the error and SKIPS the plugin with no visible
-message. The failure looks like "thatch tools disappeared", not like a load
-error. This is why the dual entry exports a MERGED default object
-(`{ id, setup, server }`) and why every shim (the user's
-`~/.config/opencode/plugins/thatch.ts` and the QA runner's generated one)
-must re-export the default as well as the name. A named-only shim loads on
-v1 and silently disables thatch on v2 - same invisible failure, opposite
-host.
 
 ## The extraction buffer matches on tool NAME, so Code Mode execute calls re-queue pipeline traffic
 
@@ -365,6 +356,20 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   must change, clone only when the value actually differs (see the
   truncation guard in `push`).
 
+## Adapter test fixtures must model the host's real tool shapes
+
+- **A fixture that spells a host's args like a different host pins a
+  fiction.** The extraction summarizer (`summarizeArgs`/`deriveTitle` in
+  src/extraction.ts) shipped broken for opencode v2: every v2 adapter test
+  buffered a `Read` call with a `file_path` arg (Claude Code's spelling),
+  while real v2 built-ins are lowercase `read`/`edit`/`write` declaring the
+  arg `path` (packages/core/src/tool/plugin/{edit,read,write}.ts in the
+  opencode repo). The suite stayed green while every live v2
+  read/edit/write payload entry summarized as "file: undefined" with an
+  empty title. When a test simulates a host hook, take the tool name and
+  arg keys from that host's source, not from another host's familiar
+  shape; `fileArg` in src/extraction.ts lists the known spellings.
+
 ## Command frontmatter descriptions must be quoted YAML scalars
 
 - **A plain-scalar frontmatter value containing a colon followed by a space
@@ -397,7 +402,7 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
 
 ## A running TUI never adopts a NEW ./tui plugin entrypoint - restart the TUI
 
-- **The v2 TUI discovers its CLI plugins at process startup only.** The
+- **The TUI discovers its CLI plugins at process startup only.** The
   server side hot-reloads plugin code (the digest watcher), and the TUI
   hot-reloads the SOURCE of plugins it already loaded - but a plugin that
   GAINS a `./tui` entrypoint (or a fresh install of one) is a discovery-
@@ -410,14 +415,16 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   proved the registration logic was correct the whole time: a FRESH TUI
   (the docker sandbox attach) showed the tab immediately.
 - **Fix**: convert the install to the directory shim (docs/user/setup.md),
-  THEN restart the TUI. A restart ALONE fixes nothing when the install is
-  a FILE shim - the file shape never loads a `./tui` entrypoint, whatever
-  the process age. First diagnostic: `ls ~/.config/opencode/plugins/` -
-  a FILE (`thatch.ts`) means no TUI consumer has ever loaded there,
-  restart or not; the directory form (`thatch/index.ts` + `tui.ts`) is
-  required. (2026-10-08, the thog TUI: the restart-and-respawn test
-  DISPROVED the stale-process theory and pointed here - the conversion
-  was the missing install step.)
+  deleting the old file shim in the same step (a file `thatch.ts` and a
+  directory `thatch/` coexisting dies on duplicate plugin ids before any
+  plugin code runs), THEN restart the TUI. A restart ALONE fixes nothing
+  when the install is a FILE shim - the file shape never loads a `./tui`
+  entrypoint, whatever the process age. First diagnostic:
+  `ls ~/.config/opencode/plugins/` - a FILE (`thatch.ts`) means no TUI
+  consumer has ever loaded there, restart or not; the directory form
+  (`thatch/index.ts` + `tui.ts`) is required. (2026-10-08, the thog TUI:
+  the restart-and-respawn test DISPROVED the stale-process theory and
+  pointed here - the conversion was the missing install step.)
 - **Fix**: restart the TUI window once after adopting (or changing the
   shape of) a `./tui` entrypoint. DIAGNOSTIC WARNING: `tabs.json` cannot
   discriminate here - it is SHARED across windows and written by ANY tab
@@ -426,25 +433,6 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   event worked. The discriminating test: restart the TUI and re-spawn; a
   tab appearing post-restart confirms the stale-process diagnosis; a tab
   still absent is a real bug worth a report.
-
-## The two opencode lines discover plugins differently: no one shim shape auto-loads on both
-
-- **v1 auto-discovers plugin FILES only** - its config plugin scan globs
-  `{plugin,plugins}/*.{ts,js}`, which never matches a directory. **v2
-  auto-discovers files AND directories** (and symlinks), and its activation
-  dies on duplicate ids - so a plugins directory holding BOTH `thatch.ts`
-  and `thatch/` loads the server plugin twice on v2 and dies with
-  "duplicate instance plugin ids" before any plugin code runs. There is no
-  single on-disk shape that auto-loads on both lines as a directory-based
-  multi-entry plugin. Consequences: the dev-checkout install uses the file
-  shim for v1-only or v2-only use, or the directory shim for v2's `./tui`
-  entrypoint (session tabs) - deleting the file shim in the same step; the
-  QA fixture keeps the FILE shim because the QA suite is headless (no TUI
-  process ever loads `./tui`, and the file shape is the only one that loads
-  on both lines - a directory shim deterministically killed UC-100's v1
-  chat canary). Local plugin specs handed to a loader explicitly
-  (`"plugin": ["./path"]`) can point at a directory on v1 - it is only the
-  AUTO-discovery scan that is files-only.
 
 ## A promptSession wrapper must stay synchronous or fire-and-forget delivery assertions misfire
 
@@ -502,3 +490,36 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   hardening belongs upstream: re-run plugin setups on `server.connected`.
   Diagnose with the file-append trick above - the daemon log cannot see
   this layer. (2026-10-20, session-tab guard investigation)
+
+## A resolved deliver() is not a delivered wake: the guard skip stamps delivered
+
+- **Symptom**: chat mail stamped `delivered_at` in `chat_messages`, wake
+  rows in `chat_wakes`, and ZERO session_message rows for the wake - the
+  recipient never turned and never will (a zombie session: alive in the
+  roster, dead in practice).
+- **Cause**: `guardDelivery` (src/runtime.ts) skips the prompt when the
+  runtime instance's own directory no longer exists, and it resolves
+  successfully when it skips. The chat poller's `deliverPending` treats
+  any resolved `deliver()` as sent: `recordChatWake` +
+  `markChatDelivered` both run. The mail is now stamped delivered and
+  never retried - the prompt never left the process. Observed live
+  2026-11-05: a session moved between worktrees of one project kept
+  being "delivered" by its old instance, whose directory had been
+  deleted; four wake stamps, no prompt, no turn (issue #25).
+- **Diagnosis recipe**: stamped mail + no session_message rows + a
+  recipient whose last real activity predates the stamps = a swallowed
+  wake. Check whether the poller's instance directory still exists
+  (guard skip) and whether the recipient's session row has a different
+  `location.directory` than the instance that hosted it.
+- **Fix shape**: release hosting when a hosted session moves
+  (`session.moved` event, strand-sweep move), so the old instance stops
+  delivering for it; the wake-swallow detector surfaces the residual
+  class loudly. The guard's skip is now a typed rejection
+  (`DeliverySkippedError`, src/capabilities.ts): the chat delivery loop
+  keeps the mail pending and logs each failed cycle, and consecutive
+  skips advance the detector's watch to condemnation (which releases the
+  hosting - closing the reload-across-a-move gap where the
+  `session.moved` event was missed). A wedged-not-dead recipient recovers
+  through the same shape: pending mail retries and lands on the cycle
+  after the session consumes prompts again. (2026-11-05, location-switch
+  fix)

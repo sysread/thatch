@@ -176,9 +176,8 @@ The footer's tool name follows the host: opencode sees
 through the caller's `ToolNamer`.
 
 The snapshot footer exists because the block is computed once when the
-message is submitted and stays attached to it for the whole turn (v1:
-synthetic part on the stored message; v2: `pendingInjections` re-injected
-into every outbound request of the turn). Predictions the conversation
+message is submitted and stays re-injected into every outbound request of
+the turn (`pendingInjections`). Predictions the conversation
 mutates mid-turn do not refresh the block; the footer tells the consumer
 the labels are a submission-time snapshot and points at the live tool.
 

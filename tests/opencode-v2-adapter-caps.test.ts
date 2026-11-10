@@ -1,5 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { describe, test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { setup } from "../src/opencode/v2";
@@ -25,10 +25,17 @@ import {
   waitFor,
 } from "./mocks/opencode-v2-harness";
 
+// These tests pump async events through the v2 adapter harness; under a
+// loaded CI runner the pump can lag. Bun's default per-test timeout is 5s
+// with no margin for that (the 2026-11-03 fleet-contention CI reds). 90s =
+// expected (ms-scale pump handling) x ~900 headroom, above the harness
+// waitFor deadline so real hangs report the poll message.
+setDefaultTimeout(90_000);
+
 // The v2 adapter's registration, wrap-up commands (/thatch/compact,
 // /thatch/exit), and the SDK capability floors: greenlight-gated host
 // actions on a current host, the blocked path, and the logged no-op
-// degrades when the host lacks session.compact / the rpc surface.
+// degrade when the host lacks the rpc surface.
 
 let cleanup: (() => Promise<void>) | undefined;
 
@@ -43,6 +50,57 @@ afterEach(async () => {
 });
 
 describe("opencode v2 adapter", () => {
+  test("noReply deliveries route to the resume:false synthetic (the live-probed no-wake path)", async () => {
+    // Pins the noReply fix (Phase A of the drop-v1 plan): the re-attach
+    // notice is the runtime's noReply delivery on setup, so it must ride
+    // session.synthetic({ resume: false }) - enqueue WITHOUT waking
+    // execution (live-probed 2026-11-05: no execution events, prompt hook
+    // never fires for the item, history materializes at the next turn's
+    // inbox delivery). A noReply body reaching session.prompt would start
+    // a real model turn in every restored session on every reload.
+    const { ThatchDB } = await import("../src/db");
+    const db = new ThatchDB(join(dbDir, "test.db"));
+    db.runtimeStatePut(
+      "watchers",
+      "ses_reattach_target",
+      [{
+        id: "watch_reattach", source: "pr", sessionID: "ses_reattach_target", repo: "acme/widgets", pr: 11,
+        events: ["pr_commit"], once: false, expiresAt: Date.now() + 600_000,
+        createdAt: Date.now(), state: { headSha: "aaaa1111" },
+      }],
+      SESSION_DIR,
+    );
+    db.close();
+
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await waitFor("the re-attach notice to the restored session", () =>
+      sessionSyntheticCalls.some((c: any) => c?.sessionID === "ses_reattach_target" && String(c?.text).includes("plugin reloaded")),
+    );
+    const notice = sessionSyntheticCalls.find((c: any) => c?.sessionID === "ses_reattach_target" && String(c?.text).includes("plugin reloaded"));
+    // The no-wake contract itself: resume is exactly false.
+    expect(notice?.resume).toBe(false);
+    // And nothing went through the real-prompt path - a prompt delivery
+    // would be a model turn (the feedback loop noReply exists to prevent).
+    expect(sessionPromptCalls.filter((c: any) => String(c?.text).includes("plugin reloaded"))).toEqual([]);
+  });
+
+  test("session-start reminder delivers via the resume:false synthetic", async () => {
+    // The second noReply feature site: the reminder rides the same
+    // no-wake synthetic path as the re-attach notice.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await queueEvent({
+      type: "session.created",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_new_session", info: { id: "ses_new_session", parentID: null } },
+    });
+    await waitFor("the session-start reminder", () =>
+      sessionSyntheticCalls.some((c: any) => c?.sessionID === "ses_new_session" && String(c?.text).includes("thatch")),
+    );
+    const reminder = sessionSyntheticCalls.find((c: any) => c?.sessionID === "ses_new_session");
+    expect(reminder?.resume).toBe(false);
+    expect(sessionPromptCalls.filter((c: any) => c?.sessionID === "ses_new_session")).toEqual([]);
+  });
+
   test("setup registers every TOOL_DEF through the ToolEditor with thatch_ names", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const names = addedTools.map((t) => t.name);
@@ -134,37 +192,6 @@ describe("opencode v2 adapter", () => {
     expect(sessionPromptCalls[1].text).toContain("Pre-exit wrap-up");
   });
 
-  test("loading the v2 adapter never evaluates the v1 SDK (isolation rule)", () => {
-    // A v2 user install skips optional peers, so @opencode-ai/plugin is
-    // ABSENT. Simulate the absence in a SUBPROCESS (module mocks are
-    // process-global, so an in-process mock would leak into the v1 adapter
-    // tests): a generated test file registers a mock that throws on
-    // require, then imports the v2 adapter. If any RUNTIME import path
-    // from src/opencode/v2.ts reached tools.ts (the v1 wrapper), the
-    // import would explode here - and on a real v2 host it would kill the
-    // whole plugin load.
-    const probe = join(dbDir, "iso-probe.test.ts");
-    writeFileSync(
-      probe,
-      [
-        `import { test, mock } from "bun:test";`,
-        `mock.module("@opencode-ai/plugin", () => {`,
-        `  throw new Error("SIMULATED ABSENCE: @opencode-ai/plugin must not load under v2");`,
-        `});`,
-        `test("v2 adapter loads without the v1 SDK", async () => {`,
-        `  await import(${JSON.stringify(join(import.meta.dir, "..", "src", "opencode", "v2.ts"))});`,
-        `});`,
-      ].join("\n"),
-    );
-    const proc = Bun.spawnSync([process.execPath, "test", probe], {
-      cwd: join(import.meta.dir, ".."),
-      env: { ...process.env, THATCH_DB_PATH: join(dbDir, "iso.db"), XDG_CONFIG_HOME: join(dbDir, "config") },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    expect(proc.exitCode).toBe(0);
-  });
-
   test("cleanup is idempotent and disposes the runtime once", async () => {
     const context = makeContext();
     const dispose = (await setup(context as any)) as () => Promise<void>;
@@ -208,7 +235,7 @@ describe("opencode v2 adapter", () => {
   test("a greenlit /thatch/compact triggers session.compact on the next idle", async () => {
     // The greenlight is the zero-arg thatch_compact tool call; the compact
     // fires on the session's next idle.
-    cleanup = (await setup(makeContext({ compact: true }) as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const compact = addedCommands.find((c) => c.name === "thatch/compact")!;
     await compact.execute({ sessionID: "ses_v2_wrap_ok" });
     expect(wrapupArmed("ses_v2_wrap_ok")).toBe(true);
@@ -375,7 +402,7 @@ describe("opencode v2 adapter", () => {
     // The blocked path died with the token: blockers are prose per the
     // template, and an un-greenlit compact idle (e.g. a background
     // extractor running mid-checklist) must not consume the arm or toast.
-    cleanup = (await setup(makeContext({ compact: true }) as any)) as () => Promise<void>;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const compact = addedCommands.find((c) => c.name === "thatch/compact")!;
     await compact.execute({ sessionID: "ses_v2_wrap_mid" });
     await queueEvent({
@@ -401,29 +428,6 @@ describe("opencode v2 adapter", () => {
     });
     await waitFor("late session.compact called", () => sessionCompactCalls.length === 1);
     expect(wrapupArmed("ses_v2_wrap_mid")).toBe(false);
-  });
-
-  test("an older SDK without session.compact degrades to a logged no-op, not a crash", async () => {
-    // The pinned dev types predate upstream #52385, so the adapter guards
-    // the call at runtime; the default context (no compact member) models
-    // that older host.
-    const { lines } = await captureConsoleError(async () => {
-      cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
-      const compact = addedCommands.find((c) => c.name === "thatch/compact")!;
-      await compact.execute({ sessionID: "ses_v2_wrap_floor" });
-      const compactTool = addedTools.find((t) => t.name === "thatch_compact")!;
-      await compactTool.execute({}, { sessionID: "ses_v2_wrap_floor", agent: "build" });
-      await queueEvent({
-        type: "session.execution.succeeded",
-        location: { directory: SESSION_DIR },
-        data: { sessionID: "ses_v2_wrap_floor" },
-      });
-      await waitFor("wrap-up resolved on the floor host", () => !wrapupArmed("ses_v2_wrap_floor"));
-      await new Promise((r) => setTimeout(r, 150));
-      expect(sessionCompactCalls.length).toBe(0);
-      return;
-    });
-    expect(lines.some((line) => line.includes("compaction trigger unavailable"))).toBe(true);
   });
 
   test("a host without the rpc surface exits greenlit with a logged no-op", async () => {

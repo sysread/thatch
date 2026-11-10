@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { ChatStore, ChatPoller, isStale, nowIso, CHAT_STALE_MS, CHAT_POLL_INTERVAL_MS, CHAT_AUTO_TTL_DAYS, isoMinutesAgo as cutoffAgo, renderChatParticipant, chatLiveness, splitChatRoster, sortChatRoster, createWakeGate, continuedInTarget, scanPredecessorTranscript, resolveRegisteredPredecessor, type ChatSessionRow } from "../src/chat";
+import { DeliverySkippedError } from "../src/capabilities";
 import { silenceConsoleError, captureConsoleError } from "./mocks/console-error";
 import { makeChatDbFixture, disposeChatDbFixture, makeReg } from "./mocks/chat-harness";
 
@@ -123,6 +124,88 @@ describe("ChatPoller", () => {
     await poller.poll();
     expect(deliveries.length).toBe(1);
     expect(deliveries[0].batch).toEqual({ fromUser: false, mixed: false });
+  });
+
+  test("a user-only batch (the CLI broadcast) wakes only open-tab recipients", async () => {
+    // The incident class this gate exists for: one terminal FYI must not
+    // spend a model turn on every hosted session. A batch of ONLY
+    // CLI-sent rows wakes the recipient when its tab is open, and skips
+    // the wake (mail stays pending, budget untouched) when it is not.
+    raw.run(
+      `INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast, from_name, to_name)
+       VALUES ('cli', 'ses_b', 'fyi only', '${nowIso()}', 1, 'Jeff Ober', 'bob-00001')`,
+    );
+    gateOpen = true;
+    const tabs: string[] = [];
+    const gated = new ChatPoller({
+      store: db,
+      hostedSessions: () => hosted,
+      openTabs: () => new Set(tabs),
+      deliver: async (sessionID, senders, count, batch) => {
+        deliveries.push({ sessionID, senders, count, batch });
+      },
+      canDeliver: (sessionID) => gateOpen && hosted.includes(sessionID),
+      pollIntervalMs: 60_000,
+    });
+    try {
+      // Tab closed: no wake, no budget spent, the row still pending.
+      await gated.deliverPending();
+      expect(deliveries.length).toBe(0);
+      expect(db.chatWakeCount("ses_b", cutoffAgo(60))).toBe(0);
+      expect(db.pendingChatNotifications(["ses_b"], cutoffAgo(15)).length).toBe(1);
+      // Tab open: the same still-undelivered row wakes as a FIRST
+      // delivery (delivered_at was never stamped), user-voiced.
+      tabs.push("ses_b");
+      await gated.deliverPending();
+      expect(deliveries.length).toBe(1);
+      expect(deliveries[0].sessionID).toBe("ses_b");
+      expect(deliveries[0].batch).toEqual({ fromUser: true, mixed: false });
+    } finally {
+      gated.dispose();
+    }
+  });
+
+  test("a user-only batch wakes nobody without a tab signal (the fail-safe default)", async () => {
+    // No openTabs provider: no tab signal, which the roster rule reads
+    // as "not open". The gate fails toward silence, never toward a
+    // fleet wake - the default poller here has no provider.
+    raw.run(
+      `INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast, from_name, to_name)
+       VALUES ('cli', 'ses_b', 'fyi only', '${nowIso()}', 1, 'Jeff Ober', 'bob-00001')`,
+    );
+    gateOpen = true;
+    await poller.deliverPending();
+    expect(deliveries.length).toBe(0);
+    expect(db.pendingChatNotifications(["ses_b"], cutoffAgo(15)).length).toBe(1);
+  });
+
+  test("agent mail in the batch lifts the user-broadcast wake gate", async () => {
+    // One agent row makes the batch mixed: the agent message justifies
+    // the turn, and the CLI rows ride along in the same prompt - even
+    // with an (empty) tab signal that would hold a user-only batch.
+    db.sendChatMessage("ses_a", "bob-00001", "agent mail");
+    raw.run(
+      `INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast, from_name, to_name)
+       VALUES ('cli', 'ses_b', 'user words', '${nowIso()}', 1, 'Jeff Ober', 'bob-00001')`,
+    );
+    gateOpen = true;
+    const gated = new ChatPoller({
+      store: db,
+      hostedSessions: () => hosted,
+      openTabs: () => new Set<string>(),
+      deliver: async (sessionID, senders, count, batch) => {
+        deliveries.push({ sessionID, senders, count, batch });
+      },
+      canDeliver: (sessionID) => gateOpen && hosted.includes(sessionID),
+      pollIntervalMs: 60_000,
+    });
+    try {
+      await gated.deliverPending();
+      expect(deliveries.length).toBe(1);
+      expect(deliveries[0].batch).toEqual({ fromUser: true, mixed: true });
+    } finally {
+      gated.dispose();
+    }
   });
 
   test("delivery failure leaves messages pending", async () => {
@@ -450,6 +533,226 @@ describe("ChatPoller", () => {
     poller.dispose();
     expect(poller.running).toBe(false);
   });
+
+  // The wake-swallow detector (issue #25): a wake prompt can be accepted
+  // without ever executing - the observed cause is a session whose project
+  // location switched mid-life. The detector arms on every successful wake
+  // and judges on later poll cycles from the session's live activity time.
+  describe("wake-swallow detector", () => {
+    let activityCalls: string[];
+    let warns: { sessionID: string; wakeAt: number }[];
+    let condemned: string[];
+    let swallowPoller: ChatPoller;
+    // Latest-wins activity stub per test: 1 = stale (never turned),
+    // null = unreadable, Date.now() = healthy.
+    let lastActivity: number | null;
+    let hostedSet: string[];
+
+    beforeEach(() => {
+      activityCalls = [];
+      warns = [];
+      condemned = [];
+      lastActivity = 1;
+      hostedSet = ["ses_b"];
+      swallowPoller = new ChatPoller({
+        store: db,
+        hostedSessions: () => [...hostedSet],
+        deliver: async () => {},
+        canDeliver: () => true,
+        pollIntervalMs: 60_000,
+        swallowWatchMs: 0,
+        sessionActivity: async (sessionID) => {
+          activityCalls.push(sessionID);
+          return lastActivity;
+        },
+        onSwallow: async (sessionID, detail) => {
+          warns.push({ sessionID, wakeAt: detail.wakeAt });
+        },
+        onSwallowDead: (sessionID) => {
+          condemned.push(sessionID);
+        },
+      });
+    });
+
+    afterEach(() => {
+      swallowPoller.dispose();
+    });
+
+    const armBob = () => db.sendChatMessage("ses_a", "bob-00001", "wake me");
+
+    test("a silent wake warns once, then condemns after three consecutive observations", async () => {
+      armBob();
+      await swallowPoller.poll(); // delivers + arms; same cycle judges (watch window 0)
+      await swallowPoller.poll();
+      await swallowPoller.poll(); // third consecutive silence -> condemn
+      expect(warns.length).toBe(1);
+      expect(warns[0].sessionID).toBe("ses_b");
+      expect(condemned).toEqual(["ses_b"]);
+      // Exactly one judgment per poll: three polls, three activity reads.
+      expect(activityCalls).toEqual(["ses_b", "ses_b", "ses_b"]);
+      // The condemned watch is gone: a fourth poll judges nothing.
+      await swallowPoller.poll();
+      expect(activityCalls.length).toBe(3);
+    });
+
+    test("a turn after the wake resolves the watch silently", async () => {
+      lastActivity = Date.now() + 1_000; // the wake produced a turn
+      armBob();
+      await swallowPoller.poll();
+      expect(warns).toEqual([]);
+      expect(condemned).toEqual([]);
+      // The watch resolved: no further judgment.
+      await swallowPoller.poll();
+      expect(activityCalls.length).toBe(1);
+    });
+
+    test("an unreadable activity time drops the watch fail-open", async () => {
+      lastActivity = null; // host unreachable / unknown session
+      armBob();
+      await swallowPoller.poll();
+      expect(warns).toEqual([]);
+      expect(condemned).toEqual([]);
+      await swallowPoller.poll();
+      expect(activityCalls.length).toBe(1);
+    });
+
+    test("armed watches survive un-hosting - the old instance is the only observer left", async () => {
+      armBob();
+      await swallowPoller.poll(); // delivers + arms
+      hostedSet = []; // the location-switch release dropped the recipient
+      await swallowPoller.poll();
+      // The detector kept watching: it read activity and warned, even
+      // though this poller no longer hosts the recipient.
+      expect(activityCalls.length).toBe(2);
+      expect(warns.length).toBe(1);
+    });
+  });
+
+  // Directory re-verification (issue #25 fast path): the poller runs the
+  // injected callback on poll cycles, before delivery, so a hosted session
+  // that moved away is released before the same cycle could spend a wake
+  // prompt on it. The callback itself (the db read plus the release) is
+  // wired in runtime.ts and pinned in state-persistence.test.ts.
+  describe("directory re-verification cadence", () => {
+    let calls: string[];
+    let reverifyPoller: ChatPoller;
+
+    const makeReverifyPoller = (everyCycles?: number): ChatPoller =>
+      new ChatPoller({
+        store: db,
+        hostedSessions: () => ["ses_b"],
+        deliver: async () => {
+          calls.push("deliver");
+        },
+        canDeliver: () => true,
+        pollIntervalMs: 60_000,
+        reverifyDirectories: () => {
+          calls.push("reverify");
+        },
+        ...(everyCycles === undefined ? {} : { reverifyEveryCycles: everyCycles }),
+      });
+
+    beforeEach(() => {
+      calls = [];
+      reverifyPoller = makeReverifyPoller();
+    });
+
+    afterEach(() => {
+      reverifyPoller.dispose();
+    });
+
+    test("runs on every cycle, before delivery", async () => {
+      db.sendChatMessage("ses_a", "bob-00001", "wake me");
+      await reverifyPoller.poll();
+      // Fresh mail for the second cycle: poll 1's delivery stamped its row
+      // delivered, and a delivered-but-just-now row is inside the re-nudge
+      // window (15 minutes), so it correctly re-delivers nothing.
+      db.sendChatMessage("ses_a", "bob-00001", "wake me again");
+      await reverifyPoller.poll();
+      expect(calls).toEqual(["reverify", "deliver", "reverify", "deliver"]);
+    });
+
+    test("reverifyEveryCycles=3 runs on every third cycle only", async () => {
+      reverifyPoller.dispose();
+      reverifyPoller = makeReverifyPoller(3);
+      for (let i = 0; i < 5; i++) await reverifyPoller.poll();
+      expect(calls).toEqual(["reverify"]); // cycle 3 only; 6 would be next
+    });
+  });
+
+  describe("skipped-wake accounting (DeliverySkippedError)", () => {
+    // The guard's dead-directory rejection, fed to the poller through the
+    // injected deliver seam (chat.ts cannot import runtime.ts, so the
+    // poller tests the CLASS, not the guard).
+    let attempts: string[];
+    let warns: { sessionID: string; wakeAt: number }[];
+    let condemned: string[];
+    let skipPoller: ChatPoller;
+    // 0 = the guard skip (nothing sent); 1 = the wake went out.
+    let failureMode: "skip" | "none";
+
+    beforeEach(() => {
+      attempts = [];
+      warns = [];
+      condemned = [];
+      failureMode = "skip";
+      skipPoller = new ChatPoller({
+        store: db,
+        hostedSessions: () => ["ses_b"],
+        deliver: async (sessionID) => {
+          attempts.push(sessionID);
+          if (failureMode === "skip") throw new DeliverySkippedError(sessionID, "/gone");
+        },
+        canDeliver: () => true,
+        pollIntervalMs: 60_000,
+        swallowWatchMs: 0,
+        sessionActivity: async () => 1, // stale: no turn ever follows a skip
+        onSwallow: async (sessionID, detail) => {
+          warns.push({ sessionID, wakeAt: detail.wakeAt });
+        },
+        onSwallowDead: (sessionID) => {
+          condemned.push(sessionID);
+        },
+      });
+    });
+
+    afterEach(() => {
+      skipPoller.dispose();
+    });
+
+    test("a skipped wake keeps the mail pending, unstamped, and off the wake budget", async () => {
+      db.sendChatMessage("ses_a", "bob-00001", "still pending");
+      await skipPoller.poll();
+      const pending = db.pendingChatNotifications(["ses_b"], cutoffAgo(15));
+      expect(pending.length).toBe(1);
+      expect(pending[0].delivered_at).toBeNull();
+    });
+
+    test("consecutive skips advance the watch and condemn - the missed-event gap", async () => {
+      // A plugin reload across a move re-hosts the moved session at the
+      // old instance WITHOUT the session.moved event: every cycle skips.
+      // The skips themselves must walk the watch to condemnation.
+      db.sendChatMessage("ses_a", "bob-00001", "retry me");
+      await skipPoller.poll();
+      await skipPoller.poll();
+      await skipPoller.poll();
+      expect(condemned).toEqual(["ses_b"]);
+      expect(warns.length).toBe(1);
+    });
+
+    test("wedged-not-dead: the retry lands once the wedge clears", async () => {
+      db.sendChatMessage("ses_a", "bob-00001", "wake me when I unstuck");
+      failureMode = "skip";
+      await skipPoller.poll(); // skip: nothing sent, mail pending, watch armed
+      failureMode = "none";
+      // The wedge clears and the session turns; the next cycle delivers.
+      await skipPoller.poll();
+      expect(attempts.length).toBe(2);
+      // Delivered: nothing needs a first delivery or a re-nudge.
+      expect(db.pendingChatNotifications(["ses_b"], cutoffAgo(15)).length).toBe(0);
+      expect(condemned).toEqual([]);
+    });
+  });
 });
 
 describe("wake gate", () => {
@@ -460,46 +763,28 @@ describe("wake gate", () => {
   const gate = (over?: {
     compacting?: boolean;
     mapped?: string;
-    statuses?: Record<string, { type?: string } | undefined>;
-    failFetch?: boolean;
   }) => {
-    const errors: unknown[] = [];
     const canPrompt = createWakeGate({
       isCompacting: () => over?.compacting ?? false,
       mappedStatus: () => over?.mapped,
-      fetchStatuses: async () => {
-        if (over?.failFetch) throw new Error("server down");
-        return over?.statuses ?? {};
-      },
-      onStatusError: (_id, err) => errors.push(err),
     });
-    return { canPrompt, errors };
+    return { canPrompt };
   };
 
-  test("map-absent session falls through to the live check and wakes", async () => {
+  test("map-absent session wakes (absence is not evidence of busy)", () => {
     const { canPrompt } = gate({});
-    expect(await canPrompt("ses_quiet")).toBe(true);
+    expect(canPrompt("ses_quiet")).toBe(true);
   });
 
-  test("known busy/retry rejects without fetching", async () => {
-    const { canPrompt, errors } = gate({ mapped: "busy", failFetch: true });
-    expect(await canPrompt("ses_busy")).toBe(false);
-    expect(await gate({ mapped: "retry", failFetch: true }).canPrompt("s")).toBe(false);
-    expect(errors).toHaveLength(0); // pre-filter: never reached the server
+  test("known busy/retry rejects", () => {
+    expect(gate({ mapped: "busy" }).canPrompt("ses_busy")).toBe(false);
+    expect(gate({ mapped: "retry" }).canPrompt("s")).toBe(false);
+    // Mapped idle and unknown-but-mapped states wake.
+    expect(gate({ mapped: "idle" }).canPrompt("s")).toBe(true);
   });
 
-  test("the live status map is authoritative: busy fails closed, absent means idle", async () => {
-    const { canPrompt: busy } = gate({ statuses: { ses_x: { type: "busy" } } });
-    expect(await busy("ses_x")).toBe(false);
-    const { canPrompt: idleish } = gate({ statuses: { ses_x: { type: "idle" } } });
-    expect(await idleish("ses_x")).toBe(true);
-  });
-
-  test("compacting fails closed; server failure fails closed", async () => {
-    expect(await gate({ compacting: true, failFetch: true }).canPrompt("ses_c")).toBe(false);
-    const { canPrompt, errors } = gate({ failFetch: true });
-    expect(await canPrompt("ses_c")).toBe(false);
-    expect(errors).toHaveLength(1);
+  test("compacting fails closed", () => {
+    expect(gate({ compacting: true }).canPrompt("ses_c")).toBe(false);
   });
 });
 

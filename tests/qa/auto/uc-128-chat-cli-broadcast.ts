@@ -14,14 +14,15 @@ import { readOpenTabSessions } from "../../../src/tab-state";
  * every audience class (open with tab, fresh tab-less = RECENT, MCP,
  * long-stale, and a NULL-project row), pins a deterministic sender name
  * through a scratch git config (GIT_CONFIG_GLOBAL), then runs the CLI
- * broadcast with and without --project. Verifies the delivery report
- * (delivered/skipped/out-of-scope buckets with liveness labels), the
- * fence note in the persisted bodies (the protocol note that tells
- * receiving sessions the user is not in the chat), the sentinel sender
- * rows (from_session 'cli', via_broadcast 1, read/delivered unstamped),
- * the tail's JSONL sent events rendering the broadcast under the
- * snapshotted sender name, the dedupe notice on an identical unread
- * retry, and the loud failure paths (unknown flag, empty message).
+ * broadcast with and without --project. Verifies the summarized
+ * delivery report (open tabs named, no-tab/mcp/skipped/out-of-scope
+ * counted - never one line per session), the fence note in the
+ * persisted bodies (the protocol note that tells receiving sessions the
+ * user is not in the chat), the sentinel sender rows (from_session
+ * 'cli', via_broadcast 1, read/delivered unstamped), the tail's JSONL
+ * sent events rendering the broadcast under the snapshotted sender
+ * name, the dedupe notice on an identical unread retry, and the loud
+ * failure paths (unknown flag, empty message).
  */
 
 const useCase: UseCase = {
@@ -32,15 +33,15 @@ const useCase: UseCase = {
   ].join("\n"),
   steps: [
     "1. Seed a DB: sessions in two projects (open tab, tab-less RECENT, MCP, long-stale, and one with no project), plus a tabs.json fixture and a scratch git config pinning the sender name.",
-    "2. Run `thatch chat broadcast <msg>` with no --project and verify the report: one delivered line per live recipient with liveness labels (open / no tab / mcp), the stale skip named, no out-of-scope section.",
-    "3. Run `thatch chat broadcast <msg> --project P --project=Q` and verify the filter: only the named projects delivered, out-of-scope rows (including the NULL-project session) named in the out-of-scope bucket.",
+    "2. Run `thatch chat broadcast <msg>` with no --project and verify the summarized report: open-tab recipients named one line each, the no-tab and mcp recipients counted by delivery state, and the stale skip counted per project.",
+    "3. Run `thatch chat broadcast <msg> --project P --project=Q` and verify the filter: only the named projects delivered, out-of-scope rows (including the NULL-project session) counted per project in the out-of-scope section.",
     "4. Query the DB: delivered rows carry from_session 'cli', the snapshotted sender name, via_broadcast 1, and NULL read_at/delivered_at; bodies begin with the fence note stating the user is not a chat session and replies go to the user's own session, not chat.",
     "5. Run `thatch chat tail --once` and verify the broadcast renders as ordinary sent events (broadcast: true) under the sender name, bodies carrying the fence note.",
     "6. Re-run the identical --project broadcast and verify the duplicate-suppressed notice; run with an unknown flag and with no message and verify both die loudly with a plain error.",
   ].join("\n"),
   expected: [
-    "- The unfiltered broadcast reaches every live session regardless of tab state (RECENT and MCP included) and skips only the stale row, which is named with its project.",
-    "- --project narrows by exact match; non-matching and NULL-project rows appear in an out-of-scope section, never as skipped or delivered.",
+    "- The unfiltered broadcast reaches every live session regardless of tab state (RECENT and MCP included) and skips only the stale row. The report names each OPEN recipient (the only ones a user broadcast wakes) and counts the rest: no-tab and mcp recipients as read-at-next-prompt counts, skips per project - a one-line FYI never prints one line per session.",
+    "- --project narrows by exact match; non-matching and NULL-project rows appear in a counted out-of-scope section, never as skipped or delivered.",
     "- Delivered rows are sentinel-sent ('cli'), carry the sender name snapshot and via_broadcast 1, and leave delivery stamping to the wake/poll machinery (read_at and delivered_at NULL).",
     "- Every delivered body starts with the fence note: the message is from the human user, who is not a chat session; recipients act in their own session and do not reply into thatch chat.",
     "- The tail shows the broadcast as ordinary per-recipient sent events with broadcast: true and from set to the snapshotted sender name.",
@@ -104,9 +105,10 @@ const useCase: UseCase = {
     }
 
     // Unfiltered broadcast: every live session receives - RECENT and MCP
-    // included (the ordinary poller delivers to open sessions, and the
-    // others read at their next prompt) - and only the stale ghost is
-    // skipped.
+    // included (their rows land in the inbox and they read at their
+    // next prompt; only OPEN sessions are woken) - and only the stale
+    // ghost is skipped. The report names the open tabs and counts the
+    // rest instead of printing one line per session.
     const wide = await run(["chat", "broadcast", "holler one", "from", "the", "fence"]);
     if (wide.exitCode !== 0) {
       console.log(`  FAIL: broadcast exited ${wide.exitCode}:\n${wide.stderr.toString()}`);
@@ -117,23 +119,31 @@ const useCase: UseCase = {
       "Broadcast from Fence Holler to 5 of 6 registered sessions:",
       "  delivered: alpha-00001 (acme/alpha-proj) [open]",
       "  delivered: beta-00001 (acme/alpha-proj) [open]",
-      "  delivered: gamma-00001 (acme/gamma-proj) [no tab, reads at next prompt]",
-      "  delivered: mike-00001 (acme/gamma-proj) [mcp, reads at next prompt]",
-      "  delivered: noplan-00001 (no project)",
-      "  skipped (stale): ghost-00001 (acme/alpha-proj)",
+      "  delivered to 2 sessions with no open tab (read at next prompt)",
+      "  delivered to 1 mcp session (read at next prompt)",
+      "Skipped:",
+      "  - 1 stale session in acme/alpha-proj",
     ]) {
       if (!wideText.includes(needle)) {
         console.log(`  FAIL: unfiltered broadcast report missing "${needle}":\n${wideText}`);
         return "FAIL";
       }
     }
-    if (wideText.includes("out of scope")) {
+    // No session name may appear outside its named delivered line: the
+    // count lines summarize, they never name.
+    for (const name of ["gamma-00001", "mike-00001", "noplan-00001", "ghost-00001"]) {
+      if (wideText.includes(name)) {
+        console.log(`  FAIL: bulk recipient "${name}" named in the summarized report:\n${wideText}`);
+        return "FAIL";
+      }
+    }
+    if (/out of scope/i.test(wideText)) {
       console.log(`  FAIL: unfiltered broadcast should have no out-of-scope section:\n${wideText}`);
       return "FAIL";
     }
 
     // --project (both flag forms) narrows by exact match; the
-    // NULL-project row is named as out of scope, not skipped.
+    // NULL-project row is counted as out of scope, not skipped.
     const filtered = await run(["chat", "broadcast", "--project", "acme/alpha-proj", "--project=acme/gamma-proj", "standup in five"]);
     if (filtered.exitCode !== 0) {
       console.log(`  FAIL: filtered broadcast exited ${filtered.exitCode}:\n${filtered.stderr.toString()}`);
@@ -143,17 +153,21 @@ const useCase: UseCase = {
     for (const needle of [
       "Broadcast from Fence Holler to 4 of 6 registered sessions (projects: acme/alpha-proj, acme/gamma-proj):",
       "  delivered: alpha-00001 (acme/alpha-proj) [open]",
-      "  delivered: gamma-00001 (acme/gamma-proj) [no tab, reads at next prompt]",
-      "  skipped (stale): ghost-00001 (acme/alpha-proj)",
-      "  out of scope (project filter): noplan-00001 (no project)",
+      "  delivered: beta-00001 (acme/alpha-proj) [open]",
+      "  delivered to 1 session with no open tab (read at next prompt)",
+      "  delivered to 1 mcp session (read at next prompt)",
+      "Skipped:",
+      "  - 1 stale session in acme/alpha-proj",
+      "Out of scope (project filter):",
+      "  - 1 session with no project",
     ]) {
       if (!filteredText.includes(needle)) {
         console.log(`  FAIL: filtered broadcast report missing "${needle}":\n${filteredText}`);
         return "FAIL";
       }
     }
-    if (filteredText.includes("noplan-00001") && !filteredText.includes("out of scope (project filter): noplan-00001")) {
-      console.log(`  FAIL: NULL-project row rendered outside the out-of-scope bucket:\n${filteredText}`);
+    if (filteredText.includes("noplan-00001")) {
+      console.log(`  FAIL: NULL-project row named instead of counted:\n${filteredText}`);
       return "FAIL";
     }
 

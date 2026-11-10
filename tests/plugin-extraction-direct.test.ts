@@ -1,89 +1,142 @@
 // Part of the former plugin.test.ts "plugin entry" describe, split by
-// topic: the direct-extraction child lifecycle (parent idle dispatch,
-// child completion/error/deletion, toast metrics). The wiring tests live
-// in plugin-entry.test.ts, the buffering + payload handshake in
+// topic, re-based onto the v2 harness (the drop-v1 plan's Phase A-prime):
+// the direct-extraction child lifecycle (parent idle dispatch, child
+// completion/error/deletion, toast metrics). The wiring tests live in
+// plugin-entry.test.ts, the buffering + payload handshake in
 // plugin-extraction.test.ts, and the journal reconcile / claim scoping in
-// plugin-extraction-claims.test.ts.
+// plugin-extraction-claims.test.ts. The sync/async endpoint-split test is
+// v1-vehicle residue (plugin-v1-mechanism.test.ts): v2 has one prompt
+// endpoint, so both dispatch modes enqueue the same way.
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import {
-  server,
-  setupPluginHarness,
-  teardownPluginHarness,
-} from "./mocks/plugin-harness";
+import { describe, test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
+import { setup } from "../src/opencode/v2";
 import { ThatchDB } from "../src/db";
+import { TOAST_EVENT } from "../src/session-tab-shared";
+import {
+  addedTools,
+  contextHook,
+  makeContext,
+  promptHook,
+  queueEvent,
+  rpcEmitted,
+  SESSION_DIR,
+  sessionCreateCalls,
+  sessionPromptCalls,
+  sessionRemoveCalls,
+  setupTestEnv,
+  teardownTestEnv,
+  toolAfterHook,
+  waitFor,
+} from "./mocks/opencode-v2-harness";
 
-beforeAll(async () => {
-  await setupPluginHarness();
+// These tests pump async events through the v2 adapter harness; under a
+// loaded CI runner the pump can lag. Bun's default per-test timeout is 5s
+// with no margin for that (the 2026-11-03 fleet-contention CI reds). 90s =
+// expected (ms-scale pump handling) x ~900 headroom, above the harness
+// waitFor deadline so real hangs report the poll message.
+setDefaultTimeout(90_000);
+
+let cleanup: (() => Promise<void>) | undefined;
+
+beforeEach(() => {
+  setupTestEnv();
 });
 
-afterAll(() => {
-  teardownPluginHarness();
+afterEach(async () => {
+  if (cleanup) await cleanup();
+  cleanup = undefined;
+  await teardownTestEnv();
 });
+
+// The child id the v2 harness's session.create returns (the extraction
+// child the plugin spawns on the parent's idle).
+const CHILD_ID = "v2-test-child";
+
+// The v2 bus envelope for a session event: payload in `data`, and a
+// location so the pump's directory filter routes it to this instance.
+const sessionEvent = (type: string, data: Record<string, unknown>) => ({
+  type,
+  location: { directory: SESSION_DIR },
+  data: { ...data },
+});
+
+// The parent's idle: v2's execution lifecycle event (the idle signal).
+const parentIdle = (sessionID: string) => sessionEvent("session.execution.succeeded", { sessionID });
+
+// The child's idle needs no location: the adapter forwards events for
+// sessions it created through its childSessions set.
+const childIdle = (sessionID: string) => ({ type: "session.execution.succeeded", data: { sessionID } });
+
+const textOf = (r: unknown): string => String((r as any)?.content ?? "");
+
+const payloadTool = () => addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
+
+// Drives one v2 turn through the prompt + context hook pair; returns the
+// injected content parts (empty means the message stayed clean).
+const runTurn = async (sessionID: string, text: string) => {
+  await promptHook!({ sessionID, messageID: `msg_${sessionID}`, prompt: { text } });
+  const request = {
+    sessionID,
+    system: [],
+    messages: [{ role: "user", content: [{ type: "text", text }] }],
+  };
+  await contextHook!(request);
+  return (request.messages[0].content as { type: string; text: string }[]).slice(1);
+};
+
+const bufferBash = async (sessionID: string, output: string) => {
+  await toolAfterHook!({
+    tool: "bash",
+    sessionID,
+    input: { command: "ls" },
+    status: "completed",
+    result: { content: output },
+  });
+};
+
+const toasts = () => rpcEmitted.filter((e) => e.name === TOAST_EVENT);
+// The extraction-metrics toast ("new: N, updated: N, ..."), distinct from
+// the chat auto-register toast the parent's first idle legitimately fires
+// on this harness (the v1 recClient had no session.get, so its
+// auto-register always failed silently and never toasted).
+const metricsToasts = () =>
+  toasts().filter((e) => /(?:new|updated|deleted): \d/.test(String(e.data?.message)) && e.data?.variant === "success");
 
 describe("plugin entry", () => {
   // -----------------------------------------------------------------------
-  // Direct extraction (opencode SDK path) - the ONLY opencode path
-  // -----------------------------------------------------------------------
+  // Direct extraction - the ONLY opencode path
   //
   // When the parent session goes idle with pending tool interactions, the
   // plugin creates a child session and prompts it directly. There is no
   // model-facing extraction nudge on opencode: the model-driven handshake
   // (dispatch + ack + id-copying) raced its own state machine and was
   // removed. chat.message stays clean; the pipeline owns the lifecycle.
+  // -----------------------------------------------------------------------
 
-  test("direct extraction: parent idle triggers child creation + promptAsync", async () => {
-    let createCalled = false;
-    let createArgs: any = null;
-    let promptAsyncCalled = false;
-    let promptAsyncArgs: any = null;
-
-    const recClient = {
-      session: {
-        prompt: async () => {},
-        promptAsync: async (args: any) => { promptAsyncCalled = true; promptAsyncArgs = args; },
-        create: async (args: any) => { createCalled = true; createArgs = args; return { data: { id: "child_direct1" } }; },
-        delete: async () => {},
-      },
-      tui: {
-        showToast: async () => {},
-      },
-    };
-
-    // The preload (tests/clean-env.ts) strips OPENCODE_* vars. Set the one
-    // this test needs, then clean up.
-    process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS = "true";
-
-    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
+  test("direct extraction: parent idle triggers child creation + child prompt", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
 
     // Buffer a tool interaction in the parent
-    await testHooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_direct1", callID: "d1", args: { command: "ls" } },
-      { title: "list", output: "file.txt", metadata: {} },
-    );
+    await bufferBash("ses_direct1", "file.txt");
 
-    // Parent goes idle — should trigger direct extraction
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_direct1", status: { type: "idle" } } } as any,
-    });
+    // Parent goes idle - should trigger direct extraction
+    await queueEvent(parentIdle("ses_direct1"));
 
-    expect(createCalled).toBe(true);
-    expect(createArgs.body.parentID).toBe("ses_direct1");
-    expect(promptAsyncCalled).toBe(true);
-    expect(promptAsyncArgs.path.id).toBe("child_direct1");
-    expect(promptAsyncArgs.body.parts[0].text).toContain("thatch-fact-extractor");
+    await waitFor("extraction child created", () => sessionCreateCalls.length === 1);
+    // Shape delta vs v1: v2's session API has no parentID - the child is
+    // created TOP-LEVEL in the project directory and the runtime's
+    // childToParent map (set eagerly at creation) carries the link instead.
+    expect(sessionCreateCalls[0].title).toBe("thatch-extraction");
+    expect(sessionCreateCalls[0].location).toEqual({ directory: "/tmp/thatch-v2-test-project" });
+    await waitFor("extraction child prompted", () => sessionPromptCalls.length === 1);
+    expect(sessionPromptCalls[0].text).toContain("thatch-fact-extractor");
 
     // Child creation writes the durable chat machinery marker, so the chat
     // auto-registration paths refuse the child even when a plugin reload
     // or daemon restart wiped the in-memory childToParent mapping.
     const directDb = new ThatchDB(process.env.THATCH_DB_PATH!);
-    expect(directDb.isChatMachinery("child_direct1")).toBe(true);
+    expect(directDb.isChatMachinery(CHILD_ID)).toBe(true);
     directDb.close();
-
-    delete process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS;
-
-    testHooks.dispose?.();
   });
 
   test("direct extraction: extraction child deleted before completing requeues", async () => {
@@ -91,489 +144,254 @@ describe("plugin entry", () => {
     // deleted before it fetches or acks. (Task-kind children are deleted
     // routinely and do NOT requeue - see the task-child deletion test
     // above; the kind gate is what separates the two.)
-    const recClient = {
-      session: {
-        prompt: async () => {},
-        promptAsync: async () => {},
-        create: async () => ({ data: { id: "child_delx" } }),
-        delete: async () => {},
-      },
-      tui: {
-        showToast: async () => {},
-      },
-    };
-    process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS = "true";
-    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
 
     // Buffer a tool interaction, then let the parent go idle - the plugin
     // dispatches a direct-extraction child (kind=extraction).
-    await testHooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_delx", callID: "dx1", args: { command: "ls" } },
-      { title: "list", output: "file.txt", metadata: {} },
-    );
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_delx", status: { type: "idle" } } } as any,
-    });
+    await bufferBash("ses_delx", "file.txt");
+    await queueEvent(parentIdle("ses_delx"));
+    await waitFor("extraction child created", () => sessionCreateCalls.length === 1);
 
     // The extraction child is deleted before completing.
-    await testHooks.event!({ event: {
-      type: "session.deleted",
-      properties: { info: { id: "child_delx" } } } as any,
-    });
+    await queueEvent(sessionEvent("session.deleted", { sessionID: CHILD_ID }));
 
     // The entries return to pending: the NEXT idle re-triggers extraction
     // (there is no model-facing nudge fallback any more - the plugin owns
     // the retry).
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_delx", status: { type: "idle" } } } as any,
-    });
-    await new Promise((r) => setTimeout(r, 10));
+    await queueEvent(parentIdle("ses_delx"));
+    await waitFor("extraction re-triggered", () => sessionCreateCalls.length === 2);
 
     // The buffer was not dropped - the payload provider still serves it.
-    const served = await (testHooks as any).tool.thatch_get_extraction_payload.execute(
+    const served = await payloadTool().execute(
       { session_id: "ses_delx" },
-      { sessionID: "ses_ext_delx" },
+      { sessionID: "ses_ext_delx", agent: "general" },
     );
-    expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("file.txt");
-
-    delete process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS;
-    testHooks.dispose?.();
+    expect(textOf(served)).toContain("file.txt");
   });
 
-  test("direct extraction: chat.message stays clean while an extraction child runs", async () => {    const recClient = {
-      session: {
-        prompt: async () => {},
-        promptAsync: async () => {},
-        create: async () => ({ data: { id: "child_direct2" } }),
-        delete: async () => {},
-      },
-      tui: {
-        showToast: async () => {},
-      },
-    };
-    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
+  test("direct extraction: chat.message stays clean while an extraction child runs", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
 
     // Buffer a tool interaction
-    await testHooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_direct2", callID: "d2", args: { command: "ls" } },
-      { title: "list", output: "file.txt", metadata: {} },
-    );
+    await bufferBash("ses_direct2", "file.txt");
 
     // Trigger extraction via parent idle
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_direct2", status: { type: "idle" } } } as any,
-    });
+    await queueEvent(parentIdle("ses_direct2"));
+    await waitFor("extraction child created", () => sessionCreateCalls.length === 1);
 
     // chat.message stays clean while a direct-extraction child runs (no
     // model-facing extraction nudge exists at all - see the section
     // comment). Short prompt falls through to recall, which produces
     // nothing here.
-    const out: any = { message: { id: "msg_d2" }, parts: [{ type: "text", text: "ok" }] };
-    await testHooks["chat.message"]!({ sessionID: "ses_direct2", messageID: "msg_d2" } as any, out);
-    expect(out.parts.length).toBe(1); // only the original part
-    expect(out.parts[0].text).not.toContain("thatch-fact-extractor");
-
-    testHooks.dispose?.();
+    const injections = await runTurn("ses_direct2", "ok");
+    expect(injections.length).toBe(0);
   });
 
   test("direct extraction: child idle cleans up and deletes child session", async () => {
-    let deleteCalled = false;
-    let deleteArgs: any = null;
-
-    const recClient = {
-      session: {
-        prompt: async () => {},
-        promptAsync: async () => {},
-        create: async () => ({ data: { id: "child_direct3" } }),
-        delete: async (args: any) => { deleteCalled = true; deleteArgs = args; },
-      },
-      tui: {
-        showToast: async () => {},
-      },
-    };
-    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
 
     // Buffer + trigger extraction
-    await testHooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_direct3", callID: "d3", args: { command: "ls" } },
-      { title: "list", output: "file.txt", metadata: {} },
-    );
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_direct3", status: { type: "idle" } } } as any,
-    });
-
-    // Simulate the child session being created (session.created event)
-    await testHooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "child_direct3", parentID: "ses_direct3" } } } as any,
-    });
+    await bufferBash("ses_direct3", "file.txt");
+    await queueEvent(parentIdle("ses_direct3"));
+    await waitFor("extraction child created", () => sessionCreateCalls.length === 1);
 
     // Child fetches its payload (the tool call records the claim), does a
     // no-save run, and acks - the claim completion consumes the delivered
     // entries.
-    await (testHooks as any).tool.thatch_get_extraction_payload.execute(
+    await payloadTool().execute(
       { session_id: "ses_direct3" },
-      { sessionID: "child_direct3" },
+      { sessionID: CHILD_ID, agent: "general" },
     );
-    await testHooks["tool.execute.after"]!(
-      { tool: "thatch_extraction_done", sessionID: "child_direct3", callID: "d3c", args: {} },
-      { title: "ack", output: "[acknowledged]", metadata: {} },
-    );
-
-    // Child goes idle — should clean up and delete the child
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "child_direct3", status: { type: "idle" } } } as any,
+    await toolAfterHook!({
+      tool: "thatch_extraction_done",
+      sessionID: CHILD_ID,
+      input: {},
+      status: "completed",
+      result: { content: "[acknowledged]" },
     });
 
-    expect(deleteCalled).toBe(true);
-    expect(deleteArgs.path.id).toBe("child_direct3");
+    // Child goes idle — should clean up and delete the child
+    await queueEvent(childIdle(CHILD_ID));
+    await waitFor("extraction child deleted", () => sessionRemoveCalls.length === 1);
+    expect(sessionRemoveCalls[0]).toEqual({ sessionID: CHILD_ID });
 
     // After cleanup, the extracting flag is cleared and the claimed entries
     // are consumed - the delivered entries were processed, so nothing is
     // left to extract. (A child that never fetches leaves them held: the
     // stale requeue returns them to pending, instead of the old idle-time
     // snapshot drain that silently dropped never-fetched entries.)
-    const out: any = { message: { id: "msg_d3" }, parts: [{ type: "text", text: "hello world testing" }] };
-    await testHooks["chat.message"]!({ sessionID: "ses_direct3", messageID: "msg_d3" } as any, out);
-    expect(out.parts.length).toBe(1); // clean message, claim consumed on child ack
-
-    testHooks.dispose?.();
+    const injections = await runTurn("ses_direct3", "hello world testing");
+    expect(injections.length).toBe(0); // clean message, claim consumed on child ack
   });
 
   test("direct extraction: child error clears extracting, next idle re-extracts", async () => {
-    let promptRuns = 0;
-    const recClient = {
-      session: {
-        prompt: async () => { promptRuns++; },
-        promptAsync: async () => { promptRuns++; },
-        create: async () => ({ data: { id: "child_direct4" } }),
-        delete: async () => {},
-      },
-      tui: {
-        showToast: async () => {},
-      },
-    };
-    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
 
-    await testHooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_direct4", callID: "d4", args: { command: "ls" } },
-      { title: "list", output: "file.txt", metadata: {} },
-    );
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_direct4", status: { type: "idle" } } } as any,
-    });
-    await testHooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "child_direct4", parentID: "ses_direct4" } } } as any,
-    });
+    await bufferBash("ses_direct4", "file.txt");
+    await queueEvent(parentIdle("ses_direct4"));
+    await waitFor("extraction child created", () => sessionCreateCalls.length === 1);
 
-    // Child errors out
-    await testHooks.event!({ event: {
-      type: "session.error",
-      properties: { sessionID: "child_direct4", error: { name: "APIError", message: "boom" } } } as any,
-    });
+    // Child errors out (v2's failed terminal event: error + idle pair).
+    await queueEvent(sessionEvent("session.execution.failed", {
+      sessionID: CHILD_ID,
+      error: { name: "APIError", message: "boom" },
+    }));
 
     // The entries are still pending (the erroring child never fetched).
     // There is no nudge fallback any more - the plugin itself retries on
     // the next idle.
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_direct4", status: { type: "idle" } } } as any,
-    });
-    await new Promise((r) => setTimeout(r, 10));
-    expect(promptRuns).toBe(2);
-
-    testHooks.dispose?.();
+    await queueEvent(parentIdle("ses_direct4"));
+    await waitFor("extraction re-triggered", () => sessionPromptCalls.length === 2);
+    expect(sessionCreateCalls.length).toBe(2);
   });
 
   test("direct extraction: child memory write without a fetch does not consume the parent's buffer", async () => {
-    const recClient = {
-      session: {
-        prompt: async () => {},
-        promptAsync: async () => {},
-        create: async () => ({ data: { id: "child_direct5" } }),
-        delete: async () => {},
-      },
-      tui: {
-        showToast: async () => {},
-      },
-    };
-    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
 
     // Buffer tool interactions in parent
-    await testHooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_direct5", callID: "d5a", args: { command: "ls" } },
-      { title: "list", output: "file.txt", metadata: {} },
-    );
+    await bufferBash("ses_direct5", "file.txt");
 
     // Parent idle triggers extraction
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_direct5", status: { type: "idle" } } } as any,
-    });
-
-    // session.created fires for the child
-    await testHooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "child_direct5", parentID: "ses_direct5" } } } as any,
-    });
+    await queueEvent(parentIdle("ses_direct5"));
+    await waitFor("extraction child created", () => sessionCreateCalls.length === 1);
 
     // Child writes a memory WITHOUT fetching first - its write proves
     // nothing about the parent's buffer (no claim exists), so the parent's
     // pending entries survive untouched.
-    await testHooks["tool.execute.after"]!(
-      { tool: "thatch_memory_remember", sessionID: "child_direct5", callID: "d5b", args: {} },
-      { title: "save", output: "[saved]", metadata: {} },
-    );
-
-    // Parent's buffer is still served - no silent consumption.
-    const served = await (testHooks as any).tool.thatch_get_extraction_payload.execute(
-      { session_id: "ses_direct5" },
-      { sessionID: "ses_ext_d5" },
-    );
-    expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("file.txt");
-
-    testHooks.dispose?.();
-  });
-
-  test("direct extraction: sync path uses prompt when bg env var unset", async () => {
-    let promptCalled = false;
-    let promptAsyncCalled = false;
-
-    const recClient = {
-      session: {
-        prompt: async () => { promptCalled = true; },
-        promptAsync: async () => { promptAsyncCalled = true; },
-        create: async () => ({ data: { id: "child_sync" } }),
-        delete: async () => {},
-      },
-      tui: {
-        showToast: async () => {},
-      },
-    };
-
-    // Preload (tests/clean-env.ts) already strips OPENCODE_* vars, so the
-    // sync path is the default — no env manipulation needed.
-
-    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
-
-    await testHooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_sync", callID: "s1", args: { command: "ls" } },
-      { title: "list", output: "file.txt", metadata: {} },
-    );
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_sync", status: { type: "idle" } } } as any,
+    await toolAfterHook!({
+      tool: "thatch_memory_remember",
+      sessionID: CHILD_ID,
+      input: {},
+      status: "completed",
+      result: { content: "[saved]" },
     });
 
-    // Allow the fire-and-forget prompt to resolve
-    await new Promise((r) => setTimeout(r, 10));
-
-    expect(promptCalled).toBe(true);
-    expect(promptAsyncCalled).toBe(false);
-
-    testHooks.dispose?.();
+    // Parent's buffer is still served - no silent consumption.
+    const served = await payloadTool().execute(
+      { session_id: "ses_direct5" },
+      { sessionID: "ses_ext_d5", agent: "general" },
+    );
+    expect(textOf(served)).toContain("file.txt");
   });
 
   test("direct extraction: no extraction triggered when buffer is empty", async () => {
-    let createCalled = false;
-
-    const recClient = {
-      session: {
-        prompt: async () => {},
-        promptAsync: async () => {},
-        create: async () => { createCalled = true; return { data: { id: "child_empty" } }; },
-        delete: async () => {},
-      },
-      tui: {
-        showToast: async () => {},
-      },
-    };
-    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
 
     // Parent goes idle with no pending interactions
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_empty", status: { type: "idle" } } } as any,
-    });
-
-    expect(createCalled).toBe(false);
-
-    testHooks.dispose?.();
+    await queueEvent(parentIdle("ses_empty"));
+    // Negative wait: the pump's handler is async; settle before asserting.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(sessionCreateCalls.length).toBe(0);
   });
 
   test("HIGH fix: interleaved entries survive when child writes memory then goes idle", async () => {
-    const recClient = {
-      session: {
-        prompt: async () => {},
-        promptAsync: async () => {},
-        create: async () => ({ data: { id: "child_interleave_fix" } }),
-        delete: async () => {},
-      },
-      tui: { showToast: async () => {} },
-    };
-    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
 
     // Buffer 3 entries in parent, trigger extraction
     for (let i = 0; i < 3; i++) {
-      await testHooks["tool.execute.after"]!(
-        { tool: "bash", sessionID: "ses_interleave_fix", callID: `pre-${i}`, args: { command: `cmd-${i}` } },
-        { title: `title-${i}`, output: `out-${i}`, metadata: {} },
-      );
+      await toolAfterHook!({
+        tool: "bash",
+        sessionID: "ses_interleave_fix",
+        input: { command: `cmd-${i}` },
+        status: "completed",
+        result: { content: `out-${i}` },
+      });
     }
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_interleave_fix", status: { type: "idle" } } } as any,
-    });
-    await testHooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "child_interleave_fix", parentID: "ses_interleave_fix" } } } as any,
-    });
+    await queueEvent(parentIdle("ses_interleave_fix"));
+    await waitFor("extraction child created", () => sessionCreateCalls.length === 1);
 
     // Simulate interleaved turn: 2 new entries arrive while child runs
     for (let i = 0; i < 2; i++) {
-      await testHooks["tool.execute.after"]!(
-        { tool: "bash", sessionID: "ses_interleave_fix", callID: `post-${i}`, args: { command: `cmd2-${i}` } },
-        { title: `title2-${i}`, output: `out2-${i}`, metadata: {} },
-      );
+      await toolAfterHook!({
+        tool: "bash",
+        sessionID: "ses_interleave_fix",
+        input: { command: `cmd2-${i}` },
+        status: "completed",
+        result: { content: `out2-${i}` },
+      });
     }
 
     // Child writes a memory — drains snapshot (3 pre-dispatch entries),
     // deletes parentSnapshots entry
-    await testHooks["tool.execute.after"]!(
-      { tool: "thatch_memory_remember", sessionID: "child_interleave_fix", callID: "mem", args: {} },
-      { title: "save", output: "[saved]", metadata: {} },
-    );
+    await toolAfterHook!({
+      tool: "thatch_memory_remember",
+      sessionID: CHILD_ID,
+      input: {},
+      status: "completed",
+      result: { content: "[saved]" },
+    });
 
     // Child goes idle — must NOT drain the buffer (interleaved entries
     // should survive for the next extraction cycle)
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "child_interleave_fix", status: { type: "idle" } } } as any,
-    });
+    await queueEvent(childIdle(CHILD_ID));
 
     // The child never fetched, so nothing was claimed or consumed: ALL
     // five entries (3 pre-dispatch + 2 interleaved) are still served for
     // the next extraction cycle. Nothing was lost.
-    const served = await (testHooks as any).tool.thatch_get_extraction_payload.execute(
+    const served = await payloadTool().execute(
       { session_id: "ses_interleave_fix" },
-      { sessionID: "ses_ext_ivf" },
+      { sessionID: "ses_ext_ivf", agent: "general" },
     );
-    const text = typeof served === "string" ? served : JSON.stringify(served);
+    const text = textOf(served);
     for (let i = 0; i < 3; i++) expect(text).toContain(`out-${i}`);
     for (let i = 0; i < 2; i++) expect(text).toContain(`out2-${i}`);
-
-    testHooks.dispose?.();
   });
 
   test("HIGH fix: non-extraction sub-agent idle does not drain buffer or delete session", async () => {
-    let deleteCalled = false;
-
-    const recClient = {
-      session: {
-        prompt: async () => {},
-        promptAsync: async () => {},
-        create: async () => ({ data: { id: "should-not-delete" } }),
-        delete: async () => { deleteCalled = true; },
-      },
-      tui: { showToast: async () => {} },
-    };
-    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
 
     // Buffer entries in parent
-    await testHooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_task_parent", callID: "tk1", args: { command: "ls" } },
-      { title: "list", output: "file.txt", metadata: {} },
-    );
+    await bufferBash("ses_task_parent", "file.txt");
 
     // Simulate a task-dispatched sub-agent (NOT created by triggerExtraction)
-    await testHooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "ses_task_child", parentID: "ses_task_parent" } } } as any,
-    });
+    await queueEvent(sessionEvent("session.created", {
+      sessionID: "ses_task_child",
+      info: { id: "ses_task_child", parentID: "ses_task_parent" },
+    }));
 
     // Sub-agent goes idle — should NOT drain buffer or delete session
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_task_child", status: { type: "idle" } } } as any,
-    });
-
-    expect(deleteCalled).toBe(false);
+    await queueEvent(sessionEvent("session.execution.succeeded", { sessionID: "ses_task_child" }));
+    // Negative wait: the pump's handler is async; settle before asserting.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(sessionRemoveCalls.length).toBe(0);
 
     // Buffer should still have entries - the payload provider still serves
     // them (the task child's idle consumed nothing it never claimed).
-    const served = await (testHooks as any).tool.thatch_get_extraction_payload.execute(
+    const served = await payloadTool().execute(
       { session_id: "ses_task_parent" },
-      { sessionID: "ses_ext_tk" },
+      { sessionID: "ses_ext_tk", agent: "general" },
     );
-    expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("file.txt");
-
-    testHooks.dispose?.();
+    expect(textOf(served)).toContain("file.txt");
   });
 
   test("toast: shows metrics on child idle after memory writes", async () => {
-    let toastCalled = false;
-    let toastArgs: any = null;
-
-    const recClient = {
-      session: {
-        prompt: async () => {},
-        promptAsync: async () => {},
-        create: async () => ({ data: { id: "child_toast1" } }),
-        delete: async () => {},
-      },
-      tui: {
-        showToast: async (args: any) => { toastCalled = true; toastArgs = args; },
-      },
-    };
-    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
 
     // Buffer + trigger extraction
-    await testHooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_toast1", callID: "t1", args: { command: "ls" } },
-      { title: "list", output: "file.txt", metadata: {} },
-    );
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_toast1", status: { type: "idle" } } } as any,
-    });
-    await testHooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "child_toast1", parentID: "ses_toast1" } } } as any,
-    });
+    await bufferBash("ses_toast1", "file.txt");
+    await queueEvent(parentIdle("ses_toast1"));
+    await waitFor("extraction child created", () => sessionCreateCalls.length === 1);
 
     // Child writes 2 new memories and 1 updated
-    await testHooks["tool.execute.after"]!(
-      { tool: "thatch_memory_remember", sessionID: "child_toast1", callID: "t2", args: { label: "a" } },
-      { title: "save", output: "[saved]", metadata: {} },
-    );
-    await testHooks["tool.execute.after"]!(
-      { tool: "thatch_memory_remember", sessionID: "child_toast1", callID: "t3", args: { label: "b" } },
-      { title: "save", output: "[saved]", metadata: {} },
-    );
-    await testHooks["tool.execute.after"]!(
-      { tool: "thatch_memory_remember", sessionID: "child_toast1", callID: "t4", args: { label: "a", overwrite: true } },
-      { title: "save", output: "[saved]", metadata: {} },
-    );
+    const remember = (label: string, extra: Record<string, unknown> = {}) =>
+      toolAfterHook!({
+        tool: "thatch_memory_remember",
+        sessionID: CHILD_ID,
+        input: { label, ...extra },
+        status: "completed",
+        result: { content: "[saved]" },
+      });
+    await remember("a");
+    await remember("b");
+    await remember("a", { overwrite: true });
 
     // Child goes idle — toast should fire with metrics
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "child_toast1", status: { type: "idle" } } } as any,
-    });
-
-    expect(toastCalled).toBe(true);
-    expect(toastArgs.body.message).toContain("new: 2");
-    expect(toastArgs.body.message).toContain("updated: 1");
-    expect(toastArgs.body.variant).toBe("success");
-
-    testHooks.dispose?.();
+    await queueEvent(childIdle(CHILD_ID));
+    await waitFor("extraction metrics toast", () => metricsToasts().length === 1);
+    const toast = metricsToasts()[0];
+    expect(toast.data.message).toContain("new: 2");
+    expect(toast.data.message).toContain("updated: 1");
+    expect(toast.data.variant).toBe("success");
   });
 
   test("toast: teaching-output remember (no save) drains nothing and bumps no metrics", async () => {
@@ -581,143 +399,75 @@ describe("plugin entry", () => {
     // draining the extraction buffer, completing claims, or bumping the
     // child's toast metrics. The child setup mirrors the positive toast
     // test exactly (buffered parent tool call, parent idle, then the
-    // child linked by parentID) so the child is an extraction-kind child:
-    // with the gate disabled, the metrics bump and the toast fires, which
-    // fails this test.
-    let toastCalled = false;
-
-    const recClient = {
-      session: {
-        prompt: async () => {},
-        promptAsync: async () => {},
-        create: async () => ({ data: { id: "child_teach1" } }),
-        delete: async () => {},
-      },
-      tui: {
-        showToast: async () => { toastCalled = true; },
-      },
-    };
-    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
+    // child linked) so the child is an extraction-kind child: with the
+    // gate disabled, the metrics bump and the toast fires, which fails
+    // this test.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
 
     // Buffer a parent tool call, then send the parent idle so the pending
-    // extraction classifies the next linked child as extraction-kind.
-    await testHooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_teach1", callID: "tt0", args: { command: "ls" } },
-      { title: "list", output: "file.txt", metadata: {} },
-    );
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_teach1", status: { type: "idle" } } } as any,
-    });
-    await testHooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "child_teach1", parentID: "ses_teach1" } } } as any,
-    });
+    // extraction classifies the child as extraction-kind.
+    await bufferBash("ses_teach1", "file.txt");
+    await queueEvent(parentIdle("ses_teach1"));
+    await waitFor("extraction child created", () => sessionCreateCalls.length === 1);
 
-    await testHooks["tool.execute.after"]!(
-      { tool: "thatch_memory_remember", sessionID: "child_teach1", callID: "tt1", args: {} },
-      { title: "save", output: "No content provided - pass the information to remember in the content parameter.", metadata: {} },
-    );
+    await toolAfterHook!({
+      tool: "thatch_memory_remember",
+      sessionID: CHILD_ID,
+      input: {},
+      status: "completed",
+      result: { content: "No content provided - pass the information to remember in the content parameter." },
+    });
 
     // A teaching return is not a write: no metrics are bumped, so the
     // child's idle stays toast-silent.
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "child_teach1", status: { type: "idle" } } } as any,
-    });
-    expect(toastCalled).toBe(false);
-
-    testHooks.dispose?.();
+    await queueEvent(childIdle(CHILD_ID));
+    // Negative wait: the pump's handler is async; settle before asserting.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(metricsToasts().length).toBe(0);
   });
 
   test("toast: no toast on no-save extraction run", async () => {
-    let toastCalled = false;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
 
-    const recClient = {
-      session: {
-        prompt: async () => {},
-        promptAsync: async () => {},
-        create: async () => ({ data: { id: "child_toast2" } }),
-        delete: async () => {},
-      },
-      tui: {
-        showToast: async () => { toastCalled = true; },
-      },
-    };
-    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
-
-    await testHooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_toast2", callID: "t5", args: { command: "ls" } },
-      { title: "list", output: "file.txt", metadata: {} },
-    );
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_toast2", status: { type: "idle" } } } as any,
-    });
-    await testHooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "child_toast2", parentID: "ses_toast2" } } } as any,
-    });
+    await bufferBash("ses_toast2", "file.txt");
+    await queueEvent(parentIdle("ses_toast2"));
+    await waitFor("extraction child created", () => sessionCreateCalls.length === 1);
 
     // Child goes idle without writing any memories — no toast should fire.
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "child_toast2", status: { type: "idle" } } } as any,
-    });
-
-    expect(toastCalled).toBe(false);
-
-    testHooks.dispose?.();
+    await queueEvent(childIdle(CHILD_ID));
+    // Negative wait: the pump's handler is async; settle before asserting.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(metricsToasts().length).toBe(0);
   });
 
   test("toast: tracks deletions in child sessions", async () => {
-    let toastArgs: any = null;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
 
-    const recClient = {
-      session: {
-        prompt: async () => {},
-        promptAsync: async () => {},
-        create: async () => ({ data: { id: "child_toast3" } }),
-        delete: async () => {},
-      },
-      tui: {
-        showToast: async (args: any) => { toastArgs = args; },
-      },
-    };
-    const testHooks = await server({ client: recClient, worktree: "/tmp/test" } as any);
-
-    await testHooks["tool.execute.after"]!(
-      { tool: "bash", sessionID: "ses_toast3", callID: "t6", args: { command: "ls" } },
-      { title: "list", output: "file.txt", metadata: {} },
-    );
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "ses_toast3", status: { type: "idle" } } } as any,
-    });
-    await testHooks.event!({ event: {
-      type: "session.created",
-      properties: { info: { id: "child_toast3", parentID: "ses_toast3" } } } as any,
-    });
+    await bufferBash("ses_toast3", "file.txt");
+    await queueEvent(parentIdle("ses_toast3"));
+    await waitFor("extraction child created", () => sessionCreateCalls.length === 1);
 
     // Child writes 1 new memory and deletes 1
-    await testHooks["tool.execute.after"]!(
-      { tool: "thatch_memory_remember", sessionID: "child_toast3", callID: "t7", args: { label: "c" } },
-      { title: "save", output: "[saved]", metadata: {} },
-    );
-    await testHooks["tool.execute.after"]!(
-      { tool: "thatch_memory_forget", sessionID: "child_toast3", callID: "t8", args: { label: "old" } },
-      { title: "forget", output: "[forgotten]", metadata: {} },
-    );
-
-    await testHooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID: "child_toast3", status: { type: "idle" } } } as any,
+    await toolAfterHook!({
+      tool: "thatch_memory_remember",
+      sessionID: CHILD_ID,
+      input: { label: "c" },
+      status: "completed",
+      result: { content: "[saved]" },
+    });
+    await toolAfterHook!({
+      tool: "thatch_memory_forget",
+      sessionID: CHILD_ID,
+      input: { label: "old" },
+      status: "completed",
+      result: { content: "[forgotten]" },
     });
 
-    expect(toastArgs.body.message).toContain("new: 1");
-    expect(toastArgs.body.message).toContain("deleted: 1");
-    expect(toastArgs.body.variant).toBe("success");
-
-    testHooks.dispose?.();
+    await queueEvent(childIdle(CHILD_ID));
+    await waitFor("extraction metrics toast", () => metricsToasts().length === 1);
+    const toast = metricsToasts()[0];
+    expect(toast.data.message).toContain("new: 1");
+    expect(toast.data.message).toContain("deleted: 1");
+    expect(toast.data.variant).toBe("success");
   });
 });

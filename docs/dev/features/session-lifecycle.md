@@ -1,6 +1,6 @@
 # Session Lifecycle Management (opencode)
 
-Unless noted, `client.*` names below are the opencode v1 mapping; the v2 equivalents and degrades are in [opencode-plugin.md](opencode-plugin.md).
+Behavior is described in runtime terms; the host-surface registrations and the HostCapabilities mapping are in [opencode-plugin.md](opencode-plugin.md).
 
 opencode emits bus events for session lifecycle changes. Thatch subscribes to these events to manage the extraction pipeline, send session-start reminders, handle child session cleanup, and resolve wrap-up commands.
 
@@ -14,6 +14,7 @@ opencode emits bus events for session lifecycle changes. Thatch subscribes to th
 - Session error recovery: child errors requeue parent's accepted entries
 - Session deletion recovery: child deletion requeues; parent deletion completes accepted entries
 - Stranded-session self-heal: sessions whose recorded directory is gone (a merged + deleted worktree) are deleted when machinery (`thatch-extraction` corpses) and moved to the project's canonical checkout when real
+- Location-switch hand-off: a session moved mid-life (`session.moved` event) is un-hosted by the old instance and adopted by the new one, so chat wake delivery follows the session
 - Wrap-up commands: `/thatch/compact` and `/thatch/exit` arm a greenlight check; each resolves on the model's zero-arg tool call (`thatch_compact` / `thatch_exit`) and the next idle
 
 ## How it works
@@ -33,9 +34,39 @@ after a reload); live delivery is claim-based: the child's payload fetch
 records exactly which entries it received, and its completion signal
 consumes only those.
 
+### session.moved (location switch)
+
+A v2 session's project location can change mid-life: the user's
+`session_move`, the stranded-session sweep's move, or opencode's
+"location unavailable" recovery dialog. opencode publishes a
+`session.moved` bus event carrying the new directory and routes it to BOTH
+the old and the new directory's plugin instances; the v2 pump forwards it
+past the generic instance gate and each instance reacts on its own
+membership:
+
+- **Moved away** (the session was hosted here, the new directory is not
+  ours): release hosting -- drop the status-map key, the rehost/resume
+  sets, and the hosted journal row (so a reload cannot resurrect it).
+  Without the release the old instance keeps heartbeating and delivering
+  for a session that no longer lives here; when its own directory was also
+  deleted, the delivery guard silently skips the prompt while the chat
+  delivery loop stamps the mail delivered -- the wake-accepted-but-never-
+  executed zombie (issue #25).
+- **Moved here**: adopt the session into hosting (the `movedInSessions`
+  set plus a durable hosted-journal merge), so wake delivery resumes from
+  this instance without waiting for the session's first turn.
+
+The stranded-session sweep's own move path releases hosting eagerly (same
+routine, before the event round-trip) because the sweep performed the move
+itself and needs no event to know. A move whose `session.moved` event was
+never observed (a move across a plugin reload) is caught by the hosted
+directory re-verification: init and each poll cycle compare the hosted
+set's directories against `session_v2` in opencode.db and release
+move-aways (see cross-session-chat.md).
+
 ### session.created without parentID (top-level session)
 
-- Send session-start reminder via `client.session.prompt` with `noReply: true` and `synthetic: true`
+- Send session-start reminder as a turn-free `noReply` delivery (`session.synthetic({ resume: false })` - a synthetic inbox item that starts no model turn; the bubble materializes at the session's next turn)
 - The reminder includes the hygiene heartbeat (pending dedup pairs, stale count, orphaned branch memories) when any signal is non-zero
 - See [hygiene.md](hygiene.md)
 
@@ -51,7 +82,7 @@ When a child created by `triggerExtraction` goes idle:
 2. Fire a toast with extraction metrics (new/updated/deleted counts) -- only if memories were actually written
 3. Clean up all maps: `extracting`, `childToParent`, `parentSnapshots`, `childMetrics`, `extractionChildren`
 4. `consume(childID)` -- drain child's own buffer
-5. Delete the child session via `client.session.delete`
+5. Delete the child session via `session.remove`
 
 ### session.status idle -- task-dispatched sub-agent
 
@@ -83,8 +114,8 @@ Both arms are journaled to `runtime_state` (kind `wrapup`) at arming. Resolution
 1. `command.execute.before` arms the session in `pendingWrapUp` when the command runs (on v2 the registered command's `execute` runs the same arming through `onCommandExecuteBefore`). A re-arm overwrites and resets `greenlit`.
 2. On the session's next idle: an un-greenlit arm does nothing -- a mid-wrap-up wait (e.g. a background fact-extractor running) must not consume it. Only a greenlit arm resolves.
 3. Greenlit: trigger the host action and return early -- compaction is starting (the checklist drained the buffer) or the session is closing. The wrap-up executor deletes the arm and journal row FIRST, then runs the host sequence.
-   - compact: v1 dispatches the TUI's `session_compact` command (`client.tui.executeCommand` -- the execute-command route only accepts legacy alias names; `session_compact` maps to the TUI's `session.compact` action, the same thing the built-in `/compact` runs). v2 calls `session.compact({sessionID})` on the promise domain directly (upstream #52385), runtime-guarded because the pinned dev types predate the surface -- an older host degrades to a logged no-op
-   - exit: record the session's watcher deaths first (`watchers.sessionDied` -- BEFORE the unregister below, because the death row is placed by the session's chat row and the unregister deletes it; the callback also captures the project there -- the durable row write and the care-based delivery ride an async continuation, since the coordinator link is read from the dead session's spawn metadata over the host), unregister the session from the chat directory (a greenlit exit's host is about to vanish; other sessions must stop addressing mail to it; the tombstone's `exit` reason is what a later restore clears), then close the session out on the host. v1 publishes the `app.exit` TUI keymap command directly (`client.tui.publish` -- no exit alias exists). v2 emits the session-tab bridge's `exit-tab-closed` event, a TUI-ONLY close of the session's OWN tab: the daemon hosts every tab, so `app.exit` would take down unrelated sessions, and the pump deliberately never translates this event (the deaths were already recorded; a second pass would erase the durable death row). The unregister is plugin-side only, after the death recording: the template deliberately does NOT ask the model to call `thatch_chat_unregister`, because a mid-turn unregister would delete the chat row before the death placement could use it. Compaction deliberately does NOT unregister - the session continues
+   - compact: `session.compact({sessionID})` on the promise domain directly (upstream #52385) - the same core compaction the built-in `/compact` runs
+   - exit: record the session's watcher deaths first (`watchers.sessionDied` -- BEFORE the unregister below, because the death row is placed by the session's chat row and the unregister deletes it; the callback also captures the project there -- the durable row write and the care-based delivery ride an async continuation, since the coordinator link is read from the dead session's spawn metadata over the host), unregister the session from the chat directory (a greenlit exit's host is about to vanish; other sessions must stop addressing mail to it; the tombstone's `exit` reason is what a later restore clears), then close the session out on the host: the session-tab bridge's `exit-tab-closed` event, a TUI-ONLY close of the session's OWN tab: the daemon hosts every tab, so an app-wide exit would take down unrelated sessions, and the pump deliberately never translates this event (the deaths were already recorded; a second pass would erase the durable death row). The unregister is plugin-side only, after the death recording: the template deliberately does NOT ask the model to call `thatch_chat_unregister`, because a mid-turn unregister would delete the chat row before the death placement could use it. Compaction deliberately does NOT unregister - the session continues
 
 ### Restore-rejoin
 
@@ -165,9 +196,10 @@ What it does, decided by `planStrandActions` (pure, unit-tested):
   parent transcript's subagent rendering
 - Unresolvable canonical or no move endpoint: skipped and logged
 
-The host supplies the enumeration (v1: `client.session.list`; v2: readonly
-read of opencode.db, since the promise domain has no session list and the
-sweep needs machine-wide rows) plus the move/delete endpoints; every leg
+The host supplies the enumeration (readonly read of opencode.db - the
+sweep needs machine-wide rows including
+never-activated directories, which `session.list`'s per-directory filter
+cannot express) plus the move/delete endpoints; every leg
 degrades silently. A summary toast fires only when something was healed. Set
 `THATCH_STRAND_SWEEP=off` to disarm the sweep entirely (tests do, so it can
 never act on a developer's real database through mocks).
@@ -217,7 +249,7 @@ itself.
 ## Source files
 
 - `src/runtime.ts` -- event handler (all session events), `triggerExtraction`, `cleanupChild`, internal state maps
-- `src/opencode/v1.ts`, `src/opencode/v2.ts` -- host adapters wiring the runtime into each opencode plugin API
+- `src/opencode/v2.ts` -- the host adapter wiring the runtime into the opencode plugin API
 
 ## Key invariants
 

@@ -135,6 +135,12 @@ process, the default, and a one-sentence description. `config_set` refuses
 the section -- environment knobs are per-process; export them in your
 shell. The full registry lives in `src/env-knobs.ts` in the thatch repo.
 
+One knob worth knowing: `THATCH_NO_NOTIFY=1` silences every thatch
+notification -- banners and voice alike -- at the dispatcher, regardless of
+the config file. Export it in your shell when you want quiet without editing
+your config. Thatch's own test and QA runs set it, so running the test suite
+never fires notifications on your machine.
+
 ## Alerts: notifications without a tool call
 
 On opencode, the plugin watches your session and alerts you automatically:

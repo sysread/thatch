@@ -1,71 +1,96 @@
 // Wrap-up command resolution and command-file installation tests from
-// plugin.test.ts: the /thatch/compact and /thatch/exit greenlight flow,
-// installOpencodeCommands, and the action command sets.
+// plugin.test.ts, re-based onto the v2 harness (the drop-v1 plan's Phase
+// A-prime): the /thatch/compact and /thatch/exit greenlight flow, the
+// registered wrap-up commands, and the action command sets. On v2 the
+// wrap-up commands arm inside their execute (v1's command.execute.before
+// hook) and the SAME execute also delivers the wrap-up body (a real
+// prompt); the compact action rides session.compact and the exit action
+// emits the rpc bridge's exit-tab-closed event (v1: the TUI publish /
+// executeCommand channels).
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  server,
-  setupPluginHarness,
-  teardownPluginHarness,
-  tuiExecuteCommandCalls,
-  tuiPublishCalls,
-  tuiToastCalls,
-} from "./mocks/plugin-harness";
+import { setup } from "../src/opencode/v2";
 import { ThatchDB } from "../src/db";
+import { EXIT_TAB_CLOSED_EVENT } from "../src/session-tab-shared";
+import {
+  addedCommands,
+  addedTools,
+  makeContext,
+  queueEvent,
+  rpcEmitted,
+  SESSION_DIR,
+  sessionCompactCalls,
+  setupTestEnv,
+  teardownTestEnv,
+  waitFor,
+} from "./mocks/opencode-v2-harness";
 
-let hooks: Awaited<ReturnType<typeof server>>;
+// These tests pump async events through the v2 adapter harness; under a
+// loaded CI runner the pump can lag. Bun's default per-test timeout is 5s
+// with no margin for that (the 2026-11-03 fleet-contention CI reds). 90s =
+// expected (ms-scale pump handling) x ~900 headroom, above the harness
+// waitFor deadline so real hangs report the poll message.
+setDefaultTimeout(90_000);
 
-beforeAll(async () => {
-  hooks = await setupPluginHarness();
+let cleanup: (() => Promise<void>) | undefined;
+
+beforeEach(() => {
+  setupTestEnv();
 });
 
-afterAll(() => {
-  teardownPluginHarness();
+afterEach(async () => {
+  if (cleanup) await cleanup();
+  cleanup = undefined;
+  await teardownTestEnv();
 });
+
+const exitEvents = () => rpcEmitted.filter((e) => e.name === EXIT_TAB_CLOSED_EVENT);
 
 describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
-  // Drives the full tool-protocol flow: the command arms the session, the
-  // model greenlights with the kind's zero-arg tool call, and the session's
-  // next idle runs the host action. The tool resolves the session from the
-  // per-call host context.
-  const arm = (command: string, sessionID: string) =>
-    hooks["command.execute.before"]!({ command, sessionID, arguments: "" }, { parts: [] });
+  // Drives the full tool-protocol flow: the registered command arms the
+  // session (and delivers the wrap-up body - the v2 execute does both),
+  // the model greenlights with the kind's zero-arg tool call, and the
+  // session's next idle runs the host action. The tool resolves the
+  // session from the per-call host context.
+  const arm = (name: "thatch/compact" | "thatch/exit", sessionID: string) =>
+    addedCommands.find((c) => c.name === name)!.execute({ sessionID });
   const idle = (sessionID: string) =>
-    hooks.event!({ event: {
-      type: "session.status",
-      properties: { sessionID, status: { type: "idle" } } } as any,
+    queueEvent({
+      type: "session.execution.succeeded",
+      location: { directory: SESSION_DIR },
+      data: { sessionID },
     });
   const callExitTool = (sessionID: string) =>
-    hooks.tool!.thatch_exit.execute({}, { sessionID } as any) as Promise<string>;
+    addedTools.find((t) => t.name === "thatch_exit")!.execute({}, { sessionID, agent: "build" }) as Promise<unknown>;
   const callCompactTool = (sessionID: string) =>
-    hooks.tool!.thatch_compact.execute({}, { sessionID } as any) as Promise<string>;
+    addedTools.find((t) => t.name === "thatch_compact")!.execute({}, { sessionID, agent: "build" }) as Promise<unknown>;
+  const replyOf = (r: unknown): string => String((r as any)?.content ?? "");
 
-  test("compact greenlight triggers the TUI compact action", async () => {
-    const before = tuiExecuteCommandCalls.length;
+  test("compact greenlight triggers the session.compact action", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/compact", "ses_wrapc");
     await callCompactTool("ses_wrapc");
     await idle("ses_wrapc");
-    expect(tuiExecuteCommandCalls.slice(before)).toEqual([
-      { body: { command: "session_compact" } },
-    ]);
-    expect(tuiPublishCalls).toHaveLength(0);
+    await waitFor("session.compact called", () => sessionCompactCalls.length === 1);
+    expect(sessionCompactCalls[0]).toEqual({ sessionID: "ses_wrapc" });
+    expect(exitEvents()).toHaveLength(0);
   });
 
   // The exit flow under the tool protocol: the command arms the exit, the
   // model greenlights with the zero-arg thatch_exit tool call, and the
   // session's next idle runs the close.
-  test("exit greenlight publishes the app.exit TUI command", async () => {
-    const before = tuiPublishCalls.length;
+  test("exit greenlight emits the exit-tab-closed event", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/exit", "ses_wrape");
     await callExitTool("ses_wrape");
     await idle("ses_wrape");
-    expect(tuiPublishCalls.slice(before)).toEqual([
-      { body: { type: "tui.command.execute", properties: { command: "app.exit" } } },
-    ]);
-    expect(tuiExecuteCommandCalls).toHaveLength(1); // only the compact test's
+    await waitFor("exit close emitted", () => exitEvents().length === 1);
+    // TUI-only payload: just the tab to close.
+    expect(exitEvents()[0].data).toEqual({ sessionID: "ses_wrape" });
+    expect(sessionCompactCalls.length).toBe(0);
   });
 
   // There is no runtime "blocked" concept under the tool protocol: the
@@ -75,139 +100,134 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
   // final action. That toast pin has no tool-protocol analog; likewise the
   // old "token must be trailing" pin: a tool call cannot be mid-text.)
   test("an un-greenlit compact arm survives an idle and triggers nothing", async () => {
-    const before = { cmd: tuiExecuteCommandCalls.length, toast: tuiToastCalls.length };
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/compact", "ses_wrapb");
     await idle("ses_wrapb");
-    expect(tuiExecuteCommandCalls.length).toBe(before.cmd);
-    expect(tuiToastCalls.length).toBe(before.toast);
+    // Negative wait: the pump's handler is async; settle before asserting.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(sessionCompactCalls.length).toBe(0);
     // The arm is still live: the tool greenlights it and the NEXT idle
     // compacts (the post-checklist compaction the old flow lost).
     await callCompactTool("ses_wrapb");
     await idle("ses_wrapb");
-    expect(tuiExecuteCommandCalls.slice(before.cmd)).toEqual([
-      { body: { command: "session_compact" } },
-    ]);
+    await waitFor("late session.compact called", () => sessionCompactCalls.length === 1);
   });
 
   test("an un-greenlit exit arm survives an idle and triggers nothing", async () => {
     // The fix behind the tool protocol: idles before the thatch_exit call
     // must not consume the arm (the old consume-on-first-idle ate the arm
-    // during a mid-exit wait, stranding the final close). No message fetch,
-    // no toast, no host action - the arm just persists.
-    const before = { pub: tuiPublishCalls.length, toast: tuiToastCalls.length };
+    // during a mid-exit wait, stranding the final close). No host action -
+    // the arm just persists.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/exit", "ses_wrapu0");
     await idle("ses_wrapu0");
-    expect(tuiPublishCalls.length).toBe(before.pub);
-    expect(tuiToastCalls.length).toBe(before.toast);
+    // Negative wait: the pump's handler is async; settle before asserting.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(exitEvents().length).toBe(0);
     // The arm is still live: the tool greenlights it and the NEXT idle
     // closes (the post-completion close the old flow lost).
     await callExitTool("ses_wrapu0");
     await idle("ses_wrapu0");
-    expect(tuiPublishCalls.slice(before.pub)).toEqual([
-      { body: { type: "tui.command.execute", properties: { command: "app.exit" } } },
-    ]);
+    await waitFor("late exit close emitted", () => exitEvents().length === 1);
   });
 
   test("thatch_exit without an armed exit refuses with no side effects", async () => {
-    const before = { pub: tuiPublishCalls.length, cmd: tuiExecuteCommandCalls.length };
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const reply = await callExitTool("ses_wrapnoarm");
-    expect(reply).toContain("No exit in progress");
-    expect(tuiPublishCalls.length).toBe(before.pub);
-    expect(tuiExecuteCommandCalls.length).toBe(before.cmd);
+    expect(replyOf(reply)).toContain("No exit in progress");
+    expect(exitEvents().length).toBe(0);
+    expect(sessionCompactCalls.length).toBe(0);
   });
 
   test("thatch_compact without an armed compact refuses with no side effects", async () => {
-    const before = { pub: tuiPublishCalls.length, cmd: tuiExecuteCommandCalls.length };
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const reply = await callCompactTool("ses_wrapnoarmc");
-    expect(reply).toContain("No compaction in progress");
-    expect(tuiPublishCalls.length).toBe(before.pub);
-    expect(tuiExecuteCommandCalls.length).toBe(before.cmd);
+    expect(replyOf(reply)).toContain("No compaction in progress");
+    expect(exitEvents().length).toBe(0);
+    expect(sessionCompactCalls.length).toBe(0);
   });
 
   test("a thatch_compact call against an exit arm refuses and leaves the exit arm alone", async () => {
     // The cross-kind refusal matrix, compact leg: an exit arm plus
     // thatch_compact is a "no compaction in progress" refusal, never a
     // greenlight - the callback owns the kind check.
-    const before = { pub: tuiPublishCalls.length, cmd: tuiExecuteCommandCalls.length };
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/exit", "ses_wrapxk");
     const reply = await callCompactTool("ses_wrapxk");
-    expect(reply).toContain("No compaction in progress");
-    expect(tuiPublishCalls.length).toBe(before.pub);
-    expect(tuiExecuteCommandCalls.length).toBe(before.cmd);
+    expect(replyOf(reply)).toContain("No compaction in progress");
+    expect(exitEvents().length).toBe(0);
+    expect(sessionCompactCalls.length).toBe(0);
     // The exit arm still resolves as exit: the thatch_exit tool greenlights it.
     await callExitTool("ses_wrapxk");
     await idle("ses_wrapxk");
-    expect(tuiPublishCalls.slice(before.pub)).toEqual([
-      { body: { type: "tui.command.execute", properties: { command: "app.exit" } } },
-    ]);
+    await waitFor("exit close emitted", () => exitEvents().length === 1);
   });
 
   test("thatch_exit against a compact arm refuses and leaves the compact arm alone", async () => {
     // The cross-kind refusal matrix, exit leg: a compact arm plus
     // thatch_exit is a "no exit in progress" refusal, never a greenlight.
-    const before = { pub: tuiPublishCalls.length, cmd: tuiExecuteCommandCalls.length };
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/compact", "ses_wrapck");
     const reply = await callExitTool("ses_wrapck");
-    expect(reply).toContain("No exit in progress");
-    expect(tuiPublishCalls.length).toBe(before.pub);
-    expect(tuiExecuteCommandCalls.length).toBe(before.cmd);
+    expect(replyOf(reply)).toContain("No exit in progress");
+    expect(exitEvents().length).toBe(0);
+    expect(sessionCompactCalls.length).toBe(0);
     // The compact arm still resolves as compact: the tool greenlights it.
     await callCompactTool("ses_wrapck");
     await idle("ses_wrapck");
-    expect(tuiExecuteCommandCalls.slice(before.cmd)).toEqual([
-      { body: { command: "session_compact" } },
-    ]);
+    await waitFor("session.compact called", () => sessionCompactCalls.length === 1);
   });
 
   test("a second thatch_exit call is idempotent and closes exactly once", async () => {
-    const before = tuiPublishCalls.length;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/exit", "ses_wrapdbl");
     const first = await callExitTool("ses_wrapdbl");
     const second = await callExitTool("ses_wrapdbl");
-    expect(first).toContain("Greenlit");
-    expect(second).toContain("Already greenlit");
+    expect(replyOf(first)).toContain("Greenlit");
+    expect(replyOf(second)).toContain("Already greenlit");
     await idle("ses_wrapdbl");
-    expect(tuiPublishCalls.slice(before)).toHaveLength(1);
+    await waitFor("exit close emitted", () => exitEvents().length === 1);
+    expect(exitEvents()).toHaveLength(1);
   });
 
   test("a second thatch_compact call is idempotent and compacts exactly once", async () => {
-    const before = tuiExecuteCommandCalls.length;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/compact", "ses_wrapdblc");
     const first = await callCompactTool("ses_wrapdblc");
     const second = await callCompactTool("ses_wrapdblc");
-    expect(first).toContain("Greenlit");
-    expect(second).toContain("Already greenlit");
+    expect(replyOf(first)).toContain("Greenlit");
+    expect(replyOf(second)).toContain("Already greenlit");
     await idle("ses_wrapdblc");
-    expect(tuiExecuteCommandCalls.slice(before)).toHaveLength(1);
-  });
-
-  test("unknown commands do not arm the wrap-up check", async () => {
-    const before = tuiExecuteCommandCalls.length;
-    await arm("some-other-command", "ses_wrapu");
-    await callCompactTool("ses_wrapu");
-    await idle("ses_wrapu");
-    expect(tuiExecuteCommandCalls.length).toBe(before);
+    await waitFor("session.compact called", () => sessionCompactCalls.length === 1);
+    expect(sessionCompactCalls).toHaveLength(1);
   });
 
   test("exit greenlight unregisters the session from the chat directory", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const before = new ThatchDB(process.env.THATCH_DB_PATH!);
     before.registerChatSession("ses_wrapeu", "p", null, "opencode", "gammawrap");
     before.close();
     await arm("thatch/exit", "ses_wrapeu");
     await callExitTool("ses_wrapeu");
     await idle("ses_wrapeu");
-    const after = new ThatchDB(process.env.THATCH_DB_PATH!);
-    expect(after.listChatSessions().find((r) => r.session_id === "ses_wrapeu")).toBeUndefined();
-    after.close();
+    await waitFor("the chat unregister", () =>
+      new ThatchDB(process.env.THATCH_DB_PATH!).listChatSessions().find((r) => r.session_id === "ses_wrapeu") === undefined,
+    );
+    // The exit tombstone also stops the same idle's auto-register from
+    // resurrecting the row.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(new ThatchDB(process.env.THATCH_DB_PATH!).listChatSessions().find((r) => r.session_id === "ses_wrapeu")).toBeUndefined();
   });
 
   test("compact greenlight does not unregister the session", async () => {
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     const before = new ThatchDB(process.env.THATCH_DB_PATH!);
     before.registerChatSession("ses_wrapnu", "p", null, "opencode", "deltawrap");
     before.close();
     await arm("thatch/compact", "ses_wrapnu");
     await callCompactTool("ses_wrapnu");
     await idle("ses_wrapnu");
+    await waitFor("session.compact called", () => sessionCompactCalls.length === 1);
     const after = new ThatchDB(process.env.THATCH_DB_PATH!);
     // Compaction continues the session, so the directory row must survive.
     expect(after.listChatSessions().find((r) => r.session_id === "ses_wrapnu")).toBeDefined();
@@ -215,29 +235,31 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
   });
 
   test("session.deleted clears a pending wrap-up", async () => {
-    const before = tuiExecuteCommandCalls.length;
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/compact", "ses_wrapd");
-    await hooks.event!({ event: {
+    await queueEvent({
       type: "session.deleted",
-      properties: { info: { id: "ses_wrapd" } } } as any,
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_wrapd" },
     });
     await idle("ses_wrapd");
     // The cleared wrap-up must not have fired a compact trigger of its own.
-    expect(tuiExecuteCommandCalls.length).toBe(before);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(sessionCompactCalls.length).toBe(0);
   });
 });
 
 describe("installOpencodeCommands", () => {
-  test("writes the wrap-up and action command files and is idempotent", async () => {
+  test("writes the action command files (wrap-ups register in code) and is idempotent", async () => {
     const { installOpencodeCommands } = await import("../src/commands");
     const home = mkdtempSync(join(tmpdir(), "thatch-cmds-"));
     try {
       const first = installOpencodeCommands(home);
       const names = first.map((p) => p.split("/").pop()!.replace(/\.md$/, "")).sort();
-      expect(names).toEqual(["bug-intake", "compact", "defrag", "exit", "extract", "hygiene", "peer-review", "refine", "reflect", "self-review", "whois"]);
-      const compact = readFileSync(join(first[0]!), "utf8");
-      expect(compact).toContain("description:");
-      expect(compact).toContain("thatch_compact");
+      expect(names).toEqual(["bug-intake", "defrag", "extract", "hygiene", "peer-review", "refine", "reflect", "self-review", "whois"]);
+      const defrag = readFileSync(join(first[0]!), "utf8");
+      expect(defrag).toContain("description:");
+      expect(defrag).toContain("$ARGUMENTS");
       // Re-run: everything current, nothing rewritten.
       expect(installOpencodeCommands(home)).toEqual([]);
     } finally {
@@ -251,45 +273,43 @@ describe("installOpencodeCommands", () => {
     try {
       const dir = join(home, "opencode", "command", "thatch");
       mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, "compact.md"), "stale content");
+      writeFileSync(join(dir, "defrag.md"), "stale content");
       const written = installOpencodeCommands(home);
-      // compact.md was stale (rewritten); everything else was missing (created).
-      expect(written).toContain(join(dir, "compact.md"));
+      // defrag.md was stale (rewritten); everything else was missing (created).
       expect(written).toContain(join(dir, "defrag.md"));
-      expect(readFileSync(join(dir, "compact.md"), "utf8")).toContain("thatch_compact");
+      expect(written).toContain(join(dir, "extract.md"));
+      expect(readFileSync(join(dir, "defrag.md"), "utf8")).toContain("$ARGUMENTS");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });
 
   test("wrap-up command bodies label the sections: user text first, then the checklist", async () => {
-    // opencode replaces $ARGUMENTS with the text typed after the command
-    // (/thatch/exit thanks! -> "thanks!" in the User Message section), and
-    // with no argument the section renders empty. The header labels are
-    // load-bearing: without them the user's text dangles after the
-    // checklist and reads like a sign-off addressed at the instructions.
-    const { opencodeCommandDefs } = await import("../src/commands");
-    const wrapUps = opencodeCommandDefs().filter((d) => d.name === "compact" || d.name === "exit");
+    // The wrap-ups are no longer file-installed; their template bodies
+    // load through wrapUpCommandContent (the CommandEditor's execute
+    // delivers this same text as the session prompt).
+    const { wrapUpCommandContent } = await import("../src/commands");
+    const wrapUps = (["compact", "exit"] as const).map((kind) => ({ name: kind, content: wrapUpCommandContent(kind) }));
     for (const def of wrapUps) {
       const body = def.content.slice(def.content.indexOf("---", 3) + 3);
       expect(body.trimStart()).toMatch(/^# User Message\n\n\$ARGUMENTS\n\n\(That section carries/);
       expect(body).toContain(`# Pre-${def.name === "compact" ? "compact" : "exit"} wrap-up`);
       expect(body).toContain("treat the user message as n/a");
     }
-    const exit = opencodeCommandDefs().find((d) => d.name === "exit")!;
+    const exit = wrapUpCommandContent("exit");
     // The exit template deliberately does NOT instruct the model to
     // unregister from chat: the plugin-side unregister on the greenlit
     // idle is the deterministic path, and a model-side unregister mid-turn
     // would delete the chat row before the exit branch can place the
     // session's watcher deaths by that row (the death lands unplaceable).
-    expect(exit.content).not.toContain("chat_unregister");
+    expect(exit).not.toContain("chat_unregister");
   });
 });
 
 describe("action commands", () => {
   test("each action file carries its core body and the user message section", async () => {
     const { opencodeCommandDefs, actionDefs } = await import("../src/commands");
-    const defs = opencodeCommandDefs().filter((d) => !["compact", "exit"].includes(d.name));
+    const defs = opencodeCommandDefs();
     const actions = actionDefs();
     expect(defs.map((d) => d.name)).toEqual(actions.map((a) => a.name));
     for (const def of defs) {
@@ -357,10 +377,10 @@ describe("action commands", () => {
     const opencodeNames = opencodeCommandDefs().map((d) => d.name).sort();
     const claudeNames = claudeCommandDefs().map((d) => d.name).sort();
     const promptNames = [...compilePrompts().keys()].sort();
-    // Claude Code gets the shared actions only; opencode adds the wrap-ups
-    // (needs plugin arming) and the opencode-only actions (need session
-    // identity).
-    expect(opencodeNames.sort()).toEqual([...claudeNames, "compact", "exit", "extract", "whois"].sort());
+    // Claude Code gets the shared actions only; opencode adds the
+    // opencode-only actions (need session identity). The wrap-ups register
+    // in code on opencode and never file-install on either host.
+    expect(opencodeNames.sort()).toEqual([...claudeNames, "extract", "whois"].sort());
     // MCP prompts match Claude Code's set: same shared actions, same bodies.
     expect(promptNames).toEqual(claudeNames);
   });
