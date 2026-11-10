@@ -74,6 +74,9 @@ One behavior is inherited from the tool on purpose: overwriting a
 branch-scoped memory WITHOUT `--branch` keeps the old branch scope.
 To promote a branch-scoped memory to project-wide, forget it and save
 it again without `--branch`, then check with `thatch show`.
+Passing an empty `--branch` value (for example, a script reading a
+detached HEAD) saves the memory unscoped, the same as omitting the
+flag: an empty branch name is never a git ref.
 
 ## Maintenance
 

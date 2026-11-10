@@ -376,10 +376,12 @@ behavior cycle (agent-driven, self-graded)
 - `recall_count`, `last_recalled_at`, and `archived` are added to pre-existing
   databases by an idempotent column migration at init (`PRAGMA table_info` +
   `ALTER TABLE`). The `archived` column is `INTEGER NOT NULL DEFAULT 0` (0 =
-  live, 1 = archived); search, dedup, and staleness queries all exclude
-  archived entries by default. A second init migration rebuilds a
+  live, 1 = archived); search, dedup, and hygiene queries (staleness,
+  orphaned-branch enumeration) all exclude archived entries by default. A
+  second init migration rebuilds a
   pre-NOCASE `chat_sessions` table to enforce case-insensitive name
-  uniqueness (see [features/database.md](features/database.md)).
+  uniqueness, and a third normalizes legacy empty-string branch scopes to
+  unscoped (see [features/database.md](features/database.md)).
 - Embeddings are raw Float32Array bytes. Serialization honors
   `byteOffset`/`byteLength` — transformers.js can return views into larger
   tensor buffers, and serializing the whole backing buffer corrupts vectors.

@@ -58,9 +58,9 @@ entries(
 - `slug`: derived from label via `slugify()`. Unicode letters/digits preserved. All-symbol labels fall back to hash.
 - `embedding`: raw Float32Array bytes. Null if not yet embedded.
 - `model`: embedding model tag (informational; dimension is the real discriminator).
-- `branch`: git branch scope. Null = project-wide.
+- `branch`: git branch scope. Null = project-wide. Empty string is not a valid scope: `remember` coerces `branch: ""` to null, and an init migration normalizes legacy rows (git refnames are never empty).
 - `confidence`: 1-10 scale. Null = unset.
-- `archived`: 0 = live, 1 = archived. Search, dedup, and staleness queries all exclude archived by default.
+- `archived`: 0 = live, 1 = archived. Search, dedup, and all hygiene queries exclude archived by default.
 - `recall_count` / `last_recalled_at`: usage telemetry, stamped by `db.recall()` (not `db.search()`).
 
 ### dedup_pairs
@@ -298,7 +298,7 @@ rules.
 
 ## Schema migration
 
-`recall_count`, `last_recalled_at`, and `archived` are added to pre-existing databases by an idempotent column migration at init. The migration uses `PRAGMA table_info` to check for the column's existence, then `ALTER TABLE ADD COLUMN` if missing. This handles databases created before these columns existed.
+`recall_count`, `last_recalled_at`, and `archived` are added to pre-existing databases by an idempotent column migration at init. The migration uses `PRAGMA table_info` to check for the column's existence, then `ALTER TABLE ADD COLUMN` if missing. This handles databases created before these columns existed. A separate init migration normalizes legacy empty-string branch scopes to NULL: such rows passed the `IS NOT NULL` hygiene filters while rendering no branch marker, so they inflated the orphaned-branch list invisibly.
 
 The chat tables' later columns (`auto`, `worktree`, `host_kind`, `via_broadcast`, the `chat_messages` name snapshots, the tombstone `reason`) follow the same pattern: a guarded `PRAGMA table_info` + conditional `ALTER TABLE` per column, run at every open.
 
@@ -313,7 +313,7 @@ Embeddings are raw Float32Array bytes stored as BLOBs. Serialization honors `byt
 - Embedding serialization honors `byteOffset`/`byteLength` (views into larger buffers).
 - Slugs are slugified labels; slug + store = composite PK.
 - Dedup verdicts auto-clear when either memory is overwritten or forgotten.
-- Archived memories excluded from search, dedup, and staleness by default.
+- Archived memories excluded from search, dedup, and hygiene signals by default.
 - Column migration is idempotent (`PRAGMA table_info` + `ALTER TABLE`).
 
 ## Interactions with other features
@@ -323,7 +323,7 @@ Embeddings are raw Float32Array bytes stored as BLOBs. Serialization honors `byt
 - Prediction engine ([prediction-engine.md](prediction-engine.md)): the prediction tables
 - Behavior engine ([behavior-engine.md](behavior-engine.md)): the behavior tables
 - Cross-session chat ([cross-session-chat.md](cross-session-chat.md)): the chat tables, shared across opencode processes
-- Hygiene ([hygiene.md](hygiene.md)): `staleEntryCount` uses `recall_count` and `last_recalled_at`; `branchesInStore` uses `branch` column
+- Hygiene ([hygiene.md](hygiene.md)): `staleEntryCount` uses `recall_count` and `last_recalled_at`; `branchesInStore` uses the `branch` column; both exclude archived entries
 
 ## Source files
 

@@ -36,12 +36,21 @@ here first. These are the things that have already cost time.
   entry clears all verdicts involving it. Both make a pair eligible for
   re-reporting by `find_duplicates`. This is intended.
 - **Archived memories are excluded by default.** `search`, `findDuplicates`,
-  and `staleEntryCount` all filter `WHERE archived = 0`. To search archived
+  `staleEntryCount`, and `branchesInStore` all filter `WHERE archived = 0`. To
+  search archived
   memories, pass `includeArchived: true` to `thatch_memory_recall`. To archive
   a memory, write it with `archived: true`; to unarchive, `archived: false`.
+- **`branch: ""` is not a scope.** An empty branch string passed the
+  `IS NOT NULL` hygiene filters, so such rows inflated the orphaned-branch
+  list, while every renderer's truthiness check hid the branch marker: the
+  rows were counted but invisible to the memory tools. `remember` now
+  coerces `""` to unscoped and an init migration repairs legacy rows; the
+  renderers show any non-null scope. Git refnames are never empty, so `""`
+  is never legitimate.
 - **Updating an archived memory requires explicit `archived` param.** If the
   entry is already archived and a `remember` call omits the `archived` param,
-  the tool returns an error (`db.ts:585`). Pass `archived: true` to keep it
+  the tool returns an error (the archived guard in `remember`, `src/db.ts`).
+  Pass `archived: true` to keep it
   archived or `archived: false` to unarchive. This guard prevents accidental
   unarchival via an unrelated content update.
 

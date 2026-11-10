@@ -29,7 +29,7 @@ export const list: Subcommand = {
     } else {
       for (const e of entries) {
         const parts = [`[${store}]`, e.label];
-        if (e.branch) parts.push(`(branch:${e.branch})`);
+        if (e.branch != null) parts.push(`(branch:${e.branch})`);
         if (e.confidence) parts.push(`(c:${e.confidence})`);
         parts.push(`(${e.updated_at})`);
         console.log(parts.join(" "));
@@ -51,7 +51,7 @@ export const show: Subcommand = {
       console.log(`No memory labeled "${label}" in "${store}".`);
     } else {
       console.log(`[${store}] ${entry.label}`);
-      if (entry.branch) console.log(`branch: ${entry.branch}`);
+      if (entry.branch != null) console.log(`branch: ${entry.branch}`);
       if (entry.confidence) console.log(`confidence: ${entry.confidence}`);
       console.log(`created: ${entry.created_at}  updated: ${entry.updated_at}`);
       console.log();
@@ -104,7 +104,7 @@ export const search: Subcommand = {
     } else {
       for (const r of results) {
         const score = r._score.toFixed(3);
-        const branch = r.branch ? ` branch:${r.branch}` : "";
+        const branch = r.branch != null ? ` branch:${r.branch}` : "";
         const conf = r.confidence ? ` c:${r.confidence}` : "";
         console.log(`[score:${score}] [${r.store}${branch}${conf}] ${r.label}`);
       }

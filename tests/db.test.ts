@@ -661,6 +661,20 @@ describe("hygiene", () => {
     expect(db.branchesInStore("s")).toEqual(["feature/x", "feature/y"]);
   });
 
+  test("branchesInStore excludes archived entries", () => {
+    db.remember("s", "a", "content", emb, "m", { branch: "feature/x" });
+    db.remember("s", "b", "content", emb, "m", { branch: "feature/y", archived: true });
+    expect(db.branchesInStore("s")).toEqual(["feature/x"]);
+  });
+
+  test("remember with an empty branch string stores unscoped", () => {
+    // branch: "" is not a git refname; a detached HEAD yields "" from
+    // git branch --show-current, so agents can pass it by accident.
+    db.remember("s", "a", "content", emb, "m", { branch: "" });
+    expect(db.listEntries("s")[0].branch).toBeNull();
+    expect(db.branchesInStore("s")).toEqual([]);
+  });
+
   test("entryCountForBranches counts scoped entries; empty branch list is zero", () => {
     db.remember("s", "a", "content", emb, "m", { branch: "feature/x" });
     db.remember("s", "b", "content", emb, "m", { branch: "feature/x" });
@@ -714,6 +728,24 @@ describe("migration", () => {
     const newRow = migrated.listChatSessions().find((r) => r.session_id === "ses_new");
     expect(newRow!.worktree).toBe("root");
     migrated.close();
+  });
+
+  test("opening a database normalizes empty-string branch scopes", () => {
+    const emb = new Float32Array([1, 0, 0, 0]);
+    db.remember("s", "scoped", "content", emb, "m", { branch: "feature/x" });
+    db.remember("s", "legacy", "content", emb, "m");
+    db.close();
+    // Simulate a row written before branch-scope normalization: branch = ''.
+    // It passes the IS NOT NULL hygiene filters but renders no marker, so
+    // it inflated the orphaned-branch list while being invisible to the
+    // memory tools.
+    const raw = new Database(dbPath);
+    raw.run("UPDATE entries SET branch = '' WHERE slug = 'legacy'");
+    raw.close();
+    // Reopening runs the init migrations.
+    db = new ThatchDB(dbPath);
+    expect(db.branchesInStore("s")).toEqual(["feature/x"]);
+    expect(db.listEntries("s").find((e) => e.label === "legacy")!.branch).toBeNull();
   });
 
   test("opening a database with the retired host_pid column drops it", () => {

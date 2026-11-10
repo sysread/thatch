@@ -28,9 +28,15 @@ memories itself — it surfaces problems and lets the agent tend the store.
 
 3. **Orphaned branch memories** — `db.branchesInStore(repo)` cross-references
    against `git.listBranches(worktree)`. Memories scoped to branches that no
-   longer exist. Skipped when the worktree is not a git repo
-   (`listBranches` returns `[]`) to avoid false positives — without a git
-   repo, every branch-scoped memory would look orphaned.
+   longer exist. `listBranches` reads `refs/heads` AND `refs/remotes`
+   (remote name stripped), so a branch pushed with an open PR but no local
+   checkout is not flagged; a stale tracking ref only delays flagging a
+   truly-deleted branch until prune. Skipped when the worktree is not a git
+   repo (`listBranches` returns `[]`) to avoid false positives — without a git
+   repo, every branch-scoped memory would look orphaned. Archived memories
+   are excluded: a branch whose entries are all archived does not appear,
+   so the branch list matches the count (`entryCountForBranches` also
+   skips archived entries).
 
 ### When it runs
 
@@ -80,4 +86,8 @@ instructions for the agent to tend the store when convenient.
   store.
 - Only non-zero signals are reported.
 - Orphan check is skipped outside a git repo.
-- Archived memories are excluded from staleness and duplicate checks.
+- A branch that exists only as a remote-tracking ref (pushed, PR open, no
+  local checkout) is not orphaned; a stale tracking ref only delays the
+  nudge until prune.
+- Archived memories are excluded from all three checks: duplicates,
+  staleness, and the orphaned-branch list.

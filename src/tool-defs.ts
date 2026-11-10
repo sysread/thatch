@@ -356,7 +356,9 @@ function formatEntry(
 
   const parts: string[] = [];
   let meta = `[${entry.store}]`;
-  if (entry.branch) meta += ` branch:${entry.branch}`;
+  // Non-null check, not truthiness: a row scoped to branch = '' must render
+  // its marker, or the scoping exists in the DB but is invisible everywhere.
+  if (entry.branch != null) meta += ` branch:${entry.branch}`;
   if (entry.confidence) meta += ` confidence:${entry.confidence}`;
   if (entry.archived) meta += " archived:true";
   meta += ` created:${entry.created_at}`;
@@ -366,7 +368,7 @@ function formatEntry(
 
 function formatRecallResult(entry: MemoryRow & { _score: number }): string {
   let meta = `store:${entry.store}`;
-  if (entry.branch) meta += ` branch:${entry.branch}`;
+  if (entry.branch != null) meta += ` branch:${entry.branch}`;
   if (entry.confidence) meta += ` confidence:${entry.confidence}`;
   if (entry.archived) meta += " archived:true";
   const score = entry._score.toFixed(3);
@@ -630,7 +632,7 @@ const listDef: ToolDef = {
     return entries
       .map((e) => {
         let line = `[${store}] ${e.label}`;
-        if (e.branch) line += ` (branch:${e.branch})`;
+        if (e.branch != null) line += ` (branch:${e.branch})`;
         if (e.confidence) line += ` (c:${e.confidence})`;
         if (e.archived) line += " (archived)";
         line += ` (${e.updated_at})`;
