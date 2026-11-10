@@ -559,7 +559,10 @@ describe("setupClaudePluginRegime (plugin regime, QA-only)", () => {
     const { setupClaudePluginRegime } = await import("../src/setup");
     const legacyMd = join(home, "CLAUDE.md");
     writeFileSync(legacyMd, "# Just user content\n", "utf-8");
-    setupClaudePluginRegime(join(proj, "bin", "thatch"), true, proj, home);
+    // AWAITED: a floating setup raced this test's cleanup (the fixture
+    // deleted mid-build surfaced as an unhandled chunk-write error and
+    // bled into the next test's run).
+    await setupClaudePluginRegime(join(proj, "bin", "thatch"), true, proj, home);
     expect(readFileSync(legacyMd, "utf8")).toBe("# Just user content\n");
   });
 
