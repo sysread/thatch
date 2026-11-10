@@ -15,12 +15,17 @@ import type { Subcommand } from "../types";
 export const mcp: Subcommand = {
   name: "mcp",
   summary: "Start the stdio MCP server (for Claude Code, Cursor, etc.)",
-  usage: () => ({ synopsis: "thatch mcp", flags: [] }),
-  async run(_args, ctx) {
+  usage: () => ({
+    synopsis: "thatch mcp [--bundled]",
+    flags: [
+      { long: "--bundled", short: null, description: "Run as the Claude Code plugin regime's bundled component: no sideband socket, no version file, no auto-refresh, no behavior seeding (see McpServerMode in src/mcp.ts). The fallback regime's `thatch mcp` (no flag) stays byte-identical." },
+    ],
+  }),
+  async run(args, ctx) {
     // The MCP server manages its own DB connection; close this one first.
     ctx.db.close();
     const { runMcpServer } = await import("../../mcp");
-    await runMcpServer();
+    await runMcpServer(args.includes("--bundled") ? "bundled" : "standalone");
     // runMcpServer blocks until stdin closes; don't fall through to db.close().
     process.exit(0);
   },

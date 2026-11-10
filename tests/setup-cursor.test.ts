@@ -136,7 +136,7 @@ describe("setupCursor (project-local)", () => {
     const result = setupCursor("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
     expect(result.skills.dir).toBe(join(projectDir, ".cursor", "skills"));
-    expect(result.skills.added.length).toBe(40);
+    expect(result.skills.added.length).toBe(41);
     expect(result.skills.updated).toEqual([]);
     expect(result.skills.unchanged).toEqual([]);
     expect(result.skills.removed).toEqual([]);
@@ -165,7 +165,10 @@ describe("setupCursor (project-local)", () => {
     expect(skillNames).toContain("thatch-refine-spike");
     expect(skillNames).toContain("thatch-refine-infra");
     expect(skillNames).toContain("thatch-refine-oss-contribution");
-    expect(skillNames).not.toContain("thatch-code-review");
+    // The coordinator is SHARED now (flat dispatch works here); the one
+    // opencode-only skill is thatch-coordination.
+    expect(skillNames).toContain("thatch-code-review");
+    expect(skillNames).not.toContain("thatch-coordination");
 
     for (const skill of result.skills.added) {
       expect(existsSync(skill.path)).toBe(true);
@@ -209,7 +212,7 @@ describe("setupCursor (global)", () => {
     const result = setupCursor("/usr/local/bin/thatch", true, projectDir, fakeHome);
 
     expect(result.skills.dir).toBe(join(fakeHome, ".cursor", "skills"));
-    expect(result.skills.added.length).toBe(40);
+    expect(result.skills.added.length).toBe(41);
     for (const skill of result.skills.added) {
       expect(skill.path.startsWith(join(fakeHome, ".cursor", "skills"))).toBe(true);
     }

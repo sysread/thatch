@@ -115,3 +115,4 @@ import "./uc-131-cli-memory-write";
 import "./uc-132-chat-roster-json";
 import "./uc-133-location-switch-handoff";
 import "./uc-141-session-tab-open";
+import "./uc-142-plugin-stage-server";

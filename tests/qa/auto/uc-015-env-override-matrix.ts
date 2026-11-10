@@ -27,7 +27,7 @@ const useCase: UseCase = {
     "|----------|--------|------------------|",
     "| `THATCH_DB_PATH` | a temp file path | the SQLite DB is created there (CLI + plugin + MCP) |",
     "| `XDG_CONFIG_HOME` | a temp dir | the default DB (`$XDG_CONFIG_HOME/thatch/thatch.db`) and opencode skill dir move there; the real `~/.config` is untouched |",
-    "| `CLAUDE_CONFIG_DIR` | a temp dir | `thatch setup --claude --global` writes CLAUDE.md, settings.json, and skills under that dir; project-local keeps project paths but skills under the custom dir |",
+    "| `CLAUDE_CONFIG_DIR` | a temp dir | `thatch setup --claude --hooks --global` writes CLAUDE.md, settings.json, and skills under that dir; project-local keeps project paths but skills under the custom dir |",
     "| `THATCH_QUEUE_DIR` | a temp dir | extraction-queue JSONL files land there instead of `$XDG_CACHE_HOME/thatch/queue` |",
     "| `THATCH_RECALL_THRESHOLD` | a low value (e.g. `0.2`) | the prompt-aware recall nudge fires for weaker matches (a prompt that matched nothing at 0.55 now surfaces results) |",
     "| `THATCH_MODEL` | a different model name | new memories carry the new model tag and vector dimension; old memories become invisible to search (see UC-012) |",
@@ -79,7 +79,7 @@ const useCase: UseCase = {
         CLAUDE_CONFIG_DIR: customConfig,
         CLAUDE_PROJECT_DIR: ctx.dir,
       };
-      await $`${bin} setup --claude --global`.env(env).quiet().nothrow();
+      await $`${bin} setup --claude --hooks --global`.env(env).quiet().nothrow();
       const claudeMd = join(customConfig, "CLAUDE.md");
       const settingsJson = join(customConfig, "settings.json");
       if (!existsSync(claudeMd)) {

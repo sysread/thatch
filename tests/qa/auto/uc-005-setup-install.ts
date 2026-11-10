@@ -24,21 +24,21 @@ const useCase: UseCase = {
     "3. Repeat both commands (re-run idempotence and drift recovery)",
     "4. Add a non-thatch hook to `.claude/settings.json` and `.cursor/hooks.json`,",
     "   then re-run setup",
-    "5. From elsewhere: `thatch setup --cursor --global`, then `thatch setup --claude --global`",
+    "5. From elsewhere: `thatch setup --cursor --global`, then `thatch setup --claude --hooks --global`",
   ].join("\n"),
   expected: [
     '- `--claude` project-local writes `.mcp.json` (`mcpServers.thatch`, stdio + `["mcp"]`),',
     "  appends a thatch block to `CLAUDE.md` bracketed by start/end markers (replaced, not",
     "  duplicated, on re-run), writes `.claude/settings.json` hooks (`SessionStart` -> `thatch reminder`,",
     "  `PostToolBatch` -> `thatch buffer-batch`, `UserPromptSubmit` -> `thatch flush-tools`), and installs",
-    "  **40 shared skills** (no code-review coordinator) to the repo's `.claude/skills/`.",
+    "  **42 shared skills** (the code-review coordinator included - it is SHARED) to the repo's `.claude/skills/`.",
     "- `--cursor` project-local writes `.cursor/mcp.json`, appends to `AGENTS.md`, writes",
     "  `.cursor/hooks.json` in the **flat format** (`{version:1, hooks:{...}}`): `sessionStart` ->",
     "  `thatch reminder --json`, `postToolUse` -> `thatch buffer-tool`, `beforeSubmitPrompt` ->",
-    "  `thatch flush-tools --json`; and installs 40 shared skills to the repo's `.cursor/skills/`.",
+    "  `thatch flush-tools --json`; and installs 41 shared skills to the repo's `.cursor/skills/`.",
     "- Setup reports where skills were installed plus per-run counts",
-    "  (added / updated / removed / unchanged). A fresh install prints `40 added`; a re-run",
-    "  prints `40 unchanged` and identical file contents.",
+    "  (added / updated / removed / unchanged). A fresh install prints `41 added`; a re-run",
+    "  prints `41 unchanged` and identical file contents.",
     "- When the opposite scope holds thatch skills (e.g. user-scope copies left over from an",
     "  older setup), setup prints a note naming that directory and leaves the copies alone.",
     "- Re-run is idempotent: instructions are not duplicated, thatch hooks are replaced (not appended),",
@@ -58,7 +58,7 @@ const useCase: UseCase = {
 
     // --- Step 1: thatch setup --claude --local (project-local) ---
 
-    const r1 = await run(["setup", "--claude", "--local"]);
+    const r1 = await run(["setup", "--claude", "--hooks", "--local"]);
     if (r1.exitCode !== 0) {
       console.log("  FAIL: `thatch setup --claude --local` exited non-zero");
       console.log(`  stderr: ${r1.stderr.toString()}`);
@@ -129,12 +129,12 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (claudeSkillNames.length !== 40) {
-      console.log(`  FAIL: Claude skills count is ${claudeSkillNames.length}, expected 40`);
+    if (claudeSkillNames.length !== 42) {
+      console.log(`  FAIL: Claude skills count is ${claudeSkillNames.length}, expected 42`);
       return "FAIL";
     }
-    if (claudeSkillNames.includes("thatch-code-review")) {
-      console.log("  FAIL: thatch-code-review coordinator should NOT be installed for Claude");
+    if (!claudeSkillNames.includes("thatch-code-review")) {
+      console.log("  FAIL: thatch-code-review coordinator should be installed for Claude (it is SHARED - flat dispatch works)");
       return "FAIL";
     }
 
@@ -144,8 +144,8 @@ const useCase: UseCase = {
       console.log("  FAIL: setup stdout does not name the Claude skills dir");
       return "FAIL";
     }
-    if (!out1.includes("40 added")) {
-      console.log("  FAIL: setup stdout does not report '40 added' on fresh install");
+    if (!out1.includes("41 added")) {
+      console.log("  FAIL: setup stdout does not report '41 added' on fresh install");
       return "FAIL";
     }
     // A project-local run must not create user-scoped skills.
@@ -221,12 +221,12 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (cursorSkillNames.length !== 40) {
-      console.log(`  FAIL: Cursor skills count is ${cursorSkillNames.length}, expected 40`);
+    if (cursorSkillNames.length !== 41) {
+      console.log(`  FAIL: Cursor skills count is ${cursorSkillNames.length}, expected 41`);
       return "FAIL";
     }
-    if (cursorSkillNames.includes("thatch-code-review")) {
-      console.log("  FAIL: thatch-code-review coordinator should NOT be installed for Cursor");
+    if (!cursorSkillNames.includes("thatch-code-review")) {
+      console.log("  FAIL: thatch-code-review coordinator should be installed for Cursor (it is SHARED - flat dispatch works)");
       return "FAIL";
     }
     const out2 = r2.stdout.toString();
@@ -234,8 +234,8 @@ const useCase: UseCase = {
       console.log("  FAIL: setup stdout does not name the Cursor skills dir");
       return "FAIL";
     }
-    if (!out2.includes("40 added")) {
-      console.log("  FAIL: setup stdout does not report '40 added' on fresh install");
+    if (!out2.includes("41 added")) {
+      console.log("  FAIL: setup stdout does not report '41 added' on fresh install");
       return "FAIL";
     }
     // A project-local run must not create user-scoped skills.
@@ -251,7 +251,7 @@ const useCase: UseCase = {
     const settingsBefore = readFileSync(settingsPath, "utf8");
     const cursorHooksBefore = readFileSync(cursorHooksPath, "utf8");
 
-    const r3c = await run(["setup", "--claude"]);
+    const r3c = await run(["setup", "--claude", "--hooks"]);
     const r3x = await run(["setup", "--cursor"]);
 
     if (readFileSync(claudeMdPath, "utf8") !== claudeMdBefore) {
@@ -272,12 +272,12 @@ const useCase: UseCase = {
     }
 
     // Reporting: a no-op re-run reports every skill as unchanged.
-    if (!r3c.stdout.toString().includes("40 unchanged")) {
-      console.log("  FAIL: re-run stdout does not report '40 unchanged' for Claude");
+    if (!r3c.stdout.toString().includes("41 unchanged")) {
+      console.log("  FAIL: re-run stdout does not report '41 unchanged' for Claude (the report counts the install set; the repo-local QA skill is not in it)");
       return "FAIL";
     }
-    if (!r3x.stdout.toString().includes("40 unchanged")) {
-      console.log("  FAIL: re-run stdout does not report '40 unchanged' for Cursor");
+    if (!r3x.stdout.toString().includes("41 unchanged")) {
+      console.log("  FAIL: re-run stdout does not report '41 unchanged' for Cursor");
       return "FAIL";
     }
 
@@ -297,7 +297,7 @@ const useCase: UseCase = {
     cursorHooksParsed.hooks.sessionStart.push({ command: "echo external-hook" });
     writeFileSync(cursorHooksPath, JSON.stringify(cursorHooksParsed, null, 2) + "\n");
 
-    await run(["setup", "--claude"]);
+    await run(["setup", "--claude", "--hooks"]);
     await run(["setup", "--cursor"]);
 
     // Non-thatch hooks should survive.
@@ -333,9 +333,9 @@ const useCase: UseCase = {
     // --- Step 5: --global mode ---
 
     // Claude --global: writes to config dir, no project .mcp.json, prints mcp add command.
-    const claudeGlobal = await run(["setup", "--claude", "--global"]);
+    const claudeGlobal = await run(["setup", "--claude", "--hooks", "--global"]);
     if (claudeGlobal.exitCode !== 0) {
-      console.log("  FAIL: `thatch setup --claude --global` exited non-zero");
+      console.log("  FAIL: `thatch setup --claude --hooks --global` exited non-zero");
       return "FAIL";
     }
     if (!existsSync(join(env.CLAUDE_CONFIG_DIR, "CLAUDE.md"))) {
@@ -385,6 +385,54 @@ const useCase: UseCase = {
     }
     if (!cursorGlobal.stdout.toString().includes(join(env.HOME, ".cursor", "skills"))) {
       console.log("  FAIL: global (Cursor) stdout does not name the ~/.cursor/skills path");
+      return "FAIL";
+    }
+
+    // --- Step 6: the default inversion (the ship-gate flip) ---
+    // Plain `thatch setup --claude` now installs the PLUGIN regime when
+    // the installed claude meets the mods floor (2.1.287+) or is absent
+    // (the docker sandbox has no claude CLI, so the detection reads
+    // absent - the front-door default). --hooks above is the explicit
+    // opt-out; this step pins the default AND the deactivation sweep.
+
+    const r6 = await run(["setup", "--claude"]);
+    if (r6.exitCode !== 0) {
+      console.log("  FAIL: plain `thatch setup --claude` (the plugin default) exited non-zero");
+      console.log(`  stderr: ${r6.stderr.toString()}`);
+      return "FAIL";
+    }
+    const out6 = r6.stdout.toString();
+    if (!out6.includes("Thatch plugin regime installed")) {
+      console.log("  FAIL: plain setup --claude did not install the plugin regime (the default inversion)");
+      return "FAIL";
+    }
+    // The generated plugin: the local-scope plugin dir + manifest.
+    if (!existsSync(join(dir, ".claude", "thatch-plugin", ".claude-plugin", "plugin.json"))) {
+      console.log("  FAIL: the plugin default did not generate the plugin dir");
+      return "FAIL";
+    }
+    // The deactivation sweep: the hooks regime's writers are REMOVED (the
+    // opt-in-must-delete contract - surviving writers would deliver every
+    // prompt twice).
+    if (!out6.includes("Deactivated:")) {
+      console.log("  FAIL: the plugin default's report does not name what it deactivated");
+      return "FAIL";
+    }
+    const mcpAfterPlugin = existsSync(join(dir, ".mcp.json"))
+      ? readFileSync(join(dir, ".mcp.json"), "utf8")
+      : "";
+    if (mcpAfterPlugin.includes("thatch")) {
+      console.log("  FAIL: the plugin default left the thatch .mcp.json entry in place (deactivation failed)");
+      return "FAIL";
+    }
+    const settingsAfterPlugin = existsSync(join(dir, ".claude", "settings.json"))
+      ? JSON.parse(readFileSync(join(dir, ".claude", "settings.json"), "utf8"))
+      : {};
+    const thatchHooksLeft = Object.values(settingsAfterPlugin.hooks ?? {}).some(
+      (groups: any) => groups?.some((g: any) => g.hooks?.some((h: any) => h.command?.includes("thatch"))),
+    );
+    if (thatchHooksLeft) {
+      console.log("  FAIL: the plugin default left thatch hooks in settings.json (deactivation failed)");
       return "FAIL";
     }
 

@@ -64,12 +64,14 @@ Or place the thatch repo in `.opencode/plugins/` for auto-loading.
 
 ## Claude Code
 
-Thatch runs as an MCP server. The setup command installs the server
-config, instructions, hooks, and skills:
+Thatch runs as a Claude Code plugin by default (see "The plugin regime"
+below). `--hooks` installs the classic integration instead - a standalone
+MCP server plus settings hooks:
 
 ```bash
-thatch setup --claude            # project-local (.mcp.json, CLAUDE.md, .claude/)
-thatch setup --claude --global   # user-scoped (~/.claude/)
+thatch setup --claude                    # the plugin regime (the default)
+thatch setup --claude --hooks            # the hooks regime, project-local (.mcp.json, CLAUDE.md, .claude/)
+thatch setup --claude --hooks --global   # the hooks regime, user-scoped (~/.claude/)
 ```
 
 Skills follow the install scope: project-local installs them to the
@@ -93,6 +95,32 @@ user-message section, body) that work without thatch managing them:
 ```bash
 thatch setup --commands-only <dir>   # writes <dir>/thatch/<name>.md
 ```
+
+### The plugin regime (the default for current Claude Code)
+
+```bash
+thatch setup --claude              # the plugin regime (the default)
+thatch setup --claude --hooks      # the hooks regime (the explicit opt-out)
+```
+
+The plugin regime installs thatch as a Claude Code PLUGIN instead of
+hooks: an in-process mod (context injection at each prompt, alerts, the
+chat wake poller, the wrap-up commands) plus the MCP server bundled in
+the plugin. It generates the plugin directory (its server command points
+at the checkout that ran setup), DEACTIVATES the hook regime's delivery
+writers (the settings hooks and the `.mcp.json` entry - so nothing
+delivers twice), and ENSURES the CLAUDE.md instructions block (that block
+is the one instructions channel Claude Code's built-in security guard
+never blocks). It prints the load command (`claude --plugin-dir <dir>`).
+Re-running it refreshes the plugin in place.
+
+Plain `thatch setup --claude` installs this regime by default when the
+installed Claude Code is 2.1.287 or newer (the mods floor) - or when no
+claude is installed yet (a fresh install gets a current one). Pass
+`--hooks` to install the hook regime instead: for Claude Code older than
+2.1.287, or enterprise policies that disable mods. `--plugin` forces the
+plugin regime explicitly - the same run as the default, useful for
+re-generating the plugin directory after editing the checkout.
 
 The `thatch/` subdirectory preserves the `/thatch/` invocation
 namespace. On Claude Code and Cursor, run a full `--claude`/`--cursor`

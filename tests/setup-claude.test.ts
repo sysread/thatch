@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -164,10 +164,10 @@ describe("setupClaudeCode (project-local)", () => {
   test("installs skills to the repo's .claude/skills/ (project-local)", () => {
     const result = setupClaudeCode("/usr/local/bin/thatch", false, projectDir, fakeHome);
 
-    // Shared skills only — opencode-only skills (thatch-code-review) are not
-    // installed for Claude Code because they require sub-agent support.
+    // Shared skills only — thatch-coordination (the one opencode-only
+    // skill) is not installed: it drives the session-tab rpc bridge.
     expect(result.skills.dir).toBe(join(projectDir, ".claude", "skills"));
-    expect(result.skills.added.length).toBe(40);
+    expect(result.skills.added.length).toBe(41);
     expect(result.skills.updated).toEqual([]);
     expect(result.skills.unchanged).toEqual([]);
     expect(result.skills.removed).toEqual([]);
@@ -206,7 +206,10 @@ describe("setupClaudeCode (project-local)", () => {
     expect(skillNames).toContain("thatch-refine-spike");
     expect(skillNames).toContain("thatch-refine-infra");
     expect(skillNames).toContain("thatch-refine-oss-contribution");
-    expect(skillNames).not.toContain("thatch-code-review");
+    // The coordinator is SHARED now (flat dispatch works here); the one
+    // opencode-only skill is thatch-coordination.
+    expect(skillNames).toContain("thatch-code-review");
+    expect(skillNames).not.toContain("thatch-coordination");
 
     for (const skill of result.skills.added) {
       expect(existsSync(skill.path)).toBe(true);
@@ -332,7 +335,7 @@ describe("CLAUDE_CONFIG_DIR override", () => {
       expect(result.settings).toBe(join(customDir, "settings.json"));
       // skills are installed under the custom dir
       expect(result.skills.dir).toBe(join(customDir, "skills"));
-      expect(result.skills.added.length).toBe(40);
+      expect(result.skills.added.length).toBe(41);
       for (const skill of result.skills.added) {
         expect(skill.path.startsWith(customDir + "/")).toBe(true);
       }
@@ -362,7 +365,7 @@ describe("CLAUDE_CONFIG_DIR override", () => {
       expect(existsSync(join(projectDir, ".claude", "settings.json"))).toBe(true);
 
       expect(result.skills.dir).toBe(join(projectDir, ".claude", "skills"));
-      expect(result.skills.added.length).toBe(40);
+      expect(result.skills.added.length).toBe(41);
       for (const skill of result.skills.added) {
         expect(skill.path.startsWith(projectDir + "/")).toBe(true);
       }
@@ -447,5 +450,154 @@ describe("registerClaudeMcpServer", () => {
     // the manual command must match what setup reports.
     const result = setupClaudeCode(join(projectDir, "bin", "thatch"), true, projectDir, fakeHome);
     expect(result.mcpAddCommand).toContain("claude mcp add --scope user thatch --");
+  });
+});
+
+describe("setupClaudePluginRegime (plugin regime, QA-only)", () => {
+  // A DEDICATED base per test: the regime marker + the CLAUDE.md block
+  // are durable state - sharing the harness fixture leaked them into the
+  // later checkSetup tests (same process, shared THATCH_DB_PATH).
+  let base: string;
+  let home: string;
+  let proj: string;
+  let dbPath: string;
+
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "thatch-plugin-regime-"));
+    home = join(base, "home");
+    proj = join(base, "proj");
+    dbPath = join(base, "thatch.db");
+    mkdirSync(join(proj, ".git"), { recursive: true });
+    mkdirSync(home, { recursive: true });
+    process.env.THATCH_DB_PATH = dbPath;
+  });
+
+  afterEach(() => {
+    delete process.env.THATCH_DB_PATH;
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  test("generates the plugin and deactivates the delivery writers", async () => {
+    const binPath = join(proj, "bin", "thatch");
+    const { setupClaudePluginRegime } = await import("../src/setup");
+    const result = await setupClaudePluginRegime(binPath, true, proj, home);
+
+    // The generated plugin: manifest (bundling the server), the modules
+    // list that makes it a mod, the shim, the rendered instructions, and
+    // the Node-free mod bundle.
+    const pluginDir = result.pluginDir;
+    const manifest = JSON.parse(readFileSync(join(pluginDir, ".claude-plugin", "plugin.json"), "utf8"));
+    expect(manifest.name).toBe("thatch");
+    expect(manifest.mcpServers.thatch.args).toEqual(["mcp", "--bundled"]);
+    const hooksJson = JSON.parse(readFileSync(join(pluginDir, "hooks", "hooks.json"), "utf8"));
+    expect(hooksJson.modules).toEqual(["./register.js"]);
+    expect(readFileSync(join(pluginDir, "hooks", "instructions.js"), "utf8")).toContain("When a system nudge reports queued tool interactions");
+    expect(existsSync(join(pluginDir, "hooks", "mod.js"))).toBe(true);
+
+    // Instructions are ENSURED - the CLAUDE.md block with the PLUGIN
+    // variant's tool spelling is the guard-proof channel (the mod has no
+    // prompt.compose; the guard passes over user mods' compose hooks).
+    const claudeMd = readFileSync(join(proj, "CLAUDE.md"), "utf8");
+    expect(claudeMd).toContain("thatch:begin");
+    expect(claudeMd).toContain("mcp__plugin_thatch_thatch__memory_remember");
+    expect(claudeMd).not.toContain("`mcp__thatch__memory_remember`");
+  });
+
+  test("refuses a bin whose checkout lacks the plugin-regime feature", async () => {
+    // The mixed-source bug: a bin pointing at a tree WITHOUT
+    // src/claude-plugin (a global symlink to another checkout) ran a
+    // server with no plugin_stage; the mod's fail-open darkened every
+    // pin. The guard must refuse loudly at setup time.
+    const { setupClaudePluginRegime } = await import("../src/setup");
+    const fakeBin = join(home, "bin", "thatch");
+    mkdirSync(join(home, "bin"), { recursive: true });
+    writeFileSync(fakeBin, "#!/bin/sh\n", "utf-8");
+    await expect(setupClaudePluginRegime(fakeBin, true, proj, home)).rejects.toThrow(/no src\/claude-plugin/);
+  });
+
+  test("the generated manifest's command references the generating checkout", async () => {
+    // Self-consistency by construction: pass the REAL checkout bin; the
+    // manifest's command must be exactly that path - never a PATH-resolved
+    // name (the PATH-first pick is the fallback regime's rule, and a
+    // global `thatch` from another tree is the mixed-source bug).
+    const { setupClaudePluginRegime } = await import("../src/setup");
+    const checkoutBin = join(import.meta.dir, "..", "bin", "thatch");
+    const result = await setupClaudePluginRegime(checkoutBin, true, proj, home);
+    const manifest = JSON.parse(readFileSync(join(result.pluginDir, ".claude-plugin", "plugin.json"), "utf8"));
+    expect(manifest.mcpServers.thatch.command).toBe(checkoutBin);
+  });
+
+  test("the legacy home-root CLAUDE.md block is removed (the QA ghost)", async () => {
+    // Observed live: the old setup era wrote instructions to ~/CLAUDE.md
+    // (home root); every session with cwd under $HOME loads it as a
+    // parent-dir CLAUDE.md, and the stale block named standalone tool
+    // spellings next to the plugin's - the "double registration" ghost.
+    // The plugin migration removes it; user content around it survives.
+    const { setupClaudePluginRegime } = await import("../src/setup");
+    const legacyMd = join(home, "CLAUDE.md");
+    writeFileSync(
+      legacyMd,
+      "# My notes\n\n" +
+        "# Persistence\n\n" +
+        "Thatch provides persistent memory across Claude Code sessions. Use it to persist\n" +
+        "knowledge so future sessions can build on what you've already learned.\n" +
+        "Tools are prefixed in Claude Code: `mcp__thatch__memory_remember`.\n" +
+        '"Forget X" - `memory_recall` to find it, then `memory_forget`.\n\n' +
+        "User content stays.\n",
+      "utf-8",
+    );
+    const result = await setupClaudePluginRegime(join(proj, "bin", "thatch"), true, proj, home);
+    const after = readFileSync(legacyMd, "utf8");
+    expect(after).toContain("My notes");
+    expect(after).toContain("User content stays.");
+    expect(after).not.toContain("mcp__thatch__");
+    // The removal is REPORTED.
+    expect(result.deactivated.some((d) => d.includes("legacy instructions block"))).toBe(true);
+  });
+
+  test("a home-root CLAUDE.md with no thatch block is untouched", async () => {
+    const { setupClaudePluginRegime } = await import("../src/setup");
+    const legacyMd = join(home, "CLAUDE.md");
+    writeFileSync(legacyMd, "# Just user content\n", "utf-8");
+    // AWAITED: a floating setup raced this test's cleanup (the fixture
+    // deleted mid-build surfaced as an unhandled chunk-write error and
+    // bled into the next test's run).
+    await setupClaudePluginRegime(join(proj, "bin", "thatch"), true, proj, home);
+    expect(readFileSync(legacyMd, "utf8")).toBe("# Just user content\n");
+  });
+
+  test("checkSetup reports installed under the plugin regime (marker read)", async () => {
+    const { setupClaudePluginRegime, checkSetup } = await import("../src/setup");
+    const { writeRegimeMarker } = await import("../src/version-check");
+    await setupClaudePluginRegime(join(proj, "bin", "thatch"), true, proj, home);
+    writeRegimeMarker(dbPath, "plugin");
+    process.env.CLAUDE_PROJECT_DIR = proj;
+    try {
+      const status = checkSetup(proj, home);
+      expect(status?.status).toBe("installed");
+      expect((status as { regime?: string }).regime).toBe("plugin");
+    } finally {
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+  });
+});
+
+describe("claudeVersionSupportsMods (the default inversion's detection)", () => {
+  test("the parse and the mods floor", async () => {
+    const { claudeVersionSupportsMods, CLAUDE_MODS_FLOOR } = await import("../src/setup");
+    expect(CLAUDE_MODS_FLOOR).toBe("2.1.287");
+    // The floor itself and everything above it.
+    expect(claudeVersionSupportsMods("2.1.287 (Claude Code)")).toBe(true);
+    expect(claudeVersionSupportsMods("2.1.301 (Claude Code)")).toBe(true);
+    expect(claudeVersionSupportsMods("2.2.0 (Claude Code)")).toBe(true);
+    expect(claudeVersionSupportsMods("3.0.0 (Claude Code)")).toBe(true);
+    // Below the floor: pre-mods builds get the hooks regime.
+    expect(claudeVersionSupportsMods("2.1.286 (Claude Code)")).toBe(false);
+    expect(claudeVersionSupportsMods("2.0.5 (Claude Code)")).toBe(false);
+    expect(claudeVersionSupportsMods("1.0.99 (Claude Code)")).toBe(false);
+    // Absent (claude not installed) and unparseable both read as the
+    // front door - the never-loaded notice is the safety net.
+    expect(claudeVersionSupportsMods(null)).toBe(true);
+    expect(claudeVersionSupportsMods("garbage output")).toBe(true);
   });
 });

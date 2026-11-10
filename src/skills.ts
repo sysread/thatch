@@ -67,6 +67,7 @@ function loadSharedSkills(): SkillDef[] {
     "thatch-code-walkthrough",
     "thatch-session-reflection",
     "thatch-coding-workflow",
+    "thatch-code-review",
     "thatch-plan-refinement",
     "thatch-plan-evidence",
     "thatch-plan-consistency",
@@ -90,8 +91,13 @@ function loadSharedSkills(): SkillDef[] {
 }
 
 function loadOpencodeOnlySkills(): SkillDef[] {
+  // thatch-coordination is the ONLY opencode-only skill left, and for a
+  // NAMED reason, not a missing port: it drives the session-tab surface
+  // (opencode v2's rpc-event TUI bridge) - no other host has anything to
+  // drive. The code-review coordinator MOVED to shared (Claude Code
+  // dispatches sub-agents flat - the old "no sub-agent dispatch" claim
+  // was stale; see the Task/Agent alias note in the skill).
   return [
-    { name: "thatch-code-review", content: loadSkillFile("thatch-code-review") },
     { name: "thatch-coordination", content: loadSkillFile("thatch-coordination") },
   ];
 }
@@ -112,6 +118,11 @@ export const OPENCODE_ONLY_SKILLS: SkillDef[] = loadOpencodeOnlySkills();
 // parties and are NEVER removed - cleanup only touches thatch-* dirs, where
 // the prefix is our namespace. Users upgrading from before v0.1.27 delete
 // the old directories manually.
+
+/** Repo-local QA skills: tracked in THIS repo's .claude/skills/ (force-added
+ *  past the .claude/ ignore), never part of the user install set, never
+ *  stale. */
+const QA_LOCAL_SKILLS = new Set(["thatch-plugin-qa"]);
 
 /**
  * Remove stale skill directories before installing the current set.
@@ -146,6 +157,13 @@ function cleanupStaleSkills(skillsDir: string, currentNames: string[]): string[]
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     const name = entry.name;
     const fullPath = join(skillsDir, name);
+
+    // REPO-LOCAL QA skills are exempt: this repo's own .claude/skills/
+    // carries tracked, force-added QA skills (thatch-plugin-qa) that are
+    // NOT in the install set - the setup a developer runs inside the
+    // thatch checkout must not delete them (it did once, mid-QA).
+
+    if (QA_LOCAL_SKILLS.has(name)) continue;
 
     // Remove a stale entry. For symlinks, unlink the symlink itself - never
     // follow the link, which could delete the target (e.g. a shared skill

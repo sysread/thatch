@@ -80,9 +80,50 @@ Four artifacts, all idempotent:
    `{hooks:{Event:{hooks:[{type,command}]}}}`.
 4. **Skills** --- installs to the scope's skills dir: the repo's
    `.claude/skills/` for project-local, `$CLAUDE_CONFIG_DIR/skills/` for
-   `--global`. `SHARED_SKILLS` only --- the
-   code-review coordinator requires sub-agent dispatch, which Claude Code
-   does not support.
+   `--global`. `SHARED_SKILLS` - the code-review coordinator moved to
+   shared: it dispatches sub-agents FLAT from the session that loaded it
+   (depth 1), which every sub-agent-capable host supports; the old "Claude
+   Code does not support sub-agent dispatch" claim was stale (the Agent
+   tool, renamed from Task in v2.1.63, allows three layers of nesting).
+   `thatch-coordination` stays opencode-v2-only (it drives the
+   session-tab rpc bridge - a named documented gap on other hosts).
+
+### The plugin regime (the default; `--hooks` opts out)
+
+Plain `thatch setup --claude` installs the IN-PROCESS plugin
+regime - the DEFAULT since the ship-gate flip: current Claude Code
+(2.1.287+, the mods floor, read from the installed claude -
+`CLAUDE_MODS_FLOOR` / `claudeVersionSupportsMods` / `claudeVersionOutput`
+in src/setup.ts; an absent or unparseable claude reads as current, the
+front door) resolves to the plugin. `--hooks` opts out for pre-mods
+builds and enterprise policies; `--plugin` forces the plugin explicitly
+(the QA-generation path). Both flags are full-install regime selectors:
+they require --claude and refuse the narrowing flags. It
+generates the plugin directory (`$CLAUDE_CONFIG_DIR/thatch-plugin/` for
+global, `<projectDir>/.claude/thatch-plugin/` for local) - the manifest
+bundling the MCP server as `thatch mcp --bundled` (pinned to the
+GENERATING checkout's binary - a global `thatch` from another tree is the
+mixed-source bug, and setup REFUSES a bin whose tree lacks
+`src/claude-plugin`), the hooks module shim, the rendered one-template
+instructions, and the bundled mod logic - and DEACTIVATES the fallback
+DELIVERY writers (the settings hooks, the `.mcp.json` server entry; the
+global `claude mcp add` registration prints as a manual removal step).
+The CLAUDE.md instructions block is the inverse: ENSURED with the plugin
+variant's tool spelling, because it is the only instructions channel that
+survives the built-in guard (the guard passes over user mods'
+`prompt.compose` hooks on managed settings and Team/Enterprise logins).
+
+The regime marker (beside the DB in the config dir - DURABLE, not the tmp
+cache: a reboot must not erase the regime story) makes `checkSetup`
+report the plugin install and makes a leftover STANDALONE server warn
+instead of auto-refresh. The mod stamps a liveness file per prompt; a
+stale stamp prepends a one-time plugin-not-delivering warning to the
+bundled server's first tools/call (the disabled-mod hole: `disableAllHooks`
+and managed `allowManagedModsOnly` silence the mod but leave its server).
+
+The skills install is unchanged in this regime (Claude Code discovers the
+scope's skills dir the same way); skills are NOT bundled in the generated
+plugin directory.
 
 ### Cursor setup (`setupCursor` in `src/setup.ts`)
 

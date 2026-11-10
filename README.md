@@ -34,16 +34,15 @@ sessions and they cannot be woken. If you keep tabs open across long
 idle periods, set `experimental.location_idle_timeout` to a longer
 duration or `false`.
 
-**Claude Code** - install globally, then run setup in your project:
+**Claude Code** - paste into a session:
 
-```bash
-npm install -g @jeffober/thatch
-cd /path/to/your/project
-thatch setup --claude            # or --global for all projects
+```text
+/plugin marketplace add sysread/thatch
+/plugin install thatch
 ```
 
-`setup` installs the MCP server config, hooks, instructions, and skills.
-Restart Claude Code and the tools are available as `mcp__thatch__*`.
+Older Claude Code versions or enterprise policies that disable mods:
+`npm install -g @jeffober/thatch && thatch setup --claude --hooks`.
 Requires [Bun](https://bun.sh) on PATH.
 
 **Cursor**:

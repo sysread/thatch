@@ -11,7 +11,8 @@ setupToolDefsHarness();
 
 describe("TOOL_DEFS", () => {
   test("exports the full tool catalog", () => {
-    expect(TOOL_DEFS.length).toBe(42);
+    // 41 shared + session_tab_open (main) + the four plugin-regime tools.
+    expect(TOOL_DEFS.length).toBe(46);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -24,6 +25,10 @@ describe("TOOL_DEFS", () => {
       "dedup_mark_checked",
       "extraction_done",
       "get_extraction_payload",
+      "plugin_stage",
+      "plugin_lifecycle",
+      "plugin_chat_wake",
+      "plugin_watch_poll",
       "prediction_query",
       "prediction_update",
       "prediction_list",
@@ -85,14 +90,21 @@ describe("TOOL_DEFS", () => {
       prompt.slice(prompt.indexOf("Tools:"), prompt.indexOf("## Stores"));
     const prompt = systemPrompt("test/repo");
     for (const def of TOOL_DEFS) {
-      expect(toolsSection(prompt)).toContain(`thatch_${def.name}`);
+      // bundledOnly tools are never opencode prompt surface - they belong
+      // to the plugin regime's bundled server only; everything else
+      // (session-tab tools, the archaeology trio included) is listed.
+      if (def.bundledOnly) {
+        expect(toolsSection(prompt)).not.toContain(`thatch_${def.name}`);
+      } else {
+        expect(toolsSection(prompt)).toContain(`thatch_${def.name}`);
+      }
     }
   });
 
   test("MCP prompts list shared tools but not opencode-only ones", () => {
     const prompt = claudeInstructions();
     for (const def of TOOL_DEFS) {
-      if (def.opencodeOnly) {
+      if (def.opencodeOnly || def.bundledOnly) {
         expect(prompt).not.toContain(`mcp__thatch__${def.name}`);
       } else {
         expect(prompt).toContain(`mcp__thatch__${def.name}`);

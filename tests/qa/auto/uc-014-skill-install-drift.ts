@@ -27,9 +27,10 @@ const useCase: UseCase = {
     "5. Check whether the `thatch-code-review` coordinator skill is present.",
   ].join("\n"),
   expected: [
-    "- Claude Code and Cursor install exactly **40 shared skills** to the scope's",
+    "- Cursor installs exactly **41 shared skills**; Claude Code 42 (the repo's",
+    "- QA skill is .claude/-side and repo-local),",
     "  skills dir (repo `.claude/skills/` and `.cursor/skills/` for project-local",
-    "  setup) — the coordinator (`thatch-code-review`) is **absent** (it needs",
+    "  setup) — the coordinator (`thatch-code-review`) is **present** (it is SHARED - flat dispatch works); it no longer needs",
     "  sub-agents, which those hosts lack).",
     "- opencode installs **42** — the 40 shared plus the two opencode-only skills (coordinator, coordination).",
     "- The locally edited `SKILL.md` is **overwritten** with the canonical content",
@@ -48,7 +49,7 @@ const useCase: UseCase = {
 
     // --- Step 1: Setup for Claude and Cursor ---
 
-    const r1 = await run(["setup", "--claude"]);
+    const r1 = await run(["setup", "--claude", "--hooks"]);
     if (r1.exitCode !== 0) {
       console.log("  FAIL: `thatch setup --claude` exited non-zero");
       return "FAIL";
@@ -71,12 +72,12 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (claudeSkills.length !== 40) {
-      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 40`);
+    if (claudeSkills.length !== 42) {
+      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 42`);
       return "FAIL";
     }
-    if (claudeSkills.includes("thatch-code-review")) {
-      console.log("  FAIL: thatch-code-review coordinator should NOT be installed for Claude");
+    if (!claudeSkills.includes("thatch-code-review")) {
+      console.log("  FAIL: thatch-code-review coordinator should be installed for Claude (it is SHARED - flat dispatch works)");
       return "FAIL";
     }
 
@@ -90,12 +91,12 @@ const useCase: UseCase = {
       .filter((d) => d.isDirectory() || d.isSymbolicLink())
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
-    if (cursorSkills.length !== 40) {
-      console.log(`  FAIL: Cursor skills count is ${cursorSkills.length}, expected 40`);
+    if (cursorSkills.length !== 41) {
+      console.log(`  FAIL: Cursor skills count is ${cursorSkills.length}, expected 41`);
       return "FAIL";
     }
-    if (cursorSkills.includes("thatch-code-review")) {
-      console.log("  FAIL: thatch-code-review coordinator should NOT be installed for Cursor");
+    if (!cursorSkills.includes("thatch-code-review")) {
+      console.log("  FAIL: thatch-code-review coordinator should be installed for Cursor (it is SHARED - flat dispatch works)");
       return "FAIL";
     }
 
@@ -157,7 +158,7 @@ const useCase: UseCase = {
 
     // --- Step 4: Re-run setup (drift recovery) ---
 
-    const r4 = await run(["setup", "--claude"]);
+    const r4 = await run(["setup", "--claude", "--hooks"]);
 
     // Drifted skill should be overwritten with canonical content.
     if (readFileSync(driftSkillPath, "utf8") !== canonicalContent) {

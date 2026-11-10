@@ -36,7 +36,7 @@ const useCase: UseCase = {
     const run = (args: string[]) => $`${bin} ${args}`.env(env).cwd(dir).quiet().nothrow();
 
     // Step 1: Claude setup.
-    const r1 = await run(["setup", "--claude"]);
+    const r1 = await run(["setup", "--claude", "--hooks"]);
     if (r1.exitCode !== 0) {
       console.log("  FAIL: `thatch setup --claude` exited non-zero");
       return "FAIL";
@@ -53,12 +53,12 @@ const useCase: UseCase = {
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
 
-    if (claudeSkills.length !== 40) {
-      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 40`);
+    if (claudeSkills.length !== 42) {
+      console.log(`  FAIL: Claude skills count is ${claudeSkills.length}, expected 42`);
       return "FAIL";
     }
-    if (claudeSkills.includes("thatch-code-review")) {
-      console.log("  FAIL: thatch-code-review should NOT be installed for Claude");
+    if (!claudeSkills.includes("thatch-code-review")) {
+      console.log("  FAIL: thatch-code-review coordinator should be installed for Claude (it is SHARED - flat dispatch works)");
       return "FAIL";
     }
 
@@ -80,12 +80,12 @@ const useCase: UseCase = {
       .map((d) => d.name)
       .filter((n) => n.startsWith("thatch-"));
 
-    if (cursorSkills.length !== 40) {
-      console.log(`  FAIL: Cursor skills count is ${cursorSkills.length}, expected 40`);
+    if (cursorSkills.length !== 41) {
+      console.log(`  FAIL: Cursor skills count is ${cursorSkills.length}, expected 41`);
       return "FAIL";
     }
-    if (cursorSkills.includes("thatch-code-review")) {
-      console.log("  FAIL: thatch-code-review should NOT be installed for Cursor");
+    if (!cursorSkills.includes("thatch-code-review")) {
+      console.log("  FAIL: thatch-code-review coordinator should be installed for Cursor (it is SHARED - flat dispatch works)");
       return "FAIL";
     }
 

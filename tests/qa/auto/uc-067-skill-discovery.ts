@@ -34,9 +34,9 @@ const useCase: UseCase = {
     const run = (args: string[]) => $`${bin} ${args}`.env(env).cwd(dir).quiet().nothrow();
 
     // Step 1: Claude setup.
-    const r1 = await run(["setup", "--claude"]);
+    const r1 = await run(["setup", "--claude", "--hooks"]);
     if (r1.exitCode !== 0) {
-      console.log("  FAIL: `thatch setup --claude` exited non-zero");
+      console.log("  FAIL: `thatch setup --claude --hooks` exited non-zero");
       return "FAIL";
     }
 
