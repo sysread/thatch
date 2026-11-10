@@ -49,7 +49,7 @@ const useCase: UseCase = {
 
     // --- Step 1: Setup for Claude and Cursor ---
 
-    const r1 = await run(["setup", "--claude"]);
+    const r1 = await run(["setup", "--claude", "--hooks"]);
     if (r1.exitCode !== 0) {
       console.log("  FAIL: `thatch setup --claude` exited non-zero");
       return "FAIL";
@@ -158,7 +158,7 @@ const useCase: UseCase = {
 
     // --- Step 4: Re-run setup (drift recovery) ---
 
-    const r4 = await run(["setup", "--claude"]);
+    const r4 = await run(["setup", "--claude", "--hooks"]);
 
     // Drifted skill should be overwritten with canonical content.
     if (readFileSync(driftSkillPath, "utf8") !== canonicalContent) {

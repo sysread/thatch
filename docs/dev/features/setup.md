@@ -88,10 +88,17 @@ Four artifacts, all idempotent:
    `thatch-coordination` stays opencode-v2-only (it drives the
    session-tab rpc bridge - a named documented gap on other hosts).
 
-### The plugin regime (`--plugin`, QA-only)
+### The plugin regime (the default; `--hooks` opts out)
 
-`thatch setup --claude --plugin` installs the IN-PROCESS plugin
-regime instead (docs/plans/claude-code-holistic-integration.md): it
+Plain `thatch setup --claude` installs the IN-PROCESS plugin
+regime - the DEFAULT since the ship-gate flip: current Claude Code
+(2.1.287+, the mods floor, read from the installed claude -
+`CLAUDE_MODS_FLOOR` / `claudeVersionSupportsMods` / `claudeVersionOutput`
+in src/setup.ts; an absent or unparseable claude reads as current, the
+front door) resolves to the plugin. `--hooks` opts out for pre-mods
+builds and enterprise policies; `--plugin` forces the plugin explicitly
+(the QA-generation path). Both flags are full-install regime selectors:
+they require --claude and refuse the narrowing flags. It
 generates the plugin directory (`$CLAUDE_CONFIG_DIR/thatch-plugin/` for
 global, `<projectDir>/.claude/thatch-plugin/` for local) - the manifest
 bundling the MCP server as `thatch mcp --bundled` (pinned to the

@@ -221,7 +221,7 @@ const useCase: UseCase = {
 
     // --- Step 5: full setup afterwards still writes everything ---
 
-    const r5 = await run(["setup", "--claude"]);
+    const r5 = await run(["setup", "--claude", "--hooks"]);
     if (r5.exitCode !== 0) {
       console.log("  FAIL: full `thatch setup --claude` after --skills-only exited non-zero");
       return "FAIL";

@@ -33,6 +33,43 @@ function claudeConfigDir(homeDir: string): string {
   return process.env.CLAUDE_CONFIG_DIR ?? join(homeDir, ".claude");
 }
 
+/** The Claude Code release that introduced mods - the plugin regime's
+ *  floor: this is the first version whose in-process plugin surface can
+ *  load the generated mod at all. Older builds get the hooks regime. */
+export const CLAUDE_MODS_FLOOR = "2.1.287";
+
+/**
+ * Reports whether `claude --version` output meets the mods floor. Null
+ * (claude not installed or not runnable) and unparseable output both read
+ * as SUPPORTED: the plugin regime is the front door, and the CLI's
+ * plugin-never-loaded notice is the safety net that names the --hooks
+ * opt-out when the assumption is wrong.
+ */
+export function claudeVersionSupportsMods(versionOutput: string | null): boolean {
+  if (versionOutput === null) return true;
+  const m = versionOutput.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return true;
+  const got = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const floor = CLAUDE_MODS_FLOOR.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (got[i]! > floor[i]!) return true;
+    if (got[i]! < floor[i]!) return false;
+  }
+  return true;
+}
+
+/** Reads the installed claude CLI's --version output; null when claude is
+ *  not on PATH or fails to run. */
+export function claudeVersionOutput(): string | null {
+  if (!Bun.which("claude")) return null;
+  try {
+    const r = Bun.spawnSync(["claude", "--version"], { stdout: "pipe" });
+    return r.exitCode === 0 ? r.stdout.toString().trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The thatch DB path, resolved the same way bin/thatch and the MCP server
  *  do (THATCH_DB_PATH override, else under the config home). The regime
  *  marker is BESIDE the db (dirname) - deliberately not version-check's

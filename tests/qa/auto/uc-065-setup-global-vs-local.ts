@@ -20,7 +20,7 @@ const useCase: UseCase = {
     "- `~/.cursor/` writable",
   ].join("\n"),
   steps: [
-    "1. Run `thatch setup --claude --global`.",
+    "1. Run `thatch setup --claude --hooks --global`.",
     "2. Check that $CLAUDE_CONFIG_DIR/CLAUDE.md and settings.json were written.",
     "3. Check that no .mcp.json was written in the current project directory.",
     "4. Check that stdout includes a `claude mcp add --scope user` command.",
@@ -40,9 +40,9 @@ const useCase: UseCase = {
     const run = (args: string[]) => $`${bin} ${args}`.env(env).cwd(dir).quiet().nothrow();
 
     // Step 1-4: Claude --global.
-    const claudeGlobal = await run(["setup", "--claude", "--global"]);
+    const claudeGlobal = await run(["setup", "--claude", "--hooks", "--global"]);
     if (claudeGlobal.exitCode !== 0) {
-      console.log("  FAIL: `thatch setup --claude --global` exited non-zero");
+      console.log("  FAIL: `thatch setup --claude --hooks --global` exited non-zero");
       return "FAIL";
     }
 

@@ -39,7 +39,7 @@ const useCase: UseCase = {
     const run = (args: string[]) => $`${bin} ${args}`.env(env).cwd(dir).quiet().nothrow();
 
     // Step 1: initial setup.
-    const r1 = await run(["setup", "--claude"]);
+    const r1 = await run(["setup", "--claude", "--hooks"]);
     if (r1.exitCode !== 0) {
       console.log("  FAIL: initial setup exited non-zero");
       return "FAIL";
@@ -80,7 +80,7 @@ const useCase: UseCase = {
     writeFileSync(settingsPath, JSON.stringify(settingsWithExternal, null, 2) + "\n");
 
     // Step 4: re-run setup.
-    await run(["setup", "--claude"]);
+    await run(["setup", "--claude", "--hooks"]);
 
     // CLAUDE.md should be restored to canonical content.
     if (readFileSync(claudeMdPath, "utf8") !== claudeMdBefore) {

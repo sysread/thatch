@@ -581,3 +581,23 @@ describe("setupClaudePluginRegime (plugin regime, QA-only)", () => {
     }
   });
 });
+
+describe("claudeVersionSupportsMods (the default inversion's detection)", () => {
+  test("the parse and the mods floor", async () => {
+    const { claudeVersionSupportsMods, CLAUDE_MODS_FLOOR } = await import("../src/setup");
+    expect(CLAUDE_MODS_FLOOR).toBe("2.1.287");
+    // The floor itself and everything above it.
+    expect(claudeVersionSupportsMods("2.1.287 (Claude Code)")).toBe(true);
+    expect(claudeVersionSupportsMods("2.1.301 (Claude Code)")).toBe(true);
+    expect(claudeVersionSupportsMods("2.2.0 (Claude Code)")).toBe(true);
+    expect(claudeVersionSupportsMods("3.0.0 (Claude Code)")).toBe(true);
+    // Below the floor: pre-mods builds get the hooks regime.
+    expect(claudeVersionSupportsMods("2.1.286 (Claude Code)")).toBe(false);
+    expect(claudeVersionSupportsMods("2.0.5 (Claude Code)")).toBe(false);
+    expect(claudeVersionSupportsMods("1.0.99 (Claude Code)")).toBe(false);
+    // Absent (claude not installed) and unparseable both read as the
+    // front door - the never-loaded notice is the safety net.
+    expect(claudeVersionSupportsMods(null)).toBe(true);
+    expect(claudeVersionSupportsMods("garbage output")).toBe(true);
+  });
+});

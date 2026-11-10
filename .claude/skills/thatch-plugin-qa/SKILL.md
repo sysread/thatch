@@ -166,7 +166,9 @@ Verified round-trip (plugin install, then hooks restore, checked end to
 end in the QA flow). Run these from the thatch repo checkout.
 
 **Back to the hook regime** (keep thatch, drop the plugin): re-run
-`thatch setup --claude` (add `--global` if that is your QA scope). It
+`thatch setup --claude --hooks` (add `--global` if that is your QA
+scope; the `--hooks` flag is REQUIRED post-inversion - plain
+`setup --claude` now re-installs the plugin). It
 clears the plugin-regime marker, reinstalls the settings hooks, the
 CLAUDE.md block, and the MCP registration, and tells you to remove the
 plugin. Then delete the plugin directory:
@@ -193,8 +195,8 @@ plugin. Then delete the plugin directory:
 **If the plugin is broken and delivers nothing**: any `thatch` CLI command
 warns when the plugin regime is installed but the plugin has not pinged,
 and prints the exact re-run/load instruction. Re-running
-`thatch setup --claude` restores the hook regime even when the plugin is
-completely dead - that is the always-works way back.
+`thatch setup --claude --hooks` restores the hook regime even when the
+plugin is completely dead - that is the always-works way back.
 
 ## Reporting
 

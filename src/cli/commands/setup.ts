@@ -4,7 +4,7 @@
  * Was a case of bin/thatch's switch before the registry replaced it.
  */
 import { join, resolve } from "node:path";
-import { setupClaudeCode, setupClaudePluginRegime, setupCursor, setupSkillsOnly, registerClaudeMcpServer, thatchMcpServerEntry, type OtherScopeSkills } from "../../setup";
+import { setupClaudeCode, setupClaudePluginRegime, setupCursor, setupSkillsOnly, registerClaudeMcpServer, thatchMcpServerEntry, claudeVersionSupportsMods, claudeVersionOutput, type OtherScopeSkills } from "../../setup";
 import { writeRegimeMarker, readRegimeMarker, clearRegimeMarker } from "../../version-check";
 import { installSkills, type InstallReport } from "../../skills";
 import { installCommandsToDir, opencodeCommandDefs } from "../../commands";
@@ -15,7 +15,7 @@ export const setup: Subcommand = {
   name: "setup",
   summary: "Install config + instructions + hooks + skills",
   usage: () => ({
-    synopsis: "thatch setup --claude [--plugin] [--cursor] [--local|--global] [--skills-only [dir]]",
+    synopsis: "thatch setup --claude [--plugin|--hooks] [--cursor] [--local|--global] [--skills-only [dir]]",
     flags: [
       { long: "--claude", short: null, description: "Set up Claude Code." },
       { long: "--cursor", short: null, description: "Set up Cursor." },
@@ -24,7 +24,8 @@ export const setup: Subcommand = {
       { long: "--skills-only", short: null, description: "Refresh just the skill files. With an explicit directory, installs the skills into that directory (no host flag needed)." },
       { long: "--commands-only", short: null, description: "Install the command files into <dir>/thatch/ for any harness (complete formal command files; no host flag; --global is rejected)." },
       { long: "--mcp-json", short: null, description: "Print the MCP server config as JSON on stdout (can be combined with other setup flags; writes nothing, stdout carries only the JSON when set)." },
-      { long: "--plugin", short: null, description: "Install the Claude Code plugin regime: generates the plugin (an in-process mod + the bundled MCP server) and deactivates the hook regime's delivery writers. Requires --claude; cannot combine with --skills-only, --mcp-json, or --commands-only." },
+      { long: "--plugin", short: null, description: "Force the plugin regime (an in-process mod + the bundled MCP server). The DEFAULT for current Claude Code (2.1.287+, detected from the installed claude). Requires --claude; cannot combine with --skills-only, --mcp-json, or --commands-only." },
+      { long: "--hooks", short: null, description: "Install the hooks regime instead of the plugin: for Claude Code older than 2.1.287 or enterprise policies that disable mods. Requires --claude; cannot combine with --skills-only, --mcp-json, or --commands-only." },
     ],
   }),
   async run(args, ctx) {
@@ -98,20 +99,44 @@ export const setup: Subcommand = {
       console.error("Usage: thatch setup --claude [--cursor] [--local|--global] [--skills-only [dir]] [--mcp-json]");
       process.exit(1);
     }
-    // --plugin: the Claude Code PLUGIN regime. Generates the plugin
-    // (mod + bundled MCP server) and DEACTIVATES the fallback regime's
-    // delivery writers (settings hooks, the .mcp.json entry) while
-    // ENSURING the CLAUDE.md instructions block - opt-in must delete the
-    // delivery writers, or both regimes deliver every prompt. Requires
-    // --claude: the mod's surfaces are Claude Code's; Cursor has no mods.
-    const pluginRegime = args.includes("--plugin");
-    if (pluginRegime && !isClaude) {
+    // THE REGIME FLAGS (the ship-gate default inversion): plain
+    // `thatch setup --claude` installs the PLUGIN regime on current
+    // Claude Code (2.1.287+, the mods floor - detected from the
+    // installed claude); --hooks is the explicit opt-out (pre-mods
+    // builds, enterprise policies that disable mods); --plugin stays the
+    // explicit force (the QA-generation path). Both flags are full-install
+    // regime selectors: they require --claude and refuse the narrowing
+    // flags (--skills-only, --mcp-json, --commands-only install no
+    // regime, so the DEFAULT never fires under them either).
+    const hooksFlag = args.includes("--hooks");
+    const pluginFlag = args.includes("--plugin");
+    if (hooksFlag && pluginFlag) {
+      console.error("Choose one regime: --plugin or --hooks.");
+      process.exit(1);
+    }
+    if (pluginFlag && !isClaude) {
       console.error("--plugin requires --claude (the plugin regime is Claude Code-only; Cursor has no mods).");
       process.exit(1);
     }
-    if (pluginRegime && (skillsOnly || mcpJson || customCommandsDir)) {
-      console.error("--plugin is a full-install mode and cannot combine with --skills-only, --mcp-json, or --commands-only.");
+    if (hooksFlag && !isClaude) {
+      console.error("--hooks requires --claude (the hook regime is Claude Code's settings hooks; use plain `thatch setup --cursor` for Cursor).");
       process.exit(1);
+    }
+    if ((pluginFlag || hooksFlag) && (skillsOnly || mcpJson || customCommandsDir)) {
+      console.error("--plugin and --hooks are full-install regime selectors and cannot combine with --skills-only, --mcp-json, or --commands-only.");
+      process.exit(1);
+    }
+    // The resolution - FULL installs only. An absent or unparseable
+    // claude reads as current (the front door; the CLI's
+    // plugin-never-loaded notice is the safety net that names --hooks).
+    let pluginRegime = false;
+    let oldClaudeDefaultedToHooks = false;
+    if (!skillsOnly && !mcpJson && !customCommandsDir && isClaude) {
+      if (pluginFlag) pluginRegime = true;
+      else if (!hooksFlag) {
+        pluginRegime = claudeVersionSupportsMods(claudeVersionOutput());
+        if (!pluginRegime) oldClaudeDefaultedToHooks = true;
+      }
     }
 
     // Resolve the thatch binary path for hooks and MCP config.
@@ -233,7 +258,10 @@ export const setup: Subcommand = {
         say("");
         say("Restart Claude Code for the changes to take effect.");
       } else {
-        // The DOWNGRADE path: a fallback --claude setup under a stale
+        if (oldClaudeDefaultedToHooks) {
+          say("  Note: the installed Claude Code is older than 2.1.287 (no mods), so the hook regime is installed; the plugin regime needs Claude Code 2.1.287 or newer.");
+        }
+        // The DOWNGRADE path: a hooks-regime setup under a stale
         // plugin-regime marker would leave contradictory state (the
         // marker says plugin, the fallback hooks just installed, the
         // standalone server says remove the entry setup wrote). Clear

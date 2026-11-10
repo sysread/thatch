@@ -95,7 +95,7 @@ if (!resolved) {
 // CLI calls, which are exactly where the silence gets noticed. setup and
 // mcp are exempt (setup manages the regime; mcp IS the regime).
 if (resolved.entry.name !== "setup" && resolved.entry.name !== "mcp" && pluginRegimeSilent(dbPath)) {
-  console.error("[thatch] The plugin regime is installed (the hook setup was deactivated), but the plugin has not loaded or pinged. If you expected thatch to work in a Claude Code session, load it: claude --plugin-dir ~/.claude/thatch-plugin (or re-run thatch setup --claude --plugin).");
+  console.error("[thatch] The plugin regime is installed (the hook setup was deactivated), but the plugin has not loaded or pinged. If you expected thatch to work in a Claude Code session, load it: claude --plugin-dir ~/.claude/thatch-plugin (or re-run thatch setup --claude - the default now generates the plugin).");
 }
 
 const db: ThatchDB = new ThatchDB(dbPath, { chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()) });

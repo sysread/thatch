@@ -24,7 +24,7 @@ const useCase: UseCase = {
     "3. Repeat both commands (re-run idempotence and drift recovery)",
     "4. Add a non-thatch hook to `.claude/settings.json` and `.cursor/hooks.json`,",
     "   then re-run setup",
-    "5. From elsewhere: `thatch setup --cursor --global`, then `thatch setup --claude --global`",
+    "5. From elsewhere: `thatch setup --cursor --global`, then `thatch setup --claude --hooks --global`",
   ].join("\n"),
   expected: [
     '- `--claude` project-local writes `.mcp.json` (`mcpServers.thatch`, stdio + `["mcp"]`),',
@@ -58,7 +58,7 @@ const useCase: UseCase = {
 
     // --- Step 1: thatch setup --claude --local (project-local) ---
 
-    const r1 = await run(["setup", "--claude", "--local"]);
+    const r1 = await run(["setup", "--claude", "--hooks", "--local"]);
     if (r1.exitCode !== 0) {
       console.log("  FAIL: `thatch setup --claude --local` exited non-zero");
       console.log(`  stderr: ${r1.stderr.toString()}`);
@@ -251,7 +251,7 @@ const useCase: UseCase = {
     const settingsBefore = readFileSync(settingsPath, "utf8");
     const cursorHooksBefore = readFileSync(cursorHooksPath, "utf8");
 
-    const r3c = await run(["setup", "--claude"]);
+    const r3c = await run(["setup", "--claude", "--hooks"]);
     const r3x = await run(["setup", "--cursor"]);
 
     if (readFileSync(claudeMdPath, "utf8") !== claudeMdBefore) {
@@ -297,7 +297,7 @@ const useCase: UseCase = {
     cursorHooksParsed.hooks.sessionStart.push({ command: "echo external-hook" });
     writeFileSync(cursorHooksPath, JSON.stringify(cursorHooksParsed, null, 2) + "\n");
 
-    await run(["setup", "--claude"]);
+    await run(["setup", "--claude", "--hooks"]);
     await run(["setup", "--cursor"]);
 
     // Non-thatch hooks should survive.
@@ -333,9 +333,9 @@ const useCase: UseCase = {
     // --- Step 5: --global mode ---
 
     // Claude --global: writes to config dir, no project .mcp.json, prints mcp add command.
-    const claudeGlobal = await run(["setup", "--claude", "--global"]);
+    const claudeGlobal = await run(["setup", "--claude", "--hooks", "--global"]);
     if (claudeGlobal.exitCode !== 0) {
-      console.log("  FAIL: `thatch setup --claude --global` exited non-zero");
+      console.log("  FAIL: `thatch setup --claude --hooks --global` exited non-zero");
       return "FAIL";
     }
     if (!existsSync(join(env.CLAUDE_CONFIG_DIR, "CLAUDE.md"))) {
@@ -385,6 +385,54 @@ const useCase: UseCase = {
     }
     if (!cursorGlobal.stdout.toString().includes(join(env.HOME, ".cursor", "skills"))) {
       console.log("  FAIL: global (Cursor) stdout does not name the ~/.cursor/skills path");
+      return "FAIL";
+    }
+
+    // --- Step 6: the default inversion (the ship-gate flip) ---
+    // Plain `thatch setup --claude` now installs the PLUGIN regime when
+    // the installed claude meets the mods floor (2.1.287+) or is absent
+    // (the docker sandbox has no claude CLI, so the detection reads
+    // absent - the front-door default). --hooks above is the explicit
+    // opt-out; this step pins the default AND the deactivation sweep.
+
+    const r6 = await run(["setup", "--claude"]);
+    if (r6.exitCode !== 0) {
+      console.log("  FAIL: plain `thatch setup --claude` (the plugin default) exited non-zero");
+      console.log(`  stderr: ${r6.stderr.toString()}`);
+      return "FAIL";
+    }
+    const out6 = r6.stdout.toString();
+    if (!out6.includes("Thatch plugin regime installed")) {
+      console.log("  FAIL: plain setup --claude did not install the plugin regime (the default inversion)");
+      return "FAIL";
+    }
+    // The generated plugin: the local-scope plugin dir + manifest.
+    if (!existsSync(join(dir, ".claude", "thatch-plugin", ".claude-plugin", "plugin.json"))) {
+      console.log("  FAIL: the plugin default did not generate the plugin dir");
+      return "FAIL";
+    }
+    // The deactivation sweep: the hooks regime's writers are REMOVED (the
+    // opt-in-must-delete contract - surviving writers would deliver every
+    // prompt twice).
+    if (!out6.includes("Deactivated:")) {
+      console.log("  FAIL: the plugin default's report does not name what it deactivated");
+      return "FAIL";
+    }
+    const mcpAfterPlugin = existsSync(join(dir, ".mcp.json"))
+      ? readFileSync(join(dir, ".mcp.json"), "utf8")
+      : "";
+    if (mcpAfterPlugin.includes("thatch")) {
+      console.log("  FAIL: the plugin default left the thatch .mcp.json entry in place (deactivation failed)");
+      return "FAIL";
+    }
+    const settingsAfterPlugin = existsSync(join(dir, ".claude", "settings.json"))
+      ? JSON.parse(readFileSync(join(dir, ".claude", "settings.json"), "utf8"))
+      : {};
+    const thatchHooksLeft = Object.values(settingsAfterPlugin.hooks ?? {}).some(
+      (groups: any) => groups?.some((g: any) => g.hooks?.some((h: any) => h.command?.includes("thatch"))),
+    );
+    if (thatchHooksLeft) {
+      console.log("  FAIL: the plugin default left thatch hooks in settings.json (deactivation failed)");
       return "FAIL";
     }
 
