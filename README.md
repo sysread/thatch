@@ -8,12 +8,13 @@ Persistent memory and operational methodology for AI coding agents. Each
 session inherits the accumulated knowledge of every session before it:
 project architecture, conventions, gotchas, user preferences. Your agent
 starts with context instead of a blank slate. No API keys, no cloud
-services; everything runs on your machine.
+services; everything runs on your machine. Thatch is an opencode v2
+plugin, and also runs on Claude Code, Cursor, and any other MCP harness.
 
 ## Install
 
 **OpenCode** - add the plugin to `opencode.jsonc`; it installs on next start.
-Requires opencode 2.1 or newer:
+Requires opencode 2.1 or newer; opencode v1 is not supported:
 
 ```jsonc
 { "plugin": ["@jeffober/thatch"] }
@@ -24,6 +25,14 @@ re-exports the plugin's old named `server` export fails to load after this
 version - replace it with a plain re-export of the default export (see the
 [setup guide](https://github.com/sysread/thatch/wiki/Guide%3A-Setup)) or
 delete the shim and let the package install above do the work.
+
+A caveat for OpenCode users: a session whose tab is open but not
+currently viewed can go quiet after about 60 minutes with no activity in
+its project directory, because opencode unloads an idle location's
+services. Until that location reloads, chat mail is not delivered to its
+sessions and they cannot be woken. If you keep tabs open across long
+idle periods, set `experimental.location_idle_timeout` to a longer
+duration or `false`.
 
 **Claude Code** - install globally, then run setup in your project:
 
