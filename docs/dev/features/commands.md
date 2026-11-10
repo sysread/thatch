@@ -2,14 +2,17 @@
 
 Thatch's `/thatch/*` commands come in two families:
 
-- **Actions** (`defrag`, `extract`, `hygiene`, `peer-review`, `refine`,
-  `reflect`, `self-review`, `whois`) — user-invoked commands. The
+- **Actions** (`defrag`, `extract`, `hygiene`, `peer-review`, `bug-intake`,
+  `refine`, `reflect`, `self-review`, `whois`) — user-invoked commands. The
   nudge-backed ones (`defrag`, `extract`, `hygiene`, `reflect`) wrap
   behaviors the nudges otherwise run on their own schedule; the rest
   are self-contained, with no nudge counterpart.
 - **Wrap-ups** (`compact`, `exit`) — greenlight-gated pre-compaction and
-  pre-exit checklists. opencode only: the greenlight check needs the
-  plugin's `command.execute.before` arming and TUI control routes.
+  pre-exit checklists. They need a plugin runtime to arm the greenlight and
+  fire the host action: opencode's adapter and the Claude Code plugin
+  regime's mod both provide one (Claude Code's exit reports it is safe to
+  close instead of closing - no mod API can). The hooks regime and Cursor
+  have no plugin host.
 
 User-facing guide: [../../user/commands.md](../../user/commands.md).
 

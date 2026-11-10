@@ -12,7 +12,8 @@ Two mechanisms:
   worth interrupting you for and calls the tool. Works on every host
   (opencode, Claude Code, Cursor) because it is plain child processes, not
   host plumbing.
-- **Automatic alerts** (opencode only): the plugin watches the session and
+- **Automatic alerts** (opencode and the Claude Code plugin regime): the
+  host integration watches the session and
   notifies you when the LLM pauses for your input or finishes a round of real
   work -- no tool call required. See the Alerts section below.
 
@@ -196,8 +197,9 @@ for -- the automatic alerts and the tool are independent channels.
   are short by design.
 - There is no debounce. If an agent polls a status in a tight loop, it should
   notify once at the end, not per poll.
-- Alerts are opencode-only. Claude Code and Cursor have no plugin event
-  stream to watch; their hosts can only notify through
+- Alerts need an event stream. opencode's plugin and the Claude Code plugin
+  regime's mod have one; the Claude Code hooks regime and Cursor do not -
+  there the agent can only notify through
   `thatch_notify_user`.
 - Alerts cannot tell whether your terminal is focused. A `done` banner can
   land while you are looking at the TUI; set the event's mode to `none` if

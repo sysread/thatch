@@ -8,8 +8,10 @@ Cursor -- with no host-specific plumbing and no new npm dependencies.
 Two delivery paths share the dispatcher and the config file:
 
 - **Agent-initiated**: the LLM calls `notify_user`. Works on every host.
-- **Automatic alerts** (opencode-only): the plugin runtime watches session
-  events and notifies when the LLM pauses for human input or finishes a
+- **Automatic alerts** (opencode and the Claude Code plugin regime): the
+  plugin runtime (opencode) or the mod's event forwards (the plugin
+  regime) watch session
+  events and notify when the LLM pauses for human input or finishes a
   round of real work. See the Alerts section below for the design decisions.
 
 ## Source files
@@ -171,11 +173,14 @@ Details that matter:
   reporting stays honest. There is no debounce; polling agents notify once at
   the end.
 
-## Alerts: the automatic notification path (opencode only)
+## Alerts: the automatic notification path (opencode and the Claude Code plugin regime)
 
 `src/alerts.ts` holds an in-memory state machine per session. The plugin
 runtime (the adapter feeds it the event stream) drives it
-from the shared `onEvent` hook; delivery reuses `sendNotification` with the
+from the shared `onEvent` hook; on the Claude Code plugin regime, the mod
+forwards turn/tool/permission events to the bundled server's
+`plugin_lifecycle`, which feeds the same classifier; delivery reuses
+`sendNotification` with the
 `alerts` config section choosing the channel per event (`alertMode`, default
 `banner`). Voice and sound come from `alertVoice` (`src/config.ts`): the
 user's configured `notifications.voice` / `notifications.sound` apply to

@@ -151,23 +151,26 @@ sessions.
 ## Claude Code and Cursor
 
 Chat works from Claude Code and Cursor through the same MCP server and the
-same shared directory. The seven tools are identical on every host; two
+same shared directory. The chat tools are identical on every host; two
 things differ.
 
 **Identity comes from the hook.** Claude Code and Cursor pass no session
 context to MCP tool calls, so the thatch hook anchors identity instead. It
 registers the conversation under a stable id derived from the host's
 session id, and prints `you are NAME (unread count)` at session start and
-on every prompt. The model passes that name as the `as` argument on the
-chat tools. Without the hook (MCP registered by hand, hooks removed), the
+on every prompt. (On the Claude Code plugin regime the in-process mod does
+this instead: it passes the session id to the bundled server with every
+prompt, and the chat line rides the injected context.) The model passes
+that name as the `as` argument on the chat tools. Without the hook (MCP registered by hand, hooks removed), the
 model can still join: `chat_register` with no arguments mints a fresh
 identity for the conversation, and the model uses the returned name from
 there. That identity does not survive a compacted context - re-register
 then, or prefer the hooked path.
 
-**Delivery model.** Only opencode can start a turn when mail arrives
-while you are away. The other hosts surface mail at their hook points,
-and both wake the agent when a turn ends:
+**Delivery model.** opencode and Claude Code's plugin regime can start a
+turn when mail arrives while you are away (the chat-wake poller). The
+other paths surface mail at their hook points, and both wake the agent
+when a turn ends:
 
 - **Cursor** checks the mailbox when a turn ends (the `stop` hook): unread
   mail is auto-submitted as a follow-up message, so the agent reads it
@@ -327,12 +330,14 @@ construction. Three mitigations:
 
 ## Requirements and limitations
 
-- **Idle wake (starting a turn with nobody at the keyboard) is opencode
-  only.** The chat tools work everywhere (other hosts declare their
-  identity with `as`). Cursor and Claude Code additionally wake the agent
-  when a turn ends with mail unread (the `stop`/`Stop` hooks); Claude
-  Code also announces mail at startup and resume, and both see pending
-  mail at prompt time (the flush-tools hook line, or `chat_status`).
+- **Idle wake (starting a turn with nobody at the keyboard) needs a
+  poller.** opencode has one, and so does Claude Code under the plugin
+  regime (the mod's timer). The chat tools work everywhere (other hosts
+  declare their identity with `as`). Cursor and the Claude Code hooks
+  regime wake the agent when a turn ends with mail unread (the
+  `stop`/`Stop` hooks); Claude Code also announces mail at startup and
+  resume, and all paths see pending mail at prompt time (the flush-tools
+  hook line or the injected chat line, or `chat_status`).
 - **Same machine only.** The directory and inbox live in thatch's local
   database. There is no network relay.
 - **Opt-in.** Unregistered sessions cannot be messaged and cannot send.

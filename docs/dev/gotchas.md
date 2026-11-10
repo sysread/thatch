@@ -110,6 +110,10 @@ here first. These are the things that have already cost time.
 
 ## Hooks (Claude Code / Cursor)
 
+These apply to the hooks regime and Cursor. The Claude Code plugin regime
+runs no settings hooks: the mod delivers in-process (the stage replaces
+`flush-tools`, the buffer push replaces `buffer-batch`/`buffer-tool`).
+
 - **`PostToolBatch`/`postToolUse` must be silent** (no stdout). The agent loop
   must not block on a payload that should be invisible until the next prompt.
   Only `flush-tools` prints.

@@ -127,7 +127,7 @@ later — land below that floor and accumulate. The dedup pass finds them:
   write time instead of duplicated.
 - The co-fire refinement (behavioral evidence layered onto this method once
   fire tracking exists) is designed in
-  [../../plans/prediction-consolidation.md](../../plans/prediction-consolidation.md).
+  docs/plans/prediction-consolidation.md.
 
 ### Auto-fire (opencode: `chat.message` hook)
 

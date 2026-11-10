@@ -187,9 +187,11 @@ restarts:
 
 ## Requirements and limitations
 
-- **opencode only.** MCP hosts (Claude Code, Cursor) have no way for a
-  plugin to start a conversation turn, so the watch tools are not
-  available there.
+- **opencode and the Claude Code plugin regime.** The watch tools need a
+  poller and a way to start a conversation turn. opencode's plugin has
+  both; on the Claude Code plugin regime the mod's timer polls and starts
+  the turn. The hooks regime and Cursor have neither, so the watch tools
+  are not available there.
 - **Requires the `gh` CLI** to be installed and authenticated for PR
   and branch watches. Watch creation reports a clear error if it is
   not. Command watches need only `bash`, not `gh`.

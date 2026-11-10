@@ -31,7 +31,7 @@ description: Extract durable project facts ... Use when ...
 
 ## The skills
 
-**Shared** — installed everywhere; no sub-agents required:
+**Shared** — installed everywhere:
 
 | Skill | Role |
 |-------|------|
@@ -53,6 +53,7 @@ description: Extract durable project facts ... Use when ...
 | `thatch-review-context` | Gather project/feature context (PR descriptions, git archaeology, ticket references, linked docs/tickets followed from the change, memory) before fan-out. Prevents false positives about intentionally deferred work, and checks whether main moved past the merge-base touching the same paths (staleness signal for the synthesizer). Also fetches prior review comments on a connected PR/MR for follow-up-round detection and builds a register with preliminary addressed-check status per comment. Also discovers related PRs (stacks chained through base branches, release trains ordered by tracker relations) and builds a sibling register with targeted consistency verdicts. |
 | `thatch-code-archaeology` | Investigate an existing feature, debug an unfamiliar area, or begin a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features, skeletons) before proposing changes. The research skill; pair with `thatch-coding-workflow`. |
 | `thatch-review-followup` | Alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review round adequately addressed your prior findings, offers to reply on resolved items, then optionally re-runs the full structured review. |
+| `thatch-code-review` | The review coordinator. Resolves the review target (incl. VCS detection and connected PR/MR lookup for follow-up round detection), gathers project context, researches affected workflows, estimates complexity, partitions, dispatches the review specialists in parallel (the Task tool, named `Agent` on Claude Code; flat, depth-1 dispatch every sub-agent-capable host supports), synthesizes with a workflow-change preface, prior-comment cross-reference, and sibling-register cross-reference. Also the machinery behind the `/thatch/self-review` and `/thatch/peer-review` mode commands. |
 | `thatch-change-walkthrough` | Explain a change to the user as a teaching walkthrough: resolve the delta, research each affected workflow at the merge-base, teach current behavior, then overlay the modifications with file:line citations and analogies. |
 | `thatch-code-walkthrough` | Explain a feature, module, or workflow to the user as a teaching walkthrough: identify the code area (optionally from a branch or PR), research how it works, teach it with file:line citations and analogies, list the key files. |
 | `thatch-session-reflection` | End-of-session memory recording (project, user, tools, self). |
@@ -76,11 +77,20 @@ description: Extract durable project facts ... Use when ...
 | `thatch-knowledge-export` | Compile everything thatch knows about a topic into a curated markdown file for knowledge transfer. Searches across stores, curates out personal noise, fact-checks code-related memories via `thatch-memory-verify`. |
 | `thatch-clear-writing` | Prose rules for any human-facing text not covered by a dedicated writing skill: PR and ticket comments, documentation, plans, reports, chat replies, and code comments. Clarity over compression; dedicated skills win when loaded. |
 
-**opencode-only** — the coordinator needs sub-agent support:
+**opencode-only** — it drives the v2 session-tab rpc bridge, which no other
+host has:
 
 | Skill | Role |
 |-------|------|
-| `thatch-code-review` | Resolve review target (incl. VCS detection and connected PR/MR lookup for follow-up round detection), gather project context, research affected workflows, estimate complexity, partition, dispatch the review specialists in parallel, synthesize with a workflow-change preface, prior-comment cross-reference, and sibling-register cross-reference. Also the machinery behind the `/thatch/self-review` and `/thatch/peer-review` mode commands, which run it with a weighting overlay (inline, without sub-agents, on hosts that lack the coordinator). |
+| `thatch-coordination` | Supervisor workflow for subordinate LLM sessions: dispatch with `thatch_session_tab`, track each subordinate in the task list, supervise over cross-session chat, verify before declaring done. The one opencode-only skill, for a named reason - no other host has session tabs to drive. |
+
+## Repo-local QA skills
+
+One skill never ships in any install set: `thatch-plugin-qa`
+(`QA_LOCAL_SKILLS` in `src/skills.ts`). It is tracked in THIS repo's
+`.claude/skills/` and runs the Claude-plugin QA pin checklists (see
+tests/qa/README.md). Stale cleanup exempts it by name, so a setup run
+inside the thatch checkout cannot delete it mid-QA (it did once).
 
 ## REVIEW_COMMON
 
@@ -120,7 +130,7 @@ The synthesizer reuses the same verification rigor but has its own structure
 
 ```ts
 const SHARED_SKILLS: SkillDef[] = [ /* all shared skills above */ ];
-const OPENCODE_ONLY_SKILLS: SkillDef[] = [ /* code-review coordinator */ ];
+const OPENCODE_ONLY_SKILLS: SkillDef[] = [ /* thatch-coordination */ ];
 ```
 
 `installSkills(skillsDir, skills?)` defaults to `SHARED_SKILLS`. The opencode
@@ -152,15 +162,15 @@ and `--cursor` pass only the shared set.
 ## Adding a skill
 
 1. Write `artifacts/skills/thatch-<name>.md` with YAML frontmatter. If it's a problem-finding review specialist, include `${REVIEW_COMMON}` (interpolated from `artifacts/skills/common.md`). The technique and highlights specialists do not use REVIEW_COMMON — technique reports informational notes and highlights finds positive things, so the problem-finding framework does not apply to either.
-2. Add the skill name to the `names` array in `loadSharedSkills()` (or `loadOpencodeOnlySkills()` if sub-agents are needed). The loader in `src/skills.ts` reads `.md` files at init.
+2. Add the skill name to the `names` array in `loadSharedSkills()` (or `loadOpencodeOnlySkills()` if the skill drives opencode-only surfaces, like session tabs). The loader in `src/skills.ts` reads `.md` files at init.
 3. If the skill name appears in a tool's workflow (e.g. `thatch-fact-extractor`), update `src/prompts.ts`.
 4. Run `mise run check` — tests verify counts; `installSkills` picks up new files on next init.
 
 ## Memory review skills in practice
 
 - **Quick single lens**: load any specialist directly and point it at a branch.
-- **Full review on opencode**: load `thatch-code-review` — it gathers project context, researches affected workflows, dispatches all review specialists in parallel (with both the context brief and workflow guide injected into each briefing), then synthesizes a report that starts with the workflow changes before findings.
-- **Full review on Claude Code/Cursor**: run each specialist in sequence, then
+- **Full review**: load `thatch-code-review` — it gathers project context, researches affected workflows, dispatches all review specialists in parallel (with both the context brief and workflow guide injected into each briefing), then synthesizes a report that starts with the workflow changes before findings. It works on every host: the dispatch is flat, and Claude Code names the dispatch tool `Agent`.
+- **Without the coordinator**: run each specialist in sequence, then
   run `thatch-review-synthesizer` to verify and aggregate.
 - **Presenting findings to the user**: when the reviewed work is another
   author's (peer review), load `thatch-review-adjudicate` after synthesis. It
@@ -178,5 +188,6 @@ and `--cursor` pass only the shared set.
   replies, and posts a top-level summary comment. Works on all hosts (no
   sub-agents required).
 
-The coordinator is the only skill that can't be used without sub-agents; that's
-why it lives in `OPENCODE_ONLY_SKILLS`.
+`thatch-coordination` is the only skill fenced to one host, and the fence is
+the session-tab bridge - not sub-agent support (flat dispatch works
+everywhere).

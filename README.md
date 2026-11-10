@@ -78,14 +78,14 @@ The embedding model downloads once at first use and is cached per user
 
 ## What you get
 
-- **Memory** -- save, search, and recall knowledge across sessions with local embeddings and SQLite; one store per project plus a shared global store.
+- **Memory** -- save, search, and recall knowledge across sessions with local embeddings and SQLite; one store per project plus a shared global store. Deleting is guarded: a tombstone holds any re-save of deleted content until you clear it (`thatch tombstones`).
 - **Prediction engine** -- a statistical model of your decision-making preferences; strong predictions apply silently, ambiguous ones surface.
 - **Behavior engine** -- the agent codifies its own operational rules ("when X, I do Y") that auto-fire in similar situations.
 - **Extraction** -- durable facts are pulled from the session's tool activity automatically; nobody has to remember to save.
 - **Conversation search** -- search past opencode conversations by substring or regex and retrieve full messages, including complete tool inputs and outputs; also available as CLI subcommands (`thatch session list/get/transcript/search`) with JSONL output built for `jq`.
 - **Cross-session chat** -- your agent sessions message each other under assigned, never-reused names; idle sessions get woken by agent mail, while a terminal broadcast (`thatch chat broadcast`) wakes only sessions with an open tab and leaves the rest to read at their next prompt; mail is framed as untrusted content.
 - **Watchers** -- the agent watches a GitHub PR, a branch, or a local command and gets prompted when something happens; notifications carry pointers, never external content.
-- **Slash commands** -- `/thatch/defrag`, `/thatch/extract`, `/thatch/hygiene`, `/thatch/reflect`, `/thatch/refine`, `/thatch/self-review`, `/thatch/peer-review`, `/thatch/whois`, and the wrap-ups `/thatch/compact` and `/thatch/exit` (a pre-flight checklist before compaction or exit); see the [user guide](https://github.com/sysread/thatch/wiki/Guide%3A-Overview).
+- **Slash commands** -- `/thatch/defrag`, `/thatch/extract`, `/thatch/hygiene`, `/thatch/reflect`, `/thatch/refine`, `/thatch/self-review`, `/thatch/peer-review`, `/thatch/whois`, `/thatch/bug-intake`, and the wrap-ups `/thatch/compact` and `/thatch/exit` (a pre-flight checklist before compaction or exit); see the [user guide](https://github.com/sysread/thatch/wiki/Guide%3A-Overview).
 - **Notifications** -- desktop banner and spoken voice on macOS and Linux, plus automatic alerts when the LLM pauses for your input or finishes real work; tune it all in a hand-editable config file the agent manages for you.
 - **Skills** -- memory workflows, multi-specialist code review, plan refinement with evidence and consistency audits, bug-report intake, walkthroughs, knowledge export, and writing tasks.
 

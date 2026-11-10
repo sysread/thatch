@@ -12,8 +12,11 @@ resolution fit together.
 
 ## What it does
 
-- `thatch setup --claude` --- installs MCP config, CLAUDE.md instructions,
-  hooks, and skills for Claude Code
+- `thatch setup --claude` --- installs the plugin regime by default on
+  current Claude Code (2.1.287+, the mods floor): generates the plugin
+  directory (manifest + bundled MCP server + mod) and deactivates the
+  fallback's delivery writers; `--hooks` opts out to the classic regime
+  (MCP config, CLAUDE.md instructions, hooks); both install skills
 - `thatch setup --cursor` --- installs MCP config, AGENTS.md instructions,
   hooks, and skills for Cursor
 - `--global` flag --- installs to user-scoped config dirs instead of

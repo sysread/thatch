@@ -60,12 +60,14 @@ const sharedChecklist = `1. Flush pending persistence. Call thatch_get_extractio
 
 /**
  * How the review-mode commands (peer-review, self-review) run the code
- * review machinery on the host at hand. opencode has the
- * thatch-code-review coordinator skill and sub-agent dispatch; Claude Code
- * and Cursor have neither, so the same procedure runs inline through the
- * shared specialist skills. The mode overlay that differentiates the two
+ * review machinery on the host at hand. The coordinator skill is shared
+ * and dispatches sub-agents flat (the Task tool, named Agent on Claude
+ * Code); the couching prefers it when available and falls back to the
+ * same procedure run inline through the shared specialist skills for
+ * hosts without it. The mode overlay that differentiates the two
  * commands lives in each command's artifact and applies in both paths:
- * sub-agent briefings on opencode, specialist passes inline elsewhere.
+ * sub-agent briefings where the coordinator drives, specialist passes
+ * inline elsewhere.
  *
  * Both couchings are spliced into the two artifacts at load so the commands'
  * procedure and target resolution cannot drift; each artifact keeps only its

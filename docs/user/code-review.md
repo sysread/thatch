@@ -6,7 +6,7 @@ deduplicates their findings into a single report.
 
 ## How it works
 
-The coordinator skill (`thatch-code-review`, opencode-only) orchestrates
+The coordinator skill (`thatch-code-review`) orchestrates
 the review:
 
 1. **Resolve the target**: fetch origin, compute merge-base against
@@ -91,9 +91,10 @@ whose work is under review.
   the same loop, and finally a staged draft review that you submit -
   the agent never submits it for you.
 
-Both commands work on every host. On opencode they drive the
-coordinator with sub-agents. On Claude Code and Cursor the same
-procedure runs the specialists inline, in sequence.
+Both commands work on every host. Where the coordinator is installed
+they drive it with sub-agents (opencode, Claude Code, and Cursor can all
+dispatch sub-agents flat). Where it is not, the same procedure runs the
+specialists inline, in sequence.
 
 ## Follow-up rounds
 
@@ -121,9 +122,9 @@ clarity and slop check before the summary comment is posted.
 
 ## Limitations
 
-- The coordinator (`thatch-code-review`) is opencode-only. It
-  requires sub-agent support to dispatch parallel specialists. On
-  Claude Code or Cursor, run specialists individually instead; the
+- The coordinator (`thatch-code-review`) is shared and dispatches
+  sub-agents flat, which every supported host can do. Where it is not
+  installed, run specialists individually instead; the
   `/thatch/self-review` and `/thatch/peer-review` commands package
   exactly that inline sequence, with a mode overlay on top.
 - The review quality depends on the model. Weak models may

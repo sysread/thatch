@@ -271,7 +271,10 @@ runs it in a dedicated session focused on project investigation.
 Run once per host (or per harness) to install thatch:
 
 ```bash
-thatch setup --claude [--cursor] [--local|--global]  # install config + instructions + hooks + skills
+thatch setup --claude [--local|--global]      # the plugin regime (Claude Code's default; --hooks opts out)
+thatch setup --claude --hooks [--local|--global]  # the hooks regime: config + instructions + hooks + skills
+thatch setup --claude --plugin [--local|--global]  # force the plugin regime (re-generate the plugin dir)
+thatch setup --cursor [--local|--global]      # Cursor: MCP server + hooks + skills
 thatch setup --claude --skills-only             # refresh just the skill files
 thatch setup --skills-only <dir>                # install skills to any directory
 thatch setup --commands-only <dir>              # install command files to any directory
@@ -300,7 +303,6 @@ process; the registry itself is `src/env-knobs.ts`.
 | Variable | Default | What it controls |
 |----------|---------|-----------------|
 | `THATCH_DB_PATH` | `~/.config/thatch/thatch.db` | SQLite database path |
-
 | `THATCH_MODEL` | `Xenova/bge-small-en-v1.5` | Embedding model name |
 | `THATCH_RECALL_THRESHOLD` | `0.55` | Cosine threshold for recall nudge |
 | `THATCH_PREDICTION_THRESHOLD` | `0.60` | Cosine threshold for prediction auto-fire |

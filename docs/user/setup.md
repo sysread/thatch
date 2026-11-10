@@ -30,7 +30,8 @@ export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
 ```
 
 Without this env var, extraction still works. The child session runs
-synchronously instead of asynchronously (blocks the turn briefly).
+fire-and-forget instead of in the background (the parent is already
+idle, so nothing waits on it).
 Put it in your shell rc, `mise.toml [env]`, or `.envrc`.
 
 ### Local development
@@ -96,6 +97,10 @@ user-message section, body) that work without thatch managing them:
 thatch setup --commands-only <dir>   # writes <dir>/thatch/<name>.md
 ```
 
+The `thatch/` subdirectory preserves the `/thatch/` invocation
+namespace. On Claude Code and Cursor, run a full `--claude`/`--cursor`
+setup instead - it installs commands with the host's tool spelling.
+
 ### The plugin regime (the default for current Claude Code)
 
 ```bash
@@ -122,10 +127,6 @@ claude is installed yet (a fresh install gets a current one). Pass
 plugin regime explicitly - the same run as the default, useful for
 re-generating the plugin directory after editing the checkout.
 
-The `thatch/` subdirectory preserves the `/thatch/` invocation
-namespace. On Claude Code and Cursor, run a full `--claude`/`--cursor`
-setup instead - it installs commands with the host's tool spelling.
-
 `bun` must be on PATH (the thatch binary runs under bun). Setup is
 idempotent. Re-running it updates drifted content without clobbering
 unrelated config, and reports what it did: the skills directory plus
@@ -137,8 +138,10 @@ example, `~/.claude/skills/` copies left over from before a repo moved
 to project-local skills), setup prints a note naming that directory.
 It never touches the other scope.
 
-For a global install, setup prints the `claude mcp add --scope user`
-command to run instead of writing a project `.mcp.json`.
+For a global install in the hooks regime, setup prints the
+`claude mcp add --scope user` command to run instead of writing a
+project `.mcp.json`. The plugin regime needs no MCP registration at
+any scope - the server is bundled in the generated plugin.
 
 ## Cursor
 
@@ -199,7 +202,6 @@ process; the registry itself is `src/env-knobs.ts`.
 | Variable | Default | What it controls |
 |----------|---------|-----------------|
 | `THATCH_DB_PATH` | `~/.config/thatch/thatch.db` | SQLite database path |
-
 | `THATCH_MODEL` | `Xenova/bge-small-en-v1.5` | Hugging Face model name for embeddings |
 | `THATCH_EMBEDDING_BACKEND` | `wasm` | Set to `native` to run embeddings on onnxruntime-node (NAPI) instead of the wasm runtime |
 | `THATCH_MODEL_CACHE` | platform per-user cache dir | Where downloaded model files are stored |

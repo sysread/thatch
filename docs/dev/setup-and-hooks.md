@@ -28,7 +28,9 @@ The plugin targets opencode 2.x through the promise-context domains
 | cleanup (from `setup`) | — | Closes the DB; idempotent for plugin reloads. |
 
 Skills install to `$XDG_CONFIG_HOME/opencode/skills` at plugin init — shared
-**and** opencode-only (the coordinator needs sub-agents).
+**and** opencode-only (`thatch-coordination` drives the v2 session-tab
+bridge; the code-review coordinator is shared and dispatches sub-agents
+flat, which every host supports).
 
 Direct extraction is the primary path for opencode: when a parent session goes
 idle with pending tool interactions, the event pump creates a child session
@@ -43,7 +45,11 @@ the TUI is not connected (headless mode).
 
 ## Claude Code (MCP server + hooks)
 
-`thatch setup --claude` (project-local) or `thatch setup --claude --global`.
+The hooks regime - Claude Code's fallback for pre-mods builds (older than
+2.1.287) and enterprise policies that disable mods. The default for current
+Claude Code is the plugin regime (see [features/setup.md](features/setup.md)).
+Install with `thatch setup --claude --hooks` (project-local) or
+`thatch setup --claude --hooks --global`.
 
 ### Artifacts written (Claude Code)
 

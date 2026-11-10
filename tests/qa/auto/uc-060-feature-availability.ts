@@ -7,9 +7,10 @@ import { registerUseCase, type UseCase, type QaContext } from "../runner";
  * UC-060: Feature availability by host.
  *
  * Automatable: yes — skill dir inspection after setup. The code-review
- * coordinator skill (thatch-code-review) is only installed for opencode
- * (which has sub-agent support). MCP hosts (Claude Code, Cursor) get
- * SHARED_SKILLS only (40 skills, no coordinator).
+ * coordinator skill (thatch-code-review) is SHARED (flat sub-agent
+ * dispatch works on every host); thatch-coordination is the one
+ * opencode-only skill (it drives the v2 session-tab bridge). MCP hosts
+ * (Claude Code, Cursor) get SHARED_SKILLS only.
  */
 
 const useCase: UseCase = {
@@ -24,8 +25,8 @@ const useCase: UseCase = {
     "3. Check whether thatch-code-review appears in each directory.",
   ].join("\n"),
   expected: [
-    "- Claude Code: 40 thatch-* skill directories present. thatch-code-review is absent.",
-    "- Cursor: 40 thatch-* skill directories present. thatch-code-review is absent.",
+    "- Claude Code: 42 thatch-* skill directories present (the repo's tracked thatch-plugin-qa rides along). thatch-code-review is present (it is shared).",
+    "- Cursor: 41 thatch-* skill directories present. thatch-code-review is present (it is shared).",
     "- opencode: 42 thatch-* skill directories present. thatch-code-review and thatch-coordination are present (fixture fidelity is what uc-014 checks).",
   ].join("\n"),
 

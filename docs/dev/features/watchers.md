@@ -18,7 +18,9 @@ User-facing behavior is documented in [docs/user/watchers.md](../../user/watcher
 
 - `thatch_watch_create` (PRs) / `thatch_watch_branch_create` (branches) /
   `thatch_watch_command_create` (commands) / `thatch_watch_list` /
-  `thatch_watch_cancel` tools (all opencode-only)
+  `thatch_watch_cancel` tools (opencode's plugin; the Claude Code plugin
+  regime's bundled server serves them too, with the mod's timer as the
+  poller)
 - A background poller in the plugin process diffs each watcher's target
   against its last-seen state
 - Delivery prompts the session with a synthetic part - the same
@@ -308,9 +310,10 @@ src/watchers.ts, test-enforced).
 - Session lifecycle ([session-lifecycle.md](session-lifecycle.md)):
   `session.status` feeds the delivery gate; `session.deleted`
   cancels watchers.
-- Multi-host ([multi-host.md](multi-host.md)): opencode-only. MCP
-  hosts have no poller, no event bus, and no channel to start a turn
-  proactively. A future CLI daemon could close this gap.
+- Multi-host ([multi-host.md](multi-host.md)): opencode and the Claude Code
+  plugin regime. The hooks regime and Cursor
+  have no poller, no event bus, and no channel to start a turn
+  proactively. A future CLI daemon could close that gap.
 
 ## Configuration
 

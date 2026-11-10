@@ -36,7 +36,7 @@ not at plugin-load time.
 ### The capability seam
 
 `HostCapabilities` (src/capabilities.ts) is the interface of host
-operations the shared runtime needs - 11 members, all implemented over
+operations the shared runtime needs - all implemented over
 the v2 promise context by `buildCapabilities` (src/opencode/v2.ts). It is
 the lifecycle-level sibling of `CoreContext` (src/tool-defs.ts, the
 per-tool-call seam); they stay separate on purpose. This table is the

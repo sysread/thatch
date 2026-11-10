@@ -75,14 +75,19 @@ See [../skills.md](../skills.md) for the skill system.
 - TUI toast notifications---best-effort, silently ignored in headless mode
 - Direct extraction via child sessions (see [session-lifecycle.md](session-lifecycle.md))
 - Compaction recovery (see [compaction-recovery.md](compaction-recovery.md))
-- Background sub-agents (experimental)---the code-review coordinator dispatches
-  specialist sub-agents through opencode's agent infrastructure
+- Background sub-agents (experimental)---extraction child sessions can run
+  asynchronously instead of fire-and-forget (the env var in
+  [../../user/setup.md](../../user/setup.md))
 
 ### Claude Code MCP server (`src/mcp.ts`)
 
-Runs as a stdio JSON-RPC 2.0 process spawned by Claude Code. The MCP server
-exposes tools via `tools/list` and `tools/call`. It is long-lived for the
-session duration, keeping the embedding model warm in memory.
+Claude Code's DEFAULT integration is the plugin regime: an in-process mod
+(`src/claude-plugin/`) plus this same server bundled inside the plugin
+(`thatch mcp --bundled` - see [setup.md](setup.md) for the regime story).
+This section describes the STANDALONE server the hooks regime and Cursor
+spawn. Runs as a stdio JSON-RPC 2.0 process spawned by the host. The MCP
+server exposes tools via `tools/list` and `tools/call`. It is long-lived for
+the session duration, keeping the embedding model warm in memory.
 
 **System prompt**: static text appended to `CLAUDE.md` by
 `thatch setup --claude`. The text is written between marker constants
@@ -203,14 +208,16 @@ behavior, with some features having no MCP counterpart.
 | Direct extraction (child sessions) | Yes | No | No |
 | Compaction recovery | Yes | No | No |
 | TUI toast notifications | Yes | No | No |
-| Sideband socket | No (in-process) | Yes | Yes |
-| code-review coordinator skill | Yes | No | No |
+| Sideband socket | No (in-process) | Hooks regime: Yes (plugin regime: in-process) | Yes |
+| code-review coordinator skill | Yes | Yes | Yes |
+| Wrap-up commands (`/thatch/compact`, `/thatch/exit`) | Yes | Yes (plugin regime; exit notifies instead of closing) | No |
+| Automatic LLM alerts | Yes | Yes (plugin regime) | No |
 | Background sub-agents | Yes (experimental) | No | No |
 | Tool batching | N/A (in-process) | PostToolBatch (batch) | postToolUse (per-tool) |
 | `get_session_info` (session identity) | Yes | No | No |
 | `session_search` / `session_get` (conversation archaeology) | Yes (tools) | CLI only (`thatch session ...`) | CLI only (`thatch session ...`) |
-| `watch_*` (PR, branch, and command watchers) | Yes (tools) | No | No |
-| `chat_*` (cross-session chat) | Yes (wake on delivery) | Yes (mail at prompt time) | Yes (mail at prompt time) |
+| `watch_*` (PR, branch, and command watchers) | Yes (tools) | Yes (plugin regime; fenced under hooks) | No |
+| `chat_*` (cross-session chat) | Yes (wake on delivery) | Yes (wake under the plugin regime; mail at prompt time under hooks) | Yes (mail at prompt time) |
 
 For the full parity matrix, see [../mcp-parity.md](../mcp-parity.md).
 
@@ -252,7 +259,8 @@ works on Claude Code and Cursor).
 | `src/index.ts` | plugin entry (default export `{ id, setup }`) |
 | `src/opencode/v2.ts` | the host adapter: promise-context domains (tools, commands, hooks, event pump), HostCapabilities implementation |
 | `src/runtime.ts` | shared plugin runtime: nudges, system prompt injection, session events |
-| `src/mcp.ts` | MCP server (shared by Claude Code and Cursor)---stdio JSON-RPC, tool dispatch |
+| `src/mcp.ts` | MCP server (standalone for the hooks regime and Cursor; bundled for the Claude Code plugin regime)---stdio JSON-RPC, tool dispatch |
+| `src/claude-plugin/` | The Claude Code plugin regime's mod: `mod.ts` (the node-free decision logic: prompt.submit staging, registrations, the wake/watch poller) and `lifecycle.ts` (event classification: alerts, wrap-up arming/greenlight, buffer push) |
 | `src/setup.ts` | Setup installer for Claude Code and Cursor---markers, hooks, skills |
 | `src/prompts.ts` | All three system prompt variants---`systemPrompt()`, `claudeInstructions()`, `cursorInstructions()` |
 | `src/tool-defs.ts` | Single source of truth for all tool definitions---name, description, zod schema, execute, `opencodeOnly` flag |
@@ -260,8 +268,8 @@ works on Claude Code and Cursor).
 
 ## Key invariants
 
-- All hosts share the tool definitions from `src/tool-defs.ts` (shared tools plus opencode-only tools marked `opencodeOnly: true`, which the MCP server filters out). Adding a tool requires updating `TOOL_DEFS` and all three prompt functions; opencode-only tools go in the opencode prompt only.
+- All hosts share the tool definitions from `src/tool-defs.ts` (shared tools plus opencode-only tools marked `opencodeOnly: true`, which the standalone MCP server filters out - the bundled plugin-regime server serves the watch family, flagged `bundledServable`). Adding a tool requires updating `TOOL_DEFS` and all three prompt functions; opencode-only tools go in the opencode prompt only.
 - The MCP server always exposes bare names. The `mcp__thatch__` prefix is applied by the MCP client, not thatch.
 - The three system prompt variants are independent string constants in `src/prompts.ts` with no shared template. Editing shared prose in one requires mirroring in the other two, or they drift.
 - The tool list line in all three prompts must match `TOOL_DEFS` in `src/tool-defs.ts` (opencode's list includes opencode-only tools; the MCP lists exclude them). The historical failure mode: a tool is added to `TOOL_DEFS` but only two of three prompts are updated.
-- opencode-only features (direct extraction, compaction recovery, code-review coordinator, background sub-agents, TUI toasts, `get_session_info`, `exit`, `compact`, `session_search`/`session_get`, all watchers (PR, branch, and command), cross-session chat wake-up) have no MCP counterpart. The `thatch session` CLI subcommands work anywhere - they only need an opencode.db file to read.
+- opencode-only features (direct extraction, compaction recovery, background sub-agents, TUI toasts, `get_session_info`, `exit`/`compact` as MCP tools, `session_search`/`session_get`, the session-tab family) have no standalone-MCP counterpart; the watch family and chat wake-up are additionally served on the plugin regime's bundled server and mod. The `thatch session` CLI subcommands work anywhere - they only need an opencode.db file to read.

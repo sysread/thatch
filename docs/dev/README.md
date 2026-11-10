@@ -7,13 +7,18 @@ its hook surface and capability mapping are catalogued in [features/opencode-plu
 
 Thatch has three integration paths sharing a common core:
 
-1. **OpenCode plugin** — runs inside opencode's Bun runtime. Full access to
+1. **OpenCode plugin** — runs inside opencode's Bun runtime (opencode 2.1+,
+   v2 plugin API only). Full access to
    plugin hooks: system prompt injection, session events, tool buffering,
    compaction context.
-2. **Claude Code MCP server** — runs as a stdio JSON-RPC process. Tools
-   exposed via MCP; session behavior driven by Claude Code hooks.
-3. **Cursor MCP server** — same stdio MCP server as Claude Code; session
-   behavior driven by Cursor hooks in a flat `hooks.json` format.
+2. **Claude Code plugin regime** — the default for current Claude Code
+   (2.1.287+): an in-process mod (`src/claude-plugin/`) plus the MCP server
+   bundled in the generated plugin. The mod delivers context at each prompt,
+   runs the alert classifier and the chat-wake/watcher poller, and registers
+   the wrap-up commands; the bundled server holds all durable state.
+3. **Claude Code hooks + MCP, and Cursor MCP + hooks** — the fallback: a
+   standalone stdio MCP server plus settings hooks (Claude Code) or Cursor
+   hooks in a flat `hooks.json` format.
 
 For feature parity and gaps across the three, see [mcp-parity.md](mcp-parity.md).
 For the concrete files and hook events each host writes, see
@@ -69,16 +74,37 @@ OpenCode plugin path
 MCP server path
   ├── mcp.ts          → stdio JSON-RPC server: z.toJSONSchema() for tools/list,
   │                     z.object().parse() for validation, dispatches to tool-defs;
-  │                     opens sideband socket for warm-model match queries
+  │                     STANDALONE mode (hooks regime + Cursor) opens the sideband
+  │                     socket; BUNDLED mode (plugin regime) wires the stage,
+  │                     lifecycle, chat-wake, and watch-poll tools plus the
+  │                     watcher registry instead
+  ├── flush.ts        → the flush tiers (extraction peek/escalation, recall,
+  │                     prediction, behavior, write fallback) shared by the
+  │                     flush-tools hook command and the plugin regime's
+  │                     plugin_stage (computePluginStage)
   ├── sideband.ts     → Unix socket: SidebandServer (embed + search via warm model)
   │                     and sidebandMatch (thin client for hook processes)
-  ├── extract-queue.ts → file-backed JSONL queue (Claude Code + Cursor hooks)
-  └── setup.ts        → `thatch setup --claude` / `--cursor`: writes .mcp.json,
-                        CLAUDE.md / AGENTS.md, settings/hooks JSON, installs skills
+  ├── extract-queue.ts → file-backed JSONL queue (hooks regime + Cursor + the
+  │                     plugin regime's durable buffer)
+  └── setup.ts        → `thatch setup --claude` / `--cursor`: generates the
+                        plugin regime (the Claude Code default), or writes the
+                        hooks regime's .mcp.json, CLAUDE.md / AGENTS.md,
+                        settings/hooks JSON; installs skills
 
-bin/thatch             → CLI: stores|list|show|forget|search|remember|mcp|reminder|hygiene|
+Claude Code plugin path
+  └── claude-plugin/
+      ├── mod.ts      → the mod's decision logic (node-free by contract):
+      │                 prompt.submit staging, prompt.compose instructions,
+      │                 tool.call buffering forward, session.start
+      │                 registrations (wrap-up commands + greenlight tools),
+      │                 the chat-wake/watch poller timer
+      └── lifecycle.ts → event classification for the bundled server's
+                        plugin_lifecycle tool: alerts, wrap-up
+                        arming/greenlight, buffer push, session-end cleanup
+
+bin/thatch             → CLI: stores|list|show|forget|search|tombstones|remember|mcp|reminder|hygiene|
                         prime|buffer-batch|buffer-tool|flush-tools|flush-predictions|setup|
-                        session (archaeology)|chat (list|tail)
+                        session (archaeology)|chat (list|tail|broadcast)
 ```
 
 ## Module responsibilities
@@ -86,33 +112,36 @@ bin/thatch             → CLI: stores|list|show|forget|search|remember|mcp|remi
 | Module | Responsibility |
 |--------|---------------|
 | `tool-defs.ts` | **Single source of truth** for all tools. Each tool has a name, description, zod schema (args), and execute function. Framework-agnostic — neither opencode nor MCP specific. `buildCoreContext` constructs the shared per-call context. |
-| `mcp.ts` | Stdio JSON-RPC 2.0 server. Compiles zod schemas to JSON Schema via `z.toJSONSchema()` for `tools/list`. Validates args via `z.object().parse()` in `tools/call`. All logging to stderr (stdout is the transport). |
+| `mcp.ts` | Stdio JSON-RPC 2.0 server with two modes: standalone (hooks regime + Cursor - opens the sideband socket, runs auto-refresh and version-skew detection) and bundled (the plugin regime - serves the watch family and the plugin-internal stage/lifecycle/chat-wake/watch-poll tools, wires the DB-backed watcher registry, skips the sideband). Compiles zod schemas to JSON Schema via `z.toJSONSchema()` for `tools/list`. Validates args via `z.object().parse()` in `tools/call`. All logging to stderr (stdout is the transport). |
 | `index.ts` | OpenCode plugin entry: the default export `{ id, setup }` is the whole plugin surface (the host's module validator ignores named exports). The adapter is lazy-imported inside `setup`. |
 | `opencode/v2.ts` | The host adapter. Registers through the promise-context domains (ToolEditor, session.hook, event.subscribe, CommandEditor) and implements HostCapabilities over the promise context. Wires the session-tab host flow (create -> move -> chat-register -> rpc emit -> prompt) through the `CoreContext.sessionTabHost` seam, plus the reopen flow (sessionGet + dead-directory guard -> tab-opened emit) behind the same seam. |
 | `opencode/tui-plugin.ts` | The TUI CLI plugin (the package's `./tui` entrypoint): listens for `rpc.thatch-tabs.tab-opened` and `rpc.thatch-tabs.tab-closed` events and opens/closes the subordinate session's tab via `ui.tabs.open`/`ui.tabs.close`. See [features/session-tabs.md](features/session-tabs.md). |
 | `capabilities.ts` | The `HostCapabilities` seam: the host operations the shared runtime needs (session create/prompt/get/list/enumerate/move/messages/delete, toast, compaction trigger, session close-out - the session's own tab). Implemented over the promise context in `opencode/v2.ts`. |
 | `runtime.ts` | Shared plugin runtime: wires DB, model, extraction; the nudge tiers, system prompt injection, session event handling, child-session bookkeeping, wrap-up resolution. Host-agnostic: consumed by the adapter. |
 | `os-args.ts` | Pure argv / OS-command-line helpers for startup session resolution (`-s`/`-c`). SDK-free. |
-| `setup.ts` | `thatch setup --claude` / `--cursor` installer. Writes MCP config (`.mcp.json` / `.cursor/mcp.json`), appends to CLAUDE.md / AGENTS.md (idempotent), installs hooks in settings.json / hooks.json, installs skills. |
+| `setup.ts` | `thatch setup --claude` / `--cursor` installer. For Claude Code the default is the plugin regime: generates the plugin directory (manifest + bundled-server entry + mod) and deactivates the fallback's delivery writers; `--hooks` installs the classic regime instead (MCP config `.mcp.json`, CLAUDE.md instructions, settings hooks). Cursor always gets the classic regime (`.cursor/mcp.json`, AGENTS.md, hooks.json). All paths install skills. |
 | `hygiene.ts` | Hygiene report: pending dedup pairs, stale count, orphaned branch memories. Shared by the plugin's session-start hook and the CLI's `thatch reminder` command. |
 | `git.ts` | Parse `owner/repo` from git remote. Worktree-safe fallback chain, plus recovery from the `repo_paths` cache when the directory is deleted, and the spawn-cwd fallback. See [features/repo-identity.md](features/repo-identity.md). |
 | `db.ts` | SQLite schema, CRUD for entries/stores, brute-force cosine search (`search` = pure scoring, `recall` = search + telemetry stamping), dedup-pair verdict tracking. Prediction tables: matchers, predictions, edges, provenance. `scorePredictionNudge` is the shared auto-fire entry point for both host paths. Behavior tables: same four-table shape (matchers, behaviors, edges, provenance) with `scoreBehaviorNudge` as the shared entry point. |
 | `embeddings.ts` | Lazy-load the embedding model. Expose `queryEmbed`/`passageEmbed` and the model `name` (stored as an informational tag). `MockEmbeddingModel` for tests. |
-| `extraction.ts` | Per-session in-memory ring buffer (cap 20) that buffers non-thatch tool interactions and serializes them into the JSON payload the `get_extraction_payload` tool returns. The in-memory pipeline is opencode-only, but the payload builders (`buildExtractionPayload`, `deriveTitle`) are shared by both paths — `extract-queue.ts` imports `deriveTitle`, `mcp.ts` imports `buildExtractionPayload` for the extraction payload provider. `summarizeArgs` is used internally by `buildExtractionPayload`. |
+| `extraction.ts` | Per-session in-memory ring buffer (cap 20) that buffers non-thatch tool interactions and serializes them into the JSON payload the `get_extraction_payload` tool returns. The in-memory pipeline is opencode-only, but the payload builders (`buildExtractionPayload`, `deriveTitle`) are shared by every path — `extract-queue.ts` imports `deriveTitle`, `mcp.ts` imports `buildExtractionPayload` for the extraction payload provider. `summarizeArgs` is used internally by `buildExtractionPayload`. |
 | `extract-queue.ts` | File-backed per-session JSONL queue (caps 20, oldest dropped). Shared by the Claude Code and Cursor hook paths, which fire one-shot per event with no cross-call state. This is the MCP-side equivalent of `extraction.ts`. |
 | `config.ts` | User config file (`~/.config/thatch/config.json`, beside the DB): Zod section schemas (strict — unknown keys fail validation), load with missing/invalid fallback to defaults, field-level merge, atomic save (temp + rename). Backs the `config_get`/`config_set` tools. |
 | `env-knobs.ts` | The registry of `THATCH_*` environment knobs (name, one-sentence description, default): the single source of truth for what the env layer tunes. `config_get`'s read-only `environment` section renders it with effective values read from `process.env` at call time; `config_set` refuses the section. A drift test (`tests/env-knobs.test.ts`) enforces the registry against the source tree in both directions. |
 | `notify.ts` | Out-of-band notification dispatch: darwin (`osascript` banner + `/usr/bin/say` voice), linux (`notify-send` + `spd-say`/`espeak`), other platforms report unsupported. Injectable spawner (`CoreContext.spawner`) so tests never fire real commands. Owns the default voice (`DEFAULT_VOICE`), the tone announcement prefixes (`applyTonePrefix`), and the 140-char spoken-line cap (`capSpokenLine`). Backs the `notify_user` tool and the alert state machine. |
-| `alerts.ts` | LLM alert state machine (opencode-only): pause/done/error decisions from session events, per-session dedup (no timer-based debounce - one alert per busy->idle transition, per request id for pauses). Fed by `runtime.ts`'s event hook; delivers through `notify.ts`. Plain memory by design (a reload loses at most one transition). See [features/notifications.md](features/notifications.md). |
+| `alerts.ts` | LLM alert state machine: pause/done/error decisions from session events, per-session dedup (no timer-based debounce - one alert per busy->idle transition, per request id for pauses). Fed by `runtime.ts`'s event hook (opencode) AND by the plugin regime's mod (its events forward through the bundled server's `plugin_lifecycle`); delivers through `notify.ts`. Plain memory by design (a reload loses at most one transition). See [features/notifications.md](features/notifications.md). |
 | `session-db.ts` | Read-only access to the opencode session database (opencode.db): session timeline (`session list`), full part/message retrieval (`session get`), OpenAI chat-completions transcript builder (`session transcript`), and decoded-content search (`session search`). Backs the `thatch session` CLI subcommands and the opencode-only `session_search`/`session_get` tools. Path resolution honors `OPENCODE_DB`, then the XDG default; the db opens read-only so a thatch bug cannot corrupt host history. |
-| `watchers.ts` | In-memory watcher registry and background poller for event-driven notifications (opencode-only). Three sources: GitHub PRs and branches via `gh api` (injected `GhRunner`), and local shell commands via `bash -c` (injected `CommandRunner`) run as condition variables - only the exit code is read, never the command's output. Diffs against last-seen state, queues events (pointer data plus machine status like check conclusions and exit codes, never external content) per session, and delivers them through a plugin-supplied callback when the session is idle. The `pollSeconds` getter surfaces the poll cadence to tool output and notifications. Process-lifetime state by design - no SQLite. |
-| `chat.ts` | Cross-session chat between opencode sessions on one machine (opencode-only). `ChatStore` holds the shared directory and inbox in SQLite so any process can read/write them; `ChatPoller` heartbeats hosted sessions and delivers wake prompts through an injected callback when the recipient is idle - only the recipient's host process delivers, so there is no cross-process double-delivery. Heartbeat staleness flags crashed sessions; a per-recipient nudge rate cap is the anti-loop hard brake. See [features/cross-session-chat.md](features/cross-session-chat.md). |
+| `watchers.ts` | Watcher registry and poller for event-driven notifications. Three sources: GitHub PRs and branches via `gh api` (injected `GhRunner`), and local shell commands via `bash -c` (injected `CommandRunner`) run as condition variables - only the exit code is read, never the command's output. Diffs against last-seen state, queues events (pointer data plus machine status like check conclusions and exit codes, never external content) per session, and delivers them through a plugin-supplied callback when the session is idle. The opencode plugin holds the registry in memory (process-lifetime state by design); the bundled plugin-regime server persists it through `runtime_state` so watches survive mod reloads. The `pollSeconds` getter surfaces the poll cadence to tool output and notifications. |
+| `chat.ts` | Cross-session chat between agent sessions on one machine (opencode, Claude Code, and Cursor). `ChatStore` holds the shared directory and inbox in SQLite so any process can read/write them; `ChatPoller` heartbeats hosted sessions and delivers wake prompts through an injected callback when the recipient is idle - opencode's poller and the Claude Code plugin regime's mod timer both wake; the hooks paths surface mail at their hook points. Heartbeat staleness flags crashed sessions; a per-recipient nudge rate cap is the anti-loop hard brake. See [features/cross-session-chat.md](features/cross-session-chat.md). |
 | `chat-names.ts` | The static display-name pool for the chat directory: whimsical geek-culture names in fnord's Nomenclater style, baked in so name assignment never costs a model call. The pool is the fallback base for registrations with no usable session title. |
 | `tab-state.ts` | Read-only open-tab reader for the chat roster: globs every opencode channel's `tabs.json` (global + cwd scopes), subtracts fresh confirmed tab closes, and composes the provider the roster surfaces and broadcast targeting consume. Degrades to an empty set - never a false OPEN. See [features/cross-session-chat.md](features/cross-session-chat.md). |
 | `sideband.ts` | Unix domain socket server + client. The MCP server (long-lived, warm model) runs `SidebandServer` so one-shot hook processes can ask it to embed a prompt and search for matches without loading the model themselves. Handles three methods: `match` (recall nudge), `predictions` (prediction auto-fire), and `behaviors` (behavior auto-fire). Socket path is a hash of the DB path — both processes compute it independently. |
 | `prompts.ts` | Text constants: opencode system prompt, compaction context, session-start reminder, prompt-aware recall nudge (`recallNudge` / `claudeRecallNudge`), prediction nudge (`predictionNudge`), behavior nudge (`behaviorNudge`), prediction verb selection (`predictionVerb`), watcher notification (`watcherNotificationNudge`), version warning (`versionWarningNudge`), chat wake notification (`chatNotificationNudge`), chat transcript echo text (`chatEchoText`), Claude Code CLAUDE.md instructions, Cursor AGENTS.md instructions, Claude Code hook text. Also the prompt cores (`defragCore`, `hygieneCore`, `reflectCore`, `extractionCore`) - host-agnostic behavior instruction bodies shared by nudges and `/thatch` commands, parameterized by a `ToolNamer` for per-host tool spellings. See [features/commands.md](features/commands.md). |
 | `commands.ts` | Slash-command registry and sync. Command bodies load from `artifacts/commands/<name>.md` templates (the same artifacts layout as skills); a `${...}` placeholder resolves at load - `${CORE:name}` for the nudge-backed prompt cores (defrag, extract, hygiene, reflect, so nudge and command wording cannot drift), `${COUCHING:...}` for the text shared by the review-mode commands (target and pipeline couchings), and `${CHECKLIST}` for the wrap-up scaffolding - and an unresolved placeholder throws instead of passing through. `actionDefs()` renders the actions; the wrap-ups (compact, exit) are not file-installed (they register in code through the CommandEditor) and their template bodies load through `wrapUpCommandContent` / `wrapUpCommandDescription`. Renderers produce full command files for opencode (`installOpencodeCommands`, action files only, synced by the plugin at init) and Claude Code (`installClaudeCommands`, synced by setup); `compilePrompts` in `mcp.ts` exposes the same actions as MCP prompts for Cursor. A parity-guard test pins the three sets to the documented exclusions. See [features/commands.md](features/commands.md). |
-| `skills.ts` | `SKILL.md` content for all thatch skills, plus the installer. Skills are split into `SHARED_SKILLS` (everything that works on all three hosts: the memory workflows, the review specialists — whose roster comes from `REVIEW_SPECIALISTS` in prompts.ts — plus the synthesizer, adjudicate, context, followup, and response skills, the walkthrough and archaeology skills, the refinement family, the writing skills, and verification/export) and `OPENCODE_ONLY_SKILLS` (the code-review coordinator and thatch-coordination — they need sub-agent support, so they are not installed for Claude Code or Cursor). `installSkills(dir, skills)` defaults to `SHARED_SKILLS`; the opencode plugin passes `[...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]`. |
+| `skills.ts` | `SKILL.md` content for all thatch skills, plus the installer. Skills are split into `SHARED_SKILLS` (everything that works on all three hosts: the memory workflows, the review specialists — whose roster comes from `REVIEW_SPECIALISTS` in prompts.ts — plus the coordinator, synthesizer, adjudicate, context, followup, and response skills, the walkthrough and archaeology skills, the refinement family, the writing skills, and verification/export) and `OPENCODE_ONLY_SKILLS` (just `thatch-coordination` — it drives the v2 session-tab bridge, which no other host has). `installSkills(dir, skills)` defaults to `SHARED_SKILLS`; the opencode plugin passes `[...SHARED_SKILLS, ...OPENCODE_ONLY_SKILLS]`. |
+| `claude-plugin/mod.ts` | The Claude Code plugin regime's mod decision logic (node-free by contract — the mods runtime allows no Node APIs). `prompt.submit` calls the bundled server's stage and injects the returned nudge text as context; `prompt.compose` injects the rendered one-template instructions; `session.start` registers the wrap-up commands and greenlight tools and arms the chat-wake/watch poller; every handler fails open so a broken pin never blocks the host. |
+| `claude-plugin/lifecycle.ts` | The mod's event classifier: turn/tool/permission events forward to the bundled server's `plugin_lifecycle` tool, which feeds the shared alerts state machine; wrap-up arm/greenlight state resolves at `turn.complete` (compact fires `$.session.compact`, exit reports safe-to-close); `session.end` (branched on reason) reports watcher death. |
+| `flush.ts` | The flush tiers — extraction peek/escalation, recall, prediction, behavior, write fallback — shared by the `flush-tools` hook command (hooks regime, via the sideband) and the plugin regime's `plugin_stage` (`computePluginStage`, in-process). |
 | `scoring-engine.ts` | Generic four-table scoring engine with Bayesian confidence. Shared base for prediction and behavior engines — each wraps it with table-specific names. |
 | `prediction.ts` | Thin wrapper around `ScoringEngine` with prediction-specific table names. |
 | `behavior.ts` | Thin wrapper around `ScoringEngine` with behavior-specific table names. |
@@ -161,8 +190,8 @@ Two of these hooks were dead for weeks because failures were invisible.
    `~/.cursor/skills/` for `--global`. Drifted content is overwritten
    on plugin init or re-running `thatch setup`. Skills are split into
    `SHARED_SKILLS` (work on all
-   three hosts) and `OPENCODE_ONLY_SKILLS` (require sub-agent support,
-   not installed for Claude Code or Cursor). The opencode plugin
+   three hosts) and `OPENCODE_ONLY_SKILLS` (just `thatch-coordination`,
+   which drives the v2 session-tab bridge). The opencode plugin
    installs both arrays; `thatch setup --claude` and `--cursor` install
    only shared.
 8. **Tool definitions are the single source of truth.** `tool-defs.ts` defines
@@ -284,10 +313,13 @@ toast notifications (opencode-only, TUI-rendered; the bridge's toast
   → behavior matches: `[thatch] N behaviors surfaced` (info variant,
      3s) — fires when chat.message matches codified behavior matchers
 
-prompt-aware recall nudge (both paths)
+prompt-aware recall nudge (every path)
   → opencode: chat.message hook embeds prompt text with warm in-process model,
     searches db.search([repo, global]), pushes nudge part if matches ≥ threshold
-  → Claude Code/Cursor: flush-tools connects to MCP server's sideband socket,
+  → plugin regime: prompt.submit calls the bundled server's plugin_stage
+    in-process (same tiers, no socket)
+  → hooks-regime Claude Code / Cursor: flush-tools connects to the standalone
+    MCP server's sideband socket,
     warm server embeds + searches, returns labels; hook prints nudge or falls
     back to write nudge if socket unavailable or no matches
   → threshold: THATCH_RECALL_THRESHOLD env (default 0.55) — lower than

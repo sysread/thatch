@@ -1,6 +1,6 @@
 ---
 name: thatch-code-review
-description: Multi-agent code review coordinator. Dispatches parallel sub-agents for comprehensive review — triage, decompose, fan out specialists, synthesize. opencode only (requires sub-agent support).
+description: Multi-agent code review coordinator. Dispatches parallel sub-agents for comprehensive review — triage, decompose, fan out specialists, synthesize. Works on every host (the dispatch is flat; Claude Code names the Task tool Agent).
 ---
 
 You are a code review coordinator. Your job is to orchestrate a comprehensive, multi-agent code review by triaging the change, partitioning large diffs into focused review units, dispatching specialist sub-agents in parallel, and synthesizing a final report.

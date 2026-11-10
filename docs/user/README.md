@@ -1,9 +1,11 @@
 # Thatch
 
-Persistent memory for AI coding agents. Thatch gives your agent the ability to
+Persistent memory and operational methodology for AI coding agents.
+Thatch gives your agent the ability to
 remember information across sessions using local embeddings and SQLite. It
-works with **OpenCode** (as a plugin), **Claude Code** (as an MCP server), and
-**Cursor** (as an MCP server).
+works with **OpenCode** (as a v2 plugin), **Claude Code** (as an in-process
+plugin by default, with an MCP-server-plus-hooks fallback), and **Cursor**
+(as an MCP server).
 
 ## Feature docs
 
@@ -29,7 +31,8 @@ This README is the overview. Each feature has its own guide:
 
 ### OpenCode
 
-Publish to npm and add thatch to your opencode config:
+Add thatch to your opencode config. Requires opencode 2.1 or newer;
+opencode v1 is not supported:
 
 ```jsonc
 // opencode.jsonc or opencode.json
@@ -61,17 +64,20 @@ place the thatch repo in `.opencode/plugins/` for auto-loading.
 
 ### Claude Code
 
-Install the MCP server, hooks, instructions, and skills into Claude Code:
+`thatch setup --claude` installs the plugin regime by default on current
+Claude Code (2.1.287 or newer, the mods floor): an in-process mod (context
+injection at each prompt, alerts, the chat wake poller, the wrap-up
+commands) plus the MCP server bundled in the plugin. `--hooks` opts out
+for older versions or enterprise policies that disable mods:
 
 ```bash
-thatch setup --claude            # project-local (writes .mcp.json, CLAUDE.md, .claude/)
-thatch setup --claude --global   # user-scoped (~/.claude/)
+thatch setup --claude                     # the plugin regime (the default)
+thatch setup --claude --hooks             # the hooks regime (the opt-out)
+thatch setup --claude --hooks --global    # the hooks regime, user-scoped (~/.claude/)
 ```
 
-`bun` must be on PATH (the thatch binary runs under bun). `setup` is idempotent.
-Re-running it updates drifted content without clobbering unrelated config.
-For a global install, `setup` prints the `claude mcp add --scope user` command
-to run instead of writing a project `.mcp.json`.
+See [setup.md](setup.md) for what each regime installs and how scopes
+work.
 
 ### Cursor
 
@@ -176,7 +182,7 @@ The same functionality is available on the command line as `thatch session
 list`, `thatch session get`, `thatch session transcript`, and `thatch session
 search` - JSONL output designed for piping to `jq` or `grep`.
 
-### Watcher tools (opencode only)
+### Watcher tools (opencode and the Claude Code plugin regime)
 
 | Tool | What it does |
 |------|-------------|
@@ -250,17 +256,20 @@ Beyond the tools, thatch hooks into opencode itself:
   notification (`[thatch] recalled 3 memories`, `[thatch] 2 predictions
   surfaced`, or `[thatch] 1 behavior surfaced`). The toast is ephemeral. It
   fades after a few seconds.
-- **Wrap-up commands.** `/thatch/compact` and `/thatch/exit` (opencode only)
+- **Wrap-up commands.** `/thatch/compact` and `/thatch/exit` (opencode and
+  the Claude Code plugin regime)
   run a pre-flight checklist before you compact or close a session: the agent
   flushes pending fact extraction, finishes any promised memory writes, and
   surfaces todos or follow-ups it never addressed. When the checklist is
   clean, the agent greenlights by calling the zero-arg tool for that
   command (`thatch_compact` or `thatch_exit`). Thatch watches for
   the greenlight and then runs the compaction or closes the session
-  (opencode 1 exits the whole app; opencode 2 closes the session's own tab.
+  (opencode closes the session's own tab; the Claude Code plugin regime
+  fires the host compaction, and its exit reports it is safe to close -
+  no mod API can close a session).
   Either way the session's watches are cancelled, and reopening or resuming
   the session does not re-arm them - re-create watches you still want with
-  `thatch_watch_create`). With items outstanding, the agent lists them and
+  `thatch_watch_create`. With items outstanding, the agent lists them and
   nothing fires -- you decide when to retry.
   Text typed
   after the command reaches the agent first, labeled as a `User Message`
@@ -270,7 +279,8 @@ Beyond the tools, thatch hooks into opencode itself:
   `/thatch/extract`, `/thatch/hygiene`, `/thatch/reflect`) whenever you
   want, not just when a nudge fires, plus the standalone commands: plan
   refinement (`/thatch/refine`), the review modes (`/thatch/self-review`,
-  `/thatch/peer-review`), and the chat identity report (`/thatch/whois`)
+  `/thatch/peer-review`), the bug-intake coordinator (`/thatch/bug-intake`),
+  and the chat identity report (`/thatch/whois`)
   -- see [commands.md](commands.md).
   A greenlit `/thatch/exit` also unregisters the session from the chat
   directory, so other sessions stop sending it mail. The commands
@@ -349,6 +359,7 @@ response, walkthrough, and workflow skills that support the review pipeline:
 | `thatch-code-archaeology` | Investigates an existing feature, debugs an unfamiliar area, or begins a new ticket. Explores the code base from multiple angles (data model, state flow, git history, sibling features, skeletons) before proposing changes. Pairs with `thatch-coding-workflow`. |
 | `thatch-review-followup` | Alternate entrypoint for follow-up review rounds. Verifies whether the author's responses and code changes since your last review adequately addressed your prior findings, offers to reply on resolved items, then optionally re-runs the full structured review. |
 | `thatch-review-response` | Author-side review response: triage findings on your own PR, fix bugs one by one, reply on each thread, post a top-level summary comment. |
+| `thatch-code-review` | Multi-agent review coordinator. Dispatches parallel sub-agents for triage, decomposition, specialist fan-out, and synthesis with a workflow-change preface (the Task tool, named `Agent` on Claude Code). Also the machinery behind the `/thatch/self-review` and `/thatch/peer-review` commands. |
 | `thatch-change-walkthrough` | Explains a change to the user as a teaching walkthrough: researches each affected workflow at the merge-base, teaches current behavior, then overlays the modifications with file:line citations. |
 | `thatch-code-walkthrough` | Explains a feature, module, or workflow to the user as a teaching walkthrough with file:line citations. Also used to draft high-level docs for new or undocumented features. |
 | `thatch-coding-workflow` | Plans and executes code changes with a task-list-driven workflow: complexity triage, milestone planning, research before coding, post-coding verification. Pairs with `thatch-code-archaeology` (research first, then plan). |
@@ -377,7 +388,7 @@ response, walkthrough, and workflow skills that support the review pipeline:
 
 | Skill | Purpose |
 |-------|---------|
-| `thatch-code-review` | Multi-agent review coordinator. Dispatches parallel sub-agents for triage, decomposition, specialist fan-out, and synthesis with a workflow-change preface. Not available in Claude Code (requires sub-agent support), though the `/thatch/self-review` and `/thatch/peer-review` commands run the same specialists inline there. |
+| `thatch-coordination` | Supervisor workflow for subordinate LLM sessions: dispatch with `thatch_session_tab` (opencode v2 only), track each subordinate in the task list, supervise over cross-session chat, verify before declaring done. It is the only opencode-only skill - it drives TUI session tabs, which no other host has. |
 
 ### Host availability
 
@@ -392,7 +403,8 @@ response, walkthrough, and workflow skills that support the review pipeline:
 | Review response (author-side) | Yes | Yes | Yes |
 | Walkthrough skills | Yes | Yes | Yes |
 | Writing skills | Yes | Yes | Yes |
-| Code review coordinator | Yes | No (requires sub-agents) | No (requires sub-agents) |
+| Code review coordinator | Yes | Yes | Yes |
+| Session-tab coordination (`thatch-coordination`) | Yes (v2) | No | No |
 
 ### Using review skills
 
@@ -403,7 +415,9 @@ point it at a branch or commit range:
 Load thatch-review-pedantic and review the changes on this branch.
 ```
 
-For a **full multi-specialist review on opencode**, load the coordinator:
+For a **full multi-specialist review**, load the coordinator (it
+dispatches the specialists as parallel sub-agents on every host; Claude
+Code names the dispatch tool `Agent`):
 
 ```text
 Load thatch-code-review and review branch feature-x.
@@ -413,7 +427,7 @@ The coordinator will triage the change, dispatch parallel sub-agents (one per
 specialist lens), and synthesize a final report. The report starts with the
 workflow-level changes so the findings have context.
 
-For a **full review on Claude Code** (or without the coordinator), run each
+Without the coordinator, run each
 specialist in sequence, then synthesize:
 
 ```text
@@ -511,7 +525,6 @@ process; the registry itself is `src/env-knobs.ts`.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `THATCH_DB_PATH` | `$XDG_CONFIG_HOME/thatch/thatch.db` | Override database location (the config file follows it) |
-
 | `THATCH_MODEL` | `Xenova/bge-small-en-v1.5` | Override embedding model |
 | `THATCH_EMBEDDING_BACKEND` | `wasm` | Set to `native` to run embeddings on onnxruntime-node (NAPI) instead of the wasm runtime |
 | `THATCH_DEBUG` | unset (off) | Diagnostic logging to `debug.log` beside the database. `1` logs everything; or a comma-separated list of tags, e.g. `chat` or `chat:startup` |

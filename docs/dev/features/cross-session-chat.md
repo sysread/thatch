@@ -627,9 +627,13 @@ counts keep the report fleet-scale-safe in both directions.
   MCP hosts get their identity from the thatch hook, which ensure-registers
   the conversation's stable session ID (`mcp_<hash of host session id>`)
   and prints the assigned name plus unread count at session start and on
-  every prompt; chat
-  tools take that name as `as`. Wake-up delivery remains opencode-only: no
-  MCP server can start a turn in the client's conversation.
+  every prompt (on the Claude Code plugin regime, the mod's per-prompt
+  stage call anchors identity and the chat line rides the injected
+  context instead); chat
+  tools take that name as `as`. Wake-up delivery needs a poller:
+  opencode's ChatPoller and the plugin regime's mod timer both start
+  turns; the hooks-regime and Cursor servers cannot (mail surfaces at
+  their hook points instead).
 
 ## Multi-host delivery tiers
 

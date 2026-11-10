@@ -5,7 +5,7 @@ plugin fires on its own schedule. The nudge-backed commands (`defrag`,
 `extract`, `hygiene`, `reflect`) share their instruction text with the
 nudges, so a behavior works the same whether it fires automatically or you
 invoke it. The remaining commands (`refine`, `self-review`, `peer-review`,
-`whois`) stand alone.
+`whois`, `bug-intake`) stand alone.
 
 ## Commands
 
@@ -50,11 +50,17 @@ invoke it. The remaining commands (`refine`, `self-review`, `peer-review`,
   state) until a round produces no meaningful findings (a drift guard at
   ten rounds is the only hard stop).
   See [code-review.md](code-review.md).
+- `/thatch/bug-intake` — run a bug-intake session: triage incoming bug
+  reports (from you, or from other agent sessions over cross-session
+  chat), verify every claim against the source code, then route each
+  confirmed bug to a filed issue in the project tracker or a coordinated
+  fix, and close the loop with the reporter.
 - `/thatch/compact` and `/thatch/exit` — the wrap-up commands. They run a
   pre-flight checklist (flush extraction, finish promised memory writes,
   surface loose ends) before a compaction or an exit, gated by a greenlight
   (the zero-arg `thatch_compact` or `thatch_exit` tool call).
-  opencode only; the greenlight mechanics are described in the
+  opencode and the Claude Code plugin regime; the greenlight mechanics are
+  described in the
   [user guide overview](README.md).
 
 ## The TUI redo command: /s
@@ -89,21 +95,29 @@ keystroke. No model turn is spent - it is instant and deterministic.
 | `/thatch/refine` | yes | yes | yes (as an MCP prompt) |
 | `/thatch/peer-review` | yes | yes | yes (as an MCP prompt) |
 | `/thatch/self-review` | yes | yes | yes (as an MCP prompt) |
-| `/thatch/compact`, `/thatch/exit` | yes | no | no |
+| `/thatch/bug-intake` | yes | yes | yes (as an MCP prompt) |
+| `/thatch/compact`, `/thatch/exit` | yes | yes (plugin regime) | no |
 
 Why the gaps: `/thatch/extract` and `/thatch/whois` need the invoking
 session's ID, which only the opencode plugin can supply. The wrap-up
-commands trigger host actions (the compaction and the session close-out)
-through the plugin. Cursor has no file-based
+commands need a plugin runtime to arm the greenlight and fire the host
+action: opencode's adapter and the Claude Code plugin regime's mod both
+provide one (Claude Code's exit reports it is safe to close the session
+instead of closing it - no mod API can). The hooks regime and Cursor have
+no plugin host. Cursor has no file-based
 commands; its prompts come from the MCP server (`prompts/list` and
 `prompts/get`).
 
 ## Installation
 
 - **opencode**: installed by the plugin on every load.
-- **Claude Code**: installed by `thatch setup --claude` into the same scope
-  as the skills (`.claude/commands/thatch/` project-local, or the Claude
-  config dir for `--global`). Re-run setup to refresh after an upgrade.
+- **Claude Code**: the hooks regime installs the action command files via
+  `thatch setup --claude --hooks`, into the same scope as the skills
+  (`.claude/commands/thatch/` project-local, or the Claude config dir for
+  `--global`). Re-run setup to refresh after an upgrade. The plugin regime
+  registers only the wrap-ups, as `/thatch_compact` and `/thatch/exit`
+  (mod command names allow no slash); the on-demand actions are not
+  commands there - load the corresponding skills directly instead.
 
 Tool names inside the command text follow each host's spelling
 (`thatch_memory_remember` on opencode, `mcp__thatch__memory_remember` on
