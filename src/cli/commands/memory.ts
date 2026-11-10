@@ -5,6 +5,7 @@
  * resolution arriving in CliContext instead of module scope.
  */
 import { BgeEmbeddingModel } from "../../embeddings";
+import { MEMORY_DISPLAY_STAMP } from "../../extraction";
 import { printCommandHelp } from "../help";
 import type { Subcommand } from "../types";
 
@@ -50,6 +51,13 @@ export const show: Subcommand = {
     if (!entry) {
       console.log(`No memory labeled "${label}" in "${store}".`);
     } else {
+      // Display stamp: the first stdout line marks this output as stored
+      // memory content so the extraction buffer sites withhold it (an
+      // unstamped display fed the extractor its own store back and undid
+      // a deliberate forget, November 2026). stdout, not stderr: the
+      // buffer sites capture tool stdout on every host; stderr capture
+      // in bash tool results is host-dependent.
+      console.log(MEMORY_DISPLAY_STAMP);
       console.log(`[${store}] ${entry.label}`);
       if (entry.branch != null) console.log(`branch: ${entry.branch}`);
       if (entry.confidence) console.log(`confidence: ${entry.confidence}`);
@@ -72,6 +80,49 @@ export const forget: Subcommand = {
     const store = args[1] ?? await ctx.defaultStore();
     const ok = ctx.db.forgetEntry(store, label);
     console.log(ok ? `[forgotten] ${store} :: ${label}` : `No memory labeled "${label}" in "${store}".`);
+  },
+};
+
+export const tombstones: Subcommand = {
+  name: "tombstones",
+  summary: "List deleted-memory guards, or clear one with --clear",
+  usage: () => ({
+    synopsis: "thatch tombstones [store] | thatch tombstones --clear <label> [store]",
+    flags: [
+      { long: "--clear", short: null, description: "Remove the guard for <label> (all its content generations). Entries are untouched; the memory itself stays gone." },
+    ],
+    notes: [
+      "Every forget leaves a guard that holds re-writes of the deleted content (a [held] remember names the guard).",
+      "Clearing the guard is the deliberate re-admission path: clear it, then repeat the remember.",
+    ],
+  }),
+  async run(args, ctx) {
+    const clearIdx = args.indexOf("--clear");
+    if (clearIdx >= 0) {
+      const label = args[clearIdx + 1];
+      if (!label || label.startsWith("--")) {
+        printCommandHelp(tombstones);
+        process.exit(1);
+      }
+      const positional = args.filter((_, i) => i !== clearIdx && i !== clearIdx + 1);
+      const store = positional[0] ?? await ctx.defaultStore();
+      const n = ctx.db.clearMemoryTombstones(store, label);
+      console.log(
+        n > 0
+          ? `[tombstone-cleared] ${store} :: ${label} (${n} guard${n === 1 ? "" : "s"} removed; entries untouched)`
+          : `No tombstone for "${label}" in "${store}".`,
+      );
+      return;
+    }
+    const store = args[0] ?? await ctx.defaultStore();
+    const rows = ctx.db.listMemoryTombstones(store);
+    if (rows.length === 0) {
+      console.log(`No deleted-memory guards in "${store}".`);
+    } else {
+      for (const r of rows) {
+        console.log(`[${store}] ${r.label} (forgotten ${r.forgottenAt.slice(0, 10)}) ${r.hashPrefix}`);
+      }
+    }
   },
 };
 

@@ -62,6 +62,7 @@ agent calls memory_remember(label?, content, opts) - label is derived from the c
   → model.passageEmbed("# label\n\ncontent")  →  Float32Array
   → db.findSimilar(store, embedding, { excludeSlug })  →  write-time collision check
   → db.remember(store, label, content, embedding, model.name, opts)
+      tombstone check FIRST (see Deletion guards) → held on a match
       overwrite:false  →  atomic INSERT (PK constraint rejects duplicates)
       overwrite:true   →  upsert + clear stale dedup verdicts for that slug
   → return confirmation + warning if similar memories found
@@ -74,6 +75,57 @@ The `findSimilar` call is a write-time collision check with no telemetry. It exc
 The save always proceeds. The warning asks the agent to reconcile — merge into one entry (overwrite + forget the other) or record that they are genuinely distinct via `dedup_mark_checked`.
 
 On overwrite, the upsert clears stale dedup verdicts: any `dedup_pairs` rows referencing that slug are deleted, since the content change may resolve or create duplicates.
+
+### Deletion guards (tombstones)
+
+Forgetting a memory means "deleted, and guarded" (ruled November 2026,
+after a live incident: a deliberate forget was silently undone ~90
+seconds later because the fact-extractor re-derived the deleted memory
+from a buffered `thatch show` output and minted it back).
+
+`db.forgetEntry` is transactional and write-lock-first: it takes the
+write lock (BEGIN IMMEDIATE), reads the doomed row's content and
+embedding under the lock, INSERT OR REPLACEs a `memory_tombstones` row,
+then deletes the entry and its dedup verdicts. Tombstone before delete,
+the chat subsystem's ordering for the same hazard class.
+
+`db.remember` checks the store's tombstones FIRST - before the label
+checks, before `overwrite` handling, and before `ensureStore` (a held
+write creates nothing). A write is held when the content hash matches
+exactly or the embedding's cosine similarity against a tombstone
+embedding is ≥ 0.90 (`MEMORY_TOMBSTONE_THRESHOLD`; higher than
+`findSimilar`'s 0.85 because a hold is heavier than a warning, and the
+asymmetry favors matching: a false hold is visible and one-step
+recoverable, a false miss silently undoes a deliberate forget). The
+check and the insert run inside one transaction; a busy/snapshot error
+from that wrapping is caught onto the failure arm rather than thrown
+(a thrown remember would drain the buffer through the fail-open gate on
+unreadable output shapes).
+
+The held write returns `{ ok: false, error, held }` - the error field
+carries the fully formatted `[held]` message (the `MEMORY_HELD_MARKER`
+constant lives in `src/db.ts`, the emitter), which the tool execute and
+the CLI emit verbatim. The message contains no `[saved]` marker anywhere
+(the MCP queue's drain gate is inclusion-based) and names the guard's
+label, the deletion date, and the un-guard command. `held` is metadata
+for tests, never a formatting source.
+
+The un-guard is CLI-only by design: `thatch tombstones --clear <label>
+[store]` calls `clearMemoryTombstones`, which removes every content
+generation's row for the (store, slug) and never touches entries.
+`memory_forget` deliberately does NOT clear guards: in the coexist state
+(a live entry plus a same-label tombstone from an earlier generation),
+overloading forget would delete the live entry and still not re-admit.
+The tool API stays special-case-free; forget's output contract is
+byte-identical to before the feature.
+
+Tombstones are permanent until cleared - no TTL (unlike
+`chat_leave_tombstones`, which age out: those are leave markers for
+never-reused session ids; these guard re-mintable content). Residual
+blind spots, named: the guard is store-scoped like every other memory
+surface, so a cross-store re-mint passes; a sufficiently different
+paraphrase of deleted content passes (the threshold trade); and
+pre-feature deletions wrote no tombstones.
 
 ### Accept-then-teach guards
 

@@ -268,6 +268,61 @@ The payload fetch is the delivery record:
 - Read-only — it peeks the queue; it does not consume it. Consumption is
   `extraction_done`'s job
 
+### Memory display guard (the stamp)
+
+Tool outputs that display stored memory content never enter the pipeline
+as extractable material (November 2026, after a deliberate forget was
+undone by the extractor re-deriving the memory from a buffered bash
+`thatch show` output).
+
+- **Emitters** stamp a marker line as the output's first line: the CLI
+  `thatch show` command, and the `memory_show`/`memory_recall` tools via
+  `withMemoryCaveat` (the single stamping point for both). The constant
+  (`MEMORY_DISPLAY_MARKER`, `MEMORY_DISPLAY_STAMP`) lives in
+  `src/extraction.ts` - the recognizer module - because extraction.ts is
+  a zero-import leaf; the `[saved]`/`[forgotten]` family stays in
+  tool-defs (the tool-execute emitter) and `[held]` in db.ts (the
+  db.remember emitter). Three marker homes, three reasons.
+- **Recognition** (`guardInteractionOutput`) uses three anchored forms
+  built from the constant: the token at line start in raw text; the
+  token after a JSON string-value opening (colon, optional whitespace,
+  quote); and the token after a literal backslash-n. The two escaped
+  forms are what make embedding transitive - a session dump or
+  JSON-serialized content block carrying a stamped output is recognized
+  even though JSON escaping buries the token mid-line. Deliberately NOT
+  a bare substring match: this repo quotes its own token, and substring
+  matching would withhold every thatch-dev session's read of the
+  extraction surface.
+- **Guard sites**: `ExtractionPipeline.push` (before the cap - every push
+  caller, including the journal-snapshot re-push), both response paths
+  of `appendBatch` (before the array path's 500-char slice - the array
+  path buries the marker in JSON and can cut it), and
+  `buildExtractionPayload` (the funnel every payload passes through -
+  the backstop for skew-window rows and any future site). A recognized
+  output is replaced WHOLE with a short placeholder note; whole-output
+  replacement is conservative by design (a `thatch show x && ls` loses
+  the `ls` facts too - surgical redaction would be content
+  classification, the fragile class the stamp exists to avoid).
+- **Marker self-collision discipline**: never place the token at the
+  start of a line in source, tests, or docs, and never write the anchor
+  sequences (colon-quote-token, colon-space-quote-token,
+  backslash-n-token) literally in any file - compose fixtures from the
+  constant. Files that violate this get their own reads withheld.
+- **Residuals** (unstamped content the guard cannot reach): the model's
+  own post-display context echoed into ordinary outputs, session-dump
+  prose and remember args in transcript JSON, bash command lines
+  carrying remember content, chat bodies, knowledge-export files, piped
+  display output (`thatch show x | tail -5` strips the marker), pre-
+  upgrade buffered rows, sliced array rows in the skew window, the
+  Claude Code over-budget queue-file Read, depth-2 value-start
+  re-embeddings, and cross-store re-mints. Deleted-content residuals
+  are backstopped by the tombstone guard (memory-store.md); live-content
+  echoes surface only through the write-time similarity warning.
+- **Extractor contract**: the skill's instruction set names the
+  placeholder ("never re-derive from withheld output") and the `[held]`
+  result ("a hold is a completed decision; do not retry; finish and
+  ack"). The fixed final-message contract is untouched.
+
 ### Background sub-agent support (opencode)
 
 - Experimental flag: `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS` (set in

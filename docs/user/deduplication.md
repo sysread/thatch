@@ -42,6 +42,13 @@ a new similarity with a different memory.
 This is intended. A merge changes the content, which may create new
 duplicate relationships that should be reviewed.
 
+One interaction with deletion guards to know: forgetting the merged-away
+duplicate leaves a guard over its content. A later edit of the merged
+entry that drifts back toward the old wording can be held (a `[held]`
+write naming the guard). Clear the guard with `thatch tombstones
+--clear <label>` and repeat the write if the edit is intentional - see
+the memory guide's "Deleted memories are guarded".
+
 ## When it fires
 
 The dedup cycle is not automatic. It fires when:

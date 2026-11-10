@@ -37,7 +37,7 @@ store when recalling.
 | `thatch_memory_recall` | Semantic search across stores. Returns matching memories with similarity scores. |
 | `thatch_memory_list` | List all memories in a store (metadata only, no content). |
 | `thatch_memory_show` | Show full content of a single memory by its exact, full label. A call without the label returns guidance pointing at `memory_list`/`memory_recall` for finding labels; a typo'd label gets a `Did you mean "..."?` suggestion when one is close. |
-| `thatch_memory_forget` | Delete a memory by its exact, full label. A call without the label returns guidance pointing at `memory_list`/`memory_recall` for finding labels; a typo'd label gets a `Did you mean "..."?` suggestion when one is close. |
+| `thatch_memory_forget` | Delete a memory by its exact, full label. A call without the label returns guidance pointing at `memory_list`/`memory_recall` for finding labels; a typo'd label gets a `Did you mean "..."?` suggestion when one is close. Deleting also leaves a guard: re-saving the same content is held (see Deleted memories are guarded below). |
 | `thatch_store_list` | List all active stores. |
 | `thatch_find_duplicates` | Surface pairs of memories with suspiciously similar content. |
 | `thatch_dedup_mark_checked` | Record a verdict for a reviewed pair so it stops being re-reported. |
@@ -70,6 +70,41 @@ store when recalling.
 - Memories are not versioned. Updating a memory with `overwrite: true`
   replaces the content and embedding. The old content is lost (git
   history does not track it).
+
+## Deleted memories are guarded
+
+Deleting a memory means deleted, and guarded. The forget writes a
+tombstone: a small record of the deleted content (an exact content hash
+plus its embedding) that stays in the store permanently.
+
+Every memory write - from the tool, from the CLI, or from the
+fact-extractor - checks the tombstones first. A write whose content
+matches a deleted memory (byte-identical, or semantically very close) is
+not saved and not silently dropped. It is held, and the agent sees a
+message like this:
+
+- the store and label of the refused write,
+- the deleted memory's label and the date it was deleted,
+- the command that clears the guard, `thatch tombstones --clear`.
+
+If the deletion was right, no action is needed - the hold is the system
+working. The agent should not retry the write.
+
+To deliberately re-admit deleted knowledge (the only path), clear the
+guard first and repeat the write: `thatch tombstones --clear <label>`
+(with the store as the second argument for non-project stores). The
+clear never touches live memories - a live memory sharing the label is
+untouched - and the memory itself stays gone until re-saved. List the
+standing guards with `thatch tombstones [store]`.
+
+Guards are permanent until cleared. There is no expiry, because a guard
+that expires can silently undo a deliberate deletion.
+
+One accepted trade: re-creating a memory under a tombstoned label with
+only slightly different wording can be held (the semantic match). That
+is recoverable with the clear command above, and it is the price of the
+promise - the alternative is deleted content quietly re-entering the
+store through the fact-extractor re-deriving it from a display.
 
 ## Archived memories
 

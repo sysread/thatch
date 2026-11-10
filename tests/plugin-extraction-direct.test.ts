@@ -100,7 +100,7 @@ const toasts = () => rpcEmitted.filter((e) => e.name === TOAST_EVENT);
 // on this harness (the v1 recClient had no session.get, so its
 // auto-register always failed silently and never toasted).
 const metricsToasts = () =>
-  toasts().filter((e) => /(?:new|updated|deleted): \d/.test(String(e.data?.message)) && e.data?.variant === "success");
+  toasts().filter((e) => /(?:new|updated|deleted|held): \d/.test(String(e.data?.message)) && e.data?.variant === "success");
 
 describe("plugin entry", () => {
   // -----------------------------------------------------------------------
@@ -424,6 +424,51 @@ describe("plugin entry", () => {
     // Negative wait: the pump's handler is async; settle before asserting.
     await new Promise((r) => setTimeout(r, 300));
     expect(metricsToasts().length).toBe(0);
+  });
+
+  test("toast: a held write drains nothing, keeps the claim open, and counts as held", async () => {
+    // A [held] remember output is not a save: the drain gate stays closed
+    // (the child's fetched claim is NOT completed by the hold - the
+    // entries survive for the completion signal), no save metric is
+    // bumped, and the held counter fires the toast (the one knowing
+    // override of the no-save suppression: a guard firing is exactly the
+    // visibility the toast exists for).
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+
+    await bufferBash("ses_hold1", "file.txt");
+    await queueEvent(parentIdle("ses_hold1"));
+    await waitFor("extraction child created", () => sessionCreateCalls.length === 1);
+
+    // The child fetches its payload (records the claim), then its remember
+    // is refused by a tombstone guard.
+    const fetch = await payloadTool().execute(
+      { session_id: "ses_hold1" },
+      { sessionID: CHILD_ID, agent: "general" },
+    );
+    expect(textOf(fetch)).toContain("file.txt");
+    await toolAfterHook!({
+      tool: "thatch_memory_remember",
+      sessionID: CHILD_ID,
+      input: { label: "x", content: "y" },
+      status: "completed",
+      result: { content: "[held] sysread/thatch :: x - nothing was saved: this content matches a memory deliberately deleted on 2026-11-10." },
+    });
+
+    // The hold did not complete the child's claim: the parent's entries
+    // are still delivered to a new fetcher (nothing was lost, and the
+    // completion still belongs to extraction_done or the child's idle).
+    const refetch = await payloadTool().execute(
+      { session_id: "ses_hold1" },
+      { sessionID: CHILD_ID, agent: "general" },
+    );
+    expect(textOf(refetch)).toContain("file.txt");
+
+    // The child completes: the toast reports the hold, not a save.
+    await queueEvent(childIdle(CHILD_ID));
+    await waitFor("held metrics toast", () => metricsToasts().length === 1);
+    const toast = metricsToasts()[0];
+    expect(toast.data.message).toContain("held: 1");
+    expect(toast.data.message).not.toContain("new:");
   });
 
   test("toast: no toast on no-save extraction run", async () => {

@@ -22,6 +22,23 @@ you.
    drained and a toast notification shows the results (`[thatch] new: 2,
    updated: 1`). The child session is deleted.
 
+## Displays of stored memories are not re-extracted
+
+Tool outputs that display stored memory content (a `thatch show` run
+through bash, the `memory_show` and `memory_recall` tools) are stamped
+with a marker line and never enter the extraction pipeline as content.
+The extractor sees a short withheld note in their place. This is
+deliberate: a display of a memory is not a new fact, and re-deriving
+memories from displays polluted the store with near-duplicate echoes -
+including, once, silently re-creating a memory minutes after it was
+deliberately deleted.
+
+Displays that reach the pipeline through surfaces that cannot stamp
+(quoted content in a file, piped output, old session transcripts) are
+backstopped differently: a deleted memory's content is guarded by a
+tombstone, and a write that matches it is held and surfaced rather than
+saved (see the memory guide's "Deleted memories are guarded").
+
 You see the toast. You do not see the nudge or the child session. The
 extraction runs in the background and does not interrupt your
 conversation.

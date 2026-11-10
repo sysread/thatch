@@ -9,9 +9,11 @@ The thatch CLI entry is `bin/thatch`, a thin dispatcher: it resolves argv agains
 | `stores` | none | none | none | List all store names |
 | `list [store]` | optional store | none | none | List memory labels in a store |
 | `show <label> [store]` | label, optional store | none | none | Display one memory by label |
-| `forget <label> [store]` | label, optional store | none | none | Delete one memory by label |
+| `forget <label> [store]` | label, optional store | none | none | Delete one memory by label (writes a deletion guard) |
 | `search <query> [store]` | query, optional store | none | none | Semantic cosine search (limit 10; "all" searches project + global) |
 | `remember <content> [flags]` | content words (or stdin) | `--label`, `--store`, `--branch`, `--confidence`, `--overwrite` | content text | Save a memory through the memory_remember tool's execute(); prints `[saved] <store> :: <label>`, exit 1 on failure |
+| `tombstones [store]` | optional store | none | none | List deleted-memory guards (label, forgotten date, hash prefix) |
+| `tombstones --clear <label> [store]` | label (after `--clear`), optional store | `--clear` | none | Remove the guard for a label (all its content generations; entries untouched); prints `[tombstone-cleared]`, exit 1 on a missing label without `--clear` usage errors |
 | `mcp` | none | none | none | Start the stdio MCP server (for Claude Code, Cursor) |
 | `reminder [--json]` | none | `--json` | none | Print session-start reminder + hygiene report |
 | `hygiene` | none | none | none | Print the hygiene report standalone |

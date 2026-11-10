@@ -1,11 +1,16 @@
 import { describe, test, expect } from "bun:test";
 import {
   ExtractionPipeline,
+  buildExtractionPayload,
   deriveTitle,
+  guardInteractionOutput,
   unwrapExecuteThatchCalls,
   planJournalPrune,
   EXTRACTION_JOURNAL_KINDS,
   INTERACTION_OUTPUT_MAX,
+  MEMORY_DISPLAY_MARKER,
+  MEMORY_DISPLAY_STAMP,
+  MEMORY_WITHHELD_PLACEHOLDER,
   RUNTIME_STATE_TTL_MS,
   type ToolInteraction,
   type JournalRowRef,
@@ -738,5 +743,118 @@ describe("planJournalPrune", () => {
     // age-only pass (with its own dead-directory exemption), but the
     // extraction module's own constant stays narrow.
     expect(EXTRACTION_JOURNAL_KINDS).toEqual(["buffer", "accepted"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// guardInteractionOutput - the display stamp's buffer-side guard
+// ---------------------------------------------------------------------------
+
+describe("guardInteractionOutput", () => {
+  // Every fixture is composed from the exported constants at runtime: the
+  // test file must never contain the marker token at a line start or any
+  // literal anchor sequence (the self-collision discipline the guard
+  // itself documents - a file that violates it gets its own reads withheld).
+  const stamp = MEMORY_DISPLAY_STAMP;
+  const token = MEMORY_DISPLAY_MARKER;
+
+  test("line-start marker in raw text is replaced with the placeholder", () => {
+    const output = stamp + "\n[sysread/thatch] Some Memory\n\nthe memory body";
+    expect(guardInteractionOutput(output)).toBe(MEMORY_WITHHELD_PLACEHOLDER);
+  });
+
+  test("line-start marker mid-output (prefix noise before the CLI line) is replaced", () => {
+    const output = "preamble\n" + stamp + "\nbody";
+    expect(guardInteractionOutput(output)).toBe(MEMORY_WITHHELD_PLACEHOLDER);
+  });
+
+  test("a quoted token mid-line is NOT replaced (source and docs quoting the marker)", () => {
+    // The repo's own files quote the token constantly; a bare substring
+    // match would withhold every thatch-dev session's read of them.
+    const quoted = 'export const X = "' + token + '"; // the marker';
+    expect(guardInteractionOutput(quoted)).toBe(quoted);
+  });
+
+  test("a token at a line start inside a code span is still replaced (column 0 is column 0)", () => {
+    const output = "text\n" + token + " tail\nmore";
+    expect(guardInteractionOutput(output)).toBe(MEMORY_WITHHELD_PLACEHOLDER);
+  });
+
+  test("JSON string-value-open form (compact serialization) is replaced", () => {
+    // MCP hosts deliver tool_response as content blocks; the stamp lands
+    // at the start of a text value, which serializes as colon-quote-token.
+    const blocks = [{ type: "text", text: stamp + "\nmemory body" }];
+    expect(guardInteractionOutput(JSON.stringify(blocks))).toBe(MEMORY_WITHHELD_PLACEHOLDER);
+  });
+
+  test("JSON string-value-open form tolerates pretty-printed whitespace", () => {
+    // `jq .` and JSON.stringify(x, null, 2) emit a space after the colon.
+    const blocks = [{ output: stamp + "\nmemory body" }];
+    expect(guardInteractionOutput(JSON.stringify(blocks, null, 2))).toBe(MEMORY_WITHHELD_PLACEHOLDER);
+  });
+
+  test("escaped-newline form (marker line after other lines in one string value) is replaced", () => {
+    const inner = "line one\n" + stamp + "\nmemory body";
+    const serialized = JSON.stringify({ output: inner });
+    expect(guardInteractionOutput(serialized)).toBe(MEMORY_WITHHELD_PLACEHOLDER);
+  });
+
+  test("the escaped-newline form survives depth-2 re-serialization", () => {
+    // A JSON embedding of a JSON embedding: the doubly-escaped newline
+    // still contains the literal backslash-n before the token, so form 3
+    // fires even when form 2's anchor is destroyed by re-escaping.
+    const inner = "line one\n" + stamp + "\nmemory body";
+    const depth2 = JSON.stringify({ dump: JSON.stringify({ output: inner }) });
+    expect(guardInteractionOutput(depth2)).toBe(MEMORY_WITHHELD_PLACEHOLDER);
+  });
+
+  test("a bare string-array embedding is NOT replaced (the named residual cousin)", () => {
+    const arr = [stamp + "\nmemory body"];
+    const serialized = JSON.stringify(arr);
+    expect(guardInteractionOutput(serialized)).toBe(serialized);
+  });
+
+  test("guarding is idempotent: the placeholder carries no marker form", () => {
+    expect(guardInteractionOutput(MEMORY_WITHHELD_PLACEHOLDER)).toBe(MEMORY_WITHHELD_PLACEHOLDER);
+  });
+
+  test("buildExtractionPayload guards stamped rows at the funnel (skew-window backstop)", () => {
+    // A row written by an un-upgraded buffer side carries the raw stamped
+    // output; the funnel swaps it before the extractor ever sees it.
+    const stamped: ToolInteraction = {
+      tool: "bash",
+      sessionID: "ses_skew",
+      args: { command: "thatch show X" },
+      title: "thatch show X",
+      output: stamp + "\n[sysread/thatch] X\n\nthe memory body",
+    };
+    const payload = JSON.parse(buildExtractionPayload([stamped], "sysread/thatch"));
+    expect(payload.interactions[0].output).toBe(MEMORY_WITHHELD_PLACEHOLDER);
+    expect(payload.interactions[0].output).not.toContain("the memory body");
+  });
+
+  test("the funnel guards before truncating: a marker past char 500 still fires", () => {
+    const long = "x".repeat(600) + "\n" + stamp + "\nbody";
+    const row: ToolInteraction = {
+      tool: "bash",
+      sessionID: "ses_skew",
+      args: {},
+      title: "t",
+      output: long,
+    };
+    const payload = JSON.parse(buildExtractionPayload([row], "sysread/thatch"));
+    expect(payload.interactions[0].output).toBe(MEMORY_WITHHELD_PLACEHOLDER);
+  });
+
+  test("unstamped output passes through the funnel unchanged (apart from the 500 cap)", () => {
+    const row: ToolInteraction = {
+      tool: "bash",
+      sessionID: "ses_plain",
+      args: {},
+      title: "t",
+      output: "ordinary tool output",
+    };
+    const payload = JSON.parse(buildExtractionPayload([row], "sysread/thatch"));
+    expect(payload.interactions[0].output).toBe("ordinary tool output");
   });
 });

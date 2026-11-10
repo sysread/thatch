@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { ThatchDB, cosineSimilarity } from "../src/db";
+import { ThatchDB, cosineSimilarity, MEMORY_HELD_MARKER } from "../src/db";
 
 let dbPath: string;
 let dbDir: string;
@@ -436,6 +436,216 @@ describe("forgetEntry", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tombstones (the forget guard ledger)
+// ---------------------------------------------------------------------------
+
+describe("memory tombstones", () => {
+  // Hand-built vectors with margin around MEMORY_TOMBSTONE_THRESHOLD, per
+  // the repo's fixed-vector fixture pattern - never 0.899/0.901 edges.
+  // above and below are normalized so their cosines against `base` sit
+  // comfortably on either side of the bar.
+  const base = new Float32Array([1, 0, 0, 0]);
+  const above = new Float32Array([0.995, 0.1, 0, 0]); // cosine ~0.995
+  const below = new Float32Array([0.75, 0.66, 0, 0]); // cosine ~0.75
+
+  test("forget writes a tombstone; listMemoryTombstones shows it", () => {
+    db.remember("s", "Guarded", "guarded content", base, "m");
+    expect(db.forgetEntry("s", "Guarded")).toBe(true);
+    const guards = db.listMemoryTombstones("s");
+    expect(guards.length).toBe(1);
+    expect(guards[0].label).toBe("Guarded");
+    expect(guards[0].slug).toBe(db.slugify("Guarded"));
+    expect(guards[0].hashPrefix.length).toBe(12);
+  });
+
+  test("a byte-identical re-save is held via the hash path; nothing is saved", () => {
+    db.remember("s", "Echoed", "the deleted body", base, "m");
+    db.forgetEntry("s", "Echoed");
+    const result = db.remember("s", "Echoed Again", "the deleted body", base, "m");
+    expect(result.ok).toBe(false);
+    const failure = result as { ok: false; error: string; held?: { label: string; forgottenAt: string } };
+    expect(failure.error.startsWith(MEMORY_HELD_MARKER)).toBe(true);
+    expect(failure.held?.label).toBe("Echoed");
+    expect(db.entryExists("s", db.slugify("Echoed Again"))).toBe(false);
+    expect(db.listMemoryTombstones("s").length).toBe(1);
+  });
+
+  test("the held message names the guard, the store, and the un-guard command, and contains no save marker", () => {
+    db.remember("s", "Named", "named body", base, "m");
+    db.forgetEntry("s", "Named");
+    const result = db.remember("s", "Named 2", "named body", base, "m") as { ok: false; error: string };
+    // The MCP queue's drain gate is inclusion-based: the [saved] token must
+    // not appear ANYWHERE in the message, not merely at the start.
+    expect(result.error).not.toContain("[saved]");
+    expect(result.error).toContain('label "Named"');
+    expect(result.error).toContain('store "s"');
+    expect(result.error).toContain("thatch tombstones --clear Named s");
+    expect(result.error).toContain("deliberately deleted on");
+    expect(result.error).toContain("do not retry this write");
+  });
+
+  test("a near-identical re-derivation (hash miss, cosine above the bar) is held", () => {
+    // The incident shape: the extractor re-derives the memory, paraphrased
+    // just enough that the bytes differ - the similarity path is the
+    // backstop that catches it.
+    db.remember("s", "Similar", "similar body", base, "m");
+    db.forgetEntry("s", "Similar");
+    const result = db.remember("s", "Similar Echo", "similar body, lightly reworded", above, "m");
+    expect(result.ok).toBe(false);
+    expect((result as { error: string }).error.startsWith(MEMORY_HELD_MARKER)).toBe(true);
+  });
+
+  test("a same-topic different-content write (cosine below the bar) saves normally", () => {
+    db.remember("s", "Topic", "topic body one", base, "m");
+    db.forgetEntry("s", "Topic");
+    const result = db.remember("s", "Topic Two", "a genuinely different take on the topic", below, "m");
+    expect(result.ok).toBe(true);
+  });
+
+  test("the tombstone sweep is store-scoped: another store's guard does not hold", () => {
+    db.remember("storeA", "Scoped", "scoped body", base, "m");
+    db.forgetEntry("storeA", "Scoped");
+    const result = db.remember("storeB", "Scoped", "scoped body", base, "m");
+    expect(result.ok).toBe(true);
+  });
+
+  test("overwrite does not bypass a hold (the guard is on content)", () => {
+    db.remember("s", "Overwrite Guard", "overwrite body", base, "m");
+    db.forgetEntry("s", "Overwrite Guard");
+    db.remember("s", "Live Label", "unrelated live content", below, "m");
+    const result = db.remember("s", "Live Label", "overwrite body", base, "m", { overwrite: true });
+    expect(result.ok).toBe(false);
+    expect((result as { error: string }).error.startsWith(MEMORY_HELD_MARKER)).toBe(true);
+    // The live entry's pre-hold content is untouched by the refused write.
+    expect(db.showEntry("s", "Live Label")?.content).toBe("unrelated live content");
+  });
+
+  test("a held write has no side effects: no entry, no new store row", () => {
+    db.remember("s", "NoSide", "noside body", base, "m");
+    db.forgetEntry("s", "NoSide");
+    const storesBefore = db.listStores();
+    const result = db.remember("s", "NoSide Echo", "noside body", base, "m");
+    expect(result.ok).toBe(false);
+    expect(db.entryExists("s", db.slugify("NoSide Echo"))).toBe(false);
+    expect(db.listStores()).toEqual(storesBefore);
+  });
+
+  test("dimension mismatch degrades to hash-only without throwing", () => {
+    db.remember("s", "Dim", "dim body", base, "m");
+    db.forgetEntry("s", "Dim");
+    // 8-dim embedding vs the 4-dim tombstone: the sweep skips the
+    // comparison (never scores nonsense), so different content saves and
+    // identical content still holds via the hash.
+    const wide = new Float32Array(8).fill(0.5);
+    const saves = db.remember("s", "Dim Wide", "totally different body", wide, "m");
+    expect(saves.ok).toBe(true);
+    const held = db.remember("s", "Dim Wide Echo", "dim body", wide, "m");
+    expect(held.ok).toBe(false);
+  });
+
+  test("a NULL-embedding tombstone is skipped by the sweep; its hash path still covers it", () => {
+    // A never-embedded forgotten entry: raw-SQL the entry so embedding is
+    // NULL, forget it, then probe both paths.
+    db.remember("s", "NullEmb", "null-emb body", base, "m");
+    const raw = new Database(dbPath);
+    raw.run("UPDATE entries SET embedding = NULL WHERE store = ? AND label = ?", ["s", "NullEmb"]);
+    raw.close();
+    db.forgetEntry("s", "NullEmb");
+    const guards = db.listMemoryTombstones("s");
+    expect(guards.length).toBe(1);
+    // Same content: held via hash. Different content with a matching
+    // direction: not held (nothing to compare against).
+    const held = db.remember("s", "NullEmb Echo", "null-emb body", above, "m");
+    expect(held.ok).toBe(false);
+    const free = db.remember("s", "NullEmb Other", "different body entirely", above, "m");
+    expect(free.ok).toBe(true);
+  });
+
+  test("generations: re-forget of different content adds a second row; clear removes all", () => {
+    db.remember("s", "Gen", "generation one body", base, "m");
+    db.forgetEntry("s", "Gen");
+    db.remember("s", "Gen", "generation two body", below, "m");
+    db.forgetEntry("s", "Gen");
+    expect(db.listMemoryTombstones("s").length).toBe(2);
+    expect(db.clearMemoryTombstones("s", "Gen")).toBe(2);
+    expect(db.listMemoryTombstones("s").length).toBe(0);
+  });
+
+  test("the upsert path: a standing same-hash tombstone plus a byte-identical live entry re-forgotten does not throw", () => {
+    // The version-skew shape: an un-upgraded writer saved identical
+    // content over a standing guard. Seeded via raw SQL (same-version
+    // flows cannot reach it - the hash path holds them first).
+    db.remember("s", "Skew", "skew body", base, "m");
+    db.forgetEntry("s", "Skew");
+    const raw = new Database(dbPath);
+    const hash = raw.query("SELECT content_hash FROM memory_tombstones WHERE store = ? AND label = ?").get("s", "Skew") as { content_hash: string };
+    raw.run(
+      "INSERT INTO entries (slug, store, label, content, embedding, model, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, 'old', ?, ?)",
+      [db.slugify("Skew"), "s", "Skew", "skew body", new Date().toISOString(), new Date().toISOString()],
+    );
+    raw.close();
+    expect(hash.content_hash.length).toBe(64);
+    // The re-forget targets the standing (store, slug, content_hash) PK:
+    // INSERT OR REPLACE upserts instead of throwing.
+    expect(db.forgetEntry("s", "Skew")).toBe(true);
+    expect(db.listMemoryTombstones("s").length).toBe(1);
+  });
+
+  test("sequential double-forget is a clean no-op", () => {
+    db.remember("s", "Once", "once body", base, "m");
+    expect(db.forgetEntry("s", "Once")).toBe(true);
+    expect(db.forgetEntry("s", "Once")).toBe(false);
+    expect(db.listMemoryTombstones("s").length).toBe(1);
+  });
+
+  test("the un-guard flow: clear, then repeat the remember - it saves", () => {
+    db.remember("s", "Readmited", "readmit body", base, "m");
+    db.forgetEntry("s", "Readmited");
+    const held = db.remember("s", "Readmited", "readmit body", base, "m");
+    expect(held.ok).toBe(false);
+    expect(db.clearMemoryTombstones("s", "Readmited")).toBe(1);
+    const saved = db.remember("s", "Readmited", "readmit body", base, "m");
+    expect(saved.ok).toBe(true);
+    expect(db.entryExists("s", db.slugify("Readmited"))).toBe(true);
+  });
+
+  test("clear never touches entries: a live same-label entry survives the clear", () => {
+    db.remember("s", "Coexist", "coexist v1", base, "m");
+    db.forgetEntry("s", "Coexist");
+    db.remember("s", "Coexist", "coexist v2", below, "m");
+    expect(db.clearMemoryTombstones("s", "Coexist")).toBe(1);
+    expect(db.showEntry("s", "Coexist")?.content).toBe("coexist v2");
+  });
+
+  test("clearMemoryTombstones returns 0 and reports nothing cleared for an unknown label", () => {
+    expect(db.clearMemoryTombstones("s", "Never Existed")).toBe(0);
+  });
+
+  test("a busy store returns on the failure arm instead of throwing (fail-open drain safety)", () => {
+    db.remember("busy-store", "Busy", "busy body", base, "m");
+    // Hold the write lock on a second connection: remember's transaction
+    // cannot upgrade to a write within busy_timeout (5000ms), and the
+    // error must come back as the tool's failure string - a thrown error
+    // would surface as a host tool error, and the runtime drain gate is
+    // fail-open on unreadable output shapes, so a thrown remember could
+    // drain the buffer on a write that did not happen.
+    const lockHolder = new Database(dbPath);
+    lockHolder.run("BEGIN IMMEDIATE");
+    lockHolder.run(
+      "INSERT INTO runtime_state (kind, session_id, value, pid) VALUES ('busy-test', 'x', 'lock', 0)",
+    );
+    const result = db.remember("busy-store", "Busy Two", "busy body two", base, "m");
+    lockHolder.run("ROLLBACK");
+    lockHolder.close();
+    expect(result.ok).toBe(false);
+    const failure = result as { ok: false; error: string };
+    expect(failure.error).toContain("not saved");
+    expect(failure.error).toContain("busy");
+    expect(db.entryExists("busy-store", db.slugify("Busy Two"))).toBe(false);
+  }, 20_000);
+});
+
+// ---------------------------------------------------------------------------
 // deduplication
 // ---------------------------------------------------------------------------
 
@@ -484,7 +694,13 @@ describe("dedup", () => {
     db.markPairChecked("s", db.slugify("first"), db.slugify("second"), "duplicate");
 
     db.forgetEntry("s", "second");
-    db.remember("s", "second", "content b again", embB, "m");
+    // The re-created entry uses a fresh direction: re-using embB would be
+    // held by the forget's tombstone (identical embedding, cosine 1.0) -
+    // the guard working as designed. This direction stays a 0.85
+    // duplicate of `first` while sitting below the tombstone bar against
+    // the old `second`.
+    const embB2 = new Float32Array([0.88, 0.475, 0, 0]);
+    db.remember("s", "second", "content b again", embB2, "m");
     expect(db.findDuplicates("s", 0.85).length).toBe(1);
   });
 });

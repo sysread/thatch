@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { createHash } from "node:crypto";
 import { blobToVector, cosineSimilarity } from "./vector-math";
 import {
   PredictionEngine,
@@ -14,6 +15,73 @@ export { cosineSimilarity } from "./vector-math";
 export type { PredictionNudgeItem, MatcherRow, PredictionRow, ScoredPrediction, PredictionDedupCandidate } from "./prediction";
 export type { BehaviorNudgeItem, BehaviorRow, ScoredBehavior } from "./behavior";
 export type { ChatSessionRow, ChatInboxItem, ChatNotificationRow, ChatWorktreeKind, LeaveTombstoneReason } from "./chat";
+
+/**
+ * The tombstone hold's output prefix, homed at the actual emitter: the hold
+ * message is formatted inside remember() below, so the constant lives here
+ * rather than in tool-defs with the [saved]/[forgotten] family (that home
+ * would force db.ts to value-import the entire tool-defs tree). The runtime
+ * hook's held-counter gate imports it from here over the existing ./db
+ * edge. Like [saved] and [forgotten], both the emitter and the gate import
+ * the same constant so a wording change moves the gate with it.
+ *
+ * The message must CONTAIN no [saved] marker anywhere, not merely avoid
+ * starting with it: the MCP queue's drain gate is inclusion-based
+ * (content-array responses stringify with markers inside the JSON), so a
+ * wording tweak that let the token slip in would drain a queue on a write
+ * that never happened.
+ */
+export const MEMORY_HELD_MARKER = "[held]";
+
+/**
+ * The cosine bar for the tombstone similarity path. Higher than the 0.85
+ * live-duplicate warning because a hold is heavier than a warning; the
+ * asymmetry that justifies biasing toward matching: a false hold is
+ * visible and one-step recoverable (the message names the un-guard),
+ * while a false miss silently undoes a deliberate forget.
+ */
+export const MEMORY_TOMBSTONE_THRESHOLD = 0.9;
+
+/** SHA-256 hex of stored-form content - the tombstone's exact-match key. */
+function contentHash(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+/**
+ * SQLite busy-family errors: lock contention or a WAL snapshot conflict
+ * (a concurrent commit invalidated this transaction's read snapshot).
+ * busy_timeout retries plain lock waits but never snapshot conflicts, so
+ * both reach callers of transactional writes as thrown errors.
+ */
+function isBusyError(err: any): boolean {
+  const text = String(err?.code ?? err?.message ?? err);
+  return text.includes("SQLITE_BUSY") || text.includes("database is locked");
+}
+
+/**
+ * The surfaced hold message, formatted once here (the db layer has the
+ * tombstone's label and date) and emitted verbatim by the tool execute
+ * and the CLI. Contains no [saved] marker anywhere - see
+ * MEMORY_HELD_MARKER for why "anywhere" is the operative word. The
+ * un-guard instruction names the store explicitly because the CLI
+ * resolves it positionally and defaults to the project store: a
+ * global-store guard cleared without the store argument clears nothing.
+ */
+function heldMessage(
+  store: string,
+  label: string,
+  guard: { label: string; forgotten_at: string },
+): string {
+  const date = guard.forgotten_at.slice(0, 10);
+  return (
+    `${MEMORY_HELD_MARKER} ${store} :: ${label} - nothing was saved: this content matches a memory ` +
+    `deliberately deleted on ${date} (label "${guard.label}", store "${store}").\n` +
+    `If the deletion was right, no action is needed - do not retry this write.\n` +
+    `To deliberately re-admit this knowledge: clear the guard first with ` +
+    `\`thatch tombstones --clear ${guard.label} ${store}\` (omit the store argument for the ` +
+    `project store; a live memory sharing the label, if any, is untouched), then repeat this remember.`
+  );
+}
 
 export interface MemoryRow {
   slug: string;
@@ -478,6 +546,29 @@ export class ThatchDB {
       )
     `);
 
+    // The forget promise's guard ledger: every deliberate forget writes a
+    // row here, and every remember checks it before writing. "Deleted, and
+    // guarded" - a display of deleted content reaching the extractor
+    // re-minted a forgotten memory once (November 2026), and this table is
+    // the backstop that makes the re-mint a held, surfaced write instead.
+    // The chat_leave_tombstones precedent ages out; these do NOT - chat
+    // rows are leave markers for never-reused session ids, while this
+    // table guards re-mintable content, which is the whole point. PK
+    // allows one row per content generation per label; INSERT OR REPLACE
+    // upserts (a version-skew byte-identical re-save, later forgotten
+    // again, targets the standing row - a plain INSERT would throw).
+    this.#db.run(`
+      CREATE TABLE IF NOT EXISTS memory_tombstones (
+        store        TEXT NOT NULL,
+        slug         TEXT NOT NULL,
+        label        TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        embedding    BLOB,
+        forgotten_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        PRIMARY KEY (store, slug, content_hash)
+      )
+    `);
+
     this.#migrateColumns();
     this.#migrateEmptyBranchScope();
     this.#migrateChatNameCollation();
@@ -704,7 +795,27 @@ export class ThatchDB {
 
   /**
    * Upserts a memory entry. Returns { ok: false } if a memory with the same
-   * label already exists and `overwrite` is not set.
+   * label already exists and `overwrite` is not set, or if the content
+   * matches a tombstone (a memory deliberately deleted from this store -
+   * the write is held, not saved, and the error field carries the full
+   * surfaced message; `held` is metadata for tests and introspection, never
+   * a formatting source).
+   *
+   * The tombstone check runs BEFORE the label checks and before
+   * ensureStore: a held write creates nothing, not even a store row, and a
+   * label complaint would invite a retry that "fixes" the wrong thing.
+   * overwrite never bypasses a hold - the guard is on content, so
+   * re-writing deleted content under a live label is the same re-learn it
+   * guards on a fresh label.
+   *
+   * Check and insert run inside one transaction so a concurrent forget
+   * from another process cannot commit between them (multiple thatch
+   * processes share one db under WAL). A busy/snapshot conflict from that
+   * wrapping is CAUGHT and returned on the failure arm rather than thrown:
+   * a thrown remember would surface as a host tool error instead of this
+   * tool's failure string, and the runtime drain gate is fail-open on
+   * unreadable output shapes - a failed write draining the buffer is the
+   * silent-loss class the [saved] gate exists to prevent.
    */
   remember(
     store: string,
@@ -713,10 +824,43 @@ export class ThatchDB {
     embedding: Float32Array,
     model: string,
     opts?: { branch?: string; confidence?: number; overwrite?: boolean; archived?: boolean },
-  ): { ok: true } | { ok: false; error: string } {
+  ): { ok: true } | { ok: false; error: string; held?: { label: string; forgottenAt: string } } {
     const slug = this.slugify(label);
-    this.ensureStore(store);
 
+    try {
+      return this.transaction((): { ok: true } | { ok: false; error: string; held?: { label: string; forgottenAt: string } } => {
+        const guard = this.#findTombstoneMatch(store, content, embedding);
+        if (guard) {
+          return {
+            ok: false,
+            error: heldMessage(store, label, guard),
+            held: { label: guard.label, forgottenAt: guard.forgotten_at },
+          };
+        }
+
+        this.ensureStore(store);
+        return this.#writeEntry(store, slug, label, content, embedding, model, opts);
+      });
+    } catch (err: any) {
+      if (isBusyError(err)) {
+        return {
+          ok: false,
+          error: `The memory was not saved - the store was busy (another thatch process was writing). Retry the write.`,
+        };
+      }
+      throw err;
+    }
+  }
+
+  #writeEntry(
+    store: string,
+    slug: string,
+    label: string,
+    content: string,
+    embedding: Float32Array,
+    model: string,
+    opts?: { branch?: string; confidence?: number; overwrite?: boolean; archived?: boolean },
+  ): { ok: true } | { ok: false; error: string } {
     const blob = new Uint8Array(embedding.buffer, embedding.byteOffset, embedding.byteLength);
     // branch: "" is not a scope - git refnames cannot be empty, and a
     // detached HEAD yields "" from git branch --show-current, so an agent
@@ -933,12 +1077,119 @@ export class ThatchDB {
     return row as unknown as MemoryRow;
   }
 
+  /**
+   * Removes a memory by label and writes the deletion guard. The write is
+   * transactional and WRITE-LOCK-FIRST (bun:sqlite's immediate mode): the
+   * lock is taken before the row read, so no read-then-write snapshot
+   * hazard and no stale-read window (a concurrent overwrite cannot commit
+   * between the read and the tombstone insert). Tombstone before delete,
+   * the chat subsystem's ordering for the same hazard class (an in-flight
+   * write resurrecting a just-deleted thing).
+   *
+   * A failed lock acquisition throws (a host tool error, naturally
+   * retried) rather than returning a false miss - telling the agent the
+   * label was wrong would send it did-you-mean hunting for a memory that
+   * exists. The insert is INSERT OR REPLACE: the reachable collision path
+   * is version skew (an un-upgraded writer saved byte-identical content
+   * over a standing tombstone; forgetting that entry re-inserts the
+   * standing (store, slug, content_hash) row). Concurrent double-forget
+   * cannot collide under the lock-first shape - the second forget's
+   * under-lock read finds no row and does nothing.
+   */
   forgetEntry(store: string, label: string): boolean {
     const slug = this.slugify(label);
-    if (!this.entryExists(store, slug)) return false;
-    this.#db.run("DELETE FROM entries WHERE slug = ? AND store = ?", [slug, store]);
-    this.#db.run("DELETE FROM dedup_pairs WHERE store = ? AND (slug_a = ? OR slug_b = ?)", [store, slug, slug]);
-    return true;
+    let deleted = false;
+    // Write-lock-first: BEGIN IMMEDIATE takes the write lock at transaction
+    // start, BEFORE the row read (bun's transaction() flag form works at
+    // runtime but is not in its type definitions, and the explicit BEGIN
+    // states the lock ordering better than a boolean argument anyway).
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.#db
+        .query("SELECT content, embedding FROM entries WHERE slug = ? AND store = ?")
+        .get(slug, store) as { content: string; embedding: Uint8Array | null } | null;
+      if (row) {
+        this.#db.run(
+          "INSERT OR REPLACE INTO memory_tombstones (store, slug, label, content_hash, embedding, forgotten_at) VALUES (?, ?, ?, ?, ?, ?)",
+          [store, slug, label, contentHash(row.content), row.embedding ?? null, new Date().toISOString()],
+        );
+        this.#db.run("DELETE FROM entries WHERE slug = ? AND store = ?", [slug, store]);
+        this.#db.run("DELETE FROM dedup_pairs WHERE store = ? AND (slug_a = ? OR slug_b = ?)", [store, slug, slug]);
+        deleted = true;
+      }
+      this.#db.exec("COMMIT");
+    } catch (err) {
+      try {
+        this.#db.exec("ROLLBACK");
+      } catch {
+        /* the transaction already failed closed */
+      }
+      throw err;
+    }
+    return deleted;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tombstones (the forget guard ledger)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The write-time tombstone check, scoped to one store (matching the
+   * data model's store-scoped symmetry). Exact hash first - free, exact,
+   * and dimension-independent - then the dimension-guarded cosine sweep
+   * over the store's embedded tombstones. NULL-embedding rows (a
+   * never-embedded forgotten entry) are skipped like dimension
+   * mismatches; their hash path still covers them.
+   */
+  #findTombstoneMatch(
+    store: string,
+    content: string,
+    embedding: Float32Array,
+  ): { label: string; forgotten_at: string } | null {
+    const exact = this.#db
+      .query("SELECT label, forgotten_at FROM memory_tombstones WHERE store = ? AND content_hash = ?")
+      .get(store, contentHash(content)) as { label: string; forgotten_at: string } | undefined;
+    if (exact) return exact;
+
+    const rows = this.#db
+      .query("SELECT label, forgotten_at, embedding FROM memory_tombstones WHERE store = ? AND embedding IS NOT NULL")
+      .all(store) as any[];
+    for (const r of rows) {
+      const emb = blobToVector(r.embedding);
+      if (emb.length !== embedding.length) continue;
+      if (cosineSimilarity(embedding, emb) >= MEMORY_TOMBSTONE_THRESHOLD) {
+        return { label: r.label, forgotten_at: r.forgotten_at };
+      }
+    }
+    return null;
+  }
+
+  /** Lists a store's standing guards: label, date, hash prefix. */
+  listMemoryTombstones(store: string): { slug: string; label: string; forgottenAt: string; hashPrefix: string }[] {
+    return (this.#db
+      .query("SELECT slug, label, forgotten_at, content_hash FROM memory_tombstones WHERE store = ? ORDER BY forgotten_at DESC")
+      .all(store) as any[]).map((r) => ({
+        slug: r.slug,
+        label: r.label,
+        forgottenAt: r.forgotten_at,
+        hashPrefix: String(r.content_hash).slice(0, 12),
+      }));
+  }
+
+  /**
+   * The explicit un-guard: removes all tombstone rows for the (store,
+   * slug) - every content generation under the label - and touches
+   * nothing else. Never touches entries: in the coexist state (a live
+   * entry plus a same-label tombstone from an earlier generation) the
+   * live entry survives the clear. Takes the label, the tool/CLI
+   * currency, and resolves it through the same slugify the forget keyed
+   * on.
+   */
+  clearMemoryTombstones(store: string, label: string): number {
+    const slug = this.slugify(label);
+    this.#db.run("DELETE FROM memory_tombstones WHERE store = ? AND slug = ?", [store, slug]);
+    const changed = this.#db.query("SELECT changes() AS n").get() as { n: number };
+    return changed.n;
   }
 
   // ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendBatch, peekQueue, consumeQueue, queueDir, getMissedCount, incrementMissedCount, resetMissedCount, type BatchToolCall } from "../src/extract-queue";
-import { buildExtractionPayload } from "../src/extraction";
+import { buildExtractionPayload, MEMORY_DISPLAY_STAMP, MEMORY_WITHHELD_PLACEHOLDER } from "../src/extraction";
 
 let dir: string;
 let originalQueueDir: string | undefined;
@@ -282,6 +282,66 @@ describe("missed-nudge counter", () => {
     ]);
     expect(getMissedCount("drain-session")).toBe(0);
     expect(peekQueue("drain-session").length).toBe(1);
+  });
+
+  test("a stamped string response is buffered as the placeholder (display guard)", () => {
+    // The incident vector: a bash `thatch show` whose stdout carries a
+    // memory's content behind the display stamp. The queue row must hold
+    // the placeholder, never the content.
+    appendBatch("stamp-string-session", [
+      call("Bash", { command: "thatch show Some Memory" }, MEMORY_DISPLAY_STAMP + "\n[sysread/thatch] Some Memory\n\nthe memory body"),
+    ]);
+    const queued = peekQueue("stamp-string-session");
+    expect(queued.length).toBe(1);
+    expect(queued[0].output).toBe(MEMORY_WITHHELD_PLACEHOLDER);
+    expect(queued[0].output).not.toContain("the memory body");
+  });
+
+  test("a stamped content-array response is buffered as the placeholder (escaped forms, pre-slice)", () => {
+    // MCP hosts deliver tool_response as content blocks: the stamp lands
+    // at a JSON string-value start, recognized only by the escaped form -
+    // and the guard must run before the array path's 500-char cap, or a
+    // marker deep in a large output would be sliced away.
+    appendBatch("stamp-array-session", [
+      call("Bash", { command: "thatch show Some Memory" }, [
+        { type: "text", text: MEMORY_DISPLAY_STAMP + "\n[sysread/thatch] Some Memory\n\nthe memory body" },
+      ]),
+    ]);
+    const queued = peekQueue("stamp-array-session");
+    expect(queued.length).toBe(1);
+    expect(queued[0].output).toBe(MEMORY_WITHHELD_PLACEHOLDER);
+  });
+
+  test("the array-path guard fires even when the marker lands past the 500-char cap", () => {
+    // Guard-before-slice is load-bearing: this output's serialized marker
+    // sits beyond character 500, so a post-slice guard would miss it.
+    const padded = "x".repeat(600) + "\n" + MEMORY_DISPLAY_STAMP + "\nthe memory body";
+    appendBatch("stamp-late-array-session", [
+      call("Bash", { command: "thatch show Some Memory" }, [
+        { type: "text", text: padded },
+      ]),
+    ]);
+    const queued = peekQueue("stamp-late-array-session");
+    expect(queued[0].output).toBe(MEMORY_WITHHELD_PLACEHOLDER);
+  });
+
+  test("an unstamped array response keeps its 500-char cap (behavior preserved)", () => {
+    const padded = "y".repeat(700);
+    appendBatch("plain-array-session", [
+      call("Bash", { command: "ls" }, [
+        { type: "text", text: padded },
+      ]),
+    ]);
+    const queued = peekQueue("plain-array-session");
+    expect(queued[0].output.length).toBe(500);
+  });
+
+  test("an unstamped string response buffers whole, as before", () => {
+    appendBatch("plain-string-session", [
+      call("Bash", { command: "ls" }, "z".repeat(700)),
+    ]);
+    const queued = peekQueue("plain-string-session");
+    expect(queued[0].output.length).toBe(700);
   });
 });
 

@@ -64,6 +64,9 @@ execution directly via bun assertions. These are fast and run in parallel.
 | UC-026 | behavior-dedup | cosine >= 0.85 dedup for matchers and behaviors |
 | UC-027 | behavior-confidence-model | ham/spam adjusts Bayesian confidence |
 | UC-028 | behavior-delete | semantic-match deletion with cascade |
+| UC-131 | cli-memory-write | `thatch remember` end to end over the single write path |
+| UC-143 | memory-display-stamp | stamped displays withheld at both buffer sites + the funnel (Layer 1) |
+| UC-144 | forget-tombstones | deletion guards hold matching re-writes; `thatch tombstones` list/clear (Layer 2) |
 
 ### Live use cases
 

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { deriveTitle, type ToolInteraction } from "./extraction";
+import { deriveTitle, guardInteractionOutput, type ToolInteraction } from "./extraction";
 import { MEMORY_SAVED_MARKER } from "./tool-defs";
 
 /**
@@ -112,9 +112,20 @@ export function appendBatch(sessionID: string, toolCalls: BatchToolCall[]): void
       lower === "skill" || lower === "task" || lower === "agent" || lower === "subagent" ||
       lower === "subagenthandback" || lower === "toolsearch"
     ) continue;
-    const response = typeof tc.tool_response === "string"
+    // Display guard, post-stringify and pre-slice: the array path
+    // stringifies content blocks into JSON, where only the escaped marker
+    // forms can be recognized, and the 500-char cap below would cut a
+    // marker that lands deep in a large output. Guarding after the cap
+    // would make the guard unreliable for exactly the array-shaped
+    // responses MCP hosts deliver (the recorded reason the [saved] gate
+    // here is inclusion-based).
+    const raw: string = typeof tc.tool_response === "string"
       ? tc.tool_response
-      : JSON.stringify(tc.tool_response).slice(0, 500);
+      : JSON.stringify(tc.tool_response);
+    const guarded = guardInteractionOutput(raw);
+    const response = guarded !== raw || typeof tc.tool_response === "string"
+      ? guarded
+      : guarded.slice(0, 500);
     additions.push({
       tool: tc.tool_name,
       sessionID,

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createDebugLog, type DebugLog } from "./debug";
-import { ThatchDB, repoPathCache } from "./db";
+import { ThatchDB, repoPathCache, MEMORY_HELD_MARKER } from "./db";
 import { chatOpenTabs as chatOpenTabsProvider } from "./tab-state";
 import { SharedModelPool } from "./embeddings";
 import { detectRepo, detectWorktreeKind, resolveSpawnCwd } from "./git";
@@ -862,7 +862,7 @@ export async function createRuntime(input: {
   // child session goes idle, these counts are formatted into a toast that
   // shows the user thatch is working without polluting the conversation.
   // Keyed by child session ID. Cleaned up on child idle, error, or deletion.
-  const childMetrics = new Map<string, { new: number; updated: number; deleted: number }>();
+  const childMetrics = new Map<string, { new: number; updated: number; deleted: number; held: number }>();
 
   // Journal the child bookkeeping (parent link, buffer snapshot, metrics) so
   // a v2 plugin reload can rehydrate an in-flight extraction instead of
@@ -883,7 +883,7 @@ export async function createRuntime(input: {
       kind: extractionChildren.has(childId) ? "extraction" : "task",
       parentID,
       snapshot: parentSnapshots.get(childId) ?? [],
-      metrics: childMetrics.get(childId) ?? { new: 0, updated: 0, deleted: 0 },
+      metrics: childMetrics.get(childId) ?? { new: 0, updated: 0, deleted: 0, held: 0 },
     }, directory);
   };
 
@@ -1035,7 +1035,7 @@ export async function createRuntime(input: {
       // in the restart branch above.
       for (const id of (row.value ?? []) as string[]) rehostedSessions.add(id);
     } else if (row.kind === "child") {
-      const rec = row.value as { kind?: "extraction" | "task"; parentID?: string; snapshot?: ToolInteraction[]; metrics?: { new: number; updated: number; deleted: number } };
+      const rec = row.value as { kind?: "extraction" | "task"; parentID?: string; snapshot?: ToolInteraction[]; metrics?: { new: number; updated: number; deleted: number; held?: number } };
       if (samePid && rec?.parentID) {
         // Reload: the child may still be running - restore its live
         // bookkeeping so its idle event finds the maps populated. The
@@ -1050,7 +1050,11 @@ export async function createRuntime(input: {
         childKinds.set(row.sessionID, kind);
         childToParent.set(row.sessionID, rec.parentID);
         parentSnapshots.set(row.sessionID, rec.snapshot ?? []);
-        if (rec.metrics) childMetrics.set(row.sessionID, rec.metrics);
+        if (rec.metrics) {
+          // Pre-upgrade journaled rows carry no held field; default it so
+          // the toast branch below never reads undefined.
+          childMetrics.set(row.sessionID, { ...rec.metrics, held: rec.metrics.held ?? 0 });
+        }
         if (kind === "extraction") {
           extractionChildren.add(row.sessionID);
           extracting.add(rec.parentID);
@@ -1381,13 +1385,17 @@ export async function createRuntime(input: {
 
       // Fire a toast with the extraction metrics. Only show a toast when
       // memories were actually written - no toast for no-save runs to avoid
-      // notification fatigue.
+      // notification fatigue. The one knowing exception: `held` fires the
+      // toast on an otherwise no-save run, because a tombstone guard
+      // refusing a write is exactly the visibility this toast exists for
+      // (silent guards are how the forget-undo bug class stayed invisible).
       const metrics = childMetrics.get(sessionID);
       const parts: string[] = [];
       if (metrics) {
         if (metrics.new > 0) parts.push(`new: ${metrics.new}`);
         if (metrics.updated > 0) parts.push(`updated: ${metrics.updated}`);
         if (metrics.deleted > 0) parts.push(`deleted: ${metrics.deleted}`);
+        if (metrics.held > 0) parts.push(`held: ${metrics.held}`);
       }
       if (parts.length > 0) {
         try {
@@ -1752,7 +1760,7 @@ export async function createRuntime(input: {
     // extraction children (extractionChildren set) on idle.
     const parentID = childToParent.get(sessionID);
     if (parentID) {
-      const metrics = childMetrics.get(sessionID) ?? { new: 0, updated: 0, deleted: 0 };
+      const metrics = childMetrics.get(sessionID) ?? { new: 0, updated: 0, deleted: 0, held: 0 };
       if (overwrite) metrics.updated++;
       else metrics.new++;
       childMetrics.set(sessionID, metrics);
@@ -1812,9 +1820,25 @@ export async function createRuntime(input: {
     }
   };
   const toolMemoryForget = (sessionID: string) => {
-    const metrics = childMetrics.get(sessionID) ?? { new: 0, updated: 0, deleted: 0 };
+    const metrics = childMetrics.get(sessionID) ?? { new: 0, updated: 0, deleted: 0, held: 0 };
     metrics.deleted++;
     childMetrics.set(sessionID, metrics);
+  };
+  // A held write: the tombstone guard refused the save. Counts for the
+  // toast but DRAINS NOTHING - a hold is not a save (the [saved]-gates
+  // stay closed; the run completes via extraction_done as on any no-save
+  // run). This knowingly overrides the no-save toast suppression below: a
+  // guard firing is exactly the visibility the toast exists for. Note
+  // "held" here is the tombstone hold - a third sense alongside the
+  // extraction buffer's accepted-held entries and chat's budget-split
+  // message clipping; the gotchas entry disambiguates all three.
+  const toolMemoryHeld = (sessionID: string) => {
+    const parentID = childToParent.get(sessionID);
+    if (!parentID) return;
+    const metrics = childMetrics.get(sessionID) ?? { new: 0, updated: 0, deleted: 0, held: 0 };
+    metrics.held++;
+    childMetrics.set(sessionID, metrics);
+    journalChild(sessionID);
   };
 
   // The wrap-up tools' greenlight callback factory (the state-access seam:
@@ -1940,17 +1964,22 @@ export async function createRuntime(input: {
     onToolExecuteAfter: async (input, output) => {
       const { tool, sessionID } = input;
       if (tool === "thatch_memory_remember") {
-        // A remember call whose output is a string either saved or returned
-        // teaching guidance (missing or misnamed args, nothing written).
-        // Only a save may drain the extraction buffer and complete claims -
-        // the write is the proof the delivered entries were processed. The
-        // gate is fail-open: an output shape we cannot read (legacy hosts)
-        // keeps the unconditional drain, so a payload change can only cost
-        // the false-positive it has today, never stall the buffer. The
-        // prefix test is exact because tool outputs are marker-first.
+        // A remember call whose output is a string either saved, returned
+        // teaching guidance (missing or misnamed args, nothing written),
+        // or was HELD by the tombstone guard (nothing written, the hold
+        // message says so). Only a save may drain the extraction buffer
+        // and complete claims - the write is the proof the delivered
+        // entries were processed. A hold counts for the toast but drains
+        // nothing. The gate is fail-open: an output shape we cannot read
+        // (legacy hosts) keeps the unconditional drain, so a payload
+        // change can only cost the false-positive it has today, never
+        // stall the buffer. The prefix test is exact because tool outputs
+        // are marker-first.
         const outputText = typeof output.output === "string" ? output.output : null;
         if (outputText === null || outputText.startsWith(MEMORY_SAVED_MARKER)) {
           await toolMemoryRemember(sessionID, (input.args as Record<string, unknown> | undefined)?.overwrite);
+        } else if (outputText.startsWith(MEMORY_HELD_MARKER)) {
+          toolMemoryHeld(sessionID);
         }
         return;
       }

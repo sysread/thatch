@@ -10,6 +10,7 @@
 
 import { describe, test, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { setup } from "../src/opencode/v2";
+import { MEMORY_DISPLAY_STAMP } from "../src/extraction";
 import {
   addedTools,
   contextHook,
@@ -167,6 +168,65 @@ describe("plugin entry", () => {
       { sessionID: "ses_ext_c", agent: "general" },
     );
     expect(textOf(drained)).not.toContain("README.md");
+  });
+
+  test("a stamped memory display is buffered as the placeholder, never as content", async () => {
+    // The incident vector on the opencode path: a bash `thatch show` whose
+    // result carries a memory's content behind the display stamp. The
+    // push-site guard swaps the whole output for the placeholder before
+    // it ever buffers, so the payload the extractor fetches carries no
+    // memory content to re-derive.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_display",
+      input: { command: "thatch show Some Memory" },
+      status: "completed",
+      result: { content: MEMORY_DISPLAY_STAMP + "\n[sysread/thatch] Some Memory\n\nthe memory body" },
+    });
+    const payloadTool = addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
+    const served = await payloadTool.execute(
+      { session_id: "ses_display" },
+      { sessionID: "ses_ext_display", agent: "general" },
+    );
+    const text = textOf(served);
+    expect(text).toContain("output withheld from extraction");
+    expect(text).not.toContain("the memory body");
+  });
+
+  test("an execute-wrapped remember drains without an output gate (the recorded Code Mode exception)", async () => {
+    // The wrap detection scans the execute call's CODE and cannot see
+    // results, so a wrapped remember drains the calling session's buffer
+    // unconditionally - including a wrapped write that was held by a
+    // tombstone guard. That false-positive class is accepted by design
+    // (a marker gate here would false-negative real saves and stall the
+    // buffer); this test pins the exception so a future "fix" cannot
+    // silently change it.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_wrap",
+      input: { command: "ls" },
+      status: "completed",
+      result: { content: "README.md" },
+    });
+
+    // A Code Mode execute call wrapping a remember: the hook runs the
+    // wrapped tool's semantics (drain) with no output gate of any kind.
+    await toolAfterHook!({
+      tool: "execute",
+      sessionID: "ses_wrap",
+      input: { code: 'await tools.thatch_memory_remember({ label: "x", content: "y" });' },
+      status: "completed",
+      result: { content: "done" },
+    });
+
+    const payloadTool = addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
+    const after = await payloadTool.execute(
+      { session_id: "ses_wrap" },
+      { sessionID: "ses_ext_wrap", agent: "general" },
+    );
+    expect(textOf(after)).not.toContain("README.md");
   });
 
   test("thatch's own tools are not buffered for extraction", async () => {

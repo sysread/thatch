@@ -23,8 +23,10 @@ command list instead.
 thatch stores                  # list all stores
 thatch list [store]            # list memory labels in a store
 thatch show <label> [store]    # display one memory by label
-thatch forget <label> [store]  # delete one memory by label
+thatch forget <label> [store]  # delete one memory by label (leaves a guard)
 thatch search <query> [store]  # semantic search (cosine similarity)
+thatch tombstones [store]      # list deleted-memory guards
+thatch tombstones --clear <label> [store]  # remove one guard (the re-admission path)
 ```
 
 Store defaults to your current git repo (detected from `git remote

@@ -306,6 +306,35 @@ memory tools:
   and the MCP-host queue (src/extract-queue.ts) import
   `MEMORY_SAVED_MARKER`/`MEMORY_FORGOTTEN_MARKER` from src/tool-defs.ts so a
   wording change on one side cannot silently stall the drain on the other.
+  There are now THREE marker homes, each at its actual emitter: the
+  `[saved]`/`[forgotten]` family in src/tool-defs.ts (the tool-execute
+  emitter), `[held]` in src/db.ts (`db.remember` formats the tombstone
+  hold message; a tool-defs home would drag the heavy tool-defs tree into
+  every db.ts consumer), and `[memory-display]` in src/extraction.ts (the
+  recognizer side - extraction.ts is a zero-import leaf the light MCP
+  paths depend on). When adding a marker, home it at the module that
+  emits it and check the import direction before placing it.
+- **Any new surface that displays stored memory content must stamp its
+  output with the display marker** (MEMORY_DISPLAY_STAMP from
+  src/extraction.ts, first line) so the extraction buffer sites withhold
+  it - an unstamped display fed the extractor its own store back and
+  once silently undid a deliberate forget (November 2026). Labels-only
+  listings owe no stamp. Surfaces that cannot stamp (session JSON
+  commands, chat bodies, export files) are named residuals in
+  docs/dev/features/extraction.md. Related discipline: never place the
+  marker token at the start of a line in source, tests, or docs, and
+  never write its anchor sequences (colon-quote-token,
+  colon-space-quote-token, backslash-n-token) literally - compose
+  fixtures from the constant; a file that violates this gets its own
+  reads withheld from extraction.
+- **"Guard" and "held" each carry multiple senses in this codebase.**
+  Guard: the Layer 1 display guard (the buffer-site stamp check in
+  src/extraction.ts) vs the Layer 2 tombstone guard (the write-path
+  check in src/db.ts) - two mechanisms, one word. Held: the tombstone
+  hold (a refused memory write), the extraction buffer's accepted-held
+  entries (src/extraction.ts), and chat's budget-split message clipping.
+  The comments at each site name which sense they mean; keep it that way
+  when touching any of them.
 - **Residual classes, accepted**: bare positional strings, wrong-type
   values (`content: 123`, `label: 42`), and misnamed keys on tools whose
   required params are semantically unavoidable (`memory_recall`'s `query`,

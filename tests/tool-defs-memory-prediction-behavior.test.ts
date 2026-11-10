@@ -3,6 +3,8 @@
 import { describe, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { TOOL_DEFS, formatAge, MEMORY_SAVED_MARKER, MEMORY_FORGOTTEN_MARKER } from "../src/tool-defs";
+import { MEMORY_DISPLAY_STAMP } from "../src/extraction";
+import { MEMORY_HELD_MARKER } from "../src/db";
 import { compileTools } from "../src/mcp";
 import { setupToolDefsHarness, ctx, db, model, dbPath, defaultStore } from "./mocks/tool-defs-harness";
 
@@ -229,6 +231,59 @@ describe("tool-defs execute functions", () => {
     expect(shown).toContain("This memory was last updated");
     const listed = await list.execute({}, ctx);
     expect(listed).not.toContain("point-in-time record");
+  });
+
+  test("memory_show and memory_recall outputs carry the display stamp as the first line", async () => {
+    // The stamp is the buffer guard's recognition contract for these
+    // displays: content-bearing memory tool outputs begin with the
+    // [memory-display] marker line so any embedding of them (session
+    // dumps, JSON serialization) stays recognizable. The fixture is
+    // composed from the constant, per the self-collision discipline.
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const show = TOOL_DEFS.find((t) => t.name === "memory_show")!;
+    const recall = TOOL_DEFS.find((t) => t.name === "memory_recall")!;
+    await remember.execute({ label: "Stamped", content: "Stamped content" }, ctx);
+    const shown = await show.execute({ label: "Stamped" }, ctx);
+    expect(shown.split("\n")[0]).toBe(MEMORY_DISPLAY_STAMP);
+    const recalled = await recall.execute({ query: "Stamped" }, ctx);
+    expect(recalled.split("\n")[0]).toBe(MEMORY_DISPLAY_STAMP);
+    // The empty-recall path bypasses withMemoryCaveat and stays unstamped.
+    const empty = await recall.execute({ query: "no match at all", store: "empty-store" }, ctx);
+    expect(empty).toBe("No matching memories found.");
+  });
+
+  test("a tombstone hold surfaces through memory_remember's failure string", async () => {
+    // forget means "deleted, and guarded": re-saving the same content
+    // through the single write path is held, the message names the guard
+    // and the un-guard command, and the write did not happen. The [held]
+    // text must contain no [saved] marker anywhere - the MCP queue's
+    // drain gate is inclusion-based, so a stray token would drain a
+    // queue on a write that never happened.
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const forget = TOOL_DEFS.find((t) => t.name === "memory_forget")!;
+    const show = TOOL_DEFS.find((t) => t.name === "memory_show")!;
+    await remember.execute({ label: "Held One", content: "held body" }, ctx);
+    const forgotten = await forget.execute({ label: "Held One" }, ctx);
+    expect(forgotten).toContain(MEMORY_FORGOTTEN_MARKER);
+
+    const result = await remember.execute({ label: "Held One", content: "held body" }, ctx);
+    expect(result.startsWith(MEMORY_HELD_MARKER)).toBe(true);
+    expect(result).not.toContain(MEMORY_SAVED_MARKER);
+    expect(result).toContain("deliberately deleted on");
+    expect(result).toContain(`thatch tombstones --clear Held One ${defaultStore}`);
+    // Nothing was saved: the label reads as absent again.
+    expect(await show.execute({ label: "Held One" }, ctx)).toContain("No memory labeled");
+  });
+
+  test("the un-guard flow through the db layer: clear, then the remember saves", async () => {
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    await remember.execute({ label: "Readmit", content: "readmit body" }, ctx);
+    await TOOL_DEFS.find((t) => t.name === "memory_forget")!.execute({ label: "Readmit" }, ctx);
+    const held = await remember.execute({ label: "Readmit", content: "readmit body" }, ctx);
+    expect(held.startsWith(MEMORY_HELD_MARKER)).toBe(true);
+    expect(db.clearMemoryTombstones(defaultStore, "Readmit")).toBe(1);
+    const saved = await remember.execute({ label: "Readmit", content: "readmit body" }, ctx);
+    expect(saved.startsWith(MEMORY_SAVED_MARKER)).toBe(true);
   });
 
   test("memory_recall without results carries no caveat", async () => {

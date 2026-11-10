@@ -59,6 +59,16 @@ surfaces candidates; the agent decides what to do.
 - Overwriting or forgetting an entry clears all verdicts involving that slug
   (`DELETE` in `remember()` and `forgetEntry()`)
 
+### Tombstone interaction (November 2026)
+
+Forgetting the merged-away duplicate writes a deletion guard over its
+content (see [memory-store.md](memory-store.md)). A later edit of the
+merged entry that matches the forgotten content - by hash or by cosine
+similarity >= 0.90 against the tombstone's embedding - is held with a
+`[held]` message naming the guard and the `thatch tombstones --clear`
+command. The merge itself is unaffected (the merged write precedes the
+forget, so no guard exists when it lands); only later re-drift is held.
+
 ### thatch-dedup-classifier skill
 
 - Shared skill (`artifacts/skills/thatch-dedup-classifier.md`)

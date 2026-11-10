@@ -14,7 +14,7 @@ The tables fall into these groups:
 
 | Group | Tables | Purpose |
 |-------|--------|---------|
-| Memory | `stores`, `entries`, `dedup_pairs` | Core memory CRUD + dedup verdicts |
+| Memory | `stores`, `entries`, `dedup_pairs`, `memory_tombstones` | Core memory CRUD + dedup verdicts + deletion guards |
 | Prediction engine | `prediction_matchers`, `predictions`, `prediction_edges`, `prediction_provenance` | User decision model |
 | Behavior engine | `behavior_matchers`, `behaviors`, `behavior_edges`, `behavior_provenance` | LLM self-discipline rules |
 | Cross-session chat | `chat_sessions`, `chat_messages` | Session directory + message inbox (shared across opencode processes) |
@@ -81,6 +81,35 @@ dedup_pairs(
 - Slugs stored sorted (a < b) for canonical matching.
 - `status`: "duplicate", "supplement", "contradiction", or "unrelated".
 - Overwriting or forgetting either memory clears the verdict (DELETE in `remember()` and `forgetEntry()`).
+
+### memory_tombstones
+
+The forget guard ledger: every deliberate forget writes a row, and every
+remember checks the store's rows before writing ("deleted, and
+guarded" - see [memory-store.md](memory-store.md)).
+
+```sql
+memory_tombstones(
+  store TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  label TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  embedding BLOB,
+  forgotten_at TEXT NOT NULL,
+  PRIMARY KEY (store, slug, content_hash)
+)
+```
+
+- `content_hash`: SHA-256 hex of the stored-form content - the exact-match
+  key at the write check.
+- `embedding`: the deleted entry's embedding blob for the similarity
+  path; NULL rows are skipped by it (the hash path still covers them).
+- PK allows one row per content generation per label; the forget's insert
+  is INSERT OR REPLACE (the version-skew collision path).
+- No TTL, unlike `chat_leave_tombstones`: chat rows are leave markers for
+  never-reused session ids, while these guard re-mintable content.
+- Rows are removed only by `clearMemoryTombstones` (the
+  `thatch tombstones --clear` un-guard), which never touches entries.
 
 ## Prediction engine tables
 

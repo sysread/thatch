@@ -175,11 +175,100 @@ export function unwrapExecuteThatchCalls(args: unknown): ExecuteUnwrap {
 }
 
 /**
+ * The memory-display stamp. Emitters whose output shows stored memory
+ * content (the CLI `thatch show` command, the memory_show/memory_recall
+ * tools via withMemoryCaveat) print this line first, so the extraction
+ * buffer sites can recognize the display and withhold the output - a
+ * display of a memory is not new extractable material, and re-deriving
+ * from one mints store pollution (a deliberate forget was undone this
+ * way, November 2026: a bash `thatch show` output sat in the buffer and
+ * the extractor re-minted the deleted memory from it ~90 seconds after
+ * the forget).
+ *
+ * The token lives HERE (the recognizer module) rather than in tool-defs
+ * with the [saved]/[forgotten] family, because extraction.ts is a
+ * zero-import leaf shared by the light MCP paths: a tool-defs home would
+ * drag the heavy tool-defs tree into every leaf consumer. The emitters
+ * import the constant from here - the import direction is the whole
+ * point.
+ */
+export const MEMORY_DISPLAY_MARKER = "[memory-display]";
+
+/** The full first line emitters print ahead of displayed memory content. */
+export const MEMORY_DISPLAY_STAMP = `${MEMORY_DISPLAY_MARKER} stored thatch memory content follows`;
+
+/**
+ * The replacement for a recognized display output at buffer time. Kept
+ * short: it must survive the payload's 500-char truncation, and the
+ * extractor needs the instruction, not the content it replaces. Contains
+ * no marker token, so guarding is idempotent (the placeholder itself is
+ * never mistaken for a display).
+ */
+export const MEMORY_WITHHELD_PLACEHOLDER =
+  "[thatch] output withheld from extraction: this tool's output displayed " +
+  "existing thatch memory content (already stored, or deliberately removed). " +
+  "It is not extractable material - do not re-derive memories from it.";
+
+/**
+ * The three anchored recognition forms, built from the constant so this
+ * file never contains the anchor sequences literally (see the discipline
+ * note below). Raw text: the token at the start of a line (covers the
+ * opencode tool-result string, bash stdout, CLI stdout). Serialized JSON:
+ * the token after a string-value opening (colon, optional whitespace,
+ * quote - covers MCP content-block responses and pretty-printed JSON
+ * alike) and after a literal backslash-n (covers an embedded marker line
+ * that follows other lines inside one JSON string). The two escaped
+ * forms are what make embedding transitive: a session dump or
+ * JSON-serialized content block carrying a stamped output is recognized
+ * even though JSON escaping buries the token mid-line. Deliberately NOT
+ * a bare substring match: this repo quotes its own token in source,
+ * tests, and docs, and substring matching would withhold every
+ * thatch-dev session's read of the extraction surface.
+ */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const MARKER_FORMS = new RegExp(
+  `^${escapeRegExp(MEMORY_DISPLAY_MARKER)}` +
+    `|:\\s*"${escapeRegExp(MEMORY_DISPLAY_MARKER)}` +
+    `|\\\\n${escapeRegExp(MEMORY_DISPLAY_MARKER)}`,
+  "m",
+);
+
+/**
+ * Whole-output replacement for stamped displays: recognized marker form
+ * in, placeholder out, everything else passes through untouched. Replacing
+ * the ENTIRE output is deliberately conservative - a bash call like
+ * `thatch show x && ls` loses the `ls` facts too, because surgically
+ * separating the memory span from the rest is content classification,
+ * the fragile problem class the stamp exists to avoid. Withholding is
+ * the safe direction.
+ *
+ * Source discipline for anyone touching this or quoting the marker:
+ * never place the token at the start of a line in source, tests, or
+ * docs, and never write the anchor sequences (colon-quote-token,
+ * colon-space-quote-token, backslash-n-token) literally in any file -
+ * compose fixtures from the constant instead. Files that violate this
+ * get their own reads withheld from extraction.
+ */
+export function guardInteractionOutput(output: string): string {
+  return MARKER_FORMS.test(output) ? MEMORY_WITHHELD_PLACEHOLDER : output;
+}
+
+/**
  * Serialize a list of tool interactions into the JSON payload the
  * thatch-fact-extractor skill expects. Shared by the opencode plugin path
  * (in-memory buffer) and the Claude Code CLI path (file-backed queue) so the
  * extractor sees an identical contract regardless of host. The agent itself
  * does the actual fact extraction - this function only collects and serializes.
+ *
+ * The output is guarded HERE as well as at both buffer sites: this is the
+ * single funnel every payload passes through (buffer build, queue fetch,
+ * inline delivery), so it backstops rows written by an un-upgraded buffer
+ * side in the version-skew window and any future third buffer site that
+ * forgets the guard. Guard before truncating so a marker anywhere in a
+ * long output is still recognized.
  */
 export function buildExtractionPayload(
   interactions: ToolInteraction[],
@@ -189,7 +278,7 @@ export function buildExtractionPayload(
     tool: ix.tool,
     title: ix.title,
     args: summarizeArgs(ix.tool, ix.args),
-    output: truncate(ix.output, 500),
+    output: truncate(guardInteractionOutput(ix.output), 500),
   }));
 
   return JSON.stringify({
@@ -254,9 +343,21 @@ export class ExtractionPipeline {
 
   /** Record a tool execution for later extraction. */
   push(interaction: ToolInteraction): void {
+    // Display guard BEFORE the cap: an output that shows stored memory
+    // content is withheld at this, the single entry point every push
+    // caller funnels through - the runtime hook, the journal-snapshot
+    // re-push, and any future site. An unstamped display fed the
+    // extractor its own store back and undid a deliberate forget
+    // (November 2026). Identity is preserved when nothing matches (the
+    // claim/snapshot machinery matches entries by reference), mirroring
+    // capInteraction's contract below.
+    const guardedOutput = guardInteractionOutput(interaction.output);
+    const guarded: ToolInteraction = guardedOutput === interaction.output
+      ? interaction
+      : { ...interaction, output: guardedOutput };
     // Cap here, at the single entry point, so every consumer (payload,
     // child snapshots, the runtime_state journal) sees the bounded shape.
-    const capped = capInteraction(interaction);
+    const capped = capInteraction(guarded);
     const buf = this.#buffers.get(interaction.sessionID) ?? [];
     buf.push(capped);
     this.#buffers.set(interaction.sessionID, buf.slice(-this.#maxBuffer));

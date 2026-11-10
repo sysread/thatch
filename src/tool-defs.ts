@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ThatchDB, DedupCandidate, MemoryRow } from "./db";
 import type { EmbeddingModel } from "./embeddings";
+import { MEMORY_DISPLAY_STAMP } from "./extraction";
 import {
   ALERT_EVENT_KINDS,
   CONFIG_SECTIONS,
@@ -409,8 +410,18 @@ const memoryCaveat =
   `against current sources before relying on them; if a memory has drifted, ` +
   `correct it with memory_remember (overwrite: true) or memory_forget.`;
 
+/**
+ * The single stamping point for content-bearing memory tools: memory_show
+ * and memory_recall both render through this, so their outputs carry the
+ * display stamp as the first line. These tools are already excluded from
+ * both extraction buffers by the meta-tool filters, but the stamp rides
+ * the content forward - a session dump or JSON serialization embedding
+ * one of these outputs is recognized by the buffer guard's escaped forms,
+ * and any future buffer site without the meta-filter still withholds the
+ * display.
+ */
 function withMemoryCaveat(body: string): string {
-  return `${memoryCaveat}\n\n${body}`;
+  return `${MEMORY_DISPLAY_STAMP}\n${memoryCaveat}\n\n${body}`;
 }
 
 function formatEntry(
