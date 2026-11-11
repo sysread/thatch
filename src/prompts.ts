@@ -395,11 +395,12 @@ about their preferences:
 3. Use thatch_prediction_delete to remove a prediction created in error
 
 When the hygiene nudge reports "prediction duplicate pairs pending review",
-read both predictions, then either merge them (thatch_prediction_update with
-the winner's statement against the loser's matcher texts to move the edges
-over, then thatch_prediction_delete the loser) or judge them distinct - and
-record the verdict with thatch_prediction_mark_checked either way so the pair
-stops resurfacing.
+read both predictions (thatch_prediction_list shows their ids), then either
+merge them (thatch_prediction_update with the winner's statement against the
+loser's matcher texts to move the edges over), record the verdict with
+thatch_prediction_mark_checked, and only then thatch_prediction_delete the
+loser (the verdict needs both ids live), or judge them distinct and record
+that verdict. Either way the pair stops resurfacing.
 
 Code review discussions are high-signal prediction material. When working
 through potential review comments with the user, watch for preferences about
@@ -758,11 +759,13 @@ about their preferences:
 3. Use prediction_delete to remove a prediction created in error
 
 When the hygiene nudge reports "prediction duplicate pairs pending review",
-read both predictions, then either merge them (${toolNamer("prediction_update")}
+read both predictions (${toolNamer("prediction_list")} shows their ids), then
+either merge them (${toolNamer("prediction_update")}
 with the winner's statement against the loser's matcher texts to move the
-edges over, then ${toolNamer("prediction_delete")} the loser) or judge them
-distinct - and record the verdict with ${toolNamer("prediction_mark_checked")}
-either way so the pair stops resurfacing.
+edges over), record the verdict with ${toolNamer("prediction_mark_checked")},
+and only then ${toolNamer("prediction_delete")} the loser (the verdict needs
+both ids live), or judge them distinct and record that verdict. Either way
+the pair stops resurfacing.
 
 Code review discussions are high-signal prediction material. When working
 through potential review comments with the user, watch for preferences about

@@ -142,9 +142,9 @@ Stores are created automatically. No setup required.
 |------|-------------|
 | `thatch_prediction_query` | Query the user decision model for scored predictions matching a context. Returns predictions with confidence and evidence count. |
 | `thatch_prediction_update` | Create, reinforce, or weaken a prediction. Takes a matcher (context description), a prediction (preference statement), and a signal (confirm/disconfirm/soft/create). |
-| `thatch_prediction_list` | List all predictions in a store with matchers, confidence, and provenance. |
-| `thatch_prediction_delete` | Delete a prediction by semantic match. Edges and provenance are cascade-deleted. |
-| `thatch_prediction_mark_checked` | Record a verdict (duplicate/distinct) on a pair the hygiene nudge flagged, so it stops resurfacing. |
+| `thatch_prediction_list` | List all predictions in a store with their ids, matchers, confidence, and provenance. |
+| `thatch_prediction_delete` | Delete a prediction by exact id (preferred; the list shows ids) or by semantic match on the statement. Statements under three words are refused as too short to match safely. |
+| `thatch_prediction_mark_checked` | Record a verdict (duplicate/distinct) on a pair the hygiene nudge flagged, so it stops resurfacing. Both ids must be live predictions in the pair's store. |
 
 ### Behavior tools
 

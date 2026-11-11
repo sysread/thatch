@@ -462,3 +462,89 @@ describe("matcher updated_at semantics", () => {
     expect(rawUpdatedAt(m2)).not.toBe("2000-01-01T00:00:00.000Z");
   });
 });
+
+describe("pair verdict sweep on init", () => {
+  // Row-level reads and writes the public ThatchDB API deliberately does
+  // not expose (house pattern from the matcher updated_at block above:
+  // raw handle on the same file). The sweep itself runs in the ThatchDB
+  // constructor, so the reopen IS the code under test.
+  const pairRows = (): { store: string; id_a: string; id_b: string }[] => {
+    const raw = new Database(dbPath, { readonly: true });
+    try {
+      return raw.query("SELECT store, id_a, id_b FROM prediction_dedup_pairs").all() as any[];
+    } finally {
+      raw.close();
+    }
+  };
+  const insertPairRow = (rowStore: string, idA: string, idB: string) => {
+    const raw = new Database(dbPath);
+    try {
+      raw.run(
+        "INSERT INTO prediction_dedup_pairs (store, id_a, id_b, status) VALUES (?, ?, ?, 'distinct')",
+        [rowStore, idA, idB],
+      );
+    } finally {
+      raw.close();
+    }
+  };
+  const reopen = () => {
+    db.close();
+    return new ThatchDB(dbPath);
+  };
+
+  test("the merge flow's residue (verdict on a deleted loser) is swept on reopen", () => {
+    const base = makeEmbed(61);
+    const reworded = new Float32Array(base);
+    reworded[0] += 0.01;
+    const winner = db.createPrediction(store, "prefer minimal dependencies", "user said", base, "m");
+    const loser = db.createPrediction(store, "keep the dependency list small", "reworded", reworded, "m");
+    db.markPredictionPairChecked(store, winner, loser, "duplicate");
+    expect(pairRows().length).toBe(1);
+
+    // The documented flow: verdict recorded while both live, THEN the
+    // loser deleted. The verdict row survives the delete (no FK) and
+    // suppresses nothing from then on - the next open sweeps it.
+    expect(db.deletePrediction(loser)).toBe(true);
+    expect(pairRows().length).toBe(1);
+
+    db = reopen();
+    expect(pairRows()).toEqual([]);
+  });
+
+  test("a fabricated pair row (ids matching no prediction) is swept on reopen", () => {
+    const live = db.createPrediction(store, "prefer tabs over spaces", "user said", makeEmbed(62), "m");
+    insertPairRow(store, live, "00000000-0000-4000-8000-000000000000");
+    insertPairRow(store, "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222");
+    expect(pairRows().length).toBe(2);
+
+    db = reopen();
+    expect(pairRows()).toEqual([]);
+  });
+
+  test("a wrong-store verdict row (ids live only in another store) is swept on reopen", () => {
+    // 229 of the live garbage rows were exactly this shape: real ids,
+    // wrong store column. The verdict suppresses only within its own
+    // store's scan, so it is as inert as a fabricated id.
+    const a = db.createPrediction("global", "prefer minimal dependencies", "user said", makeEmbed(63), "m");
+    const b = db.createPrediction("global", "keep the dependency list small", "reworded", makeEmbed(64), "m");
+    insertPairRow(store, a, b);
+    expect(pairRows().length).toBe(1);
+
+    db = reopen();
+    expect(pairRows()).toEqual([]);
+  });
+
+  test("a valid verdict row survives reopen and keeps suppressing", () => {
+    const base = makeEmbed(65);
+    const reworded = new Float32Array(base);
+    reworded[1] -= 0.02;
+    const a = db.createPrediction(store, "prefer bun test", "", base, "m");
+    const b = db.createPrediction(store, "prefer the bun test runner", "", reworded, "m");
+    db.markPredictionPairChecked(store, a, b, "distinct");
+    expect(db.findPredictionDuplicates(store)).toEqual([]);
+
+    db = reopen();
+    expect(pairRows().length).toBe(1);
+    expect(db.findPredictionDuplicates(store)).toEqual([]);
+  });
+});

@@ -356,9 +356,10 @@ prediction cycle (agent-driven, statistical model)
   → consumption: agent follows strong predictions silently, surfaces
     ambiguous/competing predictions to the user, and calls
     thatch_prediction_update to reinforce or weaken after the user responds.
-    thatch_prediction_list inspects the model with provenance;
-    thatch_prediction_delete removes bad predictions (cascade clears edges
-    and provenance).
+    thatch_prediction_list inspects the model with ids and provenance;
+    thatch_prediction_delete removes bad predictions by exact id (or by
+    semantic match on a three-word-or-longer statement; cascade clears
+    edges and provenance).
 
 behavior cycle (agent-driven, self-graded)
   → formation: agent calls thatch_behavior_codify(situation, behavior, rationale)

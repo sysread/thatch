@@ -581,6 +581,36 @@ export class ThatchDB {
     this.#migrateChatHostPid();
     this.#migrateRuntimeStateDirectory();
     this.#migrateChatLeaveReason();
+    this.#sweepPhantomPredictionPairs();
+  }
+
+  // A prediction pair verdict is garbage by construction when either id is
+  // not a live prediction in the pair's own store: prediction_dedup_pairs
+  // has no FK, its only reader (PredictionEngine.#checkedPairs) joins
+  // nothing, so such a row suppresses nothing. Prediction ids are UUIDs no
+  // write path ever reuses, so a missing id can never become live again.
+  // Three sources produce these rows: fabricated ids (prediction_mark_checked
+  // accepted anything before validation), the merge flow (record 'duplicate',
+  // then delete the loser), and wrong-store ids (real predictions that live
+  // in a different store's rows). The memory side's dedup_pairs does NOT
+  // qualify for a sweep: slugs are derived from content and a forgotten slug
+  // can legitimately be re-created, so a stale-looking verdict there can
+  // become meaningful again. Runs on every open; idempotent, and the
+  // correlated NOT EXISTS probes are PK lookups on small tables.
+  #sweepPhantomPredictionPairs(): void {
+    this.#db.run(`
+      DELETE FROM prediction_dedup_pairs
+      WHERE NOT EXISTS (
+              SELECT 1 FROM predictions
+              WHERE predictions.id = prediction_dedup_pairs.id_a
+                AND predictions.store = prediction_dedup_pairs.store
+            )
+         OR NOT EXISTS (
+              SELECT 1 FROM predictions
+              WHERE predictions.id = prediction_dedup_pairs.id_b
+                AND predictions.store = prediction_dedup_pairs.store
+            )
+    `);
   }
 
   // chat_leave_tombstones tables created before the reason column lack it;

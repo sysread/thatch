@@ -102,6 +102,23 @@ Runs in a single DB transaction:
 Returns a status line with final confidence and confirm/disconfirm counts.
 Embeds both the matcher and prediction text.
 
+Both text fields are guarded against the signal-value cross-wiring slip: a
+matcher or prediction whose text is exactly `confirm` / `disconfirm` /
+`soft` / `create` is refused with teaching before any write. The slip
+minted one-word prediction rows into the live store (November 2026), rows
+the semantic delete path could not safely target.
+
+### Delete (`prediction_delete` tool)
+
+Two paths. The `id` parameter is exact: it addresses one row by its UUID
+(ids are globally unique, so no store is needed) and is the safe route for
+malformed rows. It takes precedence when both parameters are passed. The
+`statement` path is a semantic match (cosine >= 0.85) that refuses
+statements under three words: one- and two-word text embeds too generically
+for a destructive match ("prefer tabs" can clear 0.85 against "prefer
+spaces"). `prediction_list` shows every row's id, which is where the id
+comes from. Edges and provenance cascade.
+
 ### Dedup pass (corpus-level consolidation)
 
 Write-time dedup (0.85, both stores) catches near-identical statements at
@@ -117,14 +134,30 @@ later — land below that floor and accumulate. The dedup pass finds them:
   row, the same contract as the memory side's `dedup_pairs`.
 - `prediction_mark_checked(id_a, id_b, status)` records the verdict:
   `duplicate` (merged or treat as one) or `distinct` (both legitimate).
+  Both ids must be live predictions in the target store: unknown ids are
+  refused (with a did-you-mean suggestion against the store's ids) and
+  wrong-store ids are refused naming the store they actually live in,
+  because a verdict row referencing anything else suppresses nothing.
   Distinct verdicts are the load-bearing case — a destroyed duplicate is
   gone, but a judged-distinct pair re-surfaces every session start unless
   recorded.
 - The hygiene report surfaces `N prediction duplicate pairs pending review`;
-  the agent merges (fold the loser's matchers with `prediction_update`, then
-  `prediction_delete` the loser) or judges distinct, and marks the pair
-  either way. Scans are per-store: cross-store writes are edge-linked at
-  write time instead of duplicated.
+  the agent merges (fold the loser's matchers with `prediction_update`,
+  mark the pair with `prediction_mark_checked`, then `prediction_delete`
+  the loser by id - the verdict must be recorded while both ids are live)
+  or judges distinct and records that verdict. `prediction_list` shows the
+  ids. Scans are per-store: cross-store writes are edge-linked at write
+  time instead of duplicated.
+- The pair table is swept at every DB open (`#sweepPhantomPredictionPairs`
+  in `src/db.ts`): verdict rows whose ids are not both live predictions in
+  the pair's own store are deleted. Prediction ids are UUIDs no write path
+  reuses, so such rows suppress nothing and can never become meaningful
+  again. The sweep collects the merge flow's residue (a verdict recorded
+  against a loser that was then deleted), fabricated ids from before
+  mark_checked validated, and wrong-store rows. The memory side's
+  `dedup_pairs` deliberately has no such sweep: slugs are content-derived
+  and a forgotten slug can legitimately be re-created, so a stale-looking
+  verdict there can become meaningful again.
 - The co-fire refinement (behavioral evidence layered onto this method once
   fire tracking exists) is designed in
   docs/plans/prediction-consolidation.md.
@@ -259,7 +292,7 @@ that user preferences are stable, not time-sensitive.
 |------|------|
 | `src/prediction.ts` | Thin wrapper around `ScoringEngine` with prediction-specific table names, plus the corpus dedup pass (`findPredictionDuplicates`, pair verdicts) |
 | `src/scoring-engine.ts` | Generic four-table scoring engine with Bayesian confidence (shared base for prediction and behavior) |
-| `src/db.ts` | Prediction tables, `scorePredictionNudge` |
+| `src/db.ts` | Prediction tables, `scorePredictionNudge`, pair-verdict sweep on open |
 | `src/tool-defs.ts` | Five prediction tools (`query`, `update`, `list`, `delete`, `mark_checked`) |
 | `src/prompts.ts` | `predictionNudge` formatting, verb selection, dedup-merge guidance |
 | `src/sideband.ts` | `predictions` method for the MCP path |
@@ -340,3 +373,7 @@ confidence change.
    `memory_remember`, which prepends `# label\n\n` before embedding.
 6. **Adjudicated dedup pairs never re-surface.** Verdict rows are keyed on
    the canonical sorted id pair; `findPredictionDuplicates` skips them.
+7. **Pair verdicts reference live rows.** `prediction_mark_checked`
+   validates both ids against the target store's predictions, and the
+   sweep at DB open deletes verdict rows whose ids are no longer live, so
+   the pair table never carries inert rows.

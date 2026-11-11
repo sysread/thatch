@@ -87,10 +87,10 @@ where your rationale would change the model.
 | Tool | What it does |
 |------|-------------|
 | `thatch_prediction_query` | Query the model for predictions matching a context. Returns scored predictions with confidence and evidence count. |
-| `thatch_prediction_update` | Create, reinforce, or weaken a prediction. Takes a matcher (situation), prediction (preference), signal (confirm/disconfirm/soft/create), and rationale. |
-| `thatch_prediction_list` | List all predictions with matchers, confidence, evidence count, and provenance history. |
-| `thatch_prediction_delete` | Delete a prediction by semantic match. Edges and provenance are cascade-deleted. |
-| `thatch_prediction_mark_checked` | Record a verdict (duplicate/distinct) on a pair the hygiene nudge flagged, so it stops resurfacing. |
+| `thatch_prediction_update` | Create, reinforce, or weaken a prediction. Takes a matcher (situation), prediction (preference), signal (confirm/disconfirm/soft/create), and rationale. Refuses a call that puts a signal value where the situation or preference text belongs. |
+| `thatch_prediction_list` | List all predictions with their ids, matchers, confidence, evidence count, and provenance history. |
+| `thatch_prediction_delete` | Delete a prediction by exact id (preferred; the list shows ids) or by semantic match on the statement. Statements under three words are refused as too short to match safely; pass the id instead. |
+| `thatch_prediction_mark_checked` | Record a verdict (duplicate/distinct) on a pair the hygiene nudge flagged, so it stops resurfacing. Both ids must be live predictions in the pair's store. |
 
 ## Configuration
 
@@ -119,11 +119,18 @@ where your rationale would change the model.
 
 If the same preference gets recorded twice in different words, the hygiene
 nudge reports `prediction duplicate pairs pending review`. The agent reads
-both, then either merges them (moves the loser's matchers onto the winner
-with `thatch_prediction_update`, deletes the loser with
-`thatch_prediction_delete`) or judges them distinct — and records the
-verdict with `thatch_prediction_mark_checked` either way, so an adjudicated
-pair never nags again.
+both predictions (`thatch_prediction_list` shows their ids), then either
+merges them (moves the loser's matchers onto the winner with
+`thatch_prediction_update`, records the verdict with
+`thatch_prediction_mark_checked`, and only then deletes the loser with
+`thatch_prediction_delete`; the verdict must be recorded while both
+predictions still exist) or judges them distinct and records that. Either
+way an adjudicated pair never nags again.
+
+`thatch_prediction_mark_checked` refuses ids that are not live predictions
+in the pair's store, so a mistyped or made-up id cannot leave junk behind.
+Verdict rows that outlive their predictions (the deleted loser of a merge)
+are cleaned up automatically on the next session start.
 
 See [memory.md](memory.md) for the base memory system and
 [behavior-engine.md](behavior-engine.md) for the self-discipline rules.

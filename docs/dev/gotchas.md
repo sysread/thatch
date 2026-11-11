@@ -571,3 +571,22 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   least the literal path plus `.ts` and `.js` (the pattern in
   src/doctor.ts's shim check, which hit this exact false-fail first run).
   (2026-11-11, doctor build)
+
+## An id-taking tool with no id-showing surface teaches agents to fabricate ids
+
+- **Symptom**: `prediction_mark_checked` verdict rows whose ids match no
+  prediction pair - fabricated UUIDs written by compliant agents that had
+  no way to learn the real ones (248 such rows were live in November
+  2026).
+- **Cause**: the hygiene nudge reported only a COUNT of pending pairs,
+  `prediction_list` printed statements without ids, and
+  `findPredictionDuplicates` output never reached the agent. The prompt
+  instructed agents to call `prediction_mark_checked(id_a, id_b, ...)`,
+  and the tool accepted any string, so a compliant agent had to invent
+  ids. The pair table has no FK, so nothing rejected the write.
+- **Fix shape**: every tool that takes a row id needs a surface that shows
+  that id (`prediction_list` now prints ids), and every id-taking write
+  validates its ids before writing (mark_checked refuses unknown and
+  wrong-store ids). The init sweep (`#sweepPhantomPredictionPairs`,
+  src/db.ts) collects the residue class. (2026-11-11, prediction tool
+  guards)

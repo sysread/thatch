@@ -628,6 +628,212 @@ describe("prediction tool execute functions", () => {
     expect(db.findPredictionDuplicates(defaultStore)).toEqual([]);
   });
 
+  test("prediction_delete by id removes exactly that row", async () => {
+    await findTool("prediction_update").execute({
+      matcher: "choosing a framework",
+      prediction: "prefer minimal dependencies",
+      signal: "create",
+      rationale: "user said",
+    }, ctx);
+    await findTool("prediction_update").execute({
+      matcher: "choosing test scope",
+      prediction: "prefer integration tests over unit tests",
+      signal: "create",
+      rationale: "user said",
+    }, ctx);
+    const target = db.listPredictions(defaultStore).find((p) => p.statement === "prefer minimal dependencies")!;
+
+    // No store argument: the id is a globally unique row address.
+    const result = await findTool("prediction_delete").execute({ id: target.id }, ctx);
+    expect(result).toContain("[deleted]");
+    expect(result).toContain("prefer minimal dependencies");
+
+    const remaining = db.listPredictions(defaultStore);
+    expect(remaining.length).toBe(1);
+    expect(remaining[0].statement).toBe("prefer integration tests over unit tests");
+  });
+
+  test("prediction_delete by unknown id returns not-found and deletes nothing", async () => {
+    await findTool("prediction_update").execute({
+      matcher: "choosing a framework",
+      prediction: "prefer minimal dependencies",
+      signal: "create",
+      rationale: "user said",
+    }, ctx);
+
+    const result = await findTool("prediction_delete").execute({
+      id: "00000000-0000-4000-8000-000000000000",
+    }, ctx);
+    expect(result).toContain("No prediction with id");
+    expect(result).toContain("prediction_list");
+    expect(db.listPredictions(defaultStore).length).toBe(1);
+  });
+
+  test("prediction_delete id takes precedence over statement", async () => {
+    await findTool("prediction_update").execute({
+      matcher: "choosing a framework",
+      prediction: "prefer minimal dependencies",
+      signal: "create",
+      rationale: "user said",
+    }, ctx);
+    await findTool("prediction_update").execute({
+      matcher: "choosing test scope",
+      prediction: "prefer integration tests over unit tests",
+      signal: "create",
+      rationale: "user said",
+    }, ctx);
+    const byStatement = db.listPredictions(defaultStore).find((p) => p.statement === "prefer integration tests over unit tests")!;
+    const byId = db.listPredictions(defaultStore).find((p) => p.statement === "prefer minimal dependencies")!;
+
+    // A caller passing both must not get the statement's fuzzy match.
+    const result = await findTool("prediction_delete").execute({
+      id: byId.id,
+      statement: "prefer integration tests over unit tests",
+    }, ctx);
+    expect(result).toContain("prefer minimal dependencies");
+
+    const remaining = db.listPredictions(defaultStore);
+    expect(remaining.length).toBe(1);
+    expect(remaining[0].id).toBe(byStatement.id);
+  });
+
+  test("prediction_delete refuses short statements instead of fuzzy-matching", async () => {
+    // The live-store incident: one-word "confirm"/"disconfirm" rows whose
+    // embeddings could clear 0.85 against unrelated rows. Under three
+    // words the semantic path refuses and points at the id path.
+    await findTool("prediction_update").execute({
+      matcher: "reviewing a PR with tech debt",
+      prediction: "flag tech debt before reviewing the diff",
+      signal: "create",
+      rationale: "user said",
+    }, ctx);
+
+    for (const short of ["confirm", "prefer tabs"]) {
+      const result = await findTool("prediction_delete").execute({ statement: short }, ctx);
+      expect(result).toContain("under three words");
+      expect(result).toContain("id");
+      expect(db.listPredictions(defaultStore).length).toBe(1);
+    }
+  });
+
+  test("prediction_delete with neither id nor statement returns teaching", async () => {
+    const result = await findTool("prediction_delete").execute({}, ctx);
+    expect(result).toContain("No target provided");
+    expect(result).toContain("id");
+  });
+
+  test("prediction_update refuses a signal value as the statement", async () => {
+    // The exact slip that minted the live malformed rows: the signal
+    // value lands in the prediction field. Nothing may be written.
+    for (const bad of ["confirm", "Confirm"]) {
+      const result = await findTool("prediction_update").execute({
+        matcher: "the user corrected a prediction",
+        prediction: bad,
+        signal: "confirm",
+        rationale: "user agreed",
+      }, ctx);
+      expect(result).toContain("not the signal value");
+      expect(result).toContain(`"${bad}"`);
+      expect(db.listPredictions(defaultStore)).toEqual([]);
+      expect(db.listPredictions("global")).toEqual([]);
+    }
+  });
+
+  test("prediction_update refuses a signal value as the matcher", async () => {
+    const result = await findTool("prediction_update").execute({
+      matcher: "disconfirm",
+      prediction: "prefer minimal dependencies",
+      signal: "create",
+      rationale: "user said",
+    }, ctx);
+    expect(result).toContain("not the signal value");
+    expect(result).toContain("matcher");
+    expect(db.listPredictions(defaultStore)).toEqual([]);
+    expect(db.listPredictions("global")).toEqual([]);
+  });
+
+  test("prediction_mark_checked refuses unknown ids and writes no verdict", async () => {
+    const text = "prefer minimal dependencies";
+    const embed = await model.passageEmbed(text);
+    const idA = db.createPrediction(defaultStore, text, "first wording", embed, model.name);
+    db.createPrediction(defaultStore, "keep the dependency list small", "reworded later", embed, model.name);
+    expect(db.findPredictionDuplicates(defaultStore).length).toBe(1);
+
+    // Fabricated id_b: refused, and the pair must still surface (no
+    // verdict row was written).
+    const result = await findTool("prediction_mark_checked").execute({
+      id_a: idA,
+      id_b: "33333333-3333-4333-8333-333333333333",
+      status: "distinct",
+    }, ctx);
+    expect(result).toContain("No prediction with id");
+    expect(result).toContain("Verdict not recorded");
+    expect(db.findPredictionDuplicates(defaultStore).length).toBe(1);
+  });
+
+  test("prediction_mark_checked suggests a near-miss id via did-you-mean", async () => {
+    const text = "prefer minimal dependencies";
+    const embed = await model.passageEmbed(text);
+    const idA = db.createPrediction(defaultStore, text, "first wording", embed, model.name);
+    const idB = db.createPrediction(defaultStore, "keep the dependency list small", "reworded later", embed, model.name);
+    expect(db.findPredictionDuplicates(defaultStore).length).toBe(1);
+
+    // Two substituted characters in id_b: Damerau-Levenshtein cost 4,
+    // under the 15 cutoff for a 36-char query, so the real id is
+    // suggested.
+    const typo = idB.slice(0, 10) + (idB[10] === "a" ? "b" : "a") + (idB[11] === "c" ? "d" : "c") + idB.slice(12);
+    expect(typo).not.toBe(idB);
+    const result = await findTool("prediction_mark_checked").execute({
+      id_a: idA,
+      id_b: typo,
+      status: "distinct",
+    }, ctx);
+    expect(result).toContain("Did you mean");
+    expect(result).toContain(idB);
+    expect(db.findPredictionDuplicates(defaultStore).length).toBe(1);
+  });
+
+  test("prediction_mark_checked refuses ids from the wrong store", async () => {
+    // The dominant live-garbage shape: real ids, wrong store column.
+    const embed = await model.passageEmbed("prefer minimal dependencies");
+    const a = db.createPrediction("global", "prefer minimal dependencies", "first wording", embed, model.name);
+    const b = db.createPrediction("global", "keep the dependency list small", "reworded later", embed, model.name);
+
+    // store omitted: resolves to the project store, but both ids live in
+    // global. The refusal must name where they actually live.
+    const result = await findTool("prediction_mark_checked").execute({
+      id_a: a,
+      id_b: b,
+      status: "distinct",
+    }, ctx);
+    expect(result).toContain('"global"');
+    expect(result).toContain("must live in the target store");
+    expect(db.findPredictionDuplicates(defaultStore)).toEqual([]);
+
+    // With the right store the same call succeeds.
+    const ok = await findTool("prediction_mark_checked").execute({
+      id_a: a,
+      id_b: b,
+      status: "distinct",
+      store: "global",
+    }, ctx);
+    expect(ok).toContain("[marked distinct]");
+    expect(db.findPredictionDuplicates("global")).toEqual([]);
+  });
+
+  test("prediction_list shows the row id", async () => {
+    await findTool("prediction_update").execute({
+      matcher: "choosing a framework",
+      prediction: "prefer minimal dependencies",
+      signal: "create",
+      rationale: "user said",
+    }, ctx);
+    const id = db.listPredictions(defaultStore)[0].id;
+
+    const list = await findTool("prediction_list").execute({}, ctx);
+    expect(list).toContain(`(id: ${id})`);
+  });
+
   test("prediction_list includes provenance entries", async () => {
     await findTool("prediction_update").execute({
       matcher: "reviewing code",

@@ -38,6 +38,14 @@ const MATCHER_DEDUP_COSINE = 0.85;
 const PREDICTION_DEDUP_COSINE = 0.85;
 const BEHAVIOR_DEDUP_COSINE = 0.85;
 
+// The prediction_update signal vocabulary. A matcher or statement that is
+// EXACTLY one of these values is never a real situation description or
+// preference statement - it is the observed argument cross-wiring slip that
+// minted one-word "confirm"/"disconfirm" predictions into the live store
+// (November 2026), rows the semantic delete path then could not safely
+// target. Guarded at the top of prediction_update's execute.
+const PREDICTION_SIGNAL_VALUES = new Set(["confirm", "disconfirm", "soft", "create"]);
+
 /**
  * Resolves the write target for a store-scoped tool. detectRepo falls back
  * to "unknown" when it cannot name a repo; rows written to a store called
@@ -1085,6 +1093,21 @@ const predictionUpdateDef: ToolDef = {
     const signal = args.signal as "confirm" | "disconfirm" | "soft" | "create";
     const rationale = args.rationale as string;
 
+    // Signal-value guard: a matcher or prediction that is exactly a signal
+    // enum value is the cross-wired-argument slip, not a real description
+    // or statement. Refuse before any write so no one-word prediction row
+    // is minted.
+    if (PREDICTION_SIGNAL_VALUES.has(predictionText.trim().toLowerCase())) {
+      return `The prediction parameter must be the user's tendency (e.g. "prefer X over Y"), ` +
+        `not the signal value. You passed "${predictionText.trim()}", which belongs in the ` +
+        `signal parameter (already "${signal}"). Re-call with the user's preference statement in prediction.`;
+    }
+    if (PREDICTION_SIGNAL_VALUES.has(matcherText.trim().toLowerCase())) {
+      return `The matcher parameter must describe the situation being decided, ` +
+        `not the signal value. You passed "${matcherText.trim()}", which belongs in the ` +
+        `signal parameter (already "${signal}"). Re-call with a description of the decision context in matcher.`;
+    }
+
     const matcherEmbed = await ctx.model.passageEmbed(matcherText);
     const predEmbed = await ctx.model.passageEmbed(predictionText);
 
@@ -1174,7 +1197,7 @@ const predictionListDef: ToolDef = {
       const matchers = p.matchers.map((m) => `    - "${m.description}" (w:${m.weight})`).join("\n");
       const provenance = ctx.db.getProvenance(p.id);
       const provLines = provenance.map((pr) => `    - [${pr.created_at.slice(0, 10)}] ${pr.signal}: ${pr.detail ?? ""}`).join("\n");
-      return `[${p.confidence.toFixed(2)} conf, ${p.evidence_count} tests] ${p.statement}` +
+      return `[${p.confidence.toFixed(2)} conf, ${p.evidence_count} tests] (id: ${p.id}) ${p.statement}` +
         (p.rationale ? `\n  rationale: ${p.rationale}` : "") +
         (matchers ? `\n  matchers:\n${matchers}` : "") +
         (provLines ? `\n  provenance:\n${provLines}` : "");
@@ -1187,18 +1210,61 @@ const predictionDeleteDef: ToolDef = {
   description:
     "Delete a prediction from the user decision model. Useful when a " +
     "prediction was created in error or is no longer relevant. Edges " +
-    "and provenance are deleted automatically (cascade).",
+    "and provenance are deleted automatically (cascade). Prefer the id " +
+    "parameter: it deletes exactly one row. The statement path is a " +
+    "semantic match (cosine >= 0.85) and refuses statements under three " +
+    "words - short text embeds too generically for a safe destructive match.",
   args: {
-    statement: z.string().describe(
-      "The prediction statement to delete. Use prediction_list to find the exact text; matching is semantic (cosine >= 0.85).",
+    id: z.string().optional().describe(
+      "Exact prediction id, from prediction_list (which shows ids). " +
+      "Takes precedence over statement. The id is a globally unique row " +
+      "address, so no store is needed.",
+    ),
+    statement: z.string().optional().describe(
+      "The prediction statement to delete. Use prediction_list to find the exact text; " +
+      "matching is semantic (cosine >= 0.85). Statements under three words are refused - " +
+      "short text matches too generically to delete safely; pass the id instead.",
     ),
     store: z.string().optional().describe(
-      "Store to delete from. Defaults to the project store.",
+      "Store for the statement path. Defaults to the project store. Ignored when id is given.",
     ),
   },
   async execute(args, ctx) {
+    // Exact path: the id addresses one row directly (UUIDs are unique
+    // across stores, so the store parameter is not consulted). This is
+    // the safe route for malformed rows - a one-word statement cannot
+    // be targeted by the semantic path without risking the wrong row.
+    const id = (args.id as string | undefined)?.trim();
+    if (id) {
+      const prediction = ctx.db.getPrediction(id);
+      if (!prediction) {
+        return `No prediction with id "${id}" found. Use prediction_list to see ids and statements.`;
+      }
+      const deleted = ctx.db.deletePrediction(id);
+      if (!deleted) return `Failed to delete prediction "${prediction.statement}".`;
+      return `[deleted] "${prediction.statement}" from "${prediction.store}"`;
+    }
+
+    const statementText = (args.statement as string | undefined)?.trim();
+    if (!statementText) {
+      // Accept-then-teach, matching prediction_query's context guard: the
+      // schema keys stay optional so a missing-target call reaches this
+      // teaching message instead of dying at validation.
+      return "No target provided - pass the prediction's id (from prediction_list, " +
+        "the exact and preferred path) or its statement text to match.";
+    }
+
+    // Short-statement refusal: one- and two-word text embeds too
+    // generically for a destructive cosine match (the live store held
+    // "confirm"/"disconfirm" rows; "prefer tabs" can clear 0.85 against
+    // "prefer spaces"). The id path is the safe route.
+    if (statementText.split(/\s+/).length < 3) {
+      return `Refusing to delete by statement: "${statementText}" is under three words, and short ` +
+        `text matches too generically for a safe delete. Pass the prediction's id instead ` +
+        `(prediction_list shows ids).`;
+    }
+
     const store = resolveStore(args, ctx);
-    const statementText = args.statement as string;
     const predEmbed = await ctx.model.passageEmbed(statementText);
     const prediction = ctx.db.findNearestPrediction(store, predEmbed, PREDICTION_DEDUP_COSINE);
     if (!prediction) return `No prediction matching "${statementText}" found in "${store}".`;
@@ -1214,9 +1280,12 @@ const predictionMarkCheckedDef: ToolDef = {
     "Record a verdict on a prediction dedup pair so it stops resurfacing " +
     "in the hygiene nudge. Use after reviewing a pair from the 'prediction " +
     "duplicate pairs pending review' line: status 'duplicate' once you have " +
-    "merged them (prediction_update with the winner's statement against the " +
-    "loser's matcher texts to move the edges over, then prediction_delete " +
-    "the loser), or 'distinct' to leave both in place.",
+    "folded the loser's matchers onto the winner (prediction_update with the " +
+    "winner's statement against the loser's matcher texts) - record the " +
+    "verdict BEFORE deleting the loser, because both ids must be live " +
+    "predictions when the verdict is written - or 'distinct' to leave both " +
+    "in place. Both ids must exist in the pair's store; prediction_list " +
+    "shows the ids.",
   args: {
     id_a: z.string().describe(
       "First prediction id of the pair (from the dedup candidate).",
@@ -1234,8 +1303,31 @@ const predictionMarkCheckedDef: ToolDef = {
   },
   async execute(args, ctx) {
     const store = resolveStore(args, ctx);
-    ctx.db.markPredictionPairChecked(store, args.id_a as string, args.id_b as string, args.status as string);
-    return `[marked ${args.status}] (${args.id_a}, ${args.id_b}) in "${store}"`;
+    const idA = args.id_a as string;
+    const idB = args.id_b as string;
+
+    // Both ids must be live predictions in the target store. The pair
+    // table has no FK and its reader joins nothing, so an unvalidated
+    // write is permanent inert garbage (the fabricated phantom rows this
+    // guard exists to stop). A wrong-store id is the same garbage: a
+    // verdict suppresses only within its own store's scan.
+    const pa = ctx.db.getPrediction(idA);
+    const pb = ctx.db.getPrediction(idB);
+    const missing = [pa ? null : idA, pb ? null : idB].filter((m) => m !== null) as string[];
+    if (missing.length > 0) {
+      const storeIds = ctx.db.listPredictions(store).map((p) => p.id);
+      const msg = `No prediction with id ${missing.map((m) => `"${m}"`).join(" or ")} in "${store}". ` +
+        `Verdict not recorded. Use prediction_list (it shows ids) and pass the pair's real ids.`;
+      return withDidYouMean(msg, missing[0], storeIds);
+    }
+    if (pa!.store !== store || pb!.store !== store) {
+      return `Both predictions must live in the target store: id_a lives in "${pa!.store}", ` +
+        `id_b in "${pb!.store}", not "${store}". Pass store: "<the pair's actual store>" ` +
+        `(or omit store when the pair is in the project store).`;
+    }
+
+    ctx.db.markPredictionPairChecked(store, idA, idB, args.status as string);
+    return `[marked ${args.status}] (${idA}, ${idB}) in "${store}"`;
   },
 };
 
