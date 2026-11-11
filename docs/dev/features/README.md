@@ -31,6 +31,7 @@ system, see [../skills.md](../skills.md). For non-obvious invariants, see
 | [cross-session-chat.md](cross-session-chat.md) | Cross-session chat (shared SQLite directory and inbox, per-process wake-up delivery) |
 | [notifications.md](notifications.md) | Out-of-band notification (banner + voice) and the user config file |
 | [setup.md](setup.md) | Setup system (markers, checkSetup, auto-refresh, binary resolution) |
+| [doctor.md](doctor.md) | Environment diagnostics (the read-only doctor command and its check engine) |
 | [cli.md](cli.md) | CLI (subcommands, environment variables) |
 | [database.md](database.md) | Database (schema, migrations, WAL) |
 | [qa-system.md](qa-system.md) | QA system (automatable vs live, mise tasks) |

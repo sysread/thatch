@@ -15,6 +15,8 @@ import {
   stopVersionChecker,
   getVersionChecker,
   compareSemver,
+  standaloneRegimeHost,
+  MOD_LIVENESS_STALE_MS,
   _resetForTesting,
 } from "../src/version-check";
 import { skewWarningText } from "../src/prompts";
@@ -277,5 +279,34 @@ describe("npm cache with stale (older) cached version", () => {
     expect(checker.getLatestVersion()).toBe(olderStr);
     expect(checker.isOutdated()).toBe(false);
     expect(checker.getUpdateWarning()).toBeNull();
+  });
+});
+
+describe("standaloneRegimeHost (spawn-env evidence, the mixed-host fix)", () => {
+  // The regime marker is claude-scoped state; a standalone server spawned
+  // by a NON-claude host (opencode manual MCP config, gemini cli, any
+  // stdio client) must resolve no host, so claude's marker never leaks
+  // into that session as warnings or dead auto-refresh gates. This was
+  // the class of the dispatch-path warning bug: mixed-host machines saw
+  // claude alarms from host-agnostic surfaces.
+  test("cursor env wins (CURSOR_PROJECT_DIR set)", () => {
+    expect(standaloneRegimeHost({ CURSOR_PROJECT_DIR: "/p", CLAUDE_CODE_SESSION_ID: "s" })).toBe("cursor");
+  });
+
+  test("claude session id alone resolves claude", () => {
+    expect(standaloneRegimeHost({ CLAUDE_CODE_SESSION_ID: "sess-1" })).toBe("claude");
+  });
+
+  test("CLAUDE_PROJECT_DIR alone resolves claude (the hook-env signal)", () => {
+    expect(standaloneRegimeHost({ CLAUDE_PROJECT_DIR: "/p" })).toBe("claude");
+  });
+
+  test("a foreign host's env (no claude or cursor vars) resolves null", () => {
+    expect(standaloneRegimeHost({ THATCH_PROJECT_DIR: "/p", USER: "x" })).toBeNull();
+    expect(standaloneRegimeHost({})).toBeNull();
+  });
+
+  test("the stale window is 30 minutes and shared (the bundled server and the doctor agree)", () => {
+    expect(MOD_LIVENESS_STALE_MS).toBe(30 * 60 * 1000);
   });
 });

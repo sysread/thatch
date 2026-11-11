@@ -1,6 +1,6 @@
 # CLI (bin/thatch)
 
-The thatch CLI entry is `bin/thatch`, a thin dispatcher: it resolves argv against the subcommand registry in `src/cli/registry.ts`, handles the help and version forms, opens the database, and hands off. Every subcommand is a `Subcommand` object (`src/cli/types.ts`: name, one-line summary, `usage()` returning synopsis + flag triplets + notes, and `run(args, ctx)`); the commands live in `src/cli/commands/` grouped by cohesion, and the shared help renderer (`src/cli/help.ts`) turns the registry and each `SubUsage` into uniform, column-aligned pages. The CLI provides memory inspection and writing, MCP server startup, hook commands for MCP hosts, the setup installer, session archaeology over the opencode database, and a window on the cross-session chat directory (read-only except `chat broadcast`).
+The thatch CLI entry is `bin/thatch`, a thin dispatcher: it resolves argv against the subcommand registry in `src/cli/registry.ts`, handles the help and version forms, opens the database, and hands off. Every subcommand is a `Subcommand` object (`src/cli/types.ts`: name, one-line summary, `usage()` returning synopsis + flag triplets + notes, and `run(args, ctx)`); the commands live in `src/cli/commands/` grouped by cohesion, and the shared help renderer (`src/cli/help.ts`) turns the registry and each `SubUsage` into uniform, column-aligned pages. The CLI provides memory inspection and writing, MCP server startup, hook commands for MCP hosts, the setup installer, environment diagnostics, session archaeology over the opencode database, and a window on the cross-session chat directory (read-only except `chat broadcast`).
 
 ## Subcommands
 
@@ -22,7 +22,8 @@ The thatch CLI entry is `bin/thatch`, a thin dispatcher: it resolves argv agains
 | `buffer-tool` | none | none | JSON | Append single postToolUse interaction to queue (Cursor hook) |
 | `flush-tools [--json]` | none | `--json` | JSON | Peek queue + extraction/recall/prediction/behavior/write nudge |
 | `flush-predictions [--json]` | none | `--json` | JSON | Standalone prediction-only nudge |
-| `setup --claude [--cursor] [--local\|--global] [--skills-only [dir]] [--mcp-json]` | none | `--claude`, `--cursor`, `--global`, `--local`, `--skills-only [dir]`, `--mcp-json` | none | Install config + instructions + hooks + skills; `--skills-only <dir>` installs into any directory; `--mcp-json` prints the server config as JSON |
+| `setup --claude [--cursor] [--local\|--global] [--skills-only [dir]] [--mcp-json]` | none | `--claude`, `--cursor`, `--global`, `--local`, `--dev`, `--hooks`, `--skills-only [dir]`, `--mcp-json` | none | Install config + instructions + hooks + skills; `--dev` forces the plugin regime with the claude version gate skipped (deprecated alias: `--plugin`); `--skills-only <dir>` installs into any directory; `--mcp-json` prints the server config as JSON |
+| `doctor` | none | none | none | Read-only environment diagnostics for every host (database, opencode plugin + shim + daemon, the claude regime, cursor config); one verdict per check, exit 1 only on a failed check |
 | `session list/get/transcript/search` | per subcommand | `-s/--session`, `--id`, `--after`, `--before`, `--regex`, `--limit` | none | Read-only archaeology on the opencode session database (JSONL output) |
 | `chat list` | none | `--recent`, `--stale [N\|all]`, `--json`, `--host-id ID` (repeatable) | none | Registered chat sessions: name, human-readable age, status, project, topic |
 | `chat tail` | none | `--once`, `--pretty`, `--limit N\|all`, `--match RE` (repeatable), `--from NAME`, `--to NAME`, `--since DT`, `--until DT` | none | Follow cross-session chat: sent and read events as a JSONL log (`--pretty` for email-style cards instead). Backlog defaults to the last 20 messages; filters apply to follow mode too. |
@@ -111,6 +112,19 @@ Runs the thatch-project-primer skill via an external CLI. Searches `PATH` in ord
 - claude: `claude "<primer prompt>"`
 
 Inherits stdio, exits with the child's exit code. Errors and exits 1 if none found.
+
+## doctor
+
+The environment diagnostics command ([doctor.md](doctor.md) for the full
+architecture). The check engine is `src/doctor.ts` (sections: common,
+opencode, claude, cursor; `DoctorDeps` in, `DoctorFinding[]` out - no
+printing, so tests assert findings); the command object
+(`src/cli/commands/doctor.ts`) renders the findings to stdout with
+verdict tags (colored only on a TTY without NO_COLOR, the chat roster's
+rule), sets `process.exitCode` (1 only when a check failed - warnings
+never fail the run), and takes no flags. The engine's contract is the
+inversion of the retired dispatch warning: host-scoped state is reported
+here, on demand, and never leaks into host-agnostic surfaces.
 
 ## chat
 
@@ -222,6 +236,7 @@ process; the registry itself is `src/env-knobs.ts`.
 
 - `bin/thatch` — the CLI entry: a thin dispatcher (argv resolution, help and version forms, DB lifecycle)
 - `src/cli/` — the registry, the `Subcommand`/`FlagSpec`/`SubUsage` types, the shared help renderer, arg helpers, and the per-group command modules under `src/cli/commands/`
+- `src/doctor.ts` — the doctor's check engine (see [doctor.md](doctor.md))
 - `bin/release` — release helper (bash, separate from the main CLI)
 
 ## Interactions with other features
@@ -232,6 +247,7 @@ process; the registry itself is `src/env-knobs.ts`.
 - Extraction ([extraction.md](extraction.md)): `buffer-batch`, `buffer-tool`, `flush-tools` subcommands
 - Hygiene ([hygiene.md](hygiene.md)): `hygiene`, `reminder` subcommands
 - Multi-host ([multi-host.md](multi-host.md)): `mcp` subcommand starts the MCP server for Claude Code and Cursor
+- Diagnostics ([doctor.md](doctor.md)): `doctor` subcommand - the read-only environment sweep over every host's install state
 - Session archaeology: the `session` subcommand group (see the table above) reads the opencode session database via `src/session-db.ts`
 - Cross-session chat ([cross-session-chat.md](cross-session-chat.md)): the `chat` subcommand group reads the shared chat directory and inbox; `chat broadcast` also writes user-voiced broadcast rows (the group's one write path)
 

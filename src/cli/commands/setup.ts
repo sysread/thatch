@@ -15,7 +15,7 @@ export const setup: Subcommand = {
   name: "setup",
   summary: "Install config + instructions + hooks + skills",
   usage: () => ({
-    synopsis: "thatch setup --claude [--plugin|--hooks] [--cursor] [--local|--global] [--skills-only [dir]]",
+    synopsis: "thatch setup --claude [--dev|--hooks] [--cursor] [--local|--global] [--skills-only [dir]]",
     flags: [
       { long: "--claude", short: null, description: "Set up Claude Code." },
       { long: "--cursor", short: null, description: "Set up Cursor." },
@@ -24,8 +24,11 @@ export const setup: Subcommand = {
       { long: "--skills-only", short: null, description: "Refresh just the skill files. With an explicit directory, installs the skills into that directory (no host flag needed)." },
       { long: "--commands-only", short: null, description: "Install the command files into <dir>/thatch/ for any harness (complete formal command files; no host flag; --global is rejected)." },
       { long: "--mcp-json", short: null, description: "Print the MCP server config as JSON on stdout (can be combined with other setup flags; writes nothing, stdout carries only the JSON when set)." },
-      { long: "--plugin", short: null, description: "Force the plugin regime (an in-process mod + the bundled MCP server). The DEFAULT for current Claude Code (2.1.287+, detected from the installed claude). Requires --claude; cannot combine with --skills-only, --mcp-json, or --commands-only." },
-      { long: "--hooks", short: null, description: "Install the hooks regime instead of the plugin: for Claude Code older than 2.1.287 or enterprise policies that disable mods. Requires --claude; cannot combine with --skills-only, --mcp-json, or --commands-only." },
+      { long: "--dev", short: null, description: "Force the plugin regime for dev/QA: skip the installed-claude version gate entirely (the default applies the 2.1.287 mods-floor detection; --dev is the path where that gate must not decide, e.g. QA against an old claude or none on PATH). Pinning is identical to the default - both record the generating checkout's paths. Requires --claude; cannot combine with --hooks, --skills-only, --mcp-json, or --commands-only." },
+      { long: "--hooks", short: null, description: "Install the hooks regime instead of the plugin: for Claude Code older than 2.1.287 or enterprise policies that disable mods. Requires --claude; cannot combine with --dev, --skills-only, --mcp-json, or --commands-only." },
+    ],
+    notes: [
+      "`--plugin` is a deprecated alias for `--dev`: the same force-the-plugin-regime run, announced with a one-line redirect on stderr. It will be removed in a future release.",
     ],
   }),
   async run(args, ctx) {
@@ -103,36 +106,49 @@ export const setup: Subcommand = {
     // `thatch setup --claude` installs the PLUGIN regime on current
     // Claude Code (2.1.287+, the mods floor - detected from the
     // installed claude); --hooks is the explicit opt-out (pre-mods
-    // builds, enterprise policies that disable mods); --plugin stays the
-    // explicit force (the QA-generation path). Both flags are full-install
-    // regime selectors: they require --claude and refuse the narrowing
-    // flags (--skills-only, --mcp-json, --commands-only install no
-    // regime, so the DEFAULT never fires under them either).
+    // builds, enterprise policies that disable mods); --dev forces the
+    // plugin regime with the version gate SKIPPED - the QA/dev path
+    // where the installed claude must not decide (testing against an
+    // old claude, or none on PATH). Pinning is identical under the
+    // default and --dev: both record the generating checkout's paths.
+    // Both flags are full-install regime selectors: they require
+    // --claude and refuse the narrowing flags (--skills-only,
+    // --mcp-json, --commands-only install no regime, so the DEFAULT
+    // never fires under them either).
     const hooksFlag = args.includes("--hooks");
-    const pluginFlag = args.includes("--plugin");
-    if (hooksFlag && pluginFlag) {
-      console.error("Choose one regime: --plugin or --hooks.");
+    // The deprecated --plugin alias maps to --dev before any check, so
+    // every refusal and behavior carries over unchanged; the redirect
+    // line keeps existing QA instructions and muscle memory working
+    // while they migrate.
+    const deprecatedPluginFlag = args.includes("--plugin") && !args.includes("--dev");
+    if (deprecatedPluginFlag) {
+      console.error("[thatch] --plugin is deprecated; use --dev (the same force-the-plugin-regime run). The alias will be removed in a future release.");
+    }
+    const devFlag = args.includes("--dev") || deprecatedPluginFlag;
+    if (hooksFlag && devFlag) {
+      console.error("Choose one regime: --dev or --hooks.");
       process.exit(1);
     }
-    if (pluginFlag && !isClaude) {
-      console.error("--plugin requires --claude (the plugin regime is Claude Code-only; Cursor has no mods).");
+    if (devFlag && !isClaude) {
+      console.error("--dev requires --claude (the plugin regime is Claude Code-only; Cursor has no mods).");
       process.exit(1);
     }
     if (hooksFlag && !isClaude) {
       console.error("--hooks requires --claude (the hook regime is Claude Code's settings hooks; use plain `thatch setup --cursor` for Cursor).");
       process.exit(1);
     }
-    if ((pluginFlag || hooksFlag) && (skillsOnly || mcpJson || customCommandsDir)) {
-      console.error("--plugin and --hooks are full-install regime selectors and cannot combine with --skills-only, --mcp-json, or --commands-only.");
+    if ((devFlag || hooksFlag) && (skillsOnly || mcpJson || customCommandsDir)) {
+      console.error("--dev and --hooks are full-install regime selectors and cannot combine with --skills-only, --mcp-json, or --commands-only.");
       process.exit(1);
     }
     // The resolution - FULL installs only. An absent or unparseable
-    // claude reads as current (the front door; the CLI's
-    // plugin-never-loaded notice is the safety net that names --hooks).
+    // claude reads as current (the front door; thatch doctor and the
+    // bundled server's staleness warning are the safety nets that name
+    // --hooks).
     let pluginRegime = false;
     let oldClaudeDefaultedToHooks = false;
     if (!skillsOnly && !mcpJson && !customCommandsDir && isClaude) {
-      if (pluginFlag) pluginRegime = true;
+      if (devFlag) pluginRegime = true;
       else if (!hooksFlag) {
         pluginRegime = claudeVersionSupportsMods(claudeVersionOutput());
         if (!pluginRegime) oldClaudeDefaultedToHooks = true;

@@ -99,8 +99,12 @@ regime - the DEFAULT since the ship-gate flip: current Claude Code
 `CLAUDE_MODS_FLOOR` / `claudeVersionSupportsMods` / `claudeVersionOutput`
 in src/setup.ts; an absent or unparseable claude reads as current, the
 front door) resolves to the plugin. `--hooks` opts out for pre-mods
-builds and enterprise policies; `--plugin` forces the plugin explicitly
-(the QA-generation path). Both flags are full-install regime selectors:
+builds and enterprise policies; `--dev` forces the plugin with the
+version gate SKIPPED (the dev/QA path: the installed claude must not
+decide - testing against an old claude or none on PATH). Pinning is
+identical under the default and `--dev` - both record the generating
+checkout's paths; `--plugin` remains as a deprecated alias that maps to
+`--dev` with a stderr redirect. Both flags are full-install regime selectors:
 they require --claude and refuse the narrowing flags. It
 generates the plugin directory (`$CLAUDE_CONFIG_DIR/thatch-plugin/` for
 global, `<projectDir>/.claude/thatch-plugin/` for local) - the manifest
@@ -175,6 +179,9 @@ Detects the host from environment variables set by the host process:
 - `CURSOR_PROJECT_DIR` set → Cursor
 - `CLAUDE_PROJECT_DIR` set (and Cursor not) → Claude Code
 - Neither set → returns `null` (manual `thatch mcp` invocation, no check)
+- An explicit `host` argument (the third parameter) skips the env
+  detection entirely - the doctor's use, examining every host from a
+  terminal where no host env vars are set
 
 Cursor takes priority because Cursor also sets `CLAUDE_PROJECT_DIR` as an
 alias. Without the priority check, Cursor sessions would be misidentified as

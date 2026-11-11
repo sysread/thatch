@@ -25,6 +25,7 @@ This README is the overview. Each feature has its own guide:
 - [skills.md](skills.md): structured workflow skills
 - [code-review.md](code-review.md): multi-agent code review pipeline
 - [setup.md](setup.md): installation and configuration
+- [doctor.md](doctor.md): environment diagnostics (`thatch doctor`)
 - [cli.md](cli.md): command-line tool reference
 
 ## Installation

@@ -192,9 +192,10 @@ plugin. Then delete the plugin directory:
    (`~/Library/Caches/thatch` / `$XDG_CACHE_HOME/thatch`), and the npm
    package (`npm uninstall -g @jeffober/thatch`).
 
-**If the plugin is broken and delivers nothing**: any `thatch` CLI command
-warns when the plugin regime is installed but the plugin has not pinged,
-and prints the exact re-run/load instruction. Re-running
+**If the plugin is broken and delivers nothing**: `thatch doctor` reports
+the regime marker, the plugin tree (including a manifest whose server
+checkout moved or lacks the plugin-regime feature), and the mod's ping
+freshness, with the exact re-run/load instruction on each finding. Re-running
 `thatch setup --claude --hooks` restores the hook regime even when the
 plugin is completely dead - that is the always-works way back.
 

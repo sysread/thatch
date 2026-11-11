@@ -10,7 +10,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import { ThatchDB } from "../src/db";
-import { pluginRegimeSilent } from "../src/version-check";
 import { chatOpenTabs as chatOpenTabsProvider } from "../src/tab-state";
 import { REGISTRY } from "../src/cli/registry";
 import { renderGlobal, printCommandHelp } from "../src/cli/help";
@@ -87,15 +86,6 @@ const resolved = resolveEntry();
 if (!resolved) {
   console.error(renderGlobal(REGISTRY));
   process.exit(1);
-}
-
-// The plugin-never-loaded notice (the --plugin-dir-forgotten hole).
-// Under the plugin regime the fallback hooks are gone, so if the plugin
-// was never loaded no thatch surface runs at all - except the user's own
-// CLI calls, which are exactly where the silence gets noticed. setup and
-// mcp are exempt (setup manages the regime; mcp IS the regime).
-if (resolved.entry.name !== "setup" && resolved.entry.name !== "mcp" && pluginRegimeSilent(dbPath)) {
-  console.error("[thatch] The plugin regime is installed (the hook setup was deactivated), but the plugin has not loaded or pinged. If you expected thatch to work in a Claude Code session, load it: claude --plugin-dir ~/.claude/thatch-plugin (or re-run thatch setup --claude - the default now generates the plugin).");
 }
 
 const db: ThatchDB = new ThatchDB(dbPath, { chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()) });

@@ -123,9 +123,13 @@ Plain `thatch setup --claude` installs this regime by default when the
 installed Claude Code is 2.1.287 or newer (the mods floor) - or when no
 claude is installed yet (a fresh install gets a current one). Pass
 `--hooks` to install the hook regime instead: for Claude Code older than
-2.1.287, or enterprise policies that disable mods. `--plugin` forces the
-plugin regime explicitly - the same run as the default, useful for
-re-generating the plugin directory after editing the checkout.
+2.1.287, or enterprise policies that disable mods. `--dev` forces the
+plugin regime with the version gate skipped - the dev/QA path (testing
+against an old claude, or none installed, without the floor detection
+deciding). Pinning is identical under the default and `--dev`: both
+record the paths of the checkout that ran setup, so re-running either
+from a checkout regenerates the plugin directory from it. `--plugin`
+still works as a deprecated alias for `--dev` and prints a redirect.
 
 `bun` must be on PATH (the thatch binary runs under bun). Setup is
 idempotent. Re-running it updates drifted content without clobbering
@@ -218,6 +222,11 @@ When the MCP server starts (Claude Code or Cursor), it checks whether
 or if the instruction markers are broken (e.g., the file was edited
 externally), the server emits a warning the agent can see and tell you
 to run setup.
+
+`thatch doctor` runs the same checks on demand from a terminal, for
+every host at once, plus the states the server cannot see (a stale
+plugin regime, a dead dev shim, leftover fallback writers). See
+[doctor.md](doctor.md).
 
 The MCP server also auto-refreshes skills, instructions, and hooks on
 every startup. This ensures the latest skill files and prompt

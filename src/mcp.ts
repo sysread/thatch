@@ -17,7 +17,7 @@ import { computePluginStage, computePluginChatWake, rehydrateOwnWatchers } from 
 import { pluginToolName } from "./prompts";
 import { createPluginLifecycle } from "./claude-plugin/lifecycle";
 import { seedDefaultBehaviors } from "./seed-behaviors";
-import { writeVersionFile, removeVersionFile, startVersionChecker, stopVersionChecker, getVersionChecker, readModLiveness, readRegimeMarker } from "./version-check";
+import { writeVersionFile, removeVersionFile, startVersionChecker, stopVersionChecker, getVersionChecker, readModLiveness, readRegimeMarker, MOD_LIVENESS_STALE_MS, standaloneRegimeHost } from "./version-check";
 import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
@@ -143,13 +143,12 @@ export function compilePrompts(): Map<string, ActionDef> {
  *  no behavior seeding (idempotent but per-session waste). */
 export type McpServerMode = "standalone" | "bundled";
 
-/** Minutes without a mod liveness ping after which the bundled server
- *  warns that the mod's hooks have gone silent (the disabled-mod hole:
- *  disableAllHooks / allowManagedModsOnly stop the hooks but leave the
- *  server running). Conservative: prompts can legitimately pause for
- *  longer than this inside one working session, so the warning says
- *  "may", never "is". */
-const MOD_LIVENESS_STALE_MS = 30 * 60 * 1000;
+/** The mod-liveness stale window lives in src/version-check.ts
+ *  (MOD_LIVENESS_STALE_MS): the bundled server's warning here and the
+ *  doctor's ping report share one threshold, so the surfaces never
+ *  disagree about what "silent" means. Conservative: prompts can
+ *  legitimately pause for longer than this inside one working session,
+ *  so the warning says "may", never "is". */
 
 /**
  * Runs the thatch MCP server over stdio. Reads newline-delimited JSON-RPC from
@@ -347,12 +346,14 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
   // plugin regime a standalone server should not be configured at all
   // (double delivery), so it warns instead of auto-refreshing (auto-
   // refresh would resurrect the deactivated fallback hooks and markers).
-  const regimeMarker = mode === "standalone"
-    // HOST-SCOPED: a mixed-host machine runs Cursor's standalone server
-    // beside Claude's plugin regime - Cursor's marker absence must not
-    // inherit Claude's (wrong advice + dead auto-refresh).
-    ? readRegimeMarker(dbPath, process.env.CURSOR_PROJECT_DIR ? "cursor" : "claude")
-    : null;
+  // The host comes from SPAWN EVIDENCE, not a default: a standalone server
+  // can be spawned by any MCP host (an opencode manual MCP config, the
+  // gemini cli, ...), and a machine running opencode beside claude's
+  // plugin regime must not see claude's "remove the standalone entry"
+  // advice about a config claude never wrote. No evidence - no host-scoped
+  // regime state is read at all.
+  const spawnHost = mode === "standalone" ? standaloneRegimeHost() : null;
+  const regimeMarker = spawnHost ? readRegimeMarker(dbPath, spawnHost) : null;
   if (mode === "standalone") {
     const setupStatus = checkSetup(projectDir);
     if (regimeMarker === "plugin") {

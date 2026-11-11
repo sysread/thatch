@@ -67,6 +67,7 @@ execution directly via bun assertions. These are fast and run in parallel.
 | UC-131 | cli-memory-write | `thatch remember` end to end over the single write path |
 | UC-143 | memory-display-stamp | stamped displays withheld at both buffer sites + the funnel (Layer 1) |
 | UC-144 | forget-tombstones | deletion guards hold matching re-writes; `thatch tombstones` list/clear (Layer 2) |
+| UC-145 | doctor-diagnostics | `thatch doctor` verdicts, the orphaned-marker fail, the read-only contract |
 
 ### Live use cases
 

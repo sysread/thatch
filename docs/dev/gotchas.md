@@ -556,3 +556,18 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   through the same shape: pending mail retries and lands on the cycle
   after the session consumes prompts again. (2026-11-05, location-switch
   fix)
+
+## An extensionless shim re-export target fails a naive existsSync
+
+- **Symptom**: a doctor (or any file-checking tool) reports a dev shim's
+  re-export target as deleted while opencode loads the plugin fine.
+- **Cause**: the documented shim form writes
+  `export { default } from "<checkout>/src/index"` - extensionless,
+  because bun resolves module specifiers by trying `.ts`/`.js` suffixes.
+  An `existsSync` on the literal path (`src/index`, no suffix) returns
+  false, so the check reads a healthy shim as dead. The same trap bites
+  any tooling that validates shim paths against the filesystem.
+- **Fix**: existence checks must try the suffix chain bun tries, or at
+  least the literal path plus `.ts` and `.js` (the pattern in
+  src/doctor.ts's shim check, which hit this exact false-fail first run).
+  (2026-11-11, doctor build)

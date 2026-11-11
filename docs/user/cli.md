@@ -85,6 +85,7 @@ flag: an empty branch name is never a git ref.
 ```bash
 thatch hygiene                 # print the hygiene report
 thatch reminder [--json]       # print the session-start reminder
+thatch doctor                  # check environment setup for every host
 ```
 
 `hygiene` prints the standalone hygiene report (duplicate candidates,
@@ -96,6 +97,13 @@ hygiene report. The `--json` flag wraps the output as
 `{"additional_context": "..."}` for Cursor's hook format. These
 commands are normally called by hooks, not by hand, but you can run
 them to see what the agent sees at session start.
+
+`doctor` runs the environment diagnostics: the database, the opencode
+plugin install and daemon, the Claude Code plugin or hooks regime, and
+Cursor's config - one pass/warn/fail verdict per check, a fix line for
+everything that needs action, and exit code 1 only when something is
+actually broken. It is read-only: repairs go through `thatch setup`.
+See [doctor.md](doctor.md).
 
 ## Cross-session chat
 
@@ -273,7 +281,7 @@ Run once per host (or per harness) to install thatch:
 ```bash
 thatch setup --claude [--local|--global]      # the plugin regime (Claude Code's default; --hooks opts out)
 thatch setup --claude --hooks [--local|--global]  # the hooks regime: config + instructions + hooks + skills
-thatch setup --claude --plugin [--local|--global]  # force the plugin regime (re-generate the plugin dir)
+thatch setup --claude --dev [--local|--global]    # dev/QA: force the plugin regime, skip the claude version gate
 thatch setup --cursor [--local|--global]      # Cursor: MCP server + hooks + skills
 thatch setup --claude --skills-only             # refresh just the skill files
 thatch setup --skills-only <dir>                # install skills to any directory

@@ -29,7 +29,9 @@ interface SetupPaths {
  * side by side (per Claude Code env-vars docs). Settings, CLAUDE.md, and
  * skills are all stored under this path in global scope.
  */
-function claudeConfigDir(homeDir: string): string {
+/** Claude's config dir, honoring CLAUDE_CONFIG_DIR. Exported for the
+ *  doctor, which resolves the same paths setup writes to. */
+export function claudeConfigDir(homeDir: string): string {
   return process.env.CLAUDE_CONFIG_DIR ?? join(homeDir, ".claude");
 }
 
@@ -41,9 +43,10 @@ export const CLAUDE_MODS_FLOOR = "2.1.287";
 /**
  * Reports whether `claude --version` output meets the mods floor. Null
  * (claude not installed or not runnable) and unparseable output both read
- * as SUPPORTED: the plugin regime is the front door, and the CLI's
- * plugin-never-loaded notice is the safety net that names the --hooks
- * opt-out when the assumption is wrong.
+ * as SUPPORTED: the plugin regime is the front door, and `thatch doctor`
+ * (the on-demand diagnostic) plus the bundled server's staleness warning
+ * are the safety nets that name the --hooks opt-out when the assumption
+ * is wrong.
  */
 export function claudeVersionSupportsMods(versionOutput: string | null): boolean {
   if (versionOutput === null) return true;
@@ -222,6 +225,19 @@ const THATCH_MARKER = "# Persistence\n\nThatch provides persistent memory across
 const THATCH_END_MARKER = '"Forget X" - `memory_recall` to find it, then `memory_forget`.';
 const CURSOR_MARKER = "# Persistence\n\nThatch provides persistent memory across Cursor sessions.";
 const CURSOR_END_MARKER = THATCH_END_MARKER;
+
+/**
+ * Detects whether a file carries a thatch instructions block in either
+ * format (current sentinels or legacy prose). The doctor's detect-only
+ * read of the legacy home-root ~/CLAUDE.md: a block there is stale advice
+ * naming tool spellings the reader's regime may not have. Removal stays
+ * in setup (removeLegacyInstructionsBlock); this never writes.
+ */
+export function hasThatchInstructionsBlock(path: string): boolean {
+  if (!existsSync(path)) return false;
+  const content = readFileSync(path, "utf8");
+  return content.includes(THATCH_BEGIN) || content.includes(THATCH_MARKER);
+}
 
 /**
  * The instructions' last line (punctuation-insensitive tail test): the
@@ -619,7 +635,7 @@ export async function setupClaudePluginRegime(
       throw new Error(
         `refusing to install the plugin regime from "${thatchBin}": its checkout has no src/claude-plugin (the plugin-regime feature). ` +
           `The generated mod would come from this checkout while the bundled server launched that stale binary - a mixed-source install whose stage calls all fail silently. ` +
-          `Run setup from the checkout you are testing (bun bin/thatch setup --claude --plugin).`,
+          `Run setup from the checkout you are testing (bun bin/thatch setup --claude --dev).`,
       );
     }
   } catch (err) {
@@ -835,9 +851,10 @@ export async function registerClaudeMcpServer(
  * Resolve the Cursor config directory. Cursor stores config under `~/.cursor`
  * by default. No documented env override exists (unlike Claude Code's
  * CLAUDE_CONFIG_DIR), but we honor a hypothetical CURSOR_CONFIG_DIR for
- * symmetry and forward-compatibility.
+ * symmetry and forward-compatibility. Exported for the doctor, which
+ * resolves the same paths setup writes to.
  */
-function cursorConfigDir(homeDir: string): string {
+export function cursorConfigDir(homeDir: string): string {
   return process.env.CURSOR_CONFIG_DIR ?? join(homeDir, ".cursor");
 }
 
@@ -1080,20 +1097,21 @@ function checkInstructionsFile(path: string, legacyStartMarker: string, legacyEn
  * CLAUDE_PROJECT_DIR for Claude Code) and checks whether `thatch setup` was
  * run for that host. Checks local instructions (in the project dir) first,
  * then global (in the config dir). Returns null if the host cannot be
- * determined (neither env var is set - e.g. manual `thatch mcp` invocation).
+ * determined (neither env var is set - e.g. manual `thatch mcp`
+ * invocation). The optional `host` argument skips env detection and checks
+ * that host directly - the doctor's use: it examines every host
+ * deliberately, from a terminal where no host env vars are set.
  */
-export function checkSetup(projectDir: string, homeDir?: string): SetupStatus | null {
+export function checkSetup(projectDir: string, homeDir?: string, host?: HostKind): SetupStatus | null {
   const home = homeDir ?? process.env.HOME ?? "/tmp";
-  const isCursor = !!process.env.CURSOR_PROJECT_DIR;
-  const isClaude = !!process.env.CLAUDE_PROJECT_DIR && !isCursor;
-  if (!isCursor && !isClaude) return null;
+  const resolvedHost: HostKind | null =
+    host ?? (process.env.CURSOR_PROJECT_DIR ? "cursor" : process.env.CLAUDE_PROJECT_DIR ? "claude" : null);
+  if (!resolvedHost) return null;
 
-  const host: HostKind = isCursor ? "cursor" : "claude";
-
-  if (host === "claude") {
-    return checkClaudeSetup(projectDir, home);
+  if (resolvedHost === "cursor") {
+    return checkCursorSetup(projectDir, home);
   }
-  return checkCursorSetup(projectDir, home);
+  return checkClaudeSetup(projectDir, home);
 }
 
 function checkClaudeSetup(projectDir: string, home: string): SetupStatus {

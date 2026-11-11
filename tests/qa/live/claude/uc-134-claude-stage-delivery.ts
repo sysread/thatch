@@ -25,7 +25,7 @@ const useCase: UseCase = {
     "- The thatch repo checked out; bun on PATH",
   ].join("\n"),
   steps: [
-    "1. Generate the plugin via the real setup (--plugin --global) in a fixture home.",
+    "1. Generate the plugin via the real setup (--dev --global) in a fixture home.",
     "2. Run `claude -p 'What is the meaning of life?' --plugin-dir <generated>`.",
     "3. Inspect the plugin-written surfaces: the mod liveness stamp exists and is fresh",
     "    (the stage tool ran; the $.mcp.call envelope pin holds).",

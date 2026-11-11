@@ -6,8 +6,9 @@ import type { Subcommand } from "./types";
 import { stores, list, show, forget, search, remember, tombstones } from "./commands/memory";
 import { mcp, reminder, hygiene, prime } from "./commands/misc";
 import { setup } from "./commands/setup";
+import { doctor } from "./commands/doctor";
 import { bufferBatch, bufferTool, flushTools, chatNotify, flushPredictions } from "./commands/hook-commands";
 import { session } from "./commands/session";
 import { chat } from "./commands/chat";
 
-export const REGISTRY: Subcommand[] = [stores, list, show, forget, search, remember, tombstones, mcp, reminder, hygiene, prime, bufferBatch, bufferTool, flushTools, chatNotify, flushPredictions, setup, session, chat];
+export const REGISTRY: Subcommand[] = [stores, list, show, forget, search, remember, tombstones, mcp, reminder, hygiene, prime, bufferBatch, bufferTool, flushTools, chatNotify, flushPredictions, setup, doctor, session, chat];

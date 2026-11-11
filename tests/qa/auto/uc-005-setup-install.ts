@@ -25,6 +25,8 @@ const useCase: UseCase = {
     "4. Add a non-thatch hook to `.claude/settings.json` and `.cursor/hooks.json`,",
     "   then re-run setup",
     "5. From elsewhere: `thatch setup --cursor --global`, then `thatch setup --claude --hooks --global`",
+    "6. From the project root: plain `thatch setup --claude` (the plugin-regime default)",
+    "7. `thatch setup --claude --dev`, then the deprecated `--plugin` alias, then the refusals (`--dev --hooks`, `--plugin --skills-only`)",
   ].join("\n"),
   expected: [
     '- `--claude` project-local writes `.mcp.json` (`mcpServers.thatch`, stdio + `["mcp"]`),',
@@ -48,6 +50,12 @@ const useCase: UseCase = {
     "  via `claude mcp add --scope user` itself (falling back to printing that command when the",
     "  claude CLI is missing or fails). `--global` (Cursor) writes `~/.cursor/mcp.json`,",
     "  `~/.cursor/AGENTS.md`, `~/.cursor/hooks.json`, `~/.cursor/skills/`.",
+    "- Plain `thatch setup --claude` installs the PLUGIN regime (the default inversion) and",
+    "  runs the deactivation sweep (no `.mcp.json` entry, no settings hooks survive).",
+    "- `--dev` forces the plugin regime with the installed-claude version gate skipped (pinning",
+    "  identical to the default); the deprecated `--plugin` alias runs the same path and prints a",
+    "  one-line redirect on stderr. `--dev --hooks` and `--plugin --skills-only` both refuse with",
+    "  the `--dev` naming.",
   ].join("\n"),
 
   async run(ctx: QaContext) {
@@ -433,6 +441,36 @@ const useCase: UseCase = {
     );
     if (thatchHooksLeft) {
       console.log("  FAIL: the plugin default left thatch hooks in settings.json (deactivation failed)");
+      return "FAIL";
+    }
+
+    // --- Step 7: the --dev flag (the renamed --plugin) and its alias ---
+    // --dev forces the plugin regime with the version gate skipped; the
+    // deprecated --plugin alias maps to it with a stderr redirect. The
+    // refusals carry over under the new name.
+
+    const r7 = await run(["setup", "--claude", "--dev"]);
+    if (r7.exitCode !== 0 || !r7.stdout.toString().includes("Thatch plugin regime installed")) {
+      console.log(`  FAIL: setup --claude --dev did not install the plugin regime:\n${r7.stdout.toString()}\n${r7.stderr.toString()}`);
+      return "FAIL";
+    }
+    const r8 = await run(["setup", "--claude", "--plugin"]);
+    if (r8.exitCode !== 0 || !r8.stdout.toString().includes("Thatch plugin regime installed")) {
+      console.log(`  FAIL: the deprecated --plugin alias did not run the --dev path:\n${r8.stdout.toString()}\n${r8.stderr.toString()}`);
+      return "FAIL";
+    }
+    if (!r8.stderr.toString().includes("--plugin is deprecated; use --dev")) {
+      console.log("  FAIL: the --plugin alias did not print the deprecation redirect on stderr");
+      return "FAIL";
+    }
+    const r9 = await run(["setup", "--claude", "--dev", "--hooks"]);
+    if (r9.exitCode === 0 || !r9.stderr.toString().includes("Choose one regime: --dev or --hooks.")) {
+      console.log(`  FAIL: --dev + --hooks must refuse (exit 1) with the new flag name:\n${r9.stderr.toString()}`);
+      return "FAIL";
+    }
+    const r10 = await run(["setup", "--claude", "--plugin", "--skills-only"]);
+    if (r10.exitCode === 0 || !r10.stderr.toString().includes("--dev and --hooks are full-install regime selectors")) {
+      console.log(`  FAIL: the alias must hit the narrowing-flags refusal (exit 1) under the new name:\n${r10.stderr.toString()}`);
       return "FAIL";
     }
 

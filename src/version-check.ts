@@ -72,7 +72,8 @@ export function npmCachePath(dbPath: string): string {
 
 /** Path to the mod liveness stamp: the Claude Code plugin mod touches it on
  *  every prompt (via the bundled server's stage tool); the bundled server
- *  warns on its first tools/call when the stamp is stale. This is the
+ *  warns on its first tools/call when the stamp is stale, and `thatch
+ *  doctor` reports its age on demand. This is the
  *  disabled-mod hole's detector: disableAllHooks and managed
  *  allowManagedModsOnly silence the mod's hooks but leave the plugin's
  *  server running - nudges and context injection stop silently. */
@@ -128,22 +129,26 @@ export function writeRegimeMarker(dbPath: string, regime: "plugin", host: "claud
   }
 }
 
-/** The HOST-SCOPED marker read: a plugin-regime install is Claude-Code-only;
- * a machine can also run Cursor's standalone server - its marker absence
- * must not inherit Claude's. */
+/** The window after which a missing mod ping reads as stale. The bundled
+ *  server's disabled-mod warning (its first tools/call) and the doctor's
+ *  ping report share this threshold, so the two surfaces never disagree
+ *  about what "silent" means. */
+export const MOD_LIVENESS_STALE_MS = 30 * 60 * 1000;
+
 /**
- * The plugin-never-loaded detector: the regime marker says the plugin
- * regime owns the install (the fallback hooks were DEACTIVATED) but the
- * mod's liveness stamp is absent or older than the stale window - meaning
- * no bundled server has served and no mod has pinged. That is the
- * --plugin-dir-forgotten hole: NEITHER regime delivers, silently. The CLI
- * surfaces it; the threshold mirrors the bundled server's 30-minute
- * warning window.
+ * Resolves which host spawned a STANDALONE server, from spawn-env evidence
+ * only. Cursor sets CURSOR_PROJECT_DIR in its children; Claude Code sets
+ * CLAUDE_CODE_SESSION_ID in the stdio server's environment at spawn (and
+ * its hook env carries CLAUDE_PROJECT_DIR). A server spawned by any OTHER
+ * MCP host - an opencode manual MCP config, the gemini cli, any stdio
+ * client - matches none of these, so the result is null and claude-scoped
+ * regime state must not leak into that session as warnings or skipped
+ * refreshes. The regime marker is host-scoped; the SPAWN is the host.
  */
-export function pluginRegimeSilent(dbPath: string, host: "claude" | "cursor" = "claude"): boolean {
-  if (readRegimeMarker(dbPath, host) !== "plugin") return false;
-  const lastPing = readModLiveness(dbPath);
-  return lastPing === null || Date.now() - lastPing > 30 * 60 * 1000;
+export function standaloneRegimeHost(env: Record<string, string | undefined> = process.env): "claude" | "cursor" | null {
+  if (env.CURSOR_PROJECT_DIR) return "cursor";
+  if (env.CLAUDE_CODE_SESSION_ID || env.CLAUDE_PROJECT_DIR) return "claude";
+  return null;
 }
 
 export function clearRegimeMarker(dbPath: string, host: "claude" | "cursor" = "claude"): void {
