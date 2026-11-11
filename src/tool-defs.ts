@@ -43,8 +43,10 @@ const BEHAVIOR_DEDUP_COSINE = 0.85;
 // preference statement - it is the observed argument cross-wiring slip that
 // minted one-word "confirm"/"disconfirm" predictions into the live store
 // (November 2026), rows the semantic delete path then could not safely
-// target. Guarded at the top of prediction_update's execute.
+// target. Guarded at the top of prediction_update's execute. The same
+// slip class exists for behavior_codify with the feedback signal values.
 const PREDICTION_SIGNAL_VALUES = new Set(["confirm", "disconfirm", "soft", "create"]);
+const BEHAVIOR_FEEDBACK_VALUES = new Set(["ham", "spam"]);
 
 /**
  * Resolves the write target for a store-scoped tool. detectRepo falls back
@@ -1375,6 +1377,20 @@ const behaviorCodifyDef: ToolDef = {
     const situationText = args.situation as string;
     const behaviorText = args.behavior as string;
     const rationale = args.rationale as string;
+
+    // The prediction engine's signal-value slip, mirrored: a feedback
+    // value ("ham"/"spam") is never a situation or a rule. Refuse before
+    // any write so no one-word behavior row is minted.
+    if (BEHAVIOR_FEEDBACK_VALUES.has(behaviorText.trim().toLowerCase())) {
+      return `The behavior parameter must state the rule (e.g. "close the file before replying"), ` +
+        `not the feedback value. You passed "${behaviorText.trim()}", which is a behavior_feedback ` +
+        `signal. Re-call with the rule itself in behavior.`;
+    }
+    if (BEHAVIOR_FEEDBACK_VALUES.has(situationText.trim().toLowerCase())) {
+      return `The situation parameter must describe the triggering context, ` +
+        `not the feedback value. You passed "${situationText.trim()}", which is a behavior_feedback ` +
+        `signal. Re-call with a description of when the rule applies in situation.`;
+    }
 
     const matcherEmbed = await ctx.model.passageEmbed(situationText);
     const behaviorEmbed = await ctx.model.passageEmbed(behaviorText);

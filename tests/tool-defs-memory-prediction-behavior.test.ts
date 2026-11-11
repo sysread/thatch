@@ -722,6 +722,33 @@ describe("prediction tool execute functions", () => {
     expect(result).toContain("id");
   });
 
+  test("behavior_codify refuses a feedback value as the rule", async () => {
+    // The prediction engine's signal-value slip, mirrored: "ham"/"spam"
+    // in the behavior field is never a rule. Nothing may be written.
+    for (const bad of ["ham", "Spam"]) {
+      const result = await findTool("behavior_codify").execute({
+        situation: "a surfaced behavior fires during my turn",
+        behavior: bad,
+        rationale: "testing the guard",
+      }, ctx);
+      expect(result).toContain("not the feedback value");
+      expect(result).toContain(`"${bad}"`);
+      expect(db.listBehaviors(defaultStore)).toEqual([]);
+      expect(db.listBehaviors("global")).toEqual([]);
+    }
+  });
+
+  test("behavior_codify refuses a feedback value as the situation", async () => {
+    const result = await findTool("behavior_codify").execute({
+      situation: "spam",
+      behavior: "close the file before replying",
+      rationale: "testing the guard",
+    }, ctx);
+    expect(result).toContain("not the feedback value");
+    expect(result).toContain("situation");
+    expect(db.listBehaviors(defaultStore)).toEqual([]);
+  });
+
   test("prediction_update refuses a signal value as the statement", async () => {
     // The exact slip that minted the live malformed rows: the signal
     // value lands in the prediction field. Nothing may be written.
