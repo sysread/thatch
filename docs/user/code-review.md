@@ -50,7 +50,7 @@ the review:
 | `thatch-review-acceptance` | UX coherency, behavioral delta, integration effects, user assumptions. |
 | `thatch-review-state-flow` | Module boundaries, implicit state machines, error propagation, separation of concerns. |
 | `thatch-review-economy` | Design simplicity and maintainability: is the complexity earned? Evaluates both the overall change design (forest) and individual touch points (trees) for unnecessary complexity, redundancy, and simpler available alternatives. |
-| `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth wall breaks, em dashes, hedging, filler. |
+| `thatch-review-no-slop` | AI writing anti-patterns: change narration, fourth wall breaks, em dashes, tidy triads, hedging, filler. |
 | `thatch-review-clarity` | Prose clarity in comments, docstrings, error strings, and docs: made-up phrases, buzzwords, untranslated jargon, clause chains, buried leads, doc/code responsibility splits, checked against the project's clear-writing rules regardless of who wrote the text. |
 | `thatch-review-breadcrumbs` | Comment narrative: do comments form a coherent outline of the code's behavior? |
 | `thatch-review-mark-and-sweep` | Mechanical change completeness: whole-repo sweep for stragglers after renames, flag removals, API substitutions. |

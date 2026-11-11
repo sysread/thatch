@@ -76,7 +76,7 @@ Symbol-anchored text and standalone docs fail differently, and the same text can
 
 ## Boundary with the other lenses
 
-- The **no-slop** lens owns AI-authorship tells: typography (em dashes, smart quotes), hedging, filler, verbosity, change narration, fourth wall breaks, stale artifacts, mechanism metaphors, and verbless telegraphic chains. Do not report those here. When a sentence is both unclear and an AI tell, leave it to no-slop.
+- The **no-slop** lens owns AI-authorship tells: typography (em dashes, smart quotes), tidy triads, hedging, filler, verbosity, change narration, fourth wall breaks, stale artifacts, mechanism metaphors, and verbless telegraphic chains. Do not report those here. When a sentence is both unclear and an AI tell, leave it to no-slop.
 - The **breadcrumbs** lens owns narrative coherence: do the comments together tell the code's story? A missing comment is theirs. An unclear present comment is yours.
 - The **pedantic** lens owns factual accuracy and the repo's structural conventions (file placement, heading conventions): wrong names, wrong file refs, stale docs. Clear but wrong is theirs. Right but unreadable is yours. A violation of the repo's own doc conventions is theirs, never a structure finding here.
 

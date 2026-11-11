@@ -369,6 +369,29 @@ describe("skill artifact registry parity", () => {
     }
   });
 
+  test("the em-dash rule carries the register-mismatch rationale", () => {
+    // Jeff's ruling on the 2026-11 calibration: the outright em-dash ban
+    // stays, and its reasoning is register, not style. The clause is pinned
+    // so an edit cannot silently drop the rationale and leave the ban
+    // unexplained.
+    const rules = SHARED_SKILLS.find((s) => s.name === "thatch-clear-writing")!;
+    expect(rules.content).toContain("Humans outside professional writing do not use em dashes");
+    expect(rules.content).toContain("register mismatch, not a style choice");
+  });
+
+  test("the triad tell is pinned across the clear-writing skill and the no-slop lens", () => {
+    // The tidy-triad tell lives in two places: the clear-writing skill
+    // states it as a drafting rule, the no-slop lens checks it in reviewed
+    // prose. Both files are hand-maintained prose, so this pin fires when
+    // an edit drops or rewords the tell in one place and misses the other.
+    const rules = SHARED_SKILLS.find((s) => s.name === "thatch-clear-writing")!;
+    const lens = SHARED_SKILLS.find((s) => s.name === "thatch-review-no-slop")!;
+    for (const skill of [rules, lens]) {
+      expect(skill.content).toContain("tidy triads");
+      expect(skill.content).toContain("whether or not the content wants a third item");
+    }
+  });
+
   test("the technique lens gates confirmatory-only notes out of its report", () => {
     // A technique note must be an improvement option - a change the author
     // could actually make. A confirmatory-only note ("verified X is correct
