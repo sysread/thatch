@@ -209,3 +209,29 @@ The default-flip decision is already queued for the ship gate: when QA passes an
 - **At the ship gate**: setup's default inverts to the plugin path for current-CC detection, and the README's front door is the Claude Code section's head - the flip is this addendum's migration step 1, executed then.
 - Bundled mode warns update-available on first tools/call (no version file, no skew); auto-update-off users get the same notice the settings-hook regime gives.
 - Renames: the plugin name is permanent from first publish; any later rename goes through the marketplace `renames` map.
+
+### Landed state (the marketplace front door repair, marketplace-front-door branch)
+
+The marketplace manifest (`.claude-plugin/marketplace.json` in this repo, the
+npm-sourced entry pointing at `@jeffober/thatch`), the package-side plugin
+tree, and the front-door round-trip verification landed. Two deviations from
+the letter above, both verified against the live plugin docs:
+
+- **bun.lock ships, not npm-shrinkwrap.json.** The docs recommend
+  npm-shrinkwrap.json for npm-sourced plugins only because npm excludes
+  package-lock.json from published tarballs; bun.lock (a supported lockfile,
+  checked before either npm lockfile) has no such exclusion, is already the
+  repo's lockfile, and runs Bun - the package manager the plugin's server
+  requires on PATH anyway. One lockfile, no drift, no new release step:
+  package.json's `files` now carries `bun.lock`.
+- **The plugin tree generates at prepack.** `scripts/prepack.ts` runs the
+  SAME tree generator setup uses (`writePluginTree` in src/setup.ts) with a
+  package-world server entry - `bun ${CLAUDE_PLUGIN_ROOT}/bin/thatch mcp
+  --bundled` - so the tarball carries `.claude-plugin/plugin.json` plus the
+  hooks tree; `scripts/postpack.ts` removes the generated files from the
+  checkout after the tarball is built.
+
+Still open from the criteria above: the setup marketplace handoff (print +
+opt-in run of the two commands for existing users) and the update-available
+warning in bundled mode. The real-registry npm fetch is provable only by a
+release; the local round-trip covers everything short of it.

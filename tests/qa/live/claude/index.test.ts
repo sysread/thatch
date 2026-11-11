@@ -12,3 +12,4 @@ import "./uc-137-claude-chat-wake";
 import "./uc-138-claude-wrapup";
 import "./uc-139-claude-watcher";
 import "./uc-140-claude-alerts";
+import "./uc-146-claude-marketplace-install";

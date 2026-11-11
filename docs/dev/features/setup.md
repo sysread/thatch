@@ -132,6 +132,37 @@ The skills install is unchanged in this regime (Claude Code discovers the
 scope's skills dir the same way); skills are NOT bundled in the generated
 plugin directory.
 
+### The marketplace front door (the repo is the marketplace, the npm package is the plugin)
+
+The repo itself is a Claude Code plugin marketplace:
+`.claude-plugin/marketplace.json` lists one plugin, `thatch`, whose
+source is the npm package `@jeffober/thatch`. The npm release IS the
+plugin release - one version, one update path. The entry declares no
+version and no components, so the package's own
+`.claude-plugin/plugin.json` (generated at pack time) is the manifest
+and its `version` decides updates.
+
+The package ships a loadable plugin, generated at pack time:
+`scripts/prepack.ts` (npm's prepack lifecycle - runs on `npm pack` and on
+the publish workflow's `npm publish`) calls the SAME generator as setup
+(`writePluginTree` in `src/setup.ts`) with a package-world server entry -
+`bun ${CLAUDE_PLUGIN_ROOT}/bin/thatch mcp --bundled`, the installed
+copy's bin under bun, never a PATH `thatch` or a pack-time project pin.
+`scripts/postpack.ts` removes the generated files from the checkout
+after the tarball is built; the committed `marketplace.json` survives
+every pack.
+
+The package also ships a slimmed dependency view (src/packaging.ts):
+Claude Code installs EVERY package a shipped lockfile lists, so the full
+bun.lock would land ~1 GB of node_modules (devDependency trees included)
+in the plugin cache and push the install past its 60-second budget on
+ordinary connections. Prepack rewrites package.json (no devDependencies,
+no scripts) and bun.lock (the runtime closure of package.json's
+dependencies, ~385 MB), saving the originals to `.pack-orig/` for
+postpack to restore. The slimmed artifacts agree with each other, which
+keeps Claude Code from skipping the install as a package/lockfile
+mismatch.
+
 ### Cursor setup (`setupCursor` in `src/setup.ts`)
 
 Four artifacts, same idempotent pattern:

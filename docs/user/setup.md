@@ -65,9 +65,29 @@ Or place the thatch repo in `.opencode/plugins/` for auto-loading.
 
 ## Claude Code
 
-Thatch runs as a Claude Code plugin by default (see "The plugin regime"
-below). `--hooks` installs the classic integration instead - a standalone
-MCP server plus settings hooks:
+The front door for a current Claude Code is the marketplace install - no
+setup run and no global install; paste into a session:
+
+```text
+/plugin marketplace add sysread/thatch
+/plugin install thatch
+```
+
+The marketplace lives in the thatch repository, and its plugin entry
+fetches the published npm package: the npm release IS the plugin
+release, with one version and one update path (`claude plugin update
+thatch`, or "Update now" in the `/plugin` panel). The installed plugin
+is the same shape the plugin regime below generates - the bundled MCP
+server, launched as `bun <install>/bin/thatch mcp --bundled` from the
+installed copy, plus the in-process mod - and the server writes the
+CLAUDE.md instructions block at its first startup, so even this path
+gets the instructions without a setup run. Requires Claude Code 2.1.287
+or newer (the mods floor), enterprise policy permitting mods, and bun
+on PATH.
+
+Thatch also installs as a Claude Code plugin via setup (see "The plugin
+regime" below). `--hooks` installs the classic integration instead - a
+standalone MCP server plus settings hooks:
 
 ```bash
 thatch setup --claude                    # the plugin regime (the default)

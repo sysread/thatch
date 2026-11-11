@@ -1,0 +1,18 @@
+{
+  "name": "thatch",
+  "owner": {
+    "name": "Jeff Ober",
+    "url": "https://github.com/sysread/thatch"
+  },
+  "description": "Persistent memory for Claude Code: local embeddings, SQLite stores, cross-session chat.",
+  "plugins": [
+    {
+      "name": "thatch",
+      "description": "Thatch memory, extraction, and cross-session chat for Claude Code.",
+      "source": {
+        "source": "npm",
+        "package": "@jeffober/thatch"
+      }
+    }
+  ]
+}

@@ -14,6 +14,13 @@ coverage/
 .mcp.json
 opencode.json
 CLAUDE.md
+# The prepack-generated plugin tree (scripts/prepack.ts writes it before
+# npm pack; scripts/postpack.ts removes it after). The COMMITTED
+# .claude-plugin/marketplace.json is not ignored - the repo is the
+# marketplace.
+.claude-plugin/plugin.json
+hooks/
+.pack-orig/
 scratch/
 scratchpad/
 /thatch

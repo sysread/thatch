@@ -20,11 +20,16 @@
     "src",
     "docs",
     "bin",
-    "artifacts"
+    "artifacts",
+    "hooks",
+    ".claude-plugin/plugin.json",
+    "bun.lock"
   ],
   "scripts": {
     "test": "bun test",
-    "test:watch": "bun test --watch"
+    "test:watch": "bun test --watch",
+    "prepack": "bun scripts/prepack.ts",
+    "postpack": "bun scripts/postpack.ts"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.0.0",

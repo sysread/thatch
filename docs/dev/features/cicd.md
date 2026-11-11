@@ -21,6 +21,7 @@ Key details:
 - npm >= 11.5.1 required (OIDC exchange needs it). The workflow installs setup-node@v4 (node 24) and `npm install -g npm@11`
 - npm 12 shipped a sigstore bug that broke OIDC publishing; the pin prevents it
 - The workflow deliberately sets NO `registry-url`, which would write a token-expecting `.npmrc` that preempts the OIDC exchange
+- `npm publish` runs the package's prepack lifecycle: `scripts/prepack.ts` generates the Claude Code plugin tree into the package and slims the dependency view (package.json without devDependencies or scripts, bun.lock reduced to the runtime closure); `scripts/postpack.ts` restores the checkout after the tarball is built. Bun is installed in the publish job for exactly this
 
 ## Wiki pipeline (.github/workflows/wiki.yml)
 

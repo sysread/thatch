@@ -34,7 +34,8 @@ sessions and they cannot be woken. If you keep tabs open across long
 idle periods, set `experimental.location_idle_timeout` to a longer
 duration or `false`.
 
-**Claude Code** - paste into a session:
+**Claude Code** - paste into a session (requires [Bun](https://bun.sh) on
+PATH - the plugin's bundled server runs under it):
 
 ```text
 /plugin marketplace add sysread/thatch
@@ -43,7 +44,6 @@ duration or `false`.
 
 Older Claude Code versions or enterprise policies that disable mods:
 `npm install -g @jeffober/thatch && thatch setup --claude --hooks`.
-Requires [Bun](https://bun.sh) on PATH.
 
 **Cursor**:
 

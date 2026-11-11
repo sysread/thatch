@@ -503,6 +503,36 @@ describe("setupClaudePluginRegime (plugin regime, QA-only)", () => {
     expect(claudeMd).not.toContain("`mcp__thatch__memory_remember`");
   });
 
+  test("writePluginTree generates the package variant (the npm-sourced plugin)", async () => {
+    // The prepack world: the server entry must resolve inside the
+    // INSTALLED copy - ${CLAUDE_PLUGIN_ROOT} substitution plus bun, never
+    // a PATH `thatch` or a pack-time project pin.
+    const { writePluginTree } = await import("../src/setup");
+    const pkg = (await import("../package.json")).default;
+    const pkgDir = join(base, "package");
+    await writePluginTree(pkgDir, {
+      command: "bun",
+      args: ["${CLAUDE_PLUGIN_ROOT}/bin/thatch", "mcp", "--bundled"],
+    });
+    const manifest = JSON.parse(readFileSync(join(pkgDir, ".claude-plugin", "plugin.json"), "utf8"));
+    expect(manifest.name).toBe("thatch");
+    expect(manifest.version).toBe(pkg.version);
+    expect(manifest.mcpServers.thatch).toEqual({
+      type: "stdio",
+      command: "bun",
+      args: ["${CLAUDE_PLUGIN_ROOT}/bin/thatch", "mcp", "--bundled"],
+    });
+    const hooksJson = JSON.parse(readFileSync(join(pkgDir, "hooks", "hooks.json"), "utf8"));
+    expect(hooksJson.modules).toEqual(["./register.js"]);
+    expect(existsSync(join(pkgDir, "hooks", "mod.js"))).toBe(true);
+    // The SHIPPED-world instructions variant: the plugin regime's
+    // availability claims (watch tools served, wakes delivered), with no
+    // dev-path framing.
+    const instructions = readFileSync(join(pkgDir, "hooks", "instructions.js"), "utf8");
+    expect(instructions).toContain("ARE available here");
+    expect(instructions).not.toContain("--dev");
+  });
+
   test("refuses a bin whose checkout lacks the plugin-regime feature", async () => {
     // The mixed-source bug: a bin pointing at a tree WITHOUT
     // src/claude-plugin (a global symlink to another checkout) ran a
