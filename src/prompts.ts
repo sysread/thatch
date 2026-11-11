@@ -268,6 +268,9 @@ rules live in the skill; these apply even when it is not loaded:
 - Plain English. Short declarative sentences. One idea per sentence.
 - Terse means fewer claims, never denser ones. Do not compress surviving
   sentences into clause chains or noun stacks.
+- Every sentence: a character does something. Character as subject,
+  action as verb. Passive voice erases the actor; a noun built from a
+  verb erases the action.
 - An adjective stack with no verb: write the clause it hides. A
   row-changing verb names its columns.
 - No made-up phrases. Every technical term must exist in the code, the docs,
@@ -684,6 +687,9 @@ rules live in the skill; these apply even when it is not loaded:
 - Plain English. Short declarative sentences. One idea per sentence.
 - Terse means fewer claims, never denser ones. Do not compress surviving
   sentences into clause chains or noun stacks.
+- Every sentence: a character does something. Character as subject,
+  action as verb. Passive voice erases the actor; a noun built from a
+  verb erases the action.
 - An adjective stack with no verb: write the clause it hides. A
   row-changing verb names its columns.
 - No made-up phrases. Every technical term must exist in the code, the docs,

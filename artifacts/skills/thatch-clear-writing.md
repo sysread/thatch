@@ -20,12 +20,14 @@ Every text a human reads:
 - **Comments you post for the user** - PR comments, ticket comments (Linear, Jira), replies to reviewers, replies to bot findings.
 - **Written artifacts** - documentation, feature plans, reports, write-ups, design notes, status updates.
 - **Code and doc comments** - comments in source files, doc comments, package READMEs.
-- **Replies to the user in chat** - explanations, summaries, answers.
+- **Replies to the user in chat** - explanations, summaries, answers. Code appears in chat only when the code is the subject.
 
 Same prose rules everywhere. Only the structure differs:
 
-- **Artifacts** may use sections, headings, and bullets as the content needs.
+- **Artifacts** may use sections, headings, and bullets as the content needs. Data goes in tables, reasoning in prose, and never a plan as a table. Gap lists are numbered, one sentence per item.
 - **Chat replies** use no scaffold. Lead with the answer, then the context, then the caveats. Short, but never compressed into shorthand to make it short.
+
+When you edit text the user owns, match their tone and tense; public-facing copy keeps its own voice.
 
 A dedicated writing skill overrides this one when loaded: `thatch-pr-description` for PR bodies, `thatch-ticket-description` for ticket descriptions, `thatch-review-response` for replies on the user's own PR, the review skills for review reports. Use those where they fit. This skill covers everything they do not.
 
@@ -43,15 +45,31 @@ The reader decides when to stop reading. Give them the point first so stopping e
 - Then: why. The mechanism, the evidence, the reasoning.
 - Last: caveats, open questions, alternatives considered.
 
+The same fault works inside a sentence, and between paragraphs. Inside a sentence: "so it is out" dangles when the sentence has not settled anything yet; a decision reads as the point only when it stands as the point. If the decision is the news, give it the main clause or its own sentence. Between paragraphs: a verdict arriving after its examples reads as an afterthought. Once emphasis is placed right, further cutting is taste, not repair.
+
+## The story a sentence tells
+
+Every sentence tells a small story: a character does something. The sentence states that story at two levels. The story level: which character, and what it does. The grammar level: which subject, and which verb. Keep them aligned: the character as the subject, the action as the verb. "A duck walked up to a lemonade stand and asked, 'Got any grapes?'" is aligned. The duck is the subject; "walked up" and "asked" are the verbs.
+
+Alignment is a preference, not a law. Moving the pieces on purpose, to place emphasis, keeps a sentence clear. Drift without a purpose is where the faults live, and the first one hides the story itself.
+
+**Hidden characters and actions.** Passive voice erases the actor; a noun built from a verb erases the action. "A request for grapes was made upon the duck's arrival at the lemonade stand" taxes the reader twice. The reader hunts past the grammatical subject ("request") to find the character, and rebuilds two actions ("walked up", "asked") out of the noun "arrival" that the writer had on hand as verbs. The same fault in three subtler forms:
+
+- **Status verbs hide change.** "is now in CUDA" hides "recreated in CUDA". Say what happened: the thing was recreated, moved, or deleted.
+- **Inanimate nouns take an actor's job.** "stages will close it" fails because stages do not close anything; a person closes it, by rebuilding. When the real actor is a person, make the person the subject.
+- **Agents dodge the first person.** "The Triton code is read" instead of "I read the Triton code". In reports, replies, and comments, when the actor is you, name yourself. Artifact prose is the exception: a PR description or a ticket describes the change, not the author, so the change stays the subject there.
+
+The fix is the same for every form: character as subject, the verbs back on the actions.
+
 ## Prose rules
 
 Hard rules. Not suggestions.
 
-1. **One idea per sentence.** Split clause-chains. One topic per paragraph.
+1. **One idea per sentence.** Split clause-chains. One topic per paragraph. A sentence whose form is much larger than its content is the same fault: "Nothing else depends on anything but the result, so I'll report as soon as the poll returns" means "I'll report when the poll finishes"; write that one.
 2. **Literal phrasing beats compressed idiom.** Write for an unfamiliar reader. Do not use method names as verbs. Prefer plain English nouns over code-domain nouns: "reading the row from the database" not "the row read"; "a request waiting for a worker" not "a waiter". If a word sounds like it belongs in a source file rather than a sentence, replace it. A compound of adjectives plus a domain noun standing where a clause belongs is compression in disguise: "timestamp-only re-finds", "cache-visible columns". Every word is real domain vocabulary, so a buzzword scan waves it through - the test is whether the phrase contains a verb. Write out the clause it abbreviates, subject and verb included: "a scan that re-detects a secret it already stored, and the only change is a timestamp column".
 3. **Define subsystem-specific terms on first use.** General engineering vocabulary needs no definition. "the DEK (the symmetric key that encrypts secrets at rest)" - yes. After the first definition, use the term freely.
 4. **Translate project-private labels.** Roadmap names, subsystem nicknames, ticket shorthand, and branch-local labels are not explanations. Say what the code does first: what reads, writes, blocks, retries, or changes. The label can follow if it helps the reader connect prose to code. Ticket prose is a source of facts, not phrasing: a compression coined in a ticket ("the churn that heals", "land and stick") does not become acceptable by being quoted - it gets the same decode test as everything else.
-5. **Prefer concrete over ambiguous.** If a word can mean more than one thing here, qualify it or replace it with the specific behavior. Ordinary words can be ambiguous when the code gives them a special role: claim, owner, active, current, publish, resolve, sync, scope. "Persist the value in the database so the UI can display it" beats "publish the value".
+5. **Prefer concrete over ambiguous.** If a word can mean more than one thing here, qualify it or replace it with the specific behavior. Ordinary words can be ambiguous when the code gives them a special role: claim, owner, active, current, publish, resolve, sync, scope. "Persist the value in the database so the UI can display it" beats "publish the value". A number without its referent is the same fault: "same numbers within 2%" - the outputs or the runtimes? Name the quantity that matched: "the CUDA runtimes matched the Triton runtimes within 2%".
 6. **Explain operations before naming them.** Refresh, repair, coalesce, reconcile, normalize, hydrate, fan out - these are not explanations. Name the object, the action, and the effect: "The worker waits up to 5 seconds, then reloads each stale cache key once." Plain-casual effect verbs are the same failure wearing work clothes: "gets bumped", "lands and sticks", "the next touch picks it up" hide what changed. When a sentence says a row or record changes, name the columns and what happened to them: "the rescan's write overwrites last_seen and modified_date", not "modified_date gets bumped".
 7. **Name both sides of a contrast.** If timing, ownership, or behavior changed, state the old behavior and the new close together.
 8. **Show causal links.** If a sentence uses "so", "because", or "prevents", make the middle step visible. Cause and effect that do not obviously touch need the missing step spelled out.
@@ -59,11 +77,12 @@ Hard rules. Not suggestions.
 10. **No invented shorthand.** Do not coin abbreviations, portmanteaus, or labels mid-text. Use the real name, or spell out the behavior. A term the reader cannot find anywhere else is a term they cannot look up.
 11. **No made-up technical phrases.** Do not coin multi-word terms that sound technical but mean nothing: "identity contract", "canonical hash", "semantic alignment layer". Every term must exist somewhere - in the code, the docs, or standard engineering usage. If you cannot point to where it is defined, delete the label and say what the thing does: what runs, what changes, what the reader gets.
 12. **No buzzwordy abstractions.** "leverage" -> "use". "utilize" -> "use". If you cannot say what a phrase means in plain English, it does not belong.
-13. **Plain ASCII.** No smart quotes, em dashes, or ellipsis glyphs.
-14. **No process narration.** Never describe the order you assembled things in or narrate your own actions inside the text. State the thing itself.
-15. **No sycophancy.** Never open by validating the question: phrases like "Great question", "Excellent question", "You're absolutely right", "You're asking the right questions", "I'm excited to help" signal "AI bot managing your emotions" and must never appear. Never hedge a verifiable claim with "I think", "I believe", "In my opinion", "Arguably", or "Just" as a softener. Stating uncertainty on purpose (you are genuinely unsure of a preference or a prediction) is not a hedge. Corrections are not rudeness. They are the point.
-16. **When you don't know, say so.** Say "I don't know" and stop. If you know part of it, state what you know, what you don't, and your confidence. No plausible filler.
-17. **Clarity overrides every other writing directive.** When clear, easy-to-read sentences conflict with a brevity target, a format rule, or any other instruction about how to write, clarity wins. A dedicated skill still decides the document's structure; this rule governs the sentences inside it.
+13. **Say what a person would say.** The most common fault in agent output is a word combination no person would use. "A grape availability request at the beverage retailer" passes every jargon scan - each word is ordinary - and no person says it; a person says "he asked for grapes at the lemonade stand". The fault hides best in specialist prose, where "the database readiness check sits at the user-session entry boundary" sounds native. Read the sentence aloud and ask whether any person speaking would use those words.
+14. **Plain ASCII.** No smart quotes, em dashes, or ellipsis glyphs.
+15. **No process narration.** Never describe the order you assembled things in or narrate your own actions inside the text. State the thing itself.
+16. **No sycophancy.** Never open by validating the question: phrases like "Great question", "Excellent question", "You're absolutely right", "You're asking the right questions", "I'm excited to help" signal "AI bot managing your emotions" and must never appear. Never hedge a verifiable claim with "I think", "I believe", "In my opinion", "Arguably", or "Just" as a softener. Stating uncertainty on purpose (you are genuinely unsure of a preference or a prediction) is not a hedge. Corrections are not rudeness. They are the point.
+17. **When you don't know, say so.** Say "I don't know" and stop. If you know part of it, state what you know, what you don't, and your confidence. No plausible filler.
+18. **Clarity overrides every other writing directive.** When clear, easy-to-read sentences conflict with a brevity target, a format rule, or any other instruction about how to write, clarity wins. A dedicated skill still decides the document's structure; this rule governs the sentences inside it.
 
 ## Length
 
@@ -83,7 +102,9 @@ For chat replies: terse is fine, illegible is not. If a two-line answer only fit
 
 A substantial turn ends with a brief state summary: what was done, what was found, the current state, and what remains. The response comes first; the summary is a short block after it. Keep it to a few lines. Never a large task list the user must scroll past to find the response. When work spans turns, keep pending work visible as a brief outline, not a list that grows until it hides the answer.
 
-A state summary at the end of a turn is not process narration. Rule 14 bans narrating how you assembled the text; this section requires reporting where the work stands.
+Reports of finished work name the actor and carry one fact per sentence. An enumeration counts as one fact; each new verb starts a new sentence. "I read the Triton code. I verified the CUDA clone matches the Triton runtimes within 2%. Next: tune the clone's CUDA-only knobs." When the work settles a question, name what it settles, so the reader knows what no longer needs attention.
+
+A state summary at the end of a turn is not process narration. Rule 15 bans narrating how you assembled the text; this section requires reporting where the work stands.
 
 ## Code comments
 
@@ -193,7 +214,10 @@ Before you post, save, or send: reread the draft as a reader with zero context. 
 
 Check: Does every sentence parse on first read? Does every term carry its plain-English meaning before or with the label? Is every technical phrase real - could you find it in the code, the docs, or common usage? If not, say what the thing does instead of naming it. Would a reader who has never seen this codebase, ticket, or conversation understand it? If the draft runs long, cut a claim; never tighten the grammar.
 
-Two per-sentence tests catch what the checklist above misses. Run both on every sentence:
+Surface tells - the banned words and punctuation habits - mark text as machine-made. Clearing them is the floor, not the standard. The standard is the first read: a text with no tells can still hide the character and the action.
+
+Three per-sentence tests catch what the checklist above misses. Run them on every sentence:
 
 1. **The isolation test.** Cover the rest of the document. Can a reader with general engineering knowledge parse this sentence alone - subject, verb, and outcome - with nothing from the surrounding paragraphs? A sentence that only makes sense after the reader has absorbed the neighborhood is compressed; decompress it.
 2. **The row-effect test.** For every verb that changes a stored row or record: does the sentence name the columns it changes and what happened to them? "Gets bumped", "sticks", "lands on the row" fail; "overwrites last_seen and modified_date" passes.
+3. **The read-aloud test.** Read the sentence aloud and ask whether any person speaking would use those words. Every word can be real, plain English and still no person would combine them: "a grape availability request at the beverage retailer". A person says "he asked for grapes at the lemonade stand".

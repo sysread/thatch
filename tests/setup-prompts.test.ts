@@ -169,6 +169,8 @@ describe("systemPrompt content", () => {
       expect(text).toContain("clarity-over-compression prose rules");
       // Core rules are inlined so they hold even when the skill is not loaded.
       expect(text).toContain("No made-up phrases");
+      expect(text).toContain("a character does something");
+      expect(text).toContain("Passive voice erases the actor");
       expect(text).toContain("Terse means fewer claims, never denser ones");
       expect(text).toContain("No sycophancy. Don't open by validating the question");
       expect(text).toContain("When you don't know, say so");
@@ -190,7 +192,7 @@ describe("systemPrompt content", () => {
     // need one.
     for (const text of [systemPrompt("test/repo"), claudeInstructions(), cursorInstructions()]) {
       const floor = text.slice(text.indexOf("## Clear writing"), text.indexOf("## When to Write"));
-      expect(Buffer.byteLength(floor, "utf8")).toBeLessThan(1700);
+      expect(Buffer.byteLength(floor, "utf8")).toBeLessThan(1800);
     }
   });
 
@@ -200,6 +202,8 @@ describe("systemPrompt content", () => {
     const skill = readFileSync(join(__dirname, "../artifacts/skills/thatch-clear-writing.md"), "utf8");
     expect(skill).toContain("No sycophancy");
     expect(skill).toContain("When you don't know, say so");
+    expect(skill).toContain("a character does something");
+    expect(skill).toContain("a noun built from a verb");
     expect(skill).toContain("Session replies");
     expect(skill).toContain("## Code comments");
     expect(skill).toContain("Clarity overrides every other writing directive");
