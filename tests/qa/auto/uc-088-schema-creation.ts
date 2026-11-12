@@ -9,8 +9,8 @@ import { ThatchDB } from "../../../src/db";
  * UC-088: Schema creation.
  *
  * Automatable: opens a ThatchDB with a temp SQLite file and verifies
- * all 11 tables exist, the global store is seeded, and PRAGMAs are set.
- * Also verifies idempotency (re-opening does not duplicate).
+ * the core tables exist, the global store is seeded, and PRAGMAs are
+ * set. Also verifies idempotency (re-opening does not duplicate).
  */
 
 const EXPECTED_TABLES = [
@@ -25,6 +25,7 @@ const EXPECTED_TABLES = [
   "behaviors",
   "behavior_edges",
   "behavior_provenance",
+  "notify_journal",
 ];
 
 const useCase: UseCase = {
@@ -43,7 +44,7 @@ const useCase: UseCase = {
     "7. Close and re-open the same DB path. Verify idempotency.",
   ].join("\n"),
   expected: [
-    "- All 11 tables exist: stores, entries, dedup_pairs, prediction_matchers, predictions, prediction_edges, prediction_provenance, behavior_matchers, behaviors, behavior_edges, behavior_provenance.",
+    "- All 12 listed tables exist (stores, entries, dedup_pairs, the prediction and behavior engine tables, notify_journal); the check is a lower bound, so later tables do not fail it.",
     "- The global store row exists in stores.",
     "- journal_mode is wal.",
     "- busy_timeout is 5000.",

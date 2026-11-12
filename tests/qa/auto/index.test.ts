@@ -120,3 +120,4 @@ import "./uc-143-memory-display-stamp";
 import "./uc-144-forget-tombstones";
 import "./uc-145-doctor-diagnostics";
 import "./uc-146-prediction-tool-guards";
+import "./uc-147-notification-journal";
