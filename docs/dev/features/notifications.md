@@ -258,6 +258,17 @@ selected and its click opens a Script Editor file dialog.
 - **Voice is untouched**: `/usr/bin/say` runs exactly as before either way,
   and the result line labels the step `banner (terminal-notifier)` vs
   `banner (osascript)` so the tool response says which path fired.
+- **The cask build is the only working install**: the brew formula builds an
+  unsigned app that modern macOS refuses to grant notification permission
+  to -- every banner exits 3 ("Could not request notification permission"),
+  the app never appears in System Settings > Notifications, and
+  `tccutil reset UserNotifications fr.julienxx.oss.terminal-notifier`
+  fails with exit 70 because no TCC entry ever exists to reset. Installing
+  the cask (`brew install --cask terminal-notifier`) puts the signed app in
+  /Applications, where the first banner triggers the real permission
+  dialog. Both builds link the same binary name, so the probe needs no
+  change; verified live 2026-11-12 after the formula install hit exactly
+  this wall.
 
 ## Alerts: the automatic notification path (opencode and the Claude Code plugin regime)
 

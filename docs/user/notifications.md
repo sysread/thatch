@@ -39,6 +39,23 @@ thatch_notify_user(message: "CI is green, clear for merge",
   banner copies its text to your clipboard. An ordinary Notification Center
   banner cannot be selected or copied, and clicking one opens a Script
   Editor file dialog -- terminal-notifier is the escape hatch for both.
+
+  Install the cask, not the formula:
+
+  ```sh
+  brew install --cask terminal-notifier
+  ```
+
+  The formula (`brew install terminal-notifier`, no `--cask`) builds an
+  unsigned app that macOS refuses to grant notification permission to. Its
+  banners always fail with "Could not request notification permission", and
+  the app never appears in System Settings > Notifications. If you already
+  installed the formula, replace it with the cask -- no other change is
+  needed, since both link the same binary name.
+
+  The first banner shows a macOS permission dialog; allow it and the banner
+  delivers. That grant is also what makes the app appear in
+  System Settings > Notifications, where you can adjust its style later.
 - **Linux**: banner via `notify-send` (libnotify) and voice via
   `spd-say`/`espeak` when installed. Missing tools are reported, never fatal.
 - **Windows**: not supported. The tool reports this instead of guessing.
