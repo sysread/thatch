@@ -23,7 +23,7 @@ import {
   type NotificationPrefs,
 } from "./config";
 import { renderEnvKnobs } from "./env-knobs";
-import { sendNotification, defaultSpawner, DEFAULT_VOICE, SPOKEN_LINE_MAX, TONE_PREFIXES, type NotifyChannel, type NotifyTone, type Spawner } from "./notify";
+import { sendNotification, defaultSpawner, DEFAULT_VOICE, SPOKEN_LINE_MAX, TONE_PREFIXES, type NotifyChannel, type NotifyJournalEntry, type NotifyJournalWriter, type NotifyTone, type Spawner } from "./notify";
 import { predictionVerb, formatWhenLine, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, DEFAULT_COMMAND_EXIT_CODES, commandTargetLabel, describeBaselineCheckRuns, type WatcherRegistry, type Watcher, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
@@ -172,6 +172,13 @@ export interface CoreContext {
   /** Injectable command runner for notify_user. Defaults to Bun.spawn.
    *  Tests inject a mock so notifications never actually fire or speak. */
   spawner?: Spawner;
+  /** Notification journal writer for notify_user: every delivery attempt
+   *  (delivered / failed / suppressed / unsupported) appends one row to
+   *  notify_journal, read back by `thatch notifications`. Production binds
+   *  ThatchDB.recordNotifyJournal; tests and minimal hosts omit it and
+   *  deliveries simply go unjournaled. sendNotification swallows journal
+   *  failures, so a broken journal can never break a notification. */
+  notifyJournal?: NotifyJournalWriter;
   /** Resolves the calling MCP server process's own chat identity from its
    *  parent process id (the hook-recorded Claude Code anchor). Wired on the
    *  MCP path only; the model cannot influence it, which is what makes it
@@ -1916,7 +1923,7 @@ const notifyUserDef: ToolDef = {
       channel,
       voice: (args.voice as string | undefined) ?? prefs.voice,
       sound: prefs.sound,
-    }, ctx.spawner ?? defaultSpawner);
+    }, ctx.spawner ?? defaultSpawner, ctx.notifyJournal);
   },
 };
 
@@ -3529,6 +3536,12 @@ export function buildCoreContext(
     openTabs: extensions?.openTabs,
     wrapUpGreenlight: extensions?.wrapUpGreenlight,
     wrapUpCompactGreenlight: extensions?.wrapUpCompactGreenlight,
+    // Every notify_user delivery attempt from this host is journaled -
+    // not an extension: the db is already in hand, and a host that
+    // journals nothing is a host the user cannot read notifications back
+    // from. The writer never throws into the dispatch (sendNotification
+    // guards it).
+    notifyJournal: (entry: NotifyJournalEntry) => db.recordNotifyJournal(entry),
   };
 }
 

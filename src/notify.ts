@@ -2,6 +2,10 @@
 // plain child processes - no vendored binaries, no npm notifier dependency -
 // because the per-platform commands are one-liners and the alternatives
 // (node-notifier's bundled terminal-notifier) trip Gatekeeper on modern macOS.
+// A USER-installed terminal-notifier is preferred for the darwin banner when
+// it is on PATH: osascript banners cannot be selected or copied, and clicking
+// one opens a Script Editor file dialog instead of doing anything useful,
+// while terminal-notifier supports a click action (see the banner branch).
 // Dispatch is darwin and linux only by design: win32 support is not a goal,
 // and the tool reports the gap honestly rather than half-working.
 
@@ -151,6 +155,34 @@ function appleScriptString(s: string): string {
   return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+/**
+ * POSIX shell single-quoting for one word. Everything except the single
+ * quote itself survives a single-quoted shell word verbatim (backslashes,
+ * double quotes, newlines), so only quotes need the '\'' dance. Used for
+ * terminal-notifier's -execute value: terminal-notifier runs it through a
+ * shell, so the AppleScript literal must survive one shell round-trip on
+ * its way to the clipboard.
+ */
+function shellSingleQuoted(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Runtime PATH detection for the terminal-notifier binary (the darwin
+ * banner preference): one `which` probe through the SAME spawner that
+ * delivers, so tests inject presence or absence and nothing at build time
+ * ever depends on the binary. A probe that exits nonzero (or cannot spawn
+ * at all) means absent: the osascript path runs exactly as before.
+ */
+export async function terminalNotifierAvailable(spawner: Spawner): Promise<boolean> {
+  try {
+    const result = await spawner(["/usr/bin/which", "terminal-notifier"]);
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
 interface StepOutcome {
   label: string;
   ok: boolean;
@@ -184,21 +216,80 @@ export function notifySuppressed(env: Record<string, string | undefined> = proce
 }
 
 /**
+ * One journal row's outcome. `delivered` means the command(s) succeeded -
+ * the same honesty limit the tool result has: osascript exits 0 whether or
+ * not macOS actually showed the banner. `failed` means every requested
+ * channel failed. `suppressed` is the THATCH_NO_NOTIFY kill switch;
+ * `unsupported` is a non-darwin/linux platform.
+ */
+export type NotifyOutcome = "delivered" | "failed" | "suppressed" | "unsupported";
+
+/**
+ * What a delivery attempt writes to the notify_journal table (one row per
+ * sendNotification call; the requested channel, not one row per physical
+ * channel). The message is the caller's raw text - the tone prefix is
+ * tool decoration, reproducible from the docs, not news.
+ */
+export interface NotifyJournalEntry {
+  channel: NotifyChannel;
+  source: string;
+  title: string;
+  message: string;
+  outcome: NotifyOutcome;
+}
+
+/** Journal writer injected by the host (production binds ThatchDB). */
+export type NotifyJournalWriter = (entry: NotifyJournalEntry) => void;
+
+/** A journal row as read back: the entry plus the database's id and stamp. */
+export interface NotifyJournalRow extends NotifyJournalEntry {
+  id: number;
+  created_at: string;
+}
+
+/**
  * Sends the notification and returns a result line for the tool response.
  * A zero exit proves only that the command ran - macOS focus modes can still
  * suppress the banner silently - so the result never claims the user saw it.
  * Never throws: every failure becomes text the calling model can read.
+ *
+ * When a journal writer is injected, every attempt appends one row (see
+ * NotifyJournalEntry) - delivered, failed, suppressed, or unsupported. The
+ * journal write is the notification's side detail, never its master: a
+ * journaling failure (a locked database, a closed handle) is logged to
+ * stderr and the dispatch proceeds - the user still gets their banner even
+ * when its record cannot be kept.
  */
 export async function sendNotification(
   request: NotifyRequest,
   spawner: Spawner = defaultSpawner,
+  journal?: NotifyJournalWriter,
 ): Promise<string> {
+  const record = (outcome: NotifyOutcome): void => {
+    if (!journal) return;
+    try {
+      journal({
+        channel: request.channel,
+        source: request.source ?? "",
+        title: request.title ?? "",
+        message: request.message,
+        outcome,
+      });
+    } catch (err) {
+      console.error(
+        `[thatch] notification journal write failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
   if (notifySuppressed()) {
+    record("suppressed");
     return "[suppressed] THATCH_NO_NOTIFY is set; no notification was sent.";
   }
 
   const platform = request.platform ?? process.platform;
   if (platform !== "darwin" && platform !== "linux") {
+    record("unsupported");
     return `[unsupported] notifications are not implemented on ${platform} (macOS and Linux only); nothing was sent.`;
   }
 
@@ -209,10 +300,29 @@ export async function sendNotification(
     const title = request.title ?? request.source ?? "thatch";
     if (platform === "darwin") {
       const sound = request.sound ?? "Submarine";
-      const script =
-        `display notification ${appleScriptString(bannerText)} ` +
-        `with title ${appleScriptString(title)} sound name ${appleScriptString(sound)}`;
-      outcomes.push(await runStep("banner (osascript)", ["/usr/bin/osascript", "-e", script], spawner));
+      // Preferred path when the user has installed terminal-notifier: its
+      // banner supports a click action, so clicking copies the banner text
+      // to the clipboard (the whole point - osascript banner text cannot
+      // be selected). -execute's value is a command line that
+      // terminal-notifier runs through a shell, hence the two quoting
+      // layers: appleScriptString for the AppleScript literal, then one
+      // shell single-quote around the whole -e argument.
+      if (await terminalNotifierAvailable(spawner)) {
+        const clickAction =
+          `/usr/bin/osascript -e ${shellSingleQuoted(`set the clipboard to ${appleScriptString(bannerText)}`)}`;
+        outcomes.push(
+          await runStep(
+            "banner (terminal-notifier)",
+            ["terminal-notifier", "-title", title, "-message", bannerText, "-sound", sound, "-execute", clickAction],
+            spawner,
+          ),
+        );
+      } else {
+        const script =
+          `display notification ${appleScriptString(bannerText)} ` +
+          `with title ${appleScriptString(title)} sound name ${appleScriptString(sound)}`;
+        outcomes.push(await runStep("banner (osascript)", ["/usr/bin/osascript", "-e", script], spawner));
+      }
     } else {
       outcomes.push(await runStep("banner (notify-send)", ["notify-send", title, bannerText], spawner));
     }
@@ -250,8 +360,10 @@ export async function sendNotification(
 
   const failed = outcomes.filter((o) => !o.ok);
   if (outcomes.every((o) => !o.ok)) {
+    record("failed");
     return `[failed] ${failed.map((o) => o.detail).join("; ")}`;
   }
+  record("delivered");
   const parts = outcomes.map((o) => (o.ok ? `${o.detail} ok` : o.detail));
   return `[notified] ${parts.join("; ")}`;
 }

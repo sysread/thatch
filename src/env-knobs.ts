@@ -151,7 +151,7 @@ export const ENV_KNOBS: EnvKnob[] = [
   {
     name: "THATCH_NO_NOTIFY",
     description:
-      "Kill switch for desktop notifications: set to 1 and every dispatch (banner and voice) becomes a logged no-op. Test and QA runs set this; export it to silence thatch notifications entirely.",
+      "Kill switch for desktop notifications: set to 1 and every dispatch (banner and voice) becomes a no-op. Suppressed attempts still land in the notification journal (thatch notifications) with outcome suppressed. Test and QA runs set this; export it to silence thatch notifications entirely.",
     default: "off (notifications send)",
   },
   {

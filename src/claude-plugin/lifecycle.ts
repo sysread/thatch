@@ -125,6 +125,7 @@ export function createPluginLifecycle(deps: PluginLifecycleDeps) {
       await sendNotification(
         { message: input.message, title: input.title, tone, channel: alertMode(deps.config ?? loadConfig().config, input.kind) as "both" | "banner" | "voice", voice, sound },
         defaultSpawner,
+        (entry) => deps.db.recordNotifyJournal(entry),
       );
     }),
   });

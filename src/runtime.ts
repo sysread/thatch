@@ -39,7 +39,7 @@ import { WatcherRegistry, ghApiRun, ghAvailable, runWatchedCommand, watcherTarge
 import { watcherNotificationNudge, watcherRearmNotice, watcherDeathNotice, chatNotificationNudge, chatEchoText } from "./prompts";
 import { ChatPoller, createWakeGate, EXTRACTION_CHILD_TITLE, hostedSessionIds, isDefaultSessionTitle, isMachinerySessionTitle, nowIso, unexpiredGraceRehosts } from "./chat";
 import { chatEnabled, chatAutoRegister, loadConfig, notificationDefaults } from "./config";
-import { sendNotification } from "./notify";
+import { sendNotification, defaultSpawner } from "./notify";
 import { osProcessArgs, startupSessionId, continuesLastSessionFromArgv, continuesLastSessionId } from "./os-args";
 import { type HostCapabilities, DeliverySkippedError } from "./capabilities";
 import pkg from "../package.json";
@@ -370,7 +370,7 @@ export async function createRuntime(input: {
         channel: delivery.channel,
         voice: delivery.voice,
         sound: delivery.sound,
-      });
+      }, defaultSpawner, (entry) => db.recordNotifyJournal(entry));
     },
   });
 

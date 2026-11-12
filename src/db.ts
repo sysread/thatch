@@ -10,6 +10,7 @@ import { BehaviorEngine } from "./behavior";
 import { ChatStore, type ChatHostKind, type ChatWorktreeKind, type LeaveTombstoneReason } from "./chat";
 import { PREDICTION_K, PREDICTION_P0, PREDICTION_W_SOFT } from "./scoring-engine";
 import type { RepoPathCache, RepoPathRow } from "./git";
+import type { NotifyChannel, NotifyJournalEntry, NotifyJournalRow } from "./notify";
 
 export { cosineSimilarity } from "./vector-math";
 export type { PredictionNudgeItem, MatcherRow, PredictionRow, ScoredPrediction, PredictionDedupCandidate } from "./prediction";
@@ -566,6 +567,26 @@ export class ThatchDB {
         embedding    BLOB,
         forgotten_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
         PRIMARY KEY (store, slug, content_hash)
+      )
+    `);
+
+    // The notification journal: one row per sendNotification delivery
+    // attempt (src/notify.ts records it; outcome is delivered / failed /
+    // suppressed / unsupported). Desktop banners are write-only - an
+    // osascript banner's text cannot be selected or copied, and clicking
+    // one opens a Script Editor file dialog - so this table is the
+    // durable, readable record of what was said, read back by
+    // `thatch notifications`. Append-only and never pruned: a row is
+    // tiny and a machine emits a handful per day.
+    this.#db.run(`
+      CREATE TABLE IF NOT EXISTS notify_journal (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        channel    TEXT NOT NULL,
+        source     TEXT NOT NULL DEFAULT '',
+        title      TEXT NOT NULL DEFAULT '',
+        message    TEXT NOT NULL,
+        outcome    TEXT NOT NULL
       )
     `);
 
@@ -1220,6 +1241,44 @@ export class ThatchDB {
     this.#db.run("DELETE FROM memory_tombstones WHERE store = ? AND slug = ?", [store, slug]);
     const changed = this.#db.query("SELECT changes() AS n").get() as { n: number };
     return changed.n;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Notification journal
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Appends one delivery-attempt row. The stamp is the database's (the
+   * same strftime default every other table uses); the caller passes
+   * everything else, including the outcome. Called through the
+   * NotifyJournalWriter seam (src/notify.ts), which never lets a failure
+   * here reach the notification dispatch.
+   */
+  recordNotifyJournal(entry: NotifyJournalEntry): void {
+    this.#db.run(
+      "INSERT INTO notify_journal (channel, source, title, message, outcome) VALUES (?, ?, ?, ?, ?)",
+      [entry.channel, entry.source, entry.title, entry.message, entry.outcome],
+    );
+  }
+
+  /**
+   * The most recent `limit` journal rows, returned oldest-first: display
+   * order for `thatch notifications`, which prints newest last. The id
+   * (autoincrement) is the ordering key - rows written in the same second
+   * keep their insert order.
+   */
+  listNotifyJournal(limit: number): NotifyJournalRow[] {
+    return (this.#db
+      .query("SELECT id, created_at, channel, source, title, message, outcome FROM notify_journal ORDER BY id DESC LIMIT ?")
+      .all(limit) as any[]).reverse().map((r) => ({
+      id: r.id as number,
+      created_at: r.created_at as string,
+      channel: r.channel as NotifyChannel,
+      source: r.source as string,
+      title: r.title as string,
+      message: r.message as string,
+      outcome: r.outcome as NotifyJournalRow["outcome"],
+    }));
   }
 
   // ---------------------------------------------------------------------------

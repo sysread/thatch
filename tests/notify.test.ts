@@ -2,7 +2,8 @@ import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } fr
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sendNotification, notifySuppressed, spokenText, applyTonePrefix, capSpokenLine, capSourceLabel, SPOKEN_LINE_MAX, defaultSpawner, type Spawner, type SpawnResult } from "../src/notify";
+import { sendNotification, notifySuppressed, spokenText, applyTonePrefix, capSpokenLine, capSourceLabel, SPOKEN_LINE_MAX, defaultSpawner, terminalNotifierAvailable, type NotifyJournalEntry, type Spawner, type SpawnResult } from "../src/notify";
+import { ThatchDB } from "../src/db";
 import { saveConfig } from "../src/config";
 import { TOOL_DEFS, type CoreContext } from "../src/tool-defs";
 
@@ -27,6 +28,15 @@ function mockSpawner(
   recorded: string[] = [],
 ): Spawner {
   return async (cmd) => {
+    // The terminal-notifier PATH probe (src/notify.ts) answers ABSENT by
+    // default and is never recorded: recorded[] documents delivery
+    // commands, and this machine has no terminal-notifier installed - so
+    // the default mock reproduces the binary-absent osascript path the
+    // existing assertions pin. A test that wants the terminal-notifier
+    // branch puts an exit-0 result under the "/usr/bin/which" needle.
+    if (cmd[0] === "/usr/bin/which") {
+      return results.get("/usr/bin/which") ?? { exitCode: 1, stderr: "" };
+    }
     recorded.push(cmd.join(" "));
     for (const [needle, result] of results) {
       if (cmd.join(" ").includes(needle)) return result;
@@ -230,6 +240,74 @@ describe("sendNotification on darwin", () => {
   });
 });
 
+describe("terminal-notifier preference (darwin)", () => {
+  test("a found binary delivers the banner through terminal-notifier with a copy-to-clipboard click action", async () => {
+    const cmds: string[] = [];
+    const spawner = mockSpawner(new Map([["/usr/bin/which", { exitCode: 0, stderr: "" }]]), cmds);
+    const result = await sendNotification({
+      message: "C I is green",
+      source: "PLAT-280",
+      channel: "both",
+      platform: "darwin",
+    }, spawner);
+    expect(cmds.length).toBe(2); // the PATH probe is detection, not delivery; not recorded
+    expect(cmds[0]).toContain("terminal-notifier -title PLAT-280");
+    expect(cmds[0]).toContain("-message C I is green");
+    expect(cmds[0]).toContain("-sound Submarine");
+    expect(cmds[0]).toContain("/usr/bin/osascript -e 'set the clipboard to \"C I is green\"'");
+    // Voice delivery is untouched by the banner preference.
+    expect(cmds[1]).toContain("/usr/bin/say -v Zarvox PLAT-280: C I is green");
+    expect(result).toBe("[notified] banner (terminal-notifier) ok; voice (Zarvox) ok");
+  });
+
+  test("the click action survives a message with single quotes, double quotes, and backslashes", async () => {
+    const cmds: string[] = [];
+    const spawner = mockSpawner(new Map([["/usr/bin/which", { exitCode: 0, stderr: "" }]]), cmds);
+    await sendNotification({ message: 'it\'s "done" \\ now', channel: "banner", platform: "darwin" }, spawner);
+    // Two quoting layers: appleScriptString escapes for AppleScript
+    // (backslash + double quote), then one shell single-quote wraps the
+    // whole -e argument (a single quote inside becomes '\'').
+    expect(cmds[0]).toContain(
+      "/usr/bin/osascript -e 'set the clipboard to \"it'\\''s \\\"done\\\" \\\\ now\"'",
+    );
+  });
+
+  test("the tone prefix leads the terminal-notifier message and the copied text", async () => {
+    const cmds: string[] = [];
+    const spawner = mockSpawner(new Map([["/usr/bin/which", { exitCode: 0, stderr: "" }]]), cmds);
+    await sendNotification({
+      message: "C I is green",
+      tone: "positive",
+      channel: "banner",
+      platform: "darwin",
+    }, spawner);
+    expect(cmds[0]).toContain("-message Amaze! Amaze! C I is green");
+    expect(cmds[0]).toContain('set the clipboard to "Amaze! Amaze! C I is green"');
+  });
+
+  test("a probe that cannot spawn falls back to the osascript banner", async () => {
+    const cmds: string[] = [];
+    const result = await sendNotification(
+      { message: "m", channel: "banner", platform: "darwin" },
+      async (cmd) => {
+        if (cmd[0] === "/usr/bin/which") throw new Error("spawn ENOENT");
+        cmds.push(cmd.join(" "));
+        return { exitCode: 0, stderr: "" };
+      },
+    );
+    expect(cmds.length).toBe(1);
+    expect(cmds[0]).toContain("/usr/bin/osascript");
+    expect(cmds[0]).toContain('display notification "m"');
+    expect(result).toContain("banner (osascript) ok");
+  });
+
+  test("terminalNotifierAvailable reads the probe result, treating spawn errors as absent", async () => {
+    expect(await terminalNotifierAvailable(async () => ({ exitCode: 0, stderr: "" }))).toBe(true);
+    expect(await terminalNotifierAvailable(async () => ({ exitCode: 1, stderr: "" }))).toBe(false);
+    expect(await terminalNotifierAvailable(async () => { throw new Error("ENOENT"); })).toBe(false);
+  });
+});
+
 describe("sendNotification on linux", () => {
   test("banner uses notify-send", async () => {
     const cmds: string[] = [];
@@ -297,6 +375,110 @@ describe("THATCH_NO_NOTIFY suppression", () => {
     expect(notifySuppressed({ THATCH_NO_NOTIFY: "1" })).toBe(true);
     expect(notifySuppressed({})).toBe(false);
     expect(notifySuppressed({ THATCH_NO_NOTIFY: "0" })).toBe(false);
+  });
+});
+
+describe("notification journal", () => {
+  test("a delivered attempt journals one row with the request as passed", async () => {
+    const entries: NotifyJournalEntry[] = [];
+    const result = await sendNotification(
+      { message: "C I is green", source: "PLAT-280", channel: "both", platform: "darwin" },
+      mockSpawner(new Map()),
+      (e) => entries.push(e),
+    );
+    expect(result).toContain("[notified]");
+    expect(entries).toEqual([
+      { channel: "both", source: "PLAT-280", title: "", message: "C I is green", outcome: "delivered" },
+    ]);
+  });
+
+  test("a partial failure still journals delivered (any channel ran)", async () => {
+    // Same semantics as the result string: [notified] when anything
+    // succeeded, [failed] only when every requested channel failed.
+    const entries: NotifyJournalEntry[] = [];
+    await sendNotification(
+      { message: "m", channel: "both", platform: "darwin" },
+      mockSpawner(new Map([["/usr/bin/say", { exitCode: 1, stderr: "bad voice" }]])),
+      (e) => entries.push(e),
+    );
+    expect(entries[0].outcome).toBe("delivered");
+  });
+
+  test("a total failure journals failed", async () => {
+    const entries: NotifyJournalEntry[] = [];
+    await sendNotification(
+      { message: "m", channel: "both", platform: "darwin" },
+      mockSpawner(new Map([["", { exitCode: 1, stderr: "boom" }]])),
+      (e) => entries.push(e),
+    );
+    expect(entries).toEqual([{ channel: "both", source: "", title: "", message: "m", outcome: "failed" }]);
+  });
+
+  test("a suppressed attempt journals suppressed without dispatching", async () => {
+    process.env.THATCH_NO_NOTIFY = "1";
+    try {
+      const entries: NotifyJournalEntry[] = [];
+      const cmds: string[] = [];
+      const result = await sendNotification(
+        { message: "m", source: "S", channel: "both", platform: "darwin" },
+        mockSpawner(new Map(), cmds),
+        (e) => entries.push(e),
+      );
+      expect(cmds.length).toBe(0);
+      expect(result).toContain("[suppressed]");
+      expect(entries).toEqual([{ channel: "both", source: "S", title: "", message: "m", outcome: "suppressed" }]);
+    } finally {
+      delete process.env.THATCH_NO_NOTIFY;
+    }
+  });
+
+  test("an unsupported platform journals unsupported", async () => {
+    const entries: NotifyJournalEntry[] = [];
+    await sendNotification(
+      { message: "m", channel: "both", platform: "win32" },
+      mockSpawner(new Map()),
+      (e) => entries.push(e),
+    );
+    expect(entries).toEqual([{ channel: "both", source: "", title: "", message: "m", outcome: "unsupported" }]);
+  });
+
+  test("a journal writer that throws logs and never breaks the dispatch", async () => {
+    const errors: string[] = [];
+    const orig = console.error;
+    console.error = (...args: unknown[]) => { errors.push(args.join(" ")); };
+    try {
+      const result = await sendNotification(
+        { message: "m", channel: "banner", platform: "darwin" },
+        mockSpawner(new Map()),
+        () => { throw new Error("database is locked"); },
+      );
+      expect(result).toContain("[notified]");
+      expect(errors.length).toBe(1);
+      expect(errors[0]).toContain("notification journal write failed");
+      expect(errors[0]).toContain("database is locked");
+    } finally {
+      console.error = orig;
+    }
+  });
+
+  test("ThatchDB journals rows and lists the newest N, oldest first", () => {
+    const dir = mkdtempSync(join(tmpdir(), "thatch-notify-journal-"));
+    try {
+      const db = new ThatchDB(join(dir, "thatch.db"));
+      db.recordNotifyJournal({ channel: "both", source: "a", title: "", message: "first", outcome: "delivered" });
+      db.recordNotifyJournal({ channel: "banner", source: "b", title: "t", message: "second", outcome: "failed" });
+      db.recordNotifyJournal({ channel: "voice", source: "", title: "", message: "third", outcome: "suppressed" });
+      const all = db.listNotifyJournal(10);
+      expect(all.map((r) => r.message)).toEqual(["first", "second", "third"]);
+      expect(all[1].id).toBeGreaterThan(all[0].id);
+      expect(all[1].created_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(all[2].source).toBe("");
+      const newestTwo = db.listNotifyJournal(2);
+      expect(newestTwo.map((r) => r.message)).toEqual(["second", "third"]);
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -460,6 +642,28 @@ describe("config and notify tool execute functions", () => {
     await def.execute({ message: "Amaze! Amaze! C I is green", source: "P L A T 2 8 0", tone: "positive", channel: "voice" }, ctx);
     expect(recorded[0]).toContain("/usr/bin/say -v Zarvox Amaze! Amaze! P L A T 2 8 0: C I is green");
     expect(recorded[0].split("Amaze! Amaze!").length - 1).toBe(1);
+  });
+
+  test("notify_user journals the attempt when ctx.notifyJournal is bound to ThatchDB", async () => {
+    if (process.platform !== "darwin") return; // command construction is platform-specific
+    const db = new ThatchDB(join(dbDir, "thatch.db"));
+    try {
+      ctx.notifyJournal = (e) => db.recordNotifyJournal(e);
+      const def = TOOL_DEFS.find((t) => t.name === "notify_user")!;
+      const result = await def.execute({ message: "deployed", source: "journal-test" }, ctx);
+      expect(result).toContain("[notified]");
+      const rows = db.listNotifyJournal(10);
+      expect(rows.length).toBe(1);
+      expect(rows[0]).toMatchObject({
+        channel: "both",
+        source: "journal-test",
+        message: "deployed",
+        outcome: "delivered",
+      });
+    } finally {
+      db.close();
+      ctx.notifyJournal = undefined;
+    }
   });
 
   test("config_set unsets a notification field via null and deletes the key from the file", async () => {

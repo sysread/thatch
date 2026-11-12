@@ -72,6 +72,11 @@ const useCase: UseCase = {
       const recorded: string[] = [];
       const ok: SpawnResult = { exitCode: 0, stderr: "" };
       const spawner: Spawner = async (cmd) => {
+        // The terminal-notifier PATH probe answers absent and is not
+        // recorded: recorded[] documents the delivery commands, and the
+        // binary-absent osascript banner path is what this use case pins
+        // (terminal-notifier preference coverage lives in the unit suite).
+        if (cmd[0] === "/usr/bin/which") return { exitCode: 1, stderr: "" };
         recorded.push(cmd.join(" "));
         return ok;
       };

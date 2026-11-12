@@ -291,6 +291,9 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
     defaultStore: repo,
     extractionPayloadProvider,
     drainExtractionQueue,
+    // Every notify_user delivery attempt from this server lands in the
+    // journal (read back by `thatch notifications`).
+    notifyJournal: (entry) => db.recordNotifyJournal(entry),
     // The plugin regime's stage tool: the mod's prompt.submit handler calls
     // it per prompt ($.mcp.call), and the server runs the flush tiers
     // server-side (the sideband's role, reborn in-process).
