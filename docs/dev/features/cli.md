@@ -24,6 +24,7 @@ The thatch CLI entry is `bin/thatch`, a thin dispatcher: it resolves argv agains
 | `flush-predictions [--json]` | none | `--json` | JSON | Standalone prediction-only nudge |
 | `setup --claude [--cursor] [--local\|--global] [--skills-only [dir]] [--mcp-json]` | none | `--claude`, `--cursor`, `--global`, `--local`, `--dev`, `--hooks`, `--skills-only [dir]`, `--mcp-json` | none | Install config + instructions + hooks + skills; `--dev` forces the plugin regime with the claude version gate skipped (deprecated alias: `--plugin`); `--skills-only <dir>` installs into any directory; `--mcp-json` prints the server config as JSON |
 | `doctor` | none | none | none | Read-only environment diagnostics for every host (database, opencode plugin + shim + daemon, the claude regime, cursor config); one verdict per check, exit 1 only on a failed check |
+| `notifications [--limit N]` | none | `--limit` | none | Print the notification journal: the most recent delivery attempts (tool calls, alerts, and THATCH_NO_NOTIFY-suppressed attempts), newest last, one line each -- time, source, channel, message, with non-delivered outcomes marked in brackets. Default limit 10, maximum 100 |
 | `session list/get/transcript/search` | per subcommand | `-s/--session`, `--id`, `--after`, `--before`, `--regex`, `--limit` | none | Read-only archaeology on the opencode session database (JSONL output) |
 | `chat list` | none | `--recent`, `--stale [N\|all]`, `--json`, `--host-id ID` (repeatable) | none | Registered chat sessions: name, human-readable age, status, project, topic |
 | `chat tail` | none | `--once`, `--pretty`, `--limit N\|all`, `--match RE` (repeatable), `--from NAME`, `--to NAME`, `--since DT`, `--until DT` | none | Follow cross-session chat: sent and read events as a JSONL log (`--pretty` for email-style cards instead). Backlog defaults to the last 20 messages; filters apply to follow mode too. |
@@ -227,7 +228,7 @@ process; the registry itself is `src/env-knobs.ts`.
 | `CURSOR_PROJECT_DIR` | Cursor project dir | falls through |
 | `THATCH_WATCH_DEATH_MINUTES` | Pending-age threshold for watcher death detection | `120` |
 | `THATCH_PROJECT_DIR` | Pinned project dir (written by project-local `thatch setup` MCP configs) | falls through |
-| `THATCH_NO_NOTIFY` | Set to `1` to silence all desktop notifications at the dispatcher; test and QA runs set it | off (notifications send) |
+| `THATCH_NO_NOTIFY` | Set to `1` to silence all desktop notifications at the dispatcher; test and QA runs set it. Suppressed attempts still land in the notification journal (`thatch notifications`) | off (notifications send) |
 | `CLAUDE_CONFIG_DIR` | Claude config dir | `~/.claude` |
 | `CURSOR_CONFIG_DIR` | Cursor config dir | `~/.cursor` |
 | `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS` | Enable async extraction | unset |
@@ -248,6 +249,7 @@ process; the registry itself is `src/env-knobs.ts`.
 - Hygiene ([hygiene.md](hygiene.md)): `hygiene`, `reminder` subcommands
 - Multi-host ([multi-host.md](multi-host.md)): `mcp` subcommand starts the MCP server for Claude Code and Cursor
 - Diagnostics ([doctor.md](doctor.md)): `doctor` subcommand - the read-only environment sweep over every host's install state
+- Notifications ([notifications.md](notifications.md)): `notifications` subcommand prints the delivery journal the dispatcher records
 - Session archaeology: the `session` subcommand group (see the table above) reads the opencode session database via `src/session-db.ts`
 - Cross-session chat ([cross-session-chat.md](cross-session-chat.md)): the `chat` subcommand group reads the shared chat directory and inbox; `chat broadcast` also writes user-voiced broadcast rows (the group's one write path)
 

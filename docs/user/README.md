@@ -15,7 +15,7 @@ This README is the overview. Each feature has its own guide:
 - [extraction.md](extraction.md): automatic fact extraction from tool calls
 - [watchers.md](watchers.md): event-driven notifications (PR, branch, and command watching)
 - [cross-session-chat.md](cross-session-chat.md): sessions messaging each other on one machine
-- [notifications.md](notifications.md): banner and voice notifications, automatic LLM alerts (pause / done / error), user config
+- [notifications.md](notifications.md): banner and voice notifications, automatic LLM alerts (pause / done / error), user config, and the delivery journal (`thatch notifications`)
 - [prediction-engine.md](prediction-engine.md): user decision model
 - [behavior-engine.md](behavior-engine.md): agent self-discipline rules
 - [default-behaviors.md](default-behaviors.md): what ships automatically
@@ -169,7 +169,8 @@ Stores are created automatically. No setup required.
 | `thatch_notify_user` | Notify the user out-of-band: desktop banner and/or spoken voice. Use for long-running outcomes worth interrupting for (CI results, deploys, watcher events). A `tone` argument adds the announcement prefix ("Amaze! Amaze!" / "Sad sad sad"); the spoken line is a few words, hard-capped at 140 characters. macOS and Linux. |
 
 See [notifications.md](notifications.md) for the full behavior and
-configuration.
+configuration. Every delivery attempt is journaled;
+`thatch notifications` prints the most recent ones.
 
 ### Session tools (opencode only)
 
@@ -489,6 +490,7 @@ thatch tombstones [store]
 thatch tombstones --clear <label> [store]
 thatch remember "one-line memory" [--label L] [--branch B] [--confidence N]
 cat notes.md | thatch remember --label "merge notes"   # long content via stdin
+thatch notifications [--limit N]   # recent notification delivery attempts
 
 # Before publish: run from a git checkout or symlink
 bun run bin/thatch stores

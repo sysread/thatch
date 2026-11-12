@@ -19,8 +19,10 @@ Two delivery paths share the dispatcher and the config file:
 | File | Role |
 |------|------|
 | `src/config.ts` | Zod section schemas, config file load/save/merge, platform defaults, `alertMode`, `alertVoice`. |
-| `src/notify.ts` | Per-platform dispatch for banner + voice, with an injectable spawner. |
+| `src/notify.ts` | Per-platform dispatch for banner + voice, with an injectable spawner, the injectable journal writer, and the darwin terminal-notifier preference. |
 | `src/tool-defs.ts` | `config_get`, `config_set`, `notify_user` tool definitions (shared registry, non-opencodeOnly). |
+| `src/db.ts` | The `notify_journal` table plus `recordNotifyJournal` / `listNotifyJournal` -- the storage side of the delivery journal. |
+| `src/cli/commands/notifications.ts` | The `thatch notifications` subcommand: prints the journal, newest last, with `--limit`. |
 | `src/alerts.ts` | Alert state machine: pause/done/error decisions from session events, per-session dedup (no timer-based debounce - one alert per busy->idle transition, per request id for pauses). |
 | `src/env-knobs.ts` | The registry of `THATCH_*` environment knobs (name, description, default) rendered by `config_get`'s `environment` section. |
 
@@ -116,7 +118,9 @@ returns a result string for the tool response:
 - **darwin**: banner via `/usr/bin/osascript -e 'display notification ...'`
   (title defaults to `source`, then `thatch`; sound defaults to `Submarine`),
   voice via `/usr/bin/say -v <voice>` (absolute path -- `~/bin/say` shadows
-  the system binary on the author's machine).
+  the system binary on the author's machine). When terminal-notifier is on
+  PATH the banner prefers it (see the terminal-notifier preference below);
+  with the binary absent the osascript construction is exactly this.
 - **linux**: banner via `notify-send`; voice via `spd-say -w`, falling back to
   `espeak` when speech-dispatcher is absent. A voice override goes straight to
   `espeak -v` because `spd-say` has no voice flag.
@@ -172,6 +176,88 @@ Details that matter:
 - Speech is awaited (the tool returns when the sentence finishes) so error
   reporting stays honest. There is no debounce; polling agents notify once at
   the end.
+
+## The notification journal
+
+Banners are write-only from the user's side -- an osascript banner's text
+cannot be selected or copied, and clicking one opens a Script Editor file
+dialog instead of doing anything useful -- so every delivery attempt is also
+appended to the `notify_journal` table. The journal is the readable record
+of what was said; `thatch notifications` prints it.
+
+Design decisions:
+
+- **One row per `sendNotification` call**, not one per physical channel.
+  The `channel` column holds the requested channel (`both` / `banner` /
+  `voice`), and the outcome summarizes the attempt the same way the result
+  string does: `delivered` when any requested step succeeded, `failed` when
+  every one failed, `suppressed` for the `THATCH_NO_NOTIFY` kill switch,
+  `unsupported` for other platforms. A `both` attempt that banners fine but
+  fails its voice step journals as delivered -- exactly the `[notified]`
+  result the model sees. "Delivered" keeps the feature's honesty limit:
+  it means the command ran, never that the user saw the banner.
+- **The writer is injected, like the spawner.** `sendNotification` takes an
+  optional `NotifyJournalWriter` as its third parameter. `CoreContext` grows
+  a `notifyJournal` field that `buildCoreContext` (src/tool-defs.ts) and the
+  MCP server's inline context (src/mcp.ts) bind to
+  `ThatchDB.recordNotifyJournal`; the two alert call sites (src/runtime.ts,
+  src/claude-plugin/lifecycle.ts) bind the same directly. Tests and minimal
+  hosts omit it and deliveries are simply not journaled -- the same
+  opt-in pattern `ctx.spawner` uses.
+- **Journal failures never reach the dispatch.** `sendNotification` wraps
+  the write in try/catch: a locked database or a closed handle logs one
+  stderr line and the notification still goes out. The journal is the
+  notification's side detail, never its master.
+- **Rows are raw, not rendered.** The row stores the caller's source,
+  title, and message exactly as passed; the tone prefix is tool decoration
+  and is not baked in, and `created_at` comes from the database's strftime
+  default -- the same stamping every other table uses.
+- **Append-only, no pruning.** A row is tiny and a machine emits a handful
+  of attempts a day. The chat wake budget and `runtime_state` both prune
+  because they exist to bound machine behavior; the journal exists to
+  preserve it.
+
+`listNotifyJournal(limit)` returns rows oldest-first (newest last --
+display order), keyed by the autoincrement id so same-second rows keep
+insert order. The CLI renders each row as one line: time, source, channel,
+message, with a bracketed outcome marker only when the attempt did not
+deliver -- printing a failed or suppressed attempt exactly like a delivered
+one would mislead.
+
+## The terminal-notifier preference (darwin)
+
+When the user has installed
+[terminal-notifier](https://github.com/julienXX/terminal-notifier) and it is
+on PATH, the darwin banner prefers it over osascript. The reason is
+interaction, not delivery: terminal-notifier banners support a click action.
+Thatch composes:
+
+```text
+terminal-notifier -title <title> -message <banner text> -sound <sound> \
+  -execute /usr/bin/osascript -e 'set the clipboard to "<banner text>"'
+```
+
+Clicking the banner copies the banner text (tone prefix included) to the
+clipboard -- the whole point, since an osascript banner's text cannot be
+selected and its click opens a Script Editor file dialog.
+
+- **Detection is runtime and spawner-based** (`terminalNotifierAvailable`
+  in src/notify.ts): one `/usr/bin/which terminal-notifier` probe through
+  the same injectable spawner that delivers, run per banner delivery.
+  Never a build or install dependency -- the repo does not require the
+  binary, and with the binary absent the osascript path runs exactly as it
+  did before (the command construction is unchanged; only the probe is
+  new). A probe that exits nonzero or cannot spawn at all reads as absent.
+- **Two quoting layers** carry the message into the click action:
+  `appleScriptString` builds the AppleScript literal (backslash and
+  double-quote escapes), then `shellSingleQuoted` wraps the whole `-e`
+  argument in one shell single-quote (an embedded single quote becomes
+  `'\''`) -- terminal-notifier runs `-execute`'s value through a shell, so
+  the AppleScript must survive one shell round-trip on its way to the
+  clipboard.
+- **Voice is untouched**: `/usr/bin/say` runs exactly as before either way,
+  and the result line labels the step `banner (terminal-notifier)` vs
+  `banner (osascript)` so the tool response says which path fired.
 
 ## Alerts: the automatic notification path (opencode and the Claude Code plugin regime)
 
@@ -293,7 +379,15 @@ rejected for that reason.
 - `tests/notify.test.ts` -- command construction per platform (mock spawner
   records argv), AppleScript escaping, partial vs total failure, unsupported
   platform, the `THATCH_NO_NOTIFY` suppression guard (no spawner call, a
-  `[suppressed]` result, exact-`1` matching, passed-env reads), plus
+  `[suppressed]` result, exact-`1` matching, passed-env reads), the
+  terminal-notifier preference (probe-found command shape, the two-layer
+  quoting of the click action through single quotes, double quotes, and
+  backslashes, the tone-prefixed copy text, the probe-throws fallback,
+  `terminalNotifierAvailable`), and the journal (delivered / partial /
+  total-failure / suppressed / unsupported rows, the never-throw contract
+  with its stderr log, the ThatchDB round trip with newest-N-oldest-first
+  listing, the `notify_user` tool call journaled through a bound ThatchDB),
+  plus
   tool-level tests (merge-no-wipe, echo, `mode: none` no-op,
   configured voice honored, unset via null deletes the key from the file,
   environment section rendered, environment + null-section refusals, the
@@ -319,6 +413,13 @@ seam: raw v2 bus events through `translateEvent` and real-shaped
 `session.context` lists through `mapSessionContextMessages` +
 `deriveRoundShape` (the seam where the idle-marker bug hid). `uc-096-notify-user.ts`
 covers the config tool round trip: field-level merge, unset via null (key
-deleted from the raw file), the environment section, and the two refusals. A
-live banner-by-ear check remains a manual verification against a running
-session.
+deleted from the raw file), the environment section, and the two refusals
+(its mock spawner answers the terminal-notifier probe absent, so its
+osascript assertions stay pinned). `uc-147-notification-journal.ts` covers
+the journal end to end under the suite's `THATCH_NO_NOTIFY=1`: the
+`notify_user` attempt journals a suppressed row with nothing dispatched,
+`thatch notifications` prints rows newest-last with the default and
+explicit limits and the bracketed outcome marks, and bad `--limit` values
+die loudly. `uc-088-schema-creation.ts` asserts the `notify_journal` table
+exists. A live banner-by-ear check remains a manual verification against a
+running session.

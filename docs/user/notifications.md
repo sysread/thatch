@@ -33,7 +33,12 @@ thatch_notify_user(message: "CI is green, clear for merge",
 ```
 
 - **macOS**: banner via Notification Center (with an alert sound) and voice
-  via the built-in `say` command.
+  via the built-in `say` command. When
+  [terminal-notifier](https://github.com/julienXX/terminal-notifier) is
+  installed and on your PATH, banners go through it instead: clicking a
+  banner copies its text to your clipboard. An ordinary Notification Center
+  banner cannot be selected or copied, and clicking one opens a Script
+  Editor file dialog -- terminal-notifier is the escape hatch for both.
 - **Linux**: banner via `notify-send` (libnotify) and voice via
   `spd-say`/`espeak` when installed. Missing tools are reported, never fatal.
 - **Windows**: not supported. The tool reports this instead of guessing.
@@ -59,6 +64,34 @@ rather than doubled. Omitting `tone` prepends nothing.
 The tool result reports command success only. macOS focus modes can silently
 swallow banners; if you are not seeing them, check Focus settings and that
 your terminal app has notification permission.
+
+## The notification journal
+
+Every delivery attempt -- the `notify_user` tool, the automatic alerts, and
+attempts silenced by `THATCH_NO_NOTIFY` -- is recorded in a journal inside
+thatch's database. The journal exists because a desktop banner is write-only:
+its text cannot be selected or copied, and it disappears. The journal's text
+stays.
+
+Read it from any terminal:
+
+```bash
+thatch notifications             # the 10 most recent attempts, newest last
+thatch notifications --limit 50  # up to 100
+```
+
+One line per attempt: time, source, channel, and message. An attempt that
+did not dispatch cleanly says so at the end of its line -- `[failed]`,
+`[suppressed]`, or `[unsupported]`.
+
+Two honesty notes:
+
+- An unmarked row means the delivery command succeeded, not that you saw
+  the banner. Focus modes can swallow a banner silently, and the journal
+  cannot know.
+- With `THATCH_NO_NOTIFY=1` exported, every attempt is journaled as
+  `[suppressed]`. If you keep the kill switch on permanently, suppressed
+  rows accumulate; that is the record working, not notifications leaking.
 
 ## Configuring notifications
 
@@ -140,7 +173,9 @@ One knob worth knowing: `THATCH_NO_NOTIFY=1` silences every thatch
 notification -- banners and voice alike -- at the dispatcher, regardless of
 the config file. Export it in your shell when you want quiet without editing
 your config. Thatch's own test and QA runs set it, so running the test suite
-never fires notifications on your machine.
+never fires notifications on your machine. Suppressed attempts still land in
+the notification journal, so `thatch notifications` shows what would have
+fired.
 
 ## Alerts: notifications without a tool call
 
