@@ -2,9 +2,10 @@
  * The chat namespace: a window on the cross-session chat. Read-only
  * everywhere except `chat broadcast`, the one deliberate write path: it
  * voices the human user (sentinel sender), whose rows land in every
- * non-stale inbox while the poller wakes only open-tab recipients. A
- * namespace is a Subcommand whose run dispatches a child registry; each
- * child was a case of chatCommand's switch before the registry
+ * fresh inbox plus every stale-but-resumable one, while the poller
+ * wakes open-tab recipients immediately and closed-tab recipients once.
+ * A namespace is a Subcommand whose run dispatches a child registry;
+ * each child was a case of chatCommand's switch before the registry
  * replaced it.
  */
 import {
@@ -432,16 +433,17 @@ const broadcast: Subcommand = {
       { long: "--project", short: null, description: "Narrow the audience to those projects (exact match; repeatable)." },
     ],
     notes: [
-      "You are not in the chat: delivered bodies carry a note saying so, and recipients answer you in their own session, not in chat. Delivery wakes only OPEN sessions; tab-less and MCP sessions are not woken - they read the message at their next prompt - and stale opencode sessions are skipped. The report names each open-tab delivery and summarizes the rest (no-tab, mcp, skipped, out-of-scope) as counts.",
+      "You are not in the chat: delivered bodies carry a note saying so, and recipients answer you in their own session, not in chat. Delivery wakes OPEN sessions immediately and closed-tab sessions exactly once (no re-nudges); MCP sessions read the message at their next prompt. A stale opencode session that can still be resumed gets the message queued for its next run; a gone one is skipped. The report names each open-tab delivery and summarizes the rest (no-tab, mcp, stale-queued, skipped, out-of-scope) as counts.",
     ],
   }),
   async run(args, ctx) {
     // The one chat write path: the user speaking from a terminal. The
     // sender is a sentinel (never a registered session), delivery wakes
-    // only open-tab sessions (the poller's sender-kind gate), and the
-    // fence note in the body tells recipients the protocol. A typo'd
-    // flag must not go out to every session as message text, so unknown
-    // `--` tokens die loudly instead of joining the message.
+    // open-tab sessions immediately and closed-tab sessions once (the
+    // poller's sender-kind gate), and the fence note in the body tells
+    // recipients the protocol. A typo'd flag must not go out to every
+    // session as message text, so unknown `--` tokens die loudly instead
+    // of joining the message.
     if (!chatEnabled(loadConfig(ctx.dbPath).config)) {
       console.error("error: cross-session chat is off (chat.enabled: false in the thatch config); nothing was sent.");
       process.exit(1);

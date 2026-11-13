@@ -8,6 +8,7 @@ import { checkSetup, setupClaudeCode, setupCursor } from "./setup";
 import { TOOL_DEFS, trimHostContext, type CoreContext, type HostToolContext, type ToolDef } from "./tool-defs";
 import { deepPassthrough } from "./tool-schema";
 import { chatOpenTabs as chatOpenTabsProvider } from "./tab-state";
+import { resumableSessionIds } from "./session-db";
 import { actionDefs, mcpSpelling, type ActionDef } from "./commands";
 import { SidebandServer, sidebandSocketPath } from "./sideband";
 import { peekQueue, consumeQueue, resetMissedCount } from "./extract-queue";
@@ -180,7 +181,12 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
 
   // The DB must exist before identity detection: detectRepo consults the
   // repo_paths cache when the project directory is gone (deleted worktree).
-  const db: ThatchDB = new ThatchDB(dbPath, { chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()) });
+  const db: ThatchDB = new ThatchDB(dbPath, {
+    chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()),
+    // Stale-but-resumable broadcast recipients (the same opencode.db
+    // point lookup the directory re-verification uses).
+    chatResumableSessions: resumableSessionIds,
+  });
   const detected = await detectRepo(projectDir, repoPathCache(db));
   // unknown-to-global, matching the hook's mapping (bin/thatch): chat
   // registration must follow the same store the tools would read, and

@@ -222,7 +222,7 @@ replacement, since the session (and its chat roster row) are still alive.
 | `thatch_chat_send` | Send a message to another registered session, by name or session id. The recipient is nudged when its session is idle; an unknown recipient suggests close registered names. |
 | `thatch_chat_read` | Drain your inbox: all unread messages oldest-first, marked read. Senders identified by display name. |
 | `thatch_chat_unregister` | Leave the chat directory. |
-| `thatch_chat_broadcast` | Send one message to every other live registered session at once. Opencode sessions without an open tab (stale, or fresh but tab-less) are skipped and reported by name. Use sparingly: every open session pays a model turn for a broadcast. |
+| `thatch_chat_broadcast` | Send one message to every other live registered session at once. Fresh opencode sessions without an open tab are skipped and reported by name; stale opencode sessions still resumable in the opencode session database get the message queued for their next run, and gone ones are skipped. Use sparingly: every open session pays a model turn for a broadcast. |
 
 See [cross-session-chat.md](cross-session-chat.md) for the full behavior,
 liveness model, and limitations.

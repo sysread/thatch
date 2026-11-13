@@ -195,12 +195,14 @@ A window on the cross-session chat directory ([cross-session-chat.md](cross-sess
   report (`renderBroadcastReport()` in `src/chat.ts`): open-tab
   recipients named one line each - the `delivered: NAME (PROJECT)
   [open]` shape is a consumer contract, parsed by tskmstr's board -
-  with no-tab and mcp recipients counted by delivery state, skips and
-  out-of-scope rows counted per project (the repeatable exact-match
-  `--project` filter), and the dedupe/split notes. Delivery is the
-  ordinary poll with the sender-kind wake gate: open sessions wake,
-  tab-less and mcp sessions are not woken and read at their next
-  prompt, `delivered_at` left to the wake machinery; failures print
+  with no-tab, mcp, and stale-queued recipients counted by delivery
+  state, skips and out-of-scope rows counted per project (the
+  repeatable exact-match `--project` filter), and the dedupe/split
+  notes. Delivery is the ordinary poll with the sender-kind wake gate:
+  open sessions wake immediately, closed-tab sessions get one nudge,
+  mcp sessions read at their next prompt, and stale-but-resumable
+  sessions hold queued mail for their next run, `delivered_at` left to
+  the wake machinery; failures print
   plainly (`[thatch chat broadcast] failed: ...`), matching the tail's
   friendly-failure treatment. Unknown flags
   die loudly rather than going out to every session as message text.

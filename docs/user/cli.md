@@ -204,14 +204,18 @@ sessions it came from you, that you are not a chat session and will not
 read replies there, and that they should act in their own session and
 report back to you there - never by replying into thatch chat.
 
-The message reaches OPEN sessions with a wake on their next poll;
-tab-less and Claude Code/Cursor sessions are not woken - they read it
-at their next prompt - and stale opencode sessions (host process gone)
-are skipped. The report names each open-tab delivery and summarizes
-the rest as counts (no-tab, mcp, skipped per project, and - with a
-filter - out-of-scope per project), so a broadcast to a large directory
-prints a handful of lines, not one per session. Repeat `--project`
-to narrow the audience (exact project match). Your
+The message reaches OPEN sessions with a wake on their next poll, and
+closed-tab sessions with exactly one wake nudge - if that turn runs
+they read your message then, otherwise the mail waits for their next
+prompt (no re-nudges). Claude Code/Cursor sessions are not woken and
+read it at their next prompt. A stale opencode session (host process
+gone) is checked against the opencode session database: one that can
+still be resumed gets the mail queued for its next run, and one that is
+gone is skipped. The report names each open-tab delivery and summarizes
+the rest as counts (no-tab, mcp, stale-queued, skipped per project,
+and - with a filter - out-of-scope per project), so a broadcast to a
+large directory prints a handful of lines, not one per session. Repeat
+`--project` to narrow the audience (exact project match). Your
 name comes from `git config user.name` (or your OS username), so
 sessions see who is speaking. Sessions cannot reply into chat to reach
 you - the fence note directs them to their own user instead.

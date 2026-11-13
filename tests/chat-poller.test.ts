@@ -126,11 +126,13 @@ describe("ChatPoller", () => {
     expect(deliveries[0].batch).toEqual({ fromUser: false, mixed: false });
   });
 
-  test("a user-only batch (the CLI broadcast) wakes only open-tab recipients", async () => {
-    // The incident class this gate exists for: one terminal FYI must not
-    // spend a model turn on every hosted session. A batch of ONLY
-    // CLI-sent rows wakes the recipient when its tab is open, and skips
-    // the wake (mail stays pending, budget untouched) when it is not.
+  test("a user-only batch nudges a closed-tab recipient once, then holds re-nudges", async () => {
+    // The Nov 10-12 collapse class: an idle closed-tab session never runs
+    // "the next prompt", so a gate that wakes only open tabs is mail the
+    // recipient never reads. The gate now lets the batch's FIRST delivery
+    // through as a single nudge, and holds every re-nudge of that same
+    // batch until the tab reopens - the renudge machinery must not loop
+    // on a tab that may never run a turn.
     raw.run(
       `INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast, from_name, to_name)
        VALUES ('cli', 'ses_b', 'fyi only', '${nowIso()}', 1, 'Jeff Ober', 'bob-00001')`,
@@ -148,35 +150,100 @@ describe("ChatPoller", () => {
       pollIntervalMs: 60_000,
     });
     try {
-      // Tab closed: no wake, no budget spent, the row still pending.
-      await gated.deliverPending();
-      expect(deliveries.length).toBe(0);
-      expect(db.chatWakeCount("ses_b", cutoffAgo(60))).toBe(0);
-      expect(db.pendingChatNotifications(["ses_b"], cutoffAgo(15)).length).toBe(1);
-      // Tab open: the same still-undelivered row wakes as a FIRST
-      // delivery (delivered_at was never stamped), user-voiced.
-      tabs.push("ses_b");
+      // Tab closed: the first delivery still nudges - once, user-voiced,
+      // counted against the wake budget like every prompt.
       await gated.deliverPending();
       expect(deliveries.length).toBe(1);
       expect(deliveries[0].sessionID).toBe("ses_b");
       expect(deliveries[0].batch).toEqual({ fromUser: true, mixed: false });
+      expect(db.chatWakeCount("ses_b", cutoffAgo(60))).toBe(1);
+      expect(db.pendingChatNotifications(["ses_b"], cutoffAgo(15)).length).toBe(0);
+      // The re-nudge window passes with the tab still closed: the gate
+      // holds the re-nudge - no second prompt, no loop.
+      raw.run("UPDATE chat_messages SET delivered_at = '2020-01-01T00:00:00Z'");
+      await gated.deliverPending();
+      expect(deliveries.length).toBe(1);
+      // A second broadcast is NEW first-delivery mail: it nudges once
+      // more (one prompt per batch), its re-nudges held the same way.
+      raw.run(
+        `INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast, from_name, to_name)
+         VALUES ('cli', 'ses_b', 'fyi again', '${nowIso()}', 1, 'Jeff Ober', 'bob-00001')`,
+      );
+      await gated.deliverPending();
+      expect(deliveries.length).toBe(2);
+      expect(deliveries[1].count).toBe(1);
+      // The tab reopens: the gate lifts, and both rows' held re-nudges
+      // wake in one prompt.
+      raw.run("UPDATE chat_messages SET delivered_at = '2020-01-01T00:00:00Z' WHERE body = 'fyi again'");
+      tabs.push("ses_b");
+      await gated.deliverPending();
+      expect(deliveries.length).toBe(3);
+      expect(deliveries[2].count).toBe(2);
     } finally {
       gated.dispose();
     }
   });
 
-  test("a user-only batch wakes nobody without a tab signal (the fail-safe default)", async () => {
+  test("without a tab signal a user-only batch still nudges once and never re-nudges", async () => {
     // No openTabs provider: no tab signal, which the roster rule reads
-    // as "not open". The gate fails toward silence, never toward a
-    // fleet wake - the default poller here has no provider.
+    // as "not open". The gate holds RE-NUDGES only, so the no-signal
+    // fail-safe is one prompt per batch - never the pre-gate fleet wake,
+    // never a loop. The default poller here has no provider.
     raw.run(
       `INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast, from_name, to_name)
        VALUES ('cli', 'ses_b', 'fyi only', '${nowIso()}', 1, 'Jeff Ober', 'bob-00001')`,
     );
     gateOpen = true;
     await poller.deliverPending();
-    expect(deliveries.length).toBe(0);
-    expect(db.pendingChatNotifications(["ses_b"], cutoffAgo(15)).length).toBe(1);
+    expect(deliveries.length).toBe(1);
+    expect(db.chatWakeCount("ses_b", cutoffAgo(60))).toBe(1);
+    raw.run("UPDATE chat_messages SET delivered_at = '2020-01-01T00:00:00Z'");
+    await poller.deliverPending();
+    expect(deliveries.length).toBe(1);
+  });
+
+  test("the hourly cap still binds re-nudges of a user-only batch once the tab is open", async () => {
+    // The nudge-once relaxation must not touch the anti-loop brake: with
+    // the tab open the gate is lifted, so a spent budget holds the
+    // re-nudges of CLI rows exactly as it holds agent re-nudges, and
+    // first deliveries still slip past the cap.
+    raw.run(
+      `INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast, from_name, to_name)
+       VALUES ('cli', 'ses_b', 'fyi only', '${nowIso()}', 1, 'Jeff Ober', 'bob-00001')`,
+    );
+    gateOpen = true;
+    const capped = new ChatPoller({
+      store: db,
+      hostedSessions: () => hosted,
+      openTabs: () => new Set(["ses_b"]),
+      deliver: async (sessionID, senders, count, batch) => {
+        deliveries.push({ sessionID, senders, count, batch });
+      },
+      canDeliver: (sessionID) => gateOpen && hosted.includes(sessionID),
+      pollIntervalMs: 60_000,
+      maxNudgesPerHour: 1,
+    });
+    await silenceConsoleError(async () => {
+      await capped.deliverPending();
+      expect(deliveries.length).toBe(1);
+      // Re-nudge due (aged stamp), tab open, budget spent: the CAP holds
+      // it - the gate is not the holder here.
+      raw.run("UPDATE chat_messages SET delivered_at = '2020-01-01T00:00:00Z'");
+      await capped.deliverPending();
+      expect(deliveries.length).toBe(1);
+      // New CLI mail in the same batch is first delivery: it slips past
+      // the spent cap, one prompt covering only the fresh row.
+      raw.run(
+        `INSERT INTO chat_messages (from_session, to_session, body, created_at, via_broadcast, from_name, to_name)
+         VALUES ('cli', 'ses_b', 'fyi again', '${nowIso()}', 1, 'Jeff Ober', 'bob-00001')`,
+      );
+      await capped.deliverPending();
+      expect(deliveries.length).toBe(2);
+      expect(deliveries[1].count).toBe(1);
+      const pending = db.pendingChatNotifications(["ses_b"], cutoffAgo(15));
+      expect(pending.length).toBe(1);
+    });
+    capped.dispose();
   });
 
   test("agent mail in the batch lifts the user-broadcast wake gate", async () => {

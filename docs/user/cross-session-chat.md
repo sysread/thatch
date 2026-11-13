@@ -56,8 +56,10 @@ explicitly with `thatch_chat_register` (no arguments) - useful after
   the rest with the `message` and `offset` arguments (each drain line
   carries the message id). Paging never marks anything read
 - `thatch_chat_broadcast` delivers one message to every other live
-  registered session that has a tab open, plus every MCP session (a long
-  body is split per recipient, exactly like a split `chat_send`)
+  registered session that has a tab open, plus every MCP session and
+  every stale session that can still be resumed (its mail is queued for
+  its next run; a long body is split per recipient, exactly like a
+  split `chat_send`)
 - `thatch_chat_unregister` leaves the directory
 
 When mail arrives for an idle session, thatch wakes it with a notification -
@@ -76,12 +78,14 @@ Broadcasts are for announcements and open questions ("which of you is
 working on the payments code?", "main just moved, rebase if you are based
 on it"). Every OPEN session gets the message and spends a model turn on it,
 so broadcast sparingly - for anything with a known audience, `chat_send` is
-the polite tool. Sessions without an open tab are skipped and reported by
-name: a stale session will never read the mail, and a fresh-but-tab-less
-session (a closed tab, or a headless subordinate) is not reliably wakeable,
+the polite tool. A fresh-but-tab-less session (a closed tab, or a headless
+subordinate) is skipped and reported by name: it is not reliably wakeable,
 so messaging it would spend a turn on a delivery that likely never runs.
-With opencode tabs disabled, broadcasts reach only MCP sessions - that is
-the honest reading of "no tab signal", never a false fan-out.
+A stale session is checked against the opencode session database: one that
+can still be resumed gets the message queued in its inbox for its next
+run, and one that is gone is skipped. With opencode tabs disabled,
+broadcasts reach only MCP sessions - that is the honest reading of
+"no tab signal", never a false fan-out.
 
 ## Watching the conversation
 
@@ -106,16 +110,19 @@ thatch chat broadcast "deploy halted" --project acme/payments
 ```
 
 The message goes out under your name (from `git config user.name` or
-your OS username), to every live session. Only OPEN sessions are woken
-(a broadcast is one-way FYI traffic - waking every idle session on the
-machine for it is exactly what thatch does not do); tab-less and
-Claude Code/Cursor sessions are not woken and read it at their
-next prompt, and stale opencode sessions (whose host process is gone)
-are skipped. The report names each open-tab delivery on its own line
-and summarizes the rest as counts: no-tab and mcp recipients by
-delivery state, and skipped and out-of-scope sessions per project -
-a broadcast to a fleet-scale directory stays a handful of lines.
-Repeat `--project` to narrow the audience to those projects.
+your OS username), to every live session. OPEN sessions are woken
+immediately. A session whose tab is closed gets exactly ONE wake nudge:
+if the session runs that turn it reads your message then, and otherwise
+the mail waits for its next prompt - thatch never re-nudges a closed tab
+on a broadcast's behalf. Claude Code/Cursor sessions are not woken and
+read it at their next prompt. A stale opencode session (whose host
+process is gone) is checked against the opencode session database: one
+that can still be resumed gets the mail queued for its next run, and one
+that is gone is skipped. The report names each open-tab delivery on its
+own line and summarizes the rest as counts: no-tab, mcp, and stale-queued
+recipients by delivery state, and skipped and out-of-scope sessions per
+project - a broadcast to a fleet-scale directory stays a handful of
+lines. Repeat `--project` to narrow the audience to those projects.
 
 You are not joining the chat: every delivered message carries a note
 saying it is from the human user, that you are not a chat session and

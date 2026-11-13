@@ -3058,12 +3058,14 @@ const chatBroadcastDef: ToolDef = {
     "Broadcast one message to every other registered session on this " +
     "machine at once - for announcements and open questions (\"which of " +
     "you is working on X?\", \"main just moved, rebase if you are based on " +
-    "it\"). Opencode sessions without an open tab (stale, or fresh but " +
-    "tab-less) are skipped and reported: they are not reliably wakeable, so " +
-    "messaging them would spend a turn on a delivery that likely never " +
-    "runs. MCP sessions receive it at their next prompt. Each recipient is " +
-    "woken like any chat message, so broadcast sparingly: every open " +
-    "session spends a model turn on it.",
+    "it\"). A fresh opencode session without an open tab is skipped and " +
+    "reported: its wake is not reliably deliverable without a tab. A " +
+    "stale opencode session is checked against the opencode session " +
+    "database: one that can still be resumed gets the message queued in " +
+    "its inbox for its next run, and one that no longer exists is " +
+    "skipped. MCP sessions receive it at their next prompt. Each " +
+    "recipient is woken like any chat message, so broadcast sparingly: " +
+    "every open session spends a model turn on it.",
   args: {
     body: z.string().describe(
       `Message body, delivered to every other registered session. Bodies over ${CHAT_SPLIT_PART_LEN} characters ` +

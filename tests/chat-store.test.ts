@@ -465,14 +465,15 @@ describe("ChatStore via ThatchDB", () => {
     }
   });
 
-  test("broadcastFromUser requires no open tab: RECENT rows receive, STALE still skipped", () => {
+  test("broadcastFromUser requires no open tab: RECENT rows receive; STALE rows skip without a resumability check", () => {
     reg("ses_a", "alice");
     reg("ses_b", "bob");
     reg("ses_g", "ghost");
     raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_g'");
-    // No tab provider (the CLI's situation): every fresh opencode row is
-    // RECENT, and the mail-check delivery still reaches it - but a stale
-    // row's host is gone and stays skipped, with its project reported.
+    // No tab provider (the CLI's situation) and no resumability provider:
+    // every fresh opencode row is RECENT and receives, while the stale row
+    // is unverifiable, so the fan-out stays conservative and skips it,
+    // with its project reported.
     const noTabs = new ThatchDB(dbPath);
     try {
       const result = noTabs.broadcastChatMessageFromUser("anyone there?", { senderName: "cli user" });
@@ -482,6 +483,49 @@ describe("ChatStore via ThatchDB", () => {
       expect(result.skipped).toEqual([{ name: "ghost-00001", project: "p", reason: "stale" }]);
     } finally {
       noTabs.close();
+    }
+  });
+
+  test("broadcast queues mail for STALE-but-resumable rows; rows the host db forgot stay skipped", () => {
+    reg("ses_a", "alice");
+    reg("ses_r", "returns");
+    reg("ses_d", "dead");
+    raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id IN ('ses_r', 'ses_d')");
+    // The resumability check (production: opencode.db's session_v2 table
+    // via resumableSessionIds) knows ses_r and has forgotten ses_d. The
+    // consult sees exactly the stale in-scope opencode ids - never fresh
+    // rows, never the sender.
+    let consulted: string[] = [];
+    const withCheck = new ThatchDB(dbPath, {
+      chatResumableSessions: (ids) => {
+        consulted = ids;
+        return new Set(ids.filter((id) => id === "ses_r"));
+      },
+    });
+    try {
+      const result = withCheck.broadcastChatMessageFromUser("outage over", { senderName: "cli user" });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(consulted.slice().sort()).toEqual(["ses_d", "ses_r"]);
+      expect(result.recipients.map((r) => r.name).sort()).toEqual(["alice-00001", "returns-00001"]);
+      expect(result.skipped).toEqual([{ name: "dead-00001", project: "p", reason: "stale" }]);
+      // The queued row is ordinary pending mail: unstamped, waiting for
+      // the recipient's harness to come back and deliver it.
+      expect(withCheck.unreadChatCount("ses_r")).toBe(1);
+      expect(withCheck.unreadChatCount("ses_d")).toBe(0);
+      const queued = raw.query("SELECT delivered_at, read_at FROM chat_messages WHERE to_session = 'ses_r'").all() as any[];
+      expect(queued.length).toBe(1);
+      expect(queued[0].delivered_at).toBeNull();
+      expect(queued[0].read_at).toBeNull();
+      // The agent tool path queues resumable stale rows too: the mail is
+      // not wake traffic, so the open-tab requirement never applied to it.
+      const tool = withCheck.broadcastChatMessage("ses_a", "agent words");
+      expect(tool.ok).toBe(true);
+      if (!tool.ok) return;
+      expect(tool.recipients.map((r) => r.name)).toEqual(["returns-00001"]);
+      expect(tool.skipped.map((s) => s.name)).toEqual(["dead-00001"]);
+    } finally {
+      withCheck.close();
     }
   });
 
@@ -562,12 +606,44 @@ describe("ChatStore via ThatchDB", () => {
       "Broadcast from Jeff Ober to 4 of 7 registered sessions:",
       "  delivered: alice-00001 (sysread/thatch) [open]",
       "  delivered: bob-00001 (sysread/thatch) [open]",
-      "  delivered to 1 session with no open tab (read at next prompt)",
+      "  delivered to 1 session with no open tab (single nudge; otherwise read at next prompt)",
       "  delivered to 1 mcp session (read at next prompt)",
       "Skipped:",
       "  - 2 stale sessions in sysread/thog",
       "  - 1 stale session with no project",
     ]);
+  });
+
+  test("the CLI report counts stale-queued recipients separately from dead skips", () => {
+    // A resumable stale row is a RECIPIENT (queued mail, no wake), so the
+    // report counts it in its own delivery bucket; only the row the host
+    // db forgot renders under Skipped.
+    reg("ses_a", "alice", "sysread/thatch");
+    reg("ses_r", "returns", "sysread/thatch");
+    reg("ses_d", "dies", "sysread/thog");
+    raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id IN ('ses_r', 'ses_d')");
+    const withCheck = new ThatchDB(dbPath, {
+      chatResumableSessions: (ids) => new Set(ids.filter((id) => id === "ses_r")),
+    });
+    try {
+      const result = withCheck.broadcastChatMessageFromUser("outage mail", { senderName: "cli user" });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const lines = renderBroadcastReport(result, {
+        rowsByName: new Map(withCheck.listChatSessions().map((r) => [r.name, r])),
+        openTabs: new Set(["ses_a"]),
+        projects: [],
+      });
+      expect(lines).toEqual([
+        "Broadcast from cli user to 2 of 3 registered sessions:",
+        "  delivered: alice-00001 (sysread/thatch) [open]",
+        "  delivered to 1 stale session (queued; delivered when the session resumes)",
+        "Skipped:",
+        "  - 1 stale session in sysread/thog",
+      ]);
+    } finally {
+      withCheck.close();
+    }
   });
 
   test("the CLI report counts out-of-scope rows per project and echoes the filter", () => {
@@ -586,7 +662,7 @@ describe("ChatStore via ThatchDB", () => {
     });
     expect(lines).toEqual([
       "Broadcast from cli user to 1 of 4 registered sessions (projects: acme/one):",
-      "  delivered to 1 session with no open tab (read at next prompt)",
+      "  delivered to 1 session with no open tab (single nudge; otherwise read at next prompt)",
       "Out of scope (project filter):",
       "  - 2 sessions in acme/two",
       "  - 1 session with no project",

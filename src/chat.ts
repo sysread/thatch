@@ -771,11 +771,12 @@ export interface BroadcastResult {
 
 /** One broadcast recipient's delivery state at report time, from the
  *  post-write roster: "open" (opencode row, fresh heartbeat, a tab open
- *  now - the only state a user-voiced broadcast wakes), "mcp" (reads at
- *  its next prompt), "no tab" (fresh opencode row, tab closed or
- *  unknown - reads at its next prompt), or "gone" (the roster row
- *  vanished between the write and the report). */
-export type BroadcastDeliveryKind = "open" | "mcp" | "no tab" | "gone";
+ *  now - woken immediately), "mcp" (reads at its next prompt), "no tab"
+ *  (fresh opencode row, tab closed or unknown - nudged once, then read
+ *  at the next prompt), "stale" (opencode row whose host stopped - the
+ *  queued row waits for the session to run again), or "gone" (the roster
+ *  row vanished between the write and the report). */
+export type BroadcastDeliveryKind = "open" | "mcp" | "no tab" | "stale" | "gone";
 
 export function broadcastDeliveryKind(
   row: ChatSessionRow | undefined,
@@ -784,21 +785,23 @@ export function broadcastDeliveryKind(
 ): BroadcastDeliveryKind {
   if (!row) return "gone";
   if (row.host_kind === "mcp") return "mcp";
-  return chatLiveness(row, now, openTabs) === "open" ? "open" : "no tab";
+  const liveness = chatLiveness(row, now, openTabs);
+  if (liveness === "stale") return "stale";
+  return liveness === "open" ? "open" : "no tab";
 }
 
 /**
  * Renders the CLI broadcast report: named lines for the recipients that
- * matter (the open tabs - also the only ones the poller wakes for a
- * user-voiced batch), and count lines for every other bucket. The
- * per-recipient line-per-session report once turned a one-line terminal
- * FYI into ~600 lines (94 delivered plus ~490 stale skips, observed
- * 2026-11-09), so the bulk is summarized: skipped rows count per
- * project, out-of-scope rows count per project, and no-tab and mcp
- * recipients count by delivery state. The named `delivered: NAME
- * (PROJECT) [open]` lines keep their historical shape - a downstream
- * parser (jowi-dev/tskmstr's board) reads delivered names off exactly
- * that prefix.
+ * matter (the open tabs - the sessions the poller wakes immediately),
+ * and count lines for every other bucket. The per-recipient
+ * line-per-session report once turned a one-line terminal FYI into
+ * ~600 lines (94 delivered plus ~490 stale skips, observed 2026-11-09),
+ * so the bulk is summarized: skipped rows count per project, out-of-scope
+ * rows count per project, and no-tab, mcp, and stale-queued recipients
+ * count by delivery state. The named `delivered: NAME (PROJECT) [open]`
+ * lines keep their historical shape - a downstream parser
+ * (jowi-dev/tskmstr's board) reads delivered names off exactly that
+ * prefix.
  *
  * `rowsByName` is the post-write roster keyed by display name (names
  * are never reused, so the join is stable); `openTabs` and `now` are
@@ -819,17 +822,20 @@ export function renderBroadcastReport(
   const gone: BroadcastRecipient[] = [];
   let noTab = 0;
   let mcp = 0;
+  let staleQueued = 0;
   for (const r of result.recipients) {
     const kind = broadcastDeliveryKind(opts.rowsByName.get(r.name), opts.openTabs, now);
     if (kind === "open") open.push(r);
     else if (kind === "gone") gone.push(r);
     else if (kind === "mcp") mcp++;
+    else if (kind === "stale") staleQueued++;
     else noTab++;
   }
   for (const r of open) lines.push(`  delivered: ${r.name} (${r.project ?? "no project"}) [open]`);
   for (const r of gone) lines.push(`  delivered: ${r.name} (${r.project ?? "no project"}) [no longer registered]`);
-  if (noTab > 0) lines.push(`  delivered to ${noTab} session${noTab === 1 ? "" : "s"} with no open tab (read at next prompt)`);
+  if (noTab > 0) lines.push(`  delivered to ${noTab} session${noTab === 1 ? "" : "s"} with no open tab (single nudge; otherwise read at next prompt)`);
   if (mcp > 0) lines.push(`  delivered to ${mcp} mcp session${mcp === 1 ? "" : "s"} (read at next prompt)`);
+  if (staleQueued > 0) lines.push(`  delivered to ${staleQueued} stale session${staleQueued === 1 ? "" : "s"} (queued; delivered when the session resumes)`);
   // Skips and out-of-scope rows summarize per project: the section is
   // fleet-scale (hundreds of rows on a busy machine), and the project
   // breakdown is the part a human acts on. Projects render
@@ -869,9 +875,17 @@ function countByProject(pairs: ReadonlyArray<readonly [string, string | null]>):
 
 export class ChatStore {
   #db: Database;
+  /** The stale-row resumability check for broadcast fan-out: which
+   *  session ids the host session database still knows (production wiring
+   *  is resumableSessionIds in src/session-db.ts, the same point lookup
+   *  the directory re-verification uses). Unwired - or returning nothing,
+   *  which is what an unreadable host db yields - keeps every stale row
+   *  skipped: the fan-out's behavior before the check existed. */
+  #resumableSessions?: (sessionIDs: string[]) => Set<string>;
 
-  constructor(db: Database) {
+  constructor(db: Database, opts: { resumableSessions?: (sessionIDs: string[]) => Set<string> } = {}) {
     this.#db = db;
+    this.#resumableSessions = opts.resumableSessions;
   }
 
   /**
@@ -1240,19 +1254,24 @@ export class ChatStore {
   /**
    * Posts a message to every other registered session at once. Opencode
    * rows are skipped unless they are OPEN - a fresh heartbeat AND a tab
-   * open right now. Both skip classes are honest: a STALE row's host
-   * process has stopped heartbeat-ing and will never read the mail, and a
-   * RECENT row (fresh heartbeat, no open tab) is not reliably wakeable -
-   * the wake can be swallowed without a tab to receive it, so the fan-out
-   * would spend a model turn on a delivery that likely never runs. MCP
-   * rows always receive (they read mail at their next prompt). Every skip
-   * is listed by name in `skipped` so the caller can see who was left
-   * out and why. Each recipient gets its own inbox row per part, so the
-   * existing wake machinery (grouping, gating, rate cap) treats the
-   * broadcast as ordinary per-recipient mail. An oversized body is
-   * auto-split (splitChatBody) and every recipient gets every part inside
-   * the same single transaction; `parts` reports how many rows each
-   * recipient received.
+   * open right now - with one exception: a STALE row whose session the
+   * host session database still knows (the resumability check) is
+   * resumable, so it receives a queued inbox row it reads when its
+   * harness returns (diagnosed 2026-11-12: skipping stale rows outright
+   * permanently lost mail during crash and outage windows). The skip
+   * classes stay honest: a STALE row opencode has forgotten is dead -
+   * its host process stopped heartbeat-ing and will never read the mail
+   * - and a RECENT row (fresh heartbeat, no open tab) is not reliably
+   * wakeable - the wake can be swallowed without a tab to receive it, so
+   * the fan-out would spend a model turn on a delivery that likely never
+   * runs. MCP rows always receive (they read mail at their next prompt).
+   * Every skip is listed by name in `skipped` so the caller can see who
+   * was left out and why. Each recipient gets its own inbox row per
+   * part, so the existing wake machinery (grouping, gating, rate cap)
+   * treats the broadcast as ordinary per-recipient mail. An oversized
+   * body is auto-split (splitChatBody) and every recipient gets every
+   * part inside the same single transaction; `parts` reports how many
+   * rows each recipient received.
    */
   broadcast(
     fromSession: string,
@@ -1275,12 +1294,16 @@ export class ChatStore {
    * explicit from_name, so no registration exists to look up or spoof.
    * The write itself performs no wake and stamps no delivered_at: the
    * ordinary poller then delivers the rows (ChatPoller's sender-kind
-   * wake gate: user-voiced batches wake only open-tab sessions), and
-   * RECENT opencode rows (fresh heartbeat, tab closed) and MCP rows
-   * read their mail at the next prompt. requireOpen is false - the CLI
-   * has no tab signal, and a delivery that waits for the next prompt
-   * needs none. STALE rows are
-   * still skipped and reported: a dead host never reads the mail.
+   * wake gate: user-voiced batches wake open-tab sessions immediately,
+   * and closed-tab sessions exactly once - the batch's first delivery),
+   * and RECENT opencode rows (fresh heartbeat, tab closed) that miss
+   * the single nudge and MCP rows read their mail at the next prompt.
+   * requireOpen is false - the CLI has no tab signal, and a delivery
+   * that waits for the next prompt needs none. STALE rows split on the
+   * resumability check: a row the host session database still knows is
+   * resumable and receives a queued row for its next run, and a row
+   * opencode has forgotten is skipped and reported - a dead host never
+   * reads the mail.
    * `projects` (exact whole-value matches against the registered
    * project) narrows the fan-out; rows outside the filter - including
    * rows with no project at all - land in the `outOfScope` bucket so
@@ -1312,11 +1335,15 @@ export class ChatStore {
    * The shared fan-out core behind broadcast() (registered senders,
    * open-tab requirement on) and broadcastFromUser() (sentinel sender,
    * open-tab requirement off): one acceptance ceiling, one split, ONE
-   * transaction, per-recipient dedupe, and the skip classes. The
-   * project filter runs FIRST so out-of-scope rows never appear in
-   * `skipped` - the caller asked to narrow the audience, not to hear
-   * about everyone it excluded. Recipients/skips carry the row's
-   * project so a caller can render per-project delivery lines.
+   * transaction, per-recipient dedupe, and the skip classes. Stale
+   * opencode rows split on the constructor's resumability check: a
+   * session the host session database still knows is resumable and
+   * receives a queued row (no wake - the mail is there when its harness
+   * returns), while a session opencode has forgotten is dead and is
+   * skipped. The project filter runs FIRST so out-of-scope rows never
+   * appear in `skipped` - the caller asked to narrow the audience, not
+   * to hear about everyone it excluded. Recipients/skips carry the
+   * row's project so a caller can render per-project delivery lines.
    */
   #fanOut(
     sender: { sessionID: string; name: string },
@@ -1343,11 +1370,29 @@ export class ChatStore {
     const skipped: BroadcastSkip[] = [];
     const outOfScope: BroadcastRecipient[] = [];
     let deduped = 0;
+    // One roster snapshot feeds both the resumability scan and the loop,
+    // so the classification and the writes cannot disagree about who was
+    // registered. The scan batches every in-scope stale opencode row into
+    // ONE host-db consult (the CHAT_DIRECTORY_REVERIFY point lookup) -
+    // a per-row consult would re-open opencode.db once per stale row, and
+    // a fleet-scale broadcast hits hundreds of them.
+    const rows = this.list();
+    let resumable = new Set<string>();
+    if (this.#resumableSessions) {
+      const staleInScope = rows.filter(
+        (row) =>
+          row.session_id !== sender.sessionID &&
+          row.host_kind === "opencode" &&
+          isStale(row) &&
+          (!projects || (row.project !== null && projects.includes(row.project))),
+      );
+      if (staleInScope.length > 0) resumable = this.#resumableSessions(staleInScope.map((r) => r.session_id));
+    }
     // One transaction: a crash mid-loop rolls the whole fan-out back
     // instead of leaving a partial broadcast where some recipients got the
     // message and others silently did not.
     this.#db.transaction(() => {
-      for (const row of this.list()) {
+      for (const row of rows) {
         if (row.session_id === sender.sessionID) continue;
         // Project filter before any skip classification: an
         // out-of-scope row (no project at all included) is an audience
@@ -1357,18 +1402,23 @@ export class ChatStore {
           outOfScope.push({ name: row.name, project: row.project });
           continue;
         }
-        // Two honest skip classes for opencode rows: STALE (host process
-        // gone - never reads the mail) and, when the caller requires an
-        // open tab, RECENT (fresh heartbeat, no open tab - the wake is
-        // not guaranteed to run a turn). An mcp row between turns reads
-        // its mail at the next prompt, so it always receives - even a
-        // stale one, whose mail-check still fires at its next prompt.
+        // Skip classes for opencode rows: STALE splits on the
+        // resumability scan - a session the host db still knows receives
+        // a queued row (no wake; it reads the mail when its harness
+        // returns), a session opencode has forgotten is dead and never
+        // reads the mail. RECENT (fresh heartbeat, no open tab) is
+        // skipped only when the caller requires an open tab - the wake
+        // is not guaranteed to run a turn. An mcp row between turns
+        // reads its mail at the next prompt, so it always receives -
+        // even a stale one, whose mail-check still fires at its next
+        // prompt.
         if (row.host_kind === "opencode") {
           if (isStale(row)) {
-            skipped.push({ name: row.name, project: row.project, reason: "stale" });
-            continue;
-          }
-          if (requireOpen && !open.has(row.session_id)) {
+            if (!resumable.has(row.session_id)) {
+              skipped.push({ name: row.name, project: row.project, reason: "stale" });
+              continue;
+            }
+          } else if (requireOpen && !open.has(row.session_id)) {
             skipped.push({ name: row.name, project: row.project, reason: "no open tab" });
             continue;
           }
@@ -2546,11 +2596,12 @@ export interface ChatPollerOptions {
   canDeliver: (sessionID: string) => boolean | Promise<boolean>;
   /** Open-tab session ids at delivery time (the tab-state reader,
    *  src/tab-state.ts). A batch whose rows are ALL from the CLI sentinel
-   *  (the human user's terminal broadcast) wakes a recipient only when
-   *  this set contains it; every other recipient keeps the mail unread
-   *  and reads it at the next prompt. Omitted means no tab signal, which
-   *  by the roster's honesty rule reads as "not open": user-voiced
-   *  batches then wake nobody. */
+   *  (the human user's terminal broadcast) wakes an open-tab recipient
+   *  normally; a closed-tab recipient gets the batch's FIRST delivery
+   *  only - a single wake prompt - and the re-nudges of its
+   *  already-delivered rows wait for the tab to reopen. Omitted means no
+   *  tab signal, which by the roster's honesty rule reads as "not
+   *  open": first deliveries still go out once, re-nudges stay held. */
   openTabs?: () => ReadonlySet<string>;
   /** Poll interval. Default 30s - frequent enough that wake prompts feel
    *  prompt, cheap enough that the shared DB sees only a couple of light
@@ -2897,22 +2948,6 @@ export class ChatPoller {
 
       for (const [recipient, messages] of byRecipient) {
         if (!(await this.#opts.canDeliver(recipient))) continue;
-        // Sender-kind wake gate: a batch that is entirely the human
-        // user's CLI broadcast wakes only open-tab recipients. A terminal
-        // broadcast is one-way FYI traffic; waking every hosted session
-        // for it spends a model turn per recipient machine-wide
-        // (observed 2026-11-09: one one-line broadcast, roughly fifty
-        // woken idle sessions). The mail itself still lands in every
-        // inbox - rows are cheap, and a tab-less session reads at its
-        // next prompt (the hook's pending line surfaces it); when its
-        // tab reopens, the still-undelivered row wakes then as a first
-        // delivery, exempt from the nudge cap. Any agent-sent row in the
-        // batch lifts the gate: agent mail is a real message that
-        // justifies the turn, and the CLI rows ride along in the same
-        // prompt. No provider means no tab signal, which reads as "not
-        // open" (the roster's honesty rule) - the gate then fails
-        // toward silence, never toward a fleet wake.
-        if (messages.every((m) => m.from_session === CHAT_CLI_SENDER) && !userWakeTabs().has(recipient)) continue;
         // Split the batch: a row is a re-nudge when it was already
         // wake-delivered (delivered_at stamp) or when this process sent it
         // and the stamp write failed (sentIds - the at-least-once retry
@@ -2921,9 +2956,32 @@ export class ChatPoller {
         const sent = this.#sentIds.get(recipient);
         const fresh = messages.filter((m) => m.delivered_at === null && !(sent?.has(m.id) ?? false));
         const held = messages.length - fresh.length;
-        const budget = this.#opts.maxNudgesPerHour - this.#opts.store.chatWakeCount(recipient, isoMinutesAgo(60));
+        // Sender-kind wake gate: a batch that is entirely the human
+        // user's CLI broadcast wakes a closed-tab recipient exactly once
+        // - its never-delivered rows go out as a single first-delivery
+        // prompt, and re-nudges of its already-delivered rows stay held
+        // until the tab reopens, so the renudge machinery cannot loop on
+        // a tab that may never run the turn. Without the once-nudge an
+        // idle closed-tab session never reads user broadcasts at all:
+        // "the next prompt" never comes for it (diagnosed 2026-11-12 -
+        // the Nov 10-12 delivery collapse, user broadcasts reaching
+        // ~9% of the fleet). Any agent-sent row in the batch lifts the
+        // gate: agent mail is a real message that justifies the turn,
+        // and the CLI rows ride along in the same prompt. No provider
+        // means no tab signal, which reads as "not open" (the roster's
+        // honesty rule) - the gate holds re-nudges only, so it fails
+        // toward one prompt per batch, never a fleet wake loop.
+        const userBatchHeld = messages.every((m) => m.from_session === CHAT_CLI_SENDER) && !userWakeTabs().has(recipient);
         let deliverRows = messages;
-        if (held > 0 && budget <= 0) {
+        if (userBatchHeld && held > 0) {
+          deliverRows = fresh;
+          if (deliverRows.length === 0) continue;
+        }
+        const budget = this.#opts.maxNudgesPerHour - this.#opts.store.chatWakeCount(recipient, isoMinutesAgo(60));
+        // The cap still binds re-nudges (CLI batches included, once the
+        // gate is not already the holder): the log names the cap as the
+        // holder, so it stays silent when the gate is what holds them.
+        if (held > 0 && budget <= 0 && !userBatchHeld) {
           deliverRows = fresh;
           this.#logBudgetExhausted(recipient, held);
           if (deliverRows.length === 0) continue;

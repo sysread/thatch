@@ -134,10 +134,19 @@ export class ThatchDB {
   // signal, so every fresh opencode row degrades to RECENT - honest, never
   // a false OPEN. Production callers wire chatOpenTabs(src/tab-state.ts).
   #chatOpenTabs?: () => ReadonlySet<string>;
+  // The stale-row resumability provider for broadcast fan-out (which
+  // session ids the host session database still knows - see
+  // resumableSessionIds in src/session-db.ts). Optional: unwired means
+  // every stale row stays skipped, the fan-out's conservative default.
+  #chatResumableSessions?: (sessionIDs: string[]) => Set<string>;
 
-  constructor(path: string, opts: { chatOpenTabs?: () => ReadonlySet<string> } = {}) {
+  constructor(
+    path: string,
+    opts: { chatOpenTabs?: () => ReadonlySet<string>; chatResumableSessions?: (sessionIDs: string[]) => Set<string> } = {},
+  ) {
     this.#path = path;
     this.#chatOpenTabs = opts.chatOpenTabs;
+    this.#chatResumableSessions = opts.chatResumableSessions;
     this.#open();
   }
 
@@ -214,7 +223,7 @@ export class ThatchDB {
     // reconstruction is lossless.
     this.#predictionsStore = new PredictionEngine(db);
     this.#behaviorsStore = new BehaviorEngine(db);
-    this.#chatStore = new ChatStore(db);
+    this.#chatStore = new ChatStore(db, { resumableSessions: this.#chatResumableSessions });
     this.#initSchema();
   }
 

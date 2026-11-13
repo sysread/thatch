@@ -28,7 +28,7 @@ import {
   type ToolInteraction,
 } from "./extraction";
 import { createAlerts, alertDelivery, deriveRoundShape, isNoWorkTool, replyRequestID } from "./alerts";
-import { mostRecentTopLevelSessionId, sessionDirectories } from "./session-db";
+import { mostRecentTopLevelSessionId, sessionDirectories, resumableSessionIds } from "./session-db";
 import type { CoreContext } from "./tool-defs";
 import { installSkills, SHARED_SKILLS, OPENCODE_ONLY_SKILLS } from "./skills";
 import { installOpencodeCommands, removeWrapUpCommandFiles } from "./commands";
@@ -272,7 +272,12 @@ export async function createRuntime(input: {
   // chatOpenTabs composes the tab-state reader (tabs.json across channels,
   // minus confirmed closes) lazily per call - never cached - so roster
   // rendering and broadcast targeting see the current tab state.
-  const db: ThatchDB = new ThatchDB(dbPath, { chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()) });
+  const db: ThatchDB = new ThatchDB(dbPath, {
+    chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()),
+    // Stale-but-resumable broadcast recipients (the same opencode.db
+    // point lookup the directory re-verification uses).
+    chatResumableSessions: resumableSessionIds,
+  });
   const repoCache = repoPathCache(db);
   const repo = await detectRepo(directory ?? worktree, repoCache);
 

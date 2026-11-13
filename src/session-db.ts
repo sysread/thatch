@@ -220,6 +220,22 @@ export function sessionDirectories(sessionIDs: string[]): Record<string, string>
   }
 }
 
+/**
+ * Which of these session ids opencode still knows - the resumability check
+ * for chat broadcast fan-out. A stale chat row whose session still exists
+ * here is resumable: its harness can come back, so the broadcast queues an
+ * inbox row it will read then. A row opencode has forgotten is dead. One
+ * readonly pass through the same point lookup the directory re-verification
+ * uses. An unreadable, missing, or v1-era database returns an empty set:
+ * callers treat "cannot verify" as NOT resumable, which keeps every stale
+ * row skipped - the fan-out's behavior before this check existed - so a
+ * broken host db can never silently widen a broadcast's audience.
+ */
+export function resumableSessionIds(sessionIDs: string[]): Set<string> {
+  const dirs = sessionDirectories(sessionIDs);
+  return dirs ? new Set(Object.keys(dirs)) : new Set();
+}
+
 export interface SessionRow {
   id: string;
   title: string;

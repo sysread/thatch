@@ -11,6 +11,7 @@ import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import { ThatchDB } from "../src/db";
 import { chatOpenTabs as chatOpenTabsProvider } from "../src/tab-state";
+import { resumableSessionIds } from "../src/session-db";
 import { REGISTRY } from "../src/cli/registry";
 import { renderGlobal, printCommandHelp } from "../src/cli/help";
 import { defaultStore } from "../src/cli/context";
@@ -88,7 +89,12 @@ if (!resolved) {
   process.exit(1);
 }
 
-const db: ThatchDB = new ThatchDB(dbPath, { chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()) });
+const db: ThatchDB = new ThatchDB(dbPath, {
+  chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()),
+  // Stale-but-resumable broadcast recipients (the same opencode.db
+  // point lookup the directory re-verification uses).
+  chatResumableSessions: resumableSessionIds,
+});
 try {
   await resolved.entry.run(argv.slice(resolved.depth), { db, dbPath, defaultStore: () => defaultStore(db) });
 } finally {

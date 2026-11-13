@@ -12,13 +12,14 @@ import { readOpenTabSessions } from "../../../src/tab-state";
  * Automatable: the broadcast write path is a pure CLI write over a
  * controlled DB. Seeds registered sessions across two projects covering
  * every audience class (open with tab, fresh tab-less = RECENT, MCP,
- * long-stale, and a NULL-project row), pins a deterministic sender name
+ * long-stale-but-resumable through an opencode.db fixture, long-stale
+ * and dead, and a NULL-project row), pins a deterministic sender name
  * through a scratch git config (GIT_CONFIG_GLOBAL), then runs the CLI
  * broadcast with and without --project. Verifies the summarized
- * delivery report (open tabs named, no-tab/mcp/skipped/out-of-scope
- * counted - never one line per session), the fence note in the
- * persisted bodies (the protocol note that tells receiving sessions the
- * user is not in the chat), the sentinel sender rows (from_session
+ * delivery report (open tabs named, no-tab/mcp/stale-queued/skipped/
+ * out-of-scope counted - never one line per session), the fence note in
+ * the persisted bodies (the protocol note that tells receiving sessions
+ * the user is not in the chat), the sentinel sender rows (from_session
  * 'cli', via_broadcast 1, read/delivered unstamped), the tail's JSONL
  * sent events rendering the broadcast under the snapshotted sender
  * name, the dedupe notice on an identical unread retry, and the loud
@@ -32,15 +33,15 @@ const useCase: UseCase = {
     "- A DB with registered sessions across two projects",
   ].join("\n"),
   steps: [
-    "1. Seed a DB: sessions in two projects (open tab, tab-less RECENT, MCP, long-stale, and one with no project), plus a tabs.json fixture and a scratch git config pinning the sender name.",
-    "2. Run `thatch chat broadcast <msg>` with no --project and verify the summarized report: open-tab recipients named one line each, the no-tab and mcp recipients counted by delivery state, and the stale skip counted per project.",
+    "1. Seed a DB: sessions in two projects (open tab, tab-less RECENT, MCP, two long-stale rows, and one with no project), plus a tabs.json fixture, an opencode.db fixture whose session_v2 table keeps one stale row resumable (the other stale row is absent, so it is dead), and a scratch git config pinning the sender name.",
+    "2. Run `thatch chat broadcast <msg>` with no --project and verify the summarized report: open-tab recipients named one line each, the no-tab, mcp, and stale-queued recipients counted by delivery state, and the dead stale skip counted per project.",
     "3. Run `thatch chat broadcast <msg> --project P --project=Q` and verify the filter: only the named projects delivered, out-of-scope rows (including the NULL-project session) counted per project in the out-of-scope section.",
     "4. Query the DB: delivered rows carry from_session 'cli', the snapshotted sender name, via_broadcast 1, and NULL read_at/delivered_at; bodies begin with the fence note stating the user is not a chat session and replies go to the user's own session, not chat.",
     "5. Run `thatch chat tail --once` and verify the broadcast renders as ordinary sent events (broadcast: true) under the sender name, bodies carrying the fence note.",
     "6. Re-run the identical --project broadcast and verify the duplicate-suppressed notice; run with an unknown flag and with no message and verify both die loudly with a plain error.",
   ].join("\n"),
   expected: [
-    "- The unfiltered broadcast reaches every live session regardless of tab state (RECENT and MCP included) and skips only the stale row. The report names each OPEN recipient (the only ones a user broadcast wakes) and counts the rest: no-tab and mcp recipients as read-at-next-prompt counts, skips per project - a one-line FYI never prints one line per session.",
+    "- The unfiltered broadcast reaches every live session regardless of tab state (RECENT and MCP included) and queues mail for the stale-but-resumable session (no wake; it reads the mail when its harness returns). Only the dead stale row is skipped. The report names each OPEN recipient and counts the rest: no-tab (single nudge), mcp, and stale-queued recipients as delivery-state counts, skips per project - a one-line FYI never prints one line per session.",
     "- --project narrows by exact match; non-matching and NULL-project rows appear in a counted out-of-scope section, never as skipped or delivered.",
     "- Delivered rows are sentinel-sent ('cli'), carry the sender name snapshot and via_broadcast 1, and leave delivery stamping to the wake/poll machinery (read_at and delivered_at NULL).",
     "- Every delivered body starts with the fence note: the message is from the human user, who is not a chat session; recipients act in their own session and do not reply into thatch chat.",
@@ -56,7 +57,16 @@ const useCase: UseCase = {
     // pins it so the report and tail assertions are exact.
     const gitConfig = join(ctx.dir, "gitconfig");
     writeFileSync(gitConfig, "[user]\n\tname = Fence Holler\n");
-    const env = { ...ctx.env, GIT_CONFIG_GLOBAL: gitConfig };
+    // The host session database fixture (production: opencode.db's
+    // session_v2 table, read through resumableSessionIds): the stale
+    // ghost is still resumable, so broadcasts queue its mail; the stale
+    // dead row is absent from it, so broadcasts skip that row.
+    const hostDb = join(ctx.dir, "opencode.db");
+    const odb = new Database(hostDb);
+    odb.run("CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT NOT NULL)");
+    odb.run("INSERT INTO session_v2 (id, directory) VALUES ('ses_ghost', '/sandbox/project')");
+    odb.close();
+    const env = { ...ctx.env, GIT_CONFIG_GLOBAL: gitConfig, OPENCODE_DB: hostDb };
     const run = (args: string[]) => $`bun ${bin} ${args}`.env(env).cwd(ctx.dir).quiet().nothrow();
 
     // Open-tab fixture: alpha and beta carry tabs (OPEN); every other
@@ -88,6 +98,7 @@ const useCase: UseCase = {
         ["ses_gamma", "acme/gamma-proj", "opencode", "gamma"],
         ["ses_mike", "acme/gamma-proj", "mcp", "mike"],
         ["ses_ghost", "acme/alpha-proj", "opencode", "ghost"],
+        ["ses_dead", "acme/alpha-proj", "opencode", "dead"],
         ["ses_np", null, "opencode", "noplan"],
       ] as const) {
         const r = seeded.registerChatSession(id, project, null, kind, base);
@@ -96,9 +107,11 @@ const useCase: UseCase = {
           return "FAIL";
         }
       }
-      // The ghost's host process is long gone.
+      // The ghost's and dead row's host processes are long gone; the
+      // ghost stays resumable through the opencode.db fixture above,
+      // while dead is absent from it.
       const raw = new Database(ctx.env.THATCH_DB_PATH);
-      raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_ghost'");
+      raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id IN ('ses_ghost', 'ses_dead')");
       raw.close();
     } finally {
       seeded.close();
@@ -106,9 +119,11 @@ const useCase: UseCase = {
 
     // Unfiltered broadcast: every live session receives - RECENT and MCP
     // included (their rows land in the inbox and they read at their
-    // next prompt; only OPEN sessions are woken) - and only the stale
-    // ghost is skipped. The report names the open tabs and counts the
-    // rest instead of printing one line per session.
+    // next prompt; OPEN sessions are woken immediately, closed-tab
+    // sessions get a single nudge) - and the stale-but-resumable ghost
+    // gets its mail queued for its next run. Only the dead stale row is
+    // skipped. The report names the open tabs and counts the rest
+    // instead of printing one line per session.
     const wide = await run(["chat", "broadcast", "holler one", "from", "the", "fence"]);
     if (wide.exitCode !== 0) {
       console.log(`  FAIL: broadcast exited ${wide.exitCode}:\n${wide.stderr.toString()}`);
@@ -116,11 +131,12 @@ const useCase: UseCase = {
     }
     const wideText = wide.stdout.toString();
     for (const needle of [
-      "Broadcast from Fence Holler to 5 of 6 registered sessions:",
+      "Broadcast from Fence Holler to 6 of 7 registered sessions:",
       "  delivered: alpha-00001 (acme/alpha-proj) [open]",
       "  delivered: beta-00001 (acme/alpha-proj) [open]",
-      "  delivered to 2 sessions with no open tab (read at next prompt)",
+      "  delivered to 2 sessions with no open tab (single nudge; otherwise read at next prompt)",
       "  delivered to 1 mcp session (read at next prompt)",
+      "  delivered to 1 stale session (queued; delivered when the session resumes)",
       "Skipped:",
       "  - 1 stale session in acme/alpha-proj",
     ]) {
@@ -131,7 +147,7 @@ const useCase: UseCase = {
     }
     // No session name may appear outside its named delivered line: the
     // count lines summarize, they never name.
-    for (const name of ["gamma-00001", "mike-00001", "noplan-00001", "ghost-00001"]) {
+    for (const name of ["gamma-00001", "mike-00001", "noplan-00001", "ghost-00001", "dead-00001"]) {
       if (wideText.includes(name)) {
         console.log(`  FAIL: bulk recipient "${name}" named in the summarized report:\n${wideText}`);
         return "FAIL";
@@ -151,11 +167,12 @@ const useCase: UseCase = {
     }
     const filteredText = filtered.stdout.toString();
     for (const needle of [
-      "Broadcast from Fence Holler to 4 of 6 registered sessions (projects: acme/alpha-proj, acme/gamma-proj):",
+      "Broadcast from Fence Holler to 5 of 7 registered sessions (projects: acme/alpha-proj, acme/gamma-proj):",
       "  delivered: alpha-00001 (acme/alpha-proj) [open]",
       "  delivered: beta-00001 (acme/alpha-proj) [open]",
-      "  delivered to 1 session with no open tab (read at next prompt)",
+      "  delivered to 1 session with no open tab (single nudge; otherwise read at next prompt)",
       "  delivered to 1 mcp session (read at next prompt)",
+      "  delivered to 1 stale session (queued; delivered when the session resumes)",
       "Skipped:",
       "  - 1 stale session in acme/alpha-proj",
       "Out of scope (project filter):",
@@ -190,9 +207,10 @@ const useCase: UseCase = {
         problems.push("fence note missing the protocol statements");
       }
     }
-    // alpha, beta, gamma, mike, noplan (wide) + the filtered rerun's
-    // fresh rows to alpha, beta, gamma, mike = 9 delivered rows total.
-    if (rows.length !== 9) problems.push(`expected 9 delivered sentinel rows, got ${rows.length}`);
+    // alpha, beta, gamma, mike, noplan, ghost (wide; ghost queued as
+    // resumable-stale) + the filtered rerun's fresh rows to alpha, beta,
+    // ghost, gamma, mike = 11 delivered rows total.
+    if (rows.length !== 11) problems.push(`expected 11 delivered sentinel rows, got ${rows.length}`);
     raw.close();
     if (problems.length > 0) {
       console.log(`  FAIL: sentinel row contract violated:\n${problems.join("\n")}`);
@@ -214,15 +232,15 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const cliEvents = events.filter((e) => e.from === "Fence Holler");
-    if (cliEvents.length !== 9 || !cliEvents.every((e) => e.event === "sent" && e.broadcast === true && e.body.startsWith(fence))) {
-      console.log(`  FAIL: expected 9 fence-noted broadcast sent events from Fence Holler, got:\n${JSON.stringify(cliEvents.slice(0, 3))}`);
+    if (cliEvents.length !== 11 || !cliEvents.every((e) => e.event === "sent" && e.broadcast === true && e.body.startsWith(fence))) {
+      console.log(`  FAIL: expected 11 fence-noted broadcast sent events from Fence Holler, got:\n${JSON.stringify(cliEvents.slice(0, 3))}`);
       return "FAIL";
     }
 
     // An identical unread retry is deduped per recipient, and the report
     // says so.
     const retry = await run(["chat", "broadcast", "--project", "acme/alpha-proj", "--project=acme/gamma-proj", "standup in five"]);
-    if (retry.exitCode !== 0 || !retry.stdout.toString().includes("duplicate suppressed for 4 recipients")) {
+    if (retry.exitCode !== 0 || !retry.stdout.toString().includes("duplicate suppressed for 5 recipients")) {
       console.log(`  FAIL: identical retry should report duplicate suppression:\n${retry.stdout.toString()}\n${retry.stderr.toString()}`);
       return "FAIL";
     }
@@ -243,10 +261,11 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const ddRaw = new Database(ctx.env.THATCH_DB_PATH);
-    // alpha and beta are both in acme/alpha-proj: one row per recipient.
+    // alpha, beta, and the resumable ghost are all in acme/alpha-proj:
+    // one row per recipient (dead is skipped).
     const ddRow = ddRaw.query("SELECT COUNT(*) AS n FROM chat_messages WHERE from_session = 'cli' AND body LIKE '%--leading dashes body%'").get() as any;
     ddRaw.close();
-    if (ddRow.n !== 2) {
+    if (ddRow.n !== 3) {
       console.log(`  FAIL: -- body not stored verbatim (rows: ${ddRow.n})`);
       return "FAIL";
     }
