@@ -92,7 +92,7 @@ export const tombstones: Subcommand = {
       { long: "--clear", short: null, description: "Remove the guard for <label> (all its content generations). Entries are untouched; the memory itself stays gone." },
     ],
     notes: [
-      "Every forget leaves a guard that holds re-writes of the deleted content (a [held] remember names the guard).",
+      "Every forget leaves a guard that holds creations of the deleted content (a [held] remember names the guard; updates of live memories pass).",
       "Clearing the guard is the deliberate re-admission path: clear it, then repeat the remember.",
     ],
   }),

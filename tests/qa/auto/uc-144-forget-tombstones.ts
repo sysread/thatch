@@ -10,7 +10,8 @@ import { ThatchDB, MEMORY_HELD_MARKER } from "../../../src/db";
  * arm end to end (save -> unstamped display of the content -> forget ->
  * the re-derivation mint is HELD, surfaced, and saves nothing), the
  * `thatch tombstones` listing and clear, the un-guard-then-save flow,
- * overwrite non-bypass, store scoping, and the no-op double-forget.
+ * the creation-only guard scope (a bare save is held, an overwrite onto
+ * a live entry passes), store scoping, and the no-op double-forget.
  */
 
 const useCase: UseCase = {
@@ -24,13 +25,13 @@ const useCase: UseCase = {
     "2. Attempt the re-derivation mint (`thatch remember` with the same content); verify it is HELD: exit 1, stderr begins with [held], the message names the deleted memory's label, date, and the un-guard command, and nothing was saved.",
     "3. Verify `thatch tombstones [store]` lists the standing guard (label, date, hash prefix) and that a second forget of the same label is a clean no-op (the guard stays, no duplicate row).",
     "4. Verify the un-guard: `thatch tombstones --clear <label> <store>` prints [tombstone-cleared] with the entries-untouched note; repeating the original remember then SAVES.",
-    "5. Verify a re-created entry with genuinely different content saves normally (no hold); verify `--overwrite` of matching content is still held; verify a global-store guard does not hold a project-store write.",
+    "5. Verify a re-created entry with genuinely different content saves normally (no hold); verify an `--overwrite` of the guarded body onto that LIVE entry saves (the guard governs creation only); verify a global-store guard does not hold a project-store write.",
   ].join("\n"),
   expected: [
     "- A held write is neither saved nor silently dropped: the [held] message surfaces the guard, names the un-guard command, and contains no [saved] marker anywhere (the MCP drain gate is inclusion-based).",
     "- The tombstone survives the refused write intact; nothing but the deliberate CLI clear removes it.",
     "- `thatch tombstones --clear` removes the guard and never touches entries; the repeat remember then saves.",
-    "- The guard is on content: overwrite cannot bypass it, and different content passes; it is store-scoped like every other memory surface.",
+    "- The guard governs entry creation: a bare save of matching content is held, and an overwrite resolving to a live entry passes; it is store-scoped like every other memory surface.",
   ].join("\n"),
 
   async run(ctx: QaContext) {
@@ -165,20 +166,21 @@ const useCase: UseCase = {
       console.log(`  FAIL: cross-store write should save (store scoping):\n${crossStore.stdout.toString()}\n${crossStore.stderr.toString()}`);
       return "FAIL";
     }
-    // Overwrite of matching content is still held: the guard is on
-    // content, not labels. A fresh project-store guard for the body; the
-    // live uc143-different entry must survive the refused write
-    // untouched.
+    // Overwrite onto a live entry bypasses the guard (creation-only
+    // scope, the November 2026 inversion): the guarded body overwrites
+    // the live uc143-different entry and SAVES. The fresh guard raised
+    // below stands the whole time - only the write resolving to a live
+    // row is exempt.
     await run(["remember", body, "--label", "uc143-overwrite-src"]);
     await run(["forget", "uc143-overwrite-src"]);
     const overwrite = await run(["remember", body, "--label", "uc143-different", "--overwrite"]);
-    if (overwrite.exitCode !== 1 || !overwrite.stderr.toString().includes(MEMORY_HELD_MARKER)) {
-      console.log(`  FAIL: overwrite of guarded content must be held:\n${overwrite.stderr.toString()}`);
+    if (overwrite.exitCode !== 0 || !overwrite.stdout.toString().startsWith("[saved]")) {
+      console.log(`  FAIL: overwrite onto a live entry must save (guard is create-only):\n${overwrite.stdout.toString()}\n${overwrite.stderr.toString()}`);
       return "FAIL";
     }
     const differentShow = await run(["show", "uc143-different"]);
-    if (!differentShow.stdout.toString().includes("a genuinely different body about another topic")) {
-      console.log(`  FAIL: the refused overwrite must not touch the live entry:\n${differentShow.stdout.toString()}`);
+    if (!differentShow.stdout.toString().includes(body)) {
+      console.log(`  FAIL: the overwrite must replace the live entry's content:\n${differentShow.stdout.toString()}`);
       return "FAIL";
     }
     return "PASS";

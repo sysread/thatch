@@ -247,6 +247,29 @@ describe("remember", () => {
     expect(entry?.content).toBe("updated");
   });
 
+  test("interleaved writes from two handles on one file leave one row (label maintenance under concurrency)", () => {
+    // The November 2026 incident class: a session and its extraction
+    // child both run memory maintenance on the same store. Whatever
+    // order the calls land in, the (slug, store) primary key plus the
+    // atomic upsert must leave exactly one row carrying the newest
+    // content - never a near-duplicate pair.
+    const db2 = new ThatchDB(dbPath);
+    try {
+      db.remember("s", "Shared Label", "content one", emb, "m");
+      expect(db2.remember("s", "Shared Label", "content two", emb, "m", { overwrite: true }).ok).toBe(true);
+      expect(db.remember("s", "Shared Label", "content three", emb, "m", { overwrite: true }).ok).toBe(true);
+      expect(db2.remember("s", "Shared Label", "content four", emb, "m", { overwrite: true }).ok).toBe(true);
+    } finally {
+      db2.close();
+    }
+
+    const raw = new Database(dbPath);
+    const rows = raw.query("SELECT content FROM entries WHERE store = ?").all("s") as { content: string }[];
+    raw.close();
+    expect(rows.length).toBe(1);
+    expect(rows[0].content).toBe("content four");
+  });
+
   test("stores branch and confidence metadata", () => {
     db.remember("s", "branch-test", "content", emb, "m", {
       branch: "feature/x",
@@ -509,15 +532,97 @@ describe("memory tombstones", () => {
     expect(result.ok).toBe(true);
   });
 
-  test("overwrite does not bypass a hold (the guard is on content)", () => {
+  test("an overwrite onto a live label bypasses the guard even when it carries the deleted body (the accepted cost)", () => {
+    // The scope inversion (November 2026, three live reports): the guard
+    // policed the whole write path, and on overwrites its only
+    // observable effect was holding legitimate corrections of live
+    // siblings while waving junk through. It now governs entry creation
+    // only, so an explicit overwrite onto a live label SAVES even when
+    // the new content is the deliberately deleted body - the accepted
+    // cost of not holding corrections. The adjacent bare-save
+    // assertion pins the guard's survival: the same body under a label
+    // with no live entry is still held.
     db.remember("s", "Overwrite Guard", "overwrite body", base, "m");
     db.forgetEntry("s", "Overwrite Guard");
     db.remember("s", "Live Label", "unrelated live content", below, "m");
     const result = db.remember("s", "Live Label", "overwrite body", base, "m", { overwrite: true });
+    expect(result.ok).toBe(true);
+    expect(db.showEntry("s", "Live Label")?.content).toBe("overwrite body");
+    // The create-path hold survives the bypass: same guarded body, no
+    // live entry under the label - held, guard intact.
+    const fresh = db.remember("s", "Fresh Label", "overwrite body", base, "m");
+    expect(fresh.ok).toBe(false);
+    expect((fresh as { error: string }).error.startsWith(MEMORY_HELD_MARKER)).toBe(true);
+    expect(db.listMemoryTombstones("s").length).toBe(1);
+  });
+
+  test("duplicate-cleanup collateral: an overwrite of the live keeper passes the deleted duplicate's guard", () => {
+    // The November 2026 live incidents: dedup cleanup deletes a
+    // near-duplicate, and the tombstone it raises sits in the content
+    // neighborhood the live sibling shares - so the sibling's next
+    // update, corrections included, tripped it. The guard governs entry
+    // creation only: an overwrite resolving to a live row is an update,
+    // not a resurrection, and passes. The guard itself stays standing -
+    // tombstones clear only through the CLI un-guard.
+    db.remember("s", "Keeper", "keeper body", base, "m");
+    db.remember("s", "Near Duplicate", "near duplicate body", above, "m");
+    db.forgetEntry("s", "Near Duplicate");
+    const result = db.remember("s", "Keeper", "keeper body, revised", base, "m", { overwrite: true });
+    expect(result.ok).toBe(true);
+    expect(db.showEntry("s", "Keeper")?.content).toBe("keeper body, revised");
+    const guards = db.listMemoryTombstones("s");
+    expect(guards.length).toBe(1);
+    expect(guards[0].label).toBe("Near Duplicate");
+  });
+
+  test("sibling guards from the same cleanup never hold the live keeper's updates, and only the CLI clears them", () => {
+    // The incident's full shape: three near-duplicates deleted, three
+    // guards standing, the keeper's update held by each in turn. Under
+    // the creation-only rule every keeper update passes regardless of
+    // how many guards stand, and the guards remain clearable only via
+    // the explicit un-guard.
+    //
+    // Fixture directions: each duplicate sits at cosine 0.92 against the
+    // keeper's `base` (above the 0.9 tombstone bar with margin) while the
+    // duplicates sit at 0.846 against EACH OTHER (below it) - so one
+    // duplicate's guard never holds the next duplicate's save.
+    const dupA = new Float32Array([0.92, 0.392, 0, 0]);
+    const dupB = new Float32Array([0.92, 0, 0.392, 0]);
+    const dupC = new Float32Array([0.92, 0, 0, 0.392]);
+    db.remember("s", "Keeper Two", "keeper two body", base, "m");
+    const dups: [string, Float32Array][] = [["Dup A", dupA], ["Dup B", dupB], ["Dup C", dupC]];
+    for (const [name, emb] of dups) {
+      db.remember("s", name, `${name.toLowerCase()} body`, emb, "m");
+      db.forgetEntry("s", name);
+    }
+    expect(db.listMemoryTombstones("s").length).toBe(3);
+    const result = db.remember("s", "Keeper Two", "keeper two body, revised", base, "m", { overwrite: true });
+    expect(result.ok).toBe(true);
+    expect(db.listMemoryTombstones("s").length).toBe(3);
+    expect(db.clearMemoryTombstones("s", "Dup B")).toBe(1);
+    expect(db.listMemoryTombstones("s").length).toBe(2);
+  });
+
+  test("the creation-only bypass covers the exact-hash trip: a byte-identical rewrite of the deleted body updates the keeper", () => {
+    db.remember("s", "Keeper Three", "shared body", base, "m");
+    db.remember("s", "Ghost", "shared body", above, "m");
+    db.forgetEntry("s", "Ghost");
+    // Hash trip (identical stored content) onto a live row: still an
+    // update, not a creation - passes on the exact arm too, not just
+    // the cosine sweep.
+    const result = db.remember("s", "Keeper Three", "shared body", base, "m", { overwrite: true });
+    expect(result.ok).toBe(true);
+    expect(db.listMemoryTombstones("s").length).toBe(1);
+  });
+
+  test("an overwrite with no live target row is still held (the forget-then-resave recovery stays blocked)", () => {
+    db.remember("s", "Gone", "gone body", base, "m");
+    db.forgetEntry("s", "Gone");
+    const result = db.remember("s", "Gone", "gone body, revised", above, "m", { overwrite: true });
     expect(result.ok).toBe(false);
     expect((result as { error: string }).error.startsWith(MEMORY_HELD_MARKER)).toBe(true);
-    // The live entry's pre-hold content is untouched by the refused write.
-    expect(db.showEntry("s", "Live Label")?.content).toBe("unrelated live content");
+    expect(db.listMemoryTombstones("s").length).toBe(1);
+    expect(db.entryExists("s", db.slugify("Gone"))).toBe(false);
   });
 
   test("a held write has no side effects: no entry, no new store row", () => {

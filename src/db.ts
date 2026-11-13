@@ -852,21 +852,31 @@ export class ThatchDB {
    * surfaced message; `held` is metadata for tests and introspection, never
    * a formatting source).
    *
+   * The tombstone guard governs ENTRY CREATION ONLY. A write carrying
+   * overwrite: true that resolves to a live row at (slug, store) is an
+   * update, not a creation - it skips the guard entirely, because
+   * updating a live record cannot resurrect a deleted one and the
+   * deleted sibling stays deleted. Bare saves and overwrites onto
+   * absent labels are creations and keep the full guard, so the
+   * recursion-loop threat (forgotten content silently re-minted under a
+   * fresh label) stays blocked.
+   *
    * The tombstone check runs BEFORE the label checks and before
    * ensureStore: a held write creates nothing, not even a store row, and a
    * label complaint would invite a retry that "fixes" the wrong thing.
-   * overwrite never bypasses a hold - the guard is on content, so
-   * re-writing deleted content under a live label is the same re-learn it
-   * guards on a fresh label.
    *
-   * Check and insert run inside one transaction so a concurrent forget
-   * from another process cannot commit between them (multiple thatch
-   * processes share one db under WAL). A busy/snapshot conflict from that
-   * wrapping is CAUGHT and returned on the failure arm rather than thrown:
-   * a thrown remember would surface as a host tool error instead of this
-   * tool's failure string, and the runtime drain gate is fail-open on
-   * unreadable output shapes - a failed write draining the buffer is the
-   * silent-loss class the [saved] gate exists to prevent.
+   * The whole check-and-insert sequence is write-lock-first (BEGIN
+   * IMMEDIATE, forgetEntry's pattern): the lock is taken before the
+   * tombstone read, so two thatch processes doing label maintenance on
+   * one store serialize here - one commits, the other re-reads fresh
+   * state under the lock and upserts - instead of racing a deferred
+   * read snapshot into a busy failure the agent must retry its way out
+   * of. A busy error from that wrapping is CAUGHT and returned on the
+   * failure arm rather than thrown: a thrown remember would surface as
+   * a host tool error instead of this tool's failure string, and the
+   * runtime drain gate is fail-open on unreadable output shapes - a
+   * failed write draining the buffer is the silent-loss class the
+   * [saved] gate exists to prevent.
    */
   remember(
     store: string,
@@ -877,22 +887,46 @@ export class ThatchDB {
     opts?: { branch?: string; confidence?: number; overwrite?: boolean; archived?: boolean },
   ): { ok: true } | { ok: false; error: string; held?: { label: string; forgottenAt: string } } {
     const slug = this.slugify(label);
+    type RememberResult = { ok: true } | { ok: false; error: string; held?: { label: string; forgottenAt: string } };
 
+    // Write-lock-first: BEGIN IMMEDIATE takes the write lock at
+    // transaction start, BEFORE any read (bun's transaction() wrapper
+    // begins deferred, which would snapshot the tombstone and entry
+    // reads before contending for the write lock - the failure mode the
+    // lock ordering here exists to rule out). Inside the try on
+    // purpose: a busy BEGIN (another process holds the write lock past
+    // busy_timeout) must land on the failure arm like any other busy
+    // error, and the rollback catch tolerates there being no
+    // transaction to roll back.
+    let out: RememberResult;
     try {
-      return this.transaction((): { ok: true } | { ok: false; error: string; held?: { label: string; forgottenAt: string } } => {
-        const guard = this.#findTombstoneMatch(store, content, embedding);
-        if (guard) {
-          return {
-            ok: false,
-            error: heldMessage(store, label, guard),
-            held: { label: guard.label, forgottenAt: guard.forgotten_at },
-          };
-        }
-
+      this.#db.exec("BEGIN IMMEDIATE");
+      // Creation vs update decides the guard: a near-duplicate's
+      // tombstone polices the whole content neighborhood its live
+      // sibling shares, so holding UPDATES there blocked legitimate
+      // corrections of live siblings (November 2026 incidents - the
+      // held corrections included polarity-negating ones, whose
+      // embeddings sit close to the content they negate). Updates of
+      // live rows pass; creations of any shape are guarded.
+      const updatesLiveRow = opts?.overwrite === true && this.entryExists(store, slug);
+      const guard = updatesLiveRow ? null : this.#findTombstoneMatch(store, content, embedding);
+      if (guard) {
+        out = {
+          ok: false,
+          error: heldMessage(store, label, guard),
+          held: { label: guard.label, forgottenAt: guard.forgotten_at },
+        };
+      } else {
         this.ensureStore(store);
-        return this.#writeEntry(store, slug, label, content, embedding, model, opts);
-      });
+        out = this.#writeEntry(store, slug, label, content, embedding, model, opts);
+      }
+      this.#db.exec("COMMIT");
     } catch (err: any) {
+      try {
+        this.#db.exec("ROLLBACK");
+      } catch {
+        /* the transaction already failed closed */
+      }
       if (isBusyError(err)) {
         return {
           ok: false,
@@ -901,6 +935,7 @@ export class ThatchDB {
       }
       throw err;
     }
+    return out;
   }
 
   #writeEntry(

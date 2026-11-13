@@ -582,6 +582,7 @@ const rememberDef: ToolDef = {
     "Before writing, check if a memory with the same label already exists " +
     "(use memory_list or memory_show). If one exists, read it " +
     "and use overwrite: true to update it rather than creating a duplicate. " +
+    "An overwrite replaces the entry's whole content - do not overwrite with placeholder or test text. " +
     "Each memory should be focused on a single topic. Write memories as " +
     "reference material for a future instance of yourself with zero context.",
   args: {
