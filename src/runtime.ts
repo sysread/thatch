@@ -241,6 +241,68 @@ export function planStrandActions(input: {
   return plan;
 }
 
+/** One watcher journal row as the sweep planner sees it (parsed value: the
+ *  stale test reads the definitions' expiresAt). */
+export interface WatcherRowRef {
+  kind: "watchers" | "watcher_pending";
+  sessionID: string;
+  directory: string;
+  pid: number;
+  value: unknown;
+}
+
+/** The watcher-row sweep's verdict: rows to delete, rows to re-stamp. */
+export interface WatcherRowPlan {
+  delete: WatcherRowRef[];
+  restamp: { row: WatcherRowRef; to: string }[];
+}
+
+/**
+ * Decides which watcher journal rows the strand sweep reclaims or re-stamps.
+ * The judgment is SESSION liveness from the sweep's own opencode.db
+ * enumeration, not the row's directory stamp: a re-homed session's live
+ * watch keeps a dead directory's stamp until adoption re-stamps it, so a
+ * dead-directory rule would eat live rows (the exact 2026-11-13
+ * watcher-vanishing class). A row is deleted when its session is gone
+ * (deleted with its worktree, or a corpse the strand plan is removing) or
+ * when every definition is past the watcher TTL plus the dormant grace -
+ * the immortal-orphan case: same-pid foreign-directory rows are invisible
+ * to the boot partition's stale check and to the dormant scan. A row whose
+ * session lives elsewhere is re-stamped to the session's current directory
+ * (or the strand plan's move target), so the next boot of that directory
+ * hydrates it. Rows whose session matches their stamp are untouched.
+ */
+export function planWatcherRowActions(input: {
+  rows: WatcherRowRef[];
+  sessions: { id: string; directory: string }[];
+  strandRemove: string[];
+  strandMove: { id: string; to: string }[];
+}): WatcherRowPlan {
+  const plan: WatcherRowPlan = { delete: [], restamp: [] };
+  const removing = new Set(input.strandRemove);
+  const moveTargets = new Map(input.strandMove.map((m) => [m.id, m.to]));
+  const byId = new Map(input.sessions.map((s) => [s.id, s.directory]));
+  for (const row of input.rows) {
+    if (row.kind === "watchers" && dormantWatchersStale((row.value as Watcher[] | null) ?? [])) {
+      plan.delete.push(row);
+      continue;
+    }
+    if (removing.has(row.sessionID)) {
+      plan.delete.push(row);
+      continue;
+    }
+    const current = moveTargets.get(row.sessionID) ?? byId.get(row.sessionID);
+    if (current === undefined) {
+      // The session row is gone from the host db: deleted with its
+      // worktree, and no resume can ever deliver the watch's events.
+      plan.delete.push(row);
+      continue;
+    }
+    if (current !== row.directory) plan.restamp.push({ row, to: current });
+  }
+  return plan;
+}
+
 export async function createRuntime(input: {
   capabilities: HostCapabilities;
   directory: string;
@@ -560,6 +622,12 @@ export async function createRuntime(input: {
     ghRunner: ghApiRun,
     commandRunner: watchedCommandRunner,
     journalPending: (sessionID, pending) => {
+      // Disposed check FIRST - same ownership rule as the journal hook: a
+      // poll cycle suspended at an await can outlive watchers.dispose()
+      // and reach this callback after the reload, and the lazy reopen
+      // would hand the stale writer a fresh connection to delete or
+      // overwrite the RELOADED instance's pending row.
+      if (disposed) return;
       if (pending === undefined) db.runtimeStateDelete("watcher_pending", sessionID);
       else db.runtimeStatePut("watcher_pending", sessionID, pending, directory);
     },
@@ -1167,7 +1235,10 @@ export async function createRuntime(input: {
     // outside their event stream, so without this the sessions would not
     // know the plugin is back. The noReply delivery starts no model turn:
     // a resume:false synthetic (materializes at the next turn's inbox
-    // delivery - no wake; live-probed 2026-11-05).
+    // delivery - no wake; live-probed 2026-11-05). The parenthetical lists
+    // the kinds ACTUALLY restored with counts - the 2026-11-13
+    // watcher-vanishing triage was misled by a static "(...watchers...)"
+    // that printed even when zero watchers rehydrated.
     if (chatOn) {
       for (const sessionID of rehydratedSessions) {
         void caps
@@ -1177,7 +1248,7 @@ export async function createRuntime(input: {
               parts: [
                 {
                   type: "text",
-                  text: "[thatch] plugin reloaded - persisted state restored (extraction buffers, watchers, wrap-ups). No action needed.",
+                  text: `[thatch] plugin reloaded - persisted state restored (${counts}). No action needed.`,
                   synthetic: true,
                 },
               ],
@@ -1214,6 +1285,11 @@ export async function createRuntime(input: {
     rehostedSessions.delete(sessionID);
     resumedSessions.delete(sessionID);
     movedInSessions.delete(sessionID);
+    // The session's watchers leave with it: this registry must stop polling
+    // them (the destination instance adopts the row and polls from there -
+    // two live registries would double-poll and double-deliver the same
+    // transitions). Journalless: the row is the adopter's to re-stamp.
+    watchers.release(sessionID);
     // Prune the hosted journal row (keyed by this instance's directory) so a
     // plugin reload's rehydration cannot resurrect the released session.
     const hostedRow = db.runtimeStateAll().find((r) => r.kind === "hosted" && r.sessionID === directory);
@@ -1345,10 +1421,60 @@ export async function createRuntime(input: {
     return notices;
   };
 
+  /**
+   * Adopts a re-homed session's watchers journal row into THIS registry.
+   * The row is pid-scoped (THIS process, any directory): a session that
+   * moved to this location mid-life left its row stamped with the old
+   * location, and the boot partition skips it as a presumed-live sibling -
+   * nothing polls it until adoption. Two triggers: the session.moved event
+   * (immediate, the destination instance learns the move directly) and the
+   * dormant scan at the session's first message (the backstop for a move
+   * that happened while no destination instance was up). Foreign-pid rows
+   * are invisible here on purpose - a restart's row revalidates through
+   * rearm() instead, like any other dormant recovery.
+   *
+   * Undelivered pending events ride along (delete-then-hydrate, the same
+   * dance the dormant scan and the boot partition do): the origin's
+   * journalPending row outlives its in-memory queue - release() drops the
+   * map, not the row - and without this pickup a moved session's queued
+   * events would wait in the row until this instance's next reload
+   * hydrated them. hydratePending re-journals the queue immediately, so
+   * the events are durable again under THIS directory's stamp. Pending
+   * adoption runs independently of definitions: a one-shot watch that
+   * fired and cancelled itself still has undelivered events worth
+   * delivering.
+   */
+  const adoptMovedWatchers = (sessionID: string): void => {
+    if (disposed) return;
+    try {
+      const row = db.runtimeStateAll().find(
+        (r) => r.kind === "watchers" && r.sessionID === sessionID && r.pid === process.pid && r.directory !== directory,
+      );
+      if (row && Array.isArray(row.value) && row.value.length > 0) {
+        watchers.adopt(sessionID, row.value as Watcher[]);
+        debug("runtime:watchers", `adopted re-homed session ${sessionID}'s watchers (row was stamped ${row.directory})`);
+      }
+      const pendingRow = db.runtimeStateAll().find(
+        (r) => r.kind === "watcher_pending" && r.sessionID === sessionID && r.pid === process.pid && r.directory !== directory,
+      );
+      if (pendingRow && Array.isArray(pendingRow.value) && pendingRow.value.length > 0) {
+        db.runtimeStateDelete("watcher_pending", sessionID);
+        watchers.hydratePending(sessionID, pendingRow.value as { event: WatcherEvent; queuedAt: number }[]);
+      }
+    } catch (err) {
+      // Adoption must never break the message or event that triggered it.
+      console.error(`[thatch] watcher adoption for ${sessionID} failed: ${err}`);
+    }
+  };
+
   const scanDormantWatchers = async (sessionID: string): Promise<string[]> => {
     if (dormantScanned.has(sessionID)) return [];
     dormantScanned.add(sessionID);
     try {
+      // Same-pid adoption first (the re-home backstop): the session's
+      // row may live under a foreign directory stamp this process wrote
+      // before the move. Verbatim hydrate - the baselines are current.
+      adoptMovedWatchers(sessionID);
       const rows = db.runtimeStateAll().filter((r) => r.kind === "watchers" && r.pid !== process.pid);
       const own: Watcher[] = [];
       for (const row of rows) {
@@ -1572,6 +1698,46 @@ export async function createRuntime(input: {
         } catch (err) {
           debug("strand-sweep", `move failed for ${m.id} (${trigger}): ${err}`);
         }
+      }
+      // Watcher rows ride THIS sweep (not the extraction journal sweep):
+      // the reclaim judgment needs the opencode.db session enumeration
+      // this pass already holds, because a dead directory stamp alone
+      // does not doom a row - a re-homed session's live watch keeps one
+      // until adoption re-stamps it. Deleted-with-its-worktree sessions
+      // and past-TTL orphans are reclaimed; re-homed sessions' rows are
+      // re-stamped to where the session lives now. Touches only
+      // thatch.db, but the enumeration read makes THATCH_STRAND_SWEEP the
+      // honest gate for it (unlike the journal sweep's own pass).
+      const watcherPlan = planWatcherRowActions({
+        rows: db
+          .runtimeStateAll()
+          .filter((r) => r.kind === "watchers" || r.kind === "watcher_pending")
+          .map((r) => ({
+            kind: r.kind as "watchers" | "watcher_pending",
+            sessionID: r.sessionID,
+            directory: r.directory,
+            pid: r.pid,
+            value: r.value,
+          })),
+        sessions: enumerated.sessions,
+        strandRemove: plan.remove,
+        strandMove: plan.move,
+      });
+      for (const doomed of watcherPlan.delete) {
+        if (disposed) return;
+        db.runtimeStateDelete(doomed.kind, doomed.sessionID);
+      }
+      for (const { row, to } of watcherPlan.restamp) {
+        if (disposed) return;
+        // The pid stays the writer's: dormant-vs-reload semantics ride the
+        // pid, and only the owning instance re-stamps its own pid.
+        db.runtimeStatePut(row.kind, row.sessionID, row.value, to, row.pid);
+      }
+      if (watcherPlan.delete.length + watcherPlan.restamp.length > 0) {
+        debug(
+          "strand-sweep",
+          `watcher rows: reclaimed ${watcherPlan.delete.length}, re-stamped ${watcherPlan.restamp.length} [${trigger}]`,
+        );
       }
       if (removed + moved > 0) {
         debug(
@@ -2469,12 +2635,18 @@ export async function createRuntime(input: {
         // instances, so each instance reacts on its own membership: release
         // when it moved away, adopt when it moved here. See the
         // location-switch bookkeeping block for why the release is the
-        // black hole's fix.
+        // black hole's fix. Watchers follow the session the same way: the
+        // destination adopts the journaled row (polling resumes here
+        // immediately, no first message needed), the origin releases its
+        // in-memory copy without journaling (the row belongs to the
+        // adopter now - an empty-list write would delete it).
         const sessionID = event.properties.sessionID as string | undefined;
         const toDirectory = event.properties.directory as string | undefined;
         if (sessionID && toDirectory) {
-          if (toDirectory === directory) adoptSessionHosting(sessionID);
-          else releaseSessionHosting(sessionID, "session.moved to another directory");
+          if (toDirectory === directory) {
+            adoptSessionHosting(sessionID);
+            adoptMovedWatchers(sessionID);
+          } else releaseSessionHosting(sessionID, "session.moved to another directory");
         }
         return;
       }

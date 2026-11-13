@@ -287,6 +287,73 @@ Failed or gated deliveries stay pending and retry on the next poll
 cycle or when the session next goes idle (the event hook calls
 `deliverPending()` there).
 
+### Persistence: reloads, restarts, and re-homes
+
+Watcher definitions are journaled to `runtime_state` (kind `watchers`,
+keyed by session, stamped with the writing process's pid and location
+directory; the pending-events queue rides a separate `watcher_pending`
+row). A watch with live TTL must survive every lifecycle boundary its
+hosting session can cross:
+
+- **Same-pid plugin reload** (v2 re-runs setup after a file change): rows
+  with this process's pid AND this instance's directory rehydrate into
+  the rebuilt registry at setup, verbatim - baselines included, so no
+  event replays.
+- **Process restart / version upgrade** (foreign pid): the row survives
+  boot as DORMANT - no polling, no delivery - and the resumed session's
+  first message re-arms it through `rearm()`, which REVALIDATES PR and
+  branch baselines (a deleted branch or closed PR must not re-arm into
+  silent poll failure; a fetch failure drops the definition and counts
+  as failed in the re-arm notice). The boot partition also deletes rows
+  whose every definition outlived the watcher TTL plus the dormant grace
+  (24h) - corpses of sessions that will never return.
+- **Worktree re-home** (session_move, a merged-and-deleted worktree's
+  self-heal, the location-unavailable recovery dialog): the journal row
+  keeps the OLD location's stamp, and the boot partition deliberately
+  skips same-pid foreign-directory rows (hydrating a live sibling's
+  watchers would double-poll). Adoption is pid-scoped and
+  directory-blind, on two triggers: the `session.moved` event at the
+  destination instance (immediate - polling resumes before any message)
+  and the session's first message through the dormant scan (the
+  backstop for a move that happened while no destination instance was
+  up). Adoption hydrates verbatim - the baselines are this process's own
+  - and re-stamps the row to the destination; the session's undelivered
+  pending events ride along (delete-then-hydrate, so they deliver from
+  the destination instead of waiting for its next reload). The origin
+  instance releases its in-memory copy through `WatcherRegistry.release()`,
+  which touches no journal row: an empty-list journal write would delete
+  the row the adopter just claimed. Residual window: an origin instance
+  that never sees the move keeps polling its stale copy until its next
+  reload; the re-stamped row keeps newer instances from ever hydrating
+  it, so the exposure is bounded by that instance's lifetime.
+- **Watch tool reads**: every watch tool call first reconciles the
+  session's journal row into the live registry (pid-scoped, any
+  directory), so `watch_list` converges even when no adoption trigger
+  has fired yet.
+
+The reload re-attach notice ("plugin reloaded - persisted state
+restored") lists the kinds ACTUALLY restored with counts; the old static
+parenthetical claimed watchers even when zero rehydrated, which misled
+the 2026-11-13 triage.
+
+### Watcher-row reclaim (the strand sweep)
+
+Watcher rows are reclaimed by the STRAND sweep, not the extraction
+journal sweep: the judgment needs opencode.db's session enumeration,
+because a dead directory stamp alone does not doom a row - a re-homed
+session's live watch keeps one until adoption re-stamps it. The planner
+(`planWatcherRowActions`, pure and unit-tested) deletes a row when its
+session is gone from the host db (deleted with its worktree, or a corpse
+the strand plan is removing) or when every definition is past TTL plus
+the dormant grace - the immortal-orphan case: a same-pid
+foreign-directory row is invisible to the boot partition's stale check
+and to the dormant scan, and before this sweep nothing ever reclaimed
+it. A row whose session lives elsewhere is re-stamped to the session's
+current directory, so the next boot there hydrates it. `watcher_pending`
+rows follow the same session-gone rule. The pass rides the strand
+sweep's `THATCH_STRAND_SWEEP` gate (it reads opencode.db) and runs at
+boot and on the 6h interval.
+
 ### Event vocabulary
 
 `pr_comment`, `pr_review_comment`, `pr_review_reply`,
@@ -350,6 +417,13 @@ src/watchers.ts, test-enforced).
   detection (404-class delivery persistence) and the once-only notice
 - `tests/qa/auto/uc-115-watch-list-pending-events.ts` - pending-event
   visibility in watch_list while the session is busy
+- `tests/qa/auto/uc-150-watcher-persistence-matrix.ts` - the full
+  persistence matrix: reload, restart resume, worktree re-home, and the
+  strand sweep's session-liveness reclaim
+- `tests/state-persistence.test.ts` - the continuity matrix at the
+  setup() level (reload rehydration, same-pid adoption at first message
+  and on session.moved, release-without-journaling, the sweep planner
+  end-to-end)
 
 ## Adding a new source type
 

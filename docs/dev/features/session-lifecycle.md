@@ -225,7 +225,12 @@ kept those, and the sweep must not contradict it. `wrapup` rows ride the
 same sweep (a location-switched session's arm can strand in a dead worktree
 directory - the 2026-11-13 incident left one there; an in-flight arm is
 minutes old in a live directory, so the dead-directory/TTL rules cannot
-touch it). Three companion bounds
+touch it). Watcher rows do NOT ride this sweep: their reclaim judgment
+needs opencode.db's session enumeration (a dead directory stamp alone
+does not doom a watcher row - a re-homed session's live watch keeps one
+until adoption re-stamps it), so they ride the strand sweep's
+session-liveness pass instead (see
+[watchers.md](watchers.md), "Watcher-row reclaim"). Three companion bounds
 keep rows small in the first place: journaled tool outputs and top-level
 string args are truncated to `INTERACTION_OUTPUT_MAX` (2000 chars; the
 extractor payload reads only 500 chars of output and 120 of args), a deleted

@@ -224,6 +224,32 @@ runs no settings hooks: the mod delivers in-process (the stage replaces
   answers "nothing armed/pending" while the journal row plainly exists -
   check the row's `directory` against the session's current one in
   opencode.db (`session_v2.directory`) before suspecting the writer.
+- **A journaled state kind needs an adoption path, not just a restore
+  path.** The 2026-11-13 watcher-vanishing report looked like the journal
+  was being deleted (watches gone well before TTL across a day of
+  reloads); the rows were intact the whole time. The restore partition
+  rehydrates same-pid same-directory rows and treats same-pid
+  foreign-directory rows as live siblings - so a session that re-homes
+  (worktree re-created, session_move, merged-worktree self-heal) has its
+  row skipped by every boot, and NOTHING POLLS IT between the move and
+  the session's next watch-tool call. Silent-drop signature: the journal
+  row exists, watch_list shows the watch, but no notification ever
+  arrives (the 2026-11-13 force-push CI cycle went wholly unwatched this
+  way). Any journaled kind a session owns needs a pid-scoped,
+  directory-blind adoption trigger (session.moved plus the session's
+  first message, for watchers) and a release on the origin that does NOT
+  journal an empty list (an empty-list write DELETES the row the adopter
+  needs - `WatcherRegistry.release` vs `cancelSession` is the pair).
+  Reclaim must judge by session liveness, never by the row's directory
+  stamp alone: a dead stamp on a live session's row is the normal state
+  between a move and adoption.
+- **The plugin-reload banner lists kinds, not guarantees.** A re-attach
+  notice saying "persisted state restored (...watchers...)" printed even
+  when zero watchers rehydrated - the parenthetical was static text, and
+  the 2026-11-13 triage read it as survival evidence. It now lists the
+  kinds actually restored with counts (`watchers=2, buffer=1`). Never
+  infer a specific kind survived from a reload banner; read the
+  `runtime_state` row (or the kind's tool output) instead.
 - **osascript exits 0 even when macOS drops the banner.** Focus/Do Not Disturb
   or missing notification permission silently swallow it. `notify_user` result
   text therefore reports command success only; never interpret exit 0 as

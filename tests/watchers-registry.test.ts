@@ -112,6 +112,75 @@ describe("WatcherRegistry", () => {
     expect(reg.listForSession("s1")).toHaveLength(0);
   });
 
+  test("release drops a moved-away session's watchers in memory without journaling", async () => {
+    // A session that moved to another directory leaves this registry: the
+    // destination instance adopts the journal row, so an empty-list journal
+    // write here would DELETE the row the adopter just claimed. release()
+    // removes the in-memory state only - the row survives for the adopter.
+    const journaled: Array<[string, Watcher[]]> = [];
+    const reg = new WatcherRegistry({
+      deliver: async () => {},
+      canDeliver: () => true,
+      ghRunner: quietGh(),
+      pollIntervalMs: 60_000,
+      journal: (sessionID, watchers) => journaled.push([sessionID, watchers]),
+    });
+    await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
+    await reg.createPr("s2", "acme/widgets", 8, ["pr_commit"]);
+    expect(journaled.at(-1)?.[1]).toHaveLength(1);
+
+    reg.release("s1");
+    expect(reg.listForSession("s1")).toHaveLength(0);
+    expect(reg.listForSession("s2")).toHaveLength(1);
+    // No journal write fired: the last entry still names s1's watcher, and
+    // nothing appended an empty s1 list.
+    expect(journaled.at(-1)?.[0]).toBe("s2");
+    expect(journaled.some(([sid, ws]) => sid === "s1" && ws.length === 0)).toBe(false);
+
+    // The adopter's hydrate re-populates a released session cleanly.
+    const seeded = journaled.find(([sid]) => sid === "s1")?.[1] ?? [];
+    reg.hydrate(seeded);
+    expect(reg.listForSession("s1")).toHaveLength(1);
+    reg.dispose();
+  });
+
+  test("release also drops the session's pending queue without journaling", async () => {
+    let journaledPending: Array<[string, unknown]> = [];
+    const reg = new WatcherRegistry({
+      deliver: async () => {},
+      canDeliver: () => false,
+      ghRunner: quietGh(),
+      pollIntervalMs: 60_000,
+      journalPending: (sessionID, pending) => journaledPending.push([sessionID, pending]),
+    });
+    await reg.createPr("s1", "acme/widgets", 7, ["pr_commit"]);
+    const prWatcher = reg.listForSession("s1")[0];
+    if (prWatcher.source !== "pr") throw new Error("expected a pr watcher");
+    prWatcher.state.headSha = "old";
+    await reg.poll();
+    expect(reg.pendingCount("s1")).toBe(1);
+    journaledPending = [];
+
+    reg.release("s1");
+    expect(reg.pendingCount("s1")).toBe(0);
+    expect(journaledPending).toHaveLength(0);
+    reg.dispose();
+  });
+
+  test("release is a no-op for a session this registry never held", () => {
+    const journaled: Array<[string, Watcher[]]> = [];
+    const reg = new WatcherRegistry({
+      deliver: async () => {},
+      canDeliver: () => true,
+      ghRunner: quietGh(),
+      pollIntervalMs: 60_000,
+      journal: (sessionID, watchers) => journaled.push([sessionID, watchers]),
+    });
+    reg.release("s_never");
+    expect(journaled).toHaveLength(0);
+    reg.dispose();
+  });
+
   test("poll detects events, filters by watched types, and delivers", async () => {
     let changed = false;
     const reg = new WatcherRegistry({

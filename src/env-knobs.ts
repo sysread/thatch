@@ -110,7 +110,7 @@ export const ENV_KNOBS: EnvKnob[] = [
   },
   {
     name: "THATCH_STRAND_SWEEP",
-    description: "Strand-sweep kill switch: 0, false, or off disables the sweep of stranded sessions.",
+    description: "Strand-sweep kill switch: 0, false, or off disables the sweep of stranded sessions and its watcher-row reclaim pass.",
     default: "on",
   },
   {

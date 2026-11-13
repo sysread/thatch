@@ -148,6 +148,8 @@ Other tools:
 Watchers poll from the plugin process, and their definitions survive
 restarts:
 
+- Plugin reloads (a thatch update while opencode keeps running) re-arm
+  the watches in place - nothing is lost, no notice is needed.
 - Ending the opencode process (or restarting it) stops the polling.
   The watch definitions are kept, though: when you resume the session
   that created them (session picker, or reopening the tab), the
@@ -155,6 +157,11 @@ restarts:
   notice in the conversation says what was re-armed. There is no
   re-registration step - the policy you stated when creating the
   watch is still there.
+- A watch follows its session across a location move: if opencode
+  re-homes the session (its worktree merged and deleted, a
+  `session_move`, the location recovery dialog), the watch keeps
+  running from the session's new location. The move itself is silent -
+  the watch continues as if it never happened.
 - Watch definitions whose 8-hour TTL expired while the session was
   away are not re-armed; the re-arm notice reports how many expired.
 - If a watched session's tab is closed (or the watcher's deliveries fail

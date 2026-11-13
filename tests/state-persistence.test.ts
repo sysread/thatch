@@ -1277,6 +1277,351 @@ describe("dormant watcher recovery through setup()", () => {
   }, 30_000);
 });
 
+describe("watcher continuity across reloads, restarts, and re-homes", () => {
+  // The 2026-11-13 watcher-vanishing report (mervyn-of-the-pumpkin-patch
+  // + coordinator corroboration): a live-TTL watch died silently across a
+  // day of plugin reloads that followed a service upgrade, and a
+  // re-homed worktree session's CI cycle went wholly unwatched. The
+  // watcher journal row is (kind, session) keyed with a pid + directory
+  // stamp; every survival path below pins one leg of the matrix a watch
+  // with live TTL must survive: same-pid reload, restart + resume, and a
+  // location move - plus the reclaims that must still happen.
+  const OLD_DIR = "/tmp/thatch-state-a";
+  const FAR_DIR = "/tmp/thatch-state-b";
+  const cmdDef = (id: string, sessionID: string, overrides: Record<string, unknown> = {}): any => ({
+    id,
+    source: "command",
+    sessionID,
+    command: "mise run ci-green",
+    cwd: WORK_DIR,
+    timeoutMs: 30_000,
+    events: ["command_exit"],
+    once: true,
+    expiresAt: Date.now() + 600_000,
+    createdAt: Date.now(),
+    state: { lastExit: 124 },
+    ...overrides,
+  });
+  const startServer = async () => {
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    process.env.THATCH_DB_PATH = dbPath;
+    process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+    const booted = await bootV2();
+    return {
+      harness: booted.harness,
+      finally: async () => {
+        await booted.dispose();
+        if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+        else process.env.XDG_CONFIG_HOME = prevConfig;
+        if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+        else process.env.THATCH_DB_PATH = prevDbPath;
+      },
+    };
+  };
+  const sendMessage = async (harness: V2Harness, sessionID: string): Promise<any[]> => {
+    const text = "hi";
+    await harness.hooks["prompt"]!({ sessionID, messageID: `msg_${sessionID}`, prompt: { text } });
+    const request = { sessionID, system: [], messages: [{ role: "user", content: [{ type: "text", text }] }] };
+    await harness.hooks["context"]!(request);
+    return (request.messages[0].content as any[]).slice(1);
+  };
+  const watchList = async (harness: V2Harness, sessionID: string): Promise<string> => {
+    const tool = harness.addedTools.find((t) => t.name === "thatch_watch_list")!;
+    const out = await tool.execute({}, { sessionID, agent: "build" });
+    return typeof out === "string" ? out : JSON.stringify(out);
+  };
+  const watchersRow = (): { directory: string; pid: number; value: any } | undefined => {
+    const check = new ThatchDB(dbPath);
+    try {
+      return check.runtimeStateAll().find((r) => r.kind === "watchers" && r.sessionID === "ses_c");
+    } finally {
+      check.close();
+    }
+  };
+
+  test("a same-pid reload rehydrates the session's watchers live", async () => {
+    // Arm in a first activation (the row is written by THIS process), then
+    // dispose and re-init: the reload partition must hand the definitions
+    // to the new registry before any watch tool runs.
+    const seed = new ThatchDB(dbPath);
+    seed.runtimeStatePut("watchers", "ses_c", [cmdDef("watch_c", "ses_c")], WORK_DIR);
+    seed.close();
+
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    let first: (() => Promise<void>) | undefined;
+    let second: (() => Promise<void>) | undefined;
+    try {
+      process.env.THATCH_DB_PATH = dbPath;
+      process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+      ({ dispose: first } = await bootV2());
+      await first!();
+      first = undefined;
+      const { harness, dispose } = await bootV2();
+      second = dispose;
+
+      expect(await watchList(harness, "ses_c")).toContain("watch_c");
+      // The reloaded instance owns the row unchanged: same pid, same stamp.
+      expect(watchersRow()?.pid).toBe(process.pid);
+      expect(watchersRow()?.directory).toBe(WORK_DIR);
+    } finally {
+      await first?.();
+      await second?.();
+      if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevConfig;
+      if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+      else process.env.THATCH_DB_PATH = prevDbPath;
+    }
+  });
+
+  test("a re-homed session's same-pid row adopts at its first message, silently", async () => {
+    // The row was written by THIS process under the OLD location's stamp
+    // (the session armed before opencode re-homed it). The boot partition
+    // skips it as a presumed-live sibling, so before the session speaks
+    // nothing polls it; its first message must adopt it - hydrate
+    // verbatim (the baselines are this process's own), re-stamp the row,
+    // and stay SILENT (the watch continues; a notice would be noise).
+    const seed = new ThatchDB(dbPath);
+    seed.runtimeStatePut("watchers", "ses_c", [cmdDef("watch_c", "ses_c")], OLD_DIR);
+    seed.close();
+
+    const { harness, finally: done } = await startServer();
+    try {
+      // Pre-message: the row survives the boot untouched (same pid,
+      // foreign directory - skipped, not pruned, not adopted).
+      expect(watchersRow()?.directory).toBe(OLD_DIR);
+
+      const injections = await sendMessage(harness, "ses_c");
+      expect(injections.some((p: any) => p.text?.includes("re-armed"))).toBe(false);
+      expect(await watchList(harness, "ses_c")).toContain("watch_c");
+      expect(watchersRow()?.directory).toBe(WORK_DIR);
+      expect(watchersRow()?.pid).toBe(process.pid);
+    } finally {
+      await done();
+    }
+  });
+
+  test("a restart's foreign-pid row for a re-homed session re-arms from any directory", async () => {
+    // The pre-upgrade process wrote the row; the session then re-homed.
+    // The dormant scan is directory-blind for the session's own rows:
+    // first message re-arms (with revalidation) wherever the row points.
+    const seed = new ThatchDB(dbPath);
+    seed.runtimeStatePut("watchers", "ses_c", [cmdDef("watch_c", "ses_c")], OLD_DIR, -1);
+    seed.close();
+
+    const { harness, finally: done } = await startServer();
+    try {
+      const injections = await sendMessage(harness, "ses_c");
+      const rearm = injections.find((p: any) => p.text?.includes("re-armed"));
+      expect(rearm).toBeTruthy();
+      expect(await watchList(harness, "ses_c")).toContain("watch_c");
+      expect(watchersRow()?.directory).toBe(WORK_DIR);
+      expect(watchersRow()?.pid).toBe(process.pid);
+    } finally {
+      await done();
+    }
+  });
+
+  test("session.moved adopts the mover's watchers at the destination and releases them at the origin", async () => {
+    const seed = new ThatchDB(dbPath);
+    seed.runtimeStatePut("watchers", "ses_c", [cmdDef("watch_c", "ses_c")], OLD_DIR);
+    // Undelivered events queued at the origin (its in-memory queue died
+    // with the move; the row is what survives): the destination must pick
+    // the queue up with the definitions, or the events wait in the row
+    // until this instance's next reload.
+    seed.runtimeStatePut(
+      "watcher_pending",
+      "ses_c",
+      [{ event: { type: "command_exit", target: "mise run ci-green", summary: "command exited 0 (took 1.0s)", url: "" }, queuedAt: Date.now() - 5_000 }],
+      OLD_DIR,
+    );
+    seed.close();
+
+    const { harness, finally: done } = await startServer();
+    try {
+      // Moved IN: the destination instance adopts before any message or
+      // tool call, so polling resumes from here immediately.
+      await queueEvent({
+        type: "session.moved",
+        location: { directory: OLD_DIR },
+        data: { sessionID: "ses_c", location: { directory: WORK_DIR } },
+      });
+      await waitForWiring(() => watchersRow()?.directory === WORK_DIR, "session.moved never re-stamped the watchers row");
+      expect(await watchList(harness, "ses_c")).toContain("watch_c");
+      // The queued event rode along and is visible as pending delivery.
+      expect(await watchList(harness, "ses_c")).toContain("waiting for idle to deliver");
+
+      // Moved AWAY: the origin registry drops the in-memory watcher but
+      // the row survives for the next destination - the move must never
+      // delete a live watch, and the row's stamp keeps the last adopter.
+      await queueEvent({
+        type: "session.moved",
+        location: { directory: WORK_DIR },
+        data: { sessionID: "ses_c", location: { directory: FAR_DIR } },
+      });
+      await new Promise((r) => setTimeout(r, 200));
+      const row = watchersRow();
+      expect(row).toBeTruthy();
+      expect(row?.value).toHaveLength(1);
+    } finally {
+      await done();
+    }
+  });
+
+  test("the reload notice names the kinds actually restored", async () => {
+    // The old static text claimed "(extraction buffers, watchers,
+    // wrap-ups)" even when zero watchers rehydrated - the 2026-11-13
+    // triage evidence was exactly this banner. The notice must carry the
+    // real counts.
+    const seed = new ThatchDB(dbPath);
+    seed.runtimeStatePut("buffer", "ses_c", [ix("ses_c")], WORK_DIR);
+    seed.close();
+
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    let first: (() => Promise<void>) | undefined;
+    let second: (() => Promise<void>) | undefined;
+    try {
+      process.env.THATCH_DB_PATH = dbPath;
+      process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+      ({ dispose: first } = await bootV2());
+      await first!();
+      first = undefined;
+      const { dispose } = await bootV2();
+      second = dispose;
+
+      await waitForWiring(
+        () => sessionSyntheticCalls.some((c: any) => c?.sessionID === "ses_c" && String(c?.text).includes("persisted state restored")),
+        "the re-attach notice never fired",
+      );
+      const notice = sessionSyntheticCalls.find((c: any) => c?.sessionID === "ses_c" && String(c?.text).includes("persisted state restored"));
+      expect(String(notice?.text)).toContain("buffer=");
+      expect(String(notice?.text)).not.toContain("watchers");
+    } finally {
+      await first?.();
+      await second?.();
+      if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevConfig;
+      if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+      else process.env.THATCH_DB_PATH = prevDbPath;
+    }
+  });
+});
+
+describe("watcher-row sweep (session-liveness reclaim)", () => {
+  // Watcher rows ride the STRAND sweep, not the extraction journal sweep:
+  // the reclaim judgment needs opencode.db's session enumeration (the
+  // sweep's own liveness test), because a dead-directory stamp alone does
+  // not doom a row - a re-homed session's live watch keeps a dead
+  // directory's stamp until adoption re-stamps it.
+  const OLD_DIR = "/tmp/thatch-state-a";
+  const cmdDef = (id: string, sessionID: string, overrides: Record<string, unknown> = {}): any => ({
+    id,
+    source: "command",
+    sessionID,
+    command: "mise run ci-green",
+    cwd: WORK_DIR,
+    timeoutMs: 30_000,
+    events: ["command_exit"],
+    once: true,
+    expiresAt: Date.now() + 600_000,
+    createdAt: Date.now(),
+    state: { lastExit: 124 },
+    ...overrides,
+  });
+  const makeOpencodeDb = (rows: { id: string; directory: string }[]): string => {
+    const path = join(dbDir, "opencode.db");
+    const raw = new Database(path);
+    raw.exec("CREATE TABLE session_v2 (id TEXT PRIMARY KEY, title TEXT, directory TEXT, parent_id TEXT, project_id TEXT)");
+    // The project table must exist even when empty: the enumeration's
+    // canonical-checkout read throws on a missing table and the whole
+    // pass would degrade to "nothing known".
+    raw.exec("CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT)");
+    for (const r of rows) raw.run("INSERT INTO session_v2 (id, directory) VALUES (?, ?)", [r.id, r.directory]);
+    raw.close();
+    return path;
+  };
+  const rowsFor = (sessionID: string): { kind: string; directory: string; pid: number }[] => {
+    const check = new ThatchDB(dbPath);
+    try {
+      return check
+        .runtimeStateAll()
+        .filter((r) => r.sessionID === sessionID)
+        .map((r) => ({ kind: r.kind, directory: r.directory, pid: r.pid }));
+    } finally {
+      check.close();
+    }
+  };
+
+  test("gone sessions' rows are reclaimed; re-homed sessions' rows re-stamp; live ones stay", async () => {
+    // The boot sweep is off in beforeEach; this pass needs it ON with a
+    // fixture opencode.db (never the developer's real one).
+    const prevSweep = process.env.THATCH_STRAND_SWEEP;
+    const prevOcDb = process.env.OPENCODE_DB;
+    delete process.env.THATCH_STRAND_SWEEP;
+    process.env.OPENCODE_DB = makeOpencodeDb([
+      // ses_gone is deliberately ABSENT: its session row is gone from the
+      // host db (deleted with its worktree), only thatch.db still holds
+      // its watcher rows.
+      { id: "ses_moved", directory: WORK_DIR },
+      { id: "ses_here", directory: WORK_DIR },
+      { id: "ses_zombie", directory: WORK_DIR },
+    ]);
+    const seed = new ThatchDB(dbPath);
+    // Deleted with its worktree: not in opencode.db at all. Both its
+    // watchers and its pending-events row must go.
+    seed.runtimeStatePut("watchers", "ses_gone", [cmdDef("watch_g", "ses_gone")], WORK_DIR, -1);
+    seed.runtimeStatePut("watcher_pending", "ses_gone", [{ event: { type: "command_exit", target: "t", summary: "s", url: "" }, queuedAt: Date.now() }], WORK_DIR, -1);
+    // Alive, re-homed: the row keeps the OLD stamp until something
+    // adopts it; the sweep re-stamps it to the session's current
+    // directory so the next boot of that directory hydrates it.
+    seed.runtimeStatePut("watchers", "ses_moved", [cmdDef("watch_m", "ses_moved")], OLD_DIR, -1);
+    // Alive, matching stamp: untouched.
+    seed.runtimeStatePut("watchers", "ses_here", [cmdDef("watch_h", "ses_here")], WORK_DIR, -1);
+    // An alive session whose every def is past TTL plus the dormant
+    // grace - the immortal-orphan class (no boot partition or dormant
+    // scan ever looks at a same-pid foreign-directory row, and the
+    // session outlived its watch anyway).
+    seed.runtimeStatePut(
+      "watchers",
+      "ses_zombie",
+      [cmdDef("watch_z", "ses_zombie", { expiresAt: Date.now() - 25 * 60 * 60 * 1000 })],
+      OLD_DIR,
+    );
+    seed.close();
+
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    process.env.THATCH_DB_PATH = dbPath;
+    process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+    const { dispose } = await bootV2();
+    try {
+      await waitForWiring(() => rowsFor("ses_gone").length === 0, "the sweep never reclaimed the gone session's rows");
+      await waitForWiring(() => rowsFor("ses_zombie").length === 0, "the sweep never aged out the stale-def orphan row");
+      // ses_moved's live-TTL row re-stamped to the session's current
+      // directory (the pid stays the writer's - dormant semantics ride
+      // the pid, not the stamp).
+      await waitForWiring(
+        () => rowsFor("ses_moved").some((r) => r.kind === "watchers" && r.directory === WORK_DIR),
+        "the sweep never re-stamped the re-homed session's row",
+      );
+      expect(rowsFor("ses_moved")).toEqual([{ kind: "watchers", directory: WORK_DIR, pid: -1 }]);
+      expect(rowsFor("ses_here")).toEqual([{ kind: "watchers", directory: WORK_DIR, pid: -1 }]);
+    } finally {
+      await dispose();
+      if (prevSweep === undefined) delete process.env.THATCH_STRAND_SWEEP;
+      else process.env.THATCH_STRAND_SWEEP = prevSweep;
+      if (prevOcDb === undefined) delete process.env.OPENCODE_DB;
+      else process.env.OPENCODE_DB = prevOcDb;
+      if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevConfig;
+      if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+      else process.env.THATCH_DB_PATH = prevDbPath;
+    }
+  }, 90_000);
+});
+
 describe("extraction journal sweep", () => {
   // Minimal boot harness: env isolation is NOT optional - without
   // THATCH_DB_PATH/XDG_CONFIG_HOME the runtime boots against the

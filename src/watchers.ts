@@ -1083,6 +1083,25 @@ export class WatcherRegistry {
   }
 
   /**
+   * Adopts a re-homed session's persisted definitions into the live
+   * registry. The journal row was written by THIS process under the
+   * session's OLD location, so the baselines are current and hydrate
+   * verbatim - no revalidation (a network blip must not kill a watch this
+   * process was already polling). The immediate re-journal re-stamps the
+   * row to THIS instance's directory and pid, so the origin instance's
+   * later release cannot rewrite it and the next reload of this directory
+   * hydrates it directly. The paired release() on the origin drops its
+   * in-memory copy without journaling, or the two registries would fight
+   * over the row's stamp (and double-poll the target).
+   */
+  adopt(sessionID: string, defs: Watcher[]): void {
+    this.hydrate(defs);
+    // Only journal when the session actually holds watchers: an empty-list
+    // emit would DELETE the row the adoption was supposed to claim.
+    if (this.listForSession(sessionID).length > 0) this.#emit(sessionID);
+  }
+
+  /**
    * Re-arms persisted watcher definitions recovered on session resume after
    * a restart (the dormant journal rows the runtime keeps instead of
    * pruning). Definitions whose TTL expired while the session was away are
@@ -1317,6 +1336,24 @@ export class WatcherRegistry {
     this.#consecutiveDeliveryThrows.delete(sessionID);
     this.#journalPending?.(sessionID, undefined);
     this.#emit(sessionID);
+  }
+
+  /**
+   * Drops a session's in-memory state WITHOUT touching the journal - the
+   * release path for a session that moved to another directory. The row
+   * stays for the destination instance to adopt (session.moved adoption or
+   * the resumed session's first message); an empty-list journal write here
+   * would delete the row the adopter is about to claim. Contrast with
+   * cancelSession, which journals the drop because the session itself is
+   * gone and no adopter exists.
+   */
+  release(sessionID: string): void {
+    for (const [id, w] of this.#watchers) {
+      if (w.sessionID === sessionID) this.#watchers.delete(id);
+    }
+    this.#pending.delete(sessionID);
+    this.#firstPendingAt.delete(sessionID);
+    this.#consecutiveDeliveryThrows.delete(sessionID);
   }
 
   // -- Polling and delivery ------------------------------------------------
