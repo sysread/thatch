@@ -223,6 +223,7 @@ process; the registry itself is `src/env-knobs.ts`.
 | `THATCH_PREDICTION_THRESHOLD` | Cutoff for prediction auto-fire | `0.60` |
 | `THATCH_BEHAVIOR_THRESHOLD` | Cutoff for behavior auto-fire | `0.60` |
 | `THATCH_CHILD_RECONCILE_MS` | Reload window before a restored extraction child is judged finished (test knob) | `10000` |
+| `THATCH_CHAT_WAKE_SPREAD_MS` | Window over which one poll cycle's wake prompts to multiple chat recipients spread (0 = back to back) | `5000` |
 | `THATCH_STRAND_SWEEP_MS` | Interval for the stranded-session self-heal sweep | `21600000` (6h) |
 | `THATCH_STRAND_SWEEP` | Set to `off` (or `0`/`false`) to disarm the strand sweep (test knob) | falls through (sweep on) |
 | `THATCH_RUNTIME_STATE_TTL_MS` | Age at which the journal sweep drops untouched extraction journal rows | `604800000` (7d) |

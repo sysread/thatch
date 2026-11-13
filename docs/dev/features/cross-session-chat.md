@@ -396,6 +396,20 @@ and a count, pointer-only like watcher notifications, with the model calling
 `chat_read` for content. On success the poller stamps `delivered_at`
 (re-stamping on re-nudges resets the re-nudge timer).
 
+Wake spreading: when one poll cycle wakes several recipients (a broadcast
+fan-out), the prompts fire at even gaps across `CHAT_WAKE_SPREAD_MS`
+(default 5s, `THATCH_CHAT_WAKE_SPREAD_MS`; 0 disables) instead of all within
+milliseconds. Every wake makes its recipient immediately start an LLM
+completion, and a whole fleet's requests landing on the model API at once
+gets throttled (observed live on Fireworks, Nov 2026). The first wake fires
+immediately and each later one lands at (index/count) * window, so the
+batch finishes inside the window and far inside the 30s poll cadence. The
+delivery loop was already sequential per recipient - the spread is an added
+gap, not a concurrency change - and the gap sleeps between the previous
+recipient's `delivered_at` stamp and the next dispatch, so no statement or
+transaction is open during a sleep and each recipient's stamp still reports
+its own wake time. Single-recipient cycles (the common case) add no delay.
+
 The sender-kind wake gate: a batch whose rows are ALL from the CLI
 sentinel (the human user's terminal broadcast) wakes an open-tab
 recipient normally (the poller's `openTabs` option, fed by the same
@@ -753,9 +767,11 @@ Environment overrides: `THATCH_CHAT_SPLIT_PART_LEN`
 (auto-split part budget, default 2000, clamped 500..9000),
 `THATCH_CHAT_MAX_BODY_CHARS` (whole-body acceptance ceiling, default 20000),
 `THATCH_CHAT_DIRECTORY_REVERIFY_CYCLES` (poll cycles between hosted
-directory re-verifications, default 1, clamped 1..120), and
-`THATCH_OPENCODE_STATE_ROOT` (the open-tab reader's state root, tests and
-QA sandboxes only);
+directory re-verifications, default 1, clamped 1..120),
+`THATCH_CHAT_WAKE_SPREAD_MS` (window over which one cycle's wake prompts
+to multiple recipients spread, default 5000, clamped 0..30000; 0 restores
+back-to-back wakes), and `THATCH_OPENCODE_STATE_ROOT` (the open-tab
+reader's state root, tests and QA sandboxes only);
 the split constants are resolved once at module load and sanitized to positive integers
 within their clamps - invalid values silently fall back to the default.
 
@@ -764,8 +780,8 @@ within their clamps - invalid values silently fall back to the default.
 - `src/chat.ts` - ChatStore (directory + inbox SQL, assigned-name draw:
   pool pick, slugify, counter bump, insert, prune, topic refresh, broadcast
   targeting), ChatPoller
-  (heartbeat, directory re-verification cadence, gated delivery, re-nudge,
-  rate cap, hourly prune sweep),
+  (heartbeat, directory re-verification cadence, gated delivery, wake
+  spreading, re-nudge, rate cap, hourly prune sweep),
   staleness helper, chatLiveness (the open/recent/active/idle/stale
   verdicts)
 - `src/tab-state.ts` - the read-only open-tab reader: per-channel

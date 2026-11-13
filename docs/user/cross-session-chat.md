@@ -74,6 +74,15 @@ parts carry their own markers so the reader assembles the whole before
 acting: the first part is prefixed "(message 1 of N)" and every part but
 the last is suffixed "(continued in next message)".
 
+When one cycle wakes many sessions at once (a broadcast fan-out), the wake
+prompts do not all fire in the same instant. Each wake makes its session
+start a model request, so the prompts are spread evenly across a short
+window - 5 seconds by default - instead of hammering the model provider
+with every request within milliseconds. The window is
+`THATCH_CHAT_WAKE_SPREAD_MS`; set it to `0` to restore back-to-back wakes.
+A cycle that wakes a single session fires immediately, with no added
+delay.
+
 Broadcasts are for announcements and open questions ("which of you is
 working on the payments code?", "main just moved, rebase if you are based
 on it"). Every OPEN session gets the message and spends a model turn on it,

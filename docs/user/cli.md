@@ -319,6 +319,7 @@ process; the registry itself is `src/env-knobs.ts`.
 | `THATCH_RECALL_THRESHOLD` | `0.55` | Cosine threshold for recall nudge |
 | `THATCH_PREDICTION_THRESHOLD` | `0.60` | Cosine threshold for prediction auto-fire |
 | `THATCH_BEHAVIOR_THRESHOLD` | `0.60` | Cosine threshold for behavior auto-fire |
+| `THATCH_CHAT_WAKE_SPREAD_MS` | `5000` | Window over which one cycle's chat wake prompts spread out (0 = all at once) |
 | `CLAUDE_PROJECT_DIR` | `process.cwd()` | Claude Code project directory |
 | `CURSOR_PROJECT_DIR` | (falls through) | Cursor project directory |
 | `THATCH_WATCH_DEATH_MINUTES` | `120` | Pending-age threshold before a dead session's watchers are cancelled and announced |
