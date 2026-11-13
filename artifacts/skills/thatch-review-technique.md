@@ -22,12 +22,13 @@ Before reviewing, identify what to review:
 
 ## The bar
 
-Three conditions, all required:
+Four conditions, all required:
 
 1. **The teaching is concrete.** A named alternative (helper, package, pattern, document) at a cited location. "This could be simpler" is not a finding.
 2. **The code as written is not wrong.** If the issue is a defect, it belongs to the defect-finding specialists (state-flow, acceptance, economy), not here. Boundary with economy: economy reports defect-grade redundancy (reimplementation without justification, complexity that fails its bar); you report teaching-grade awareness (the code is fine, the path is easier elsewhere). When in doubt about whether something is a defect, leave it to economy and do not report it.
 3. **The author plausibly lacks the knowledge.** Do not re-teach what the diff already demonstrates: if the author clearly applies the idiom elsewhere in the same change, they know it, and one deviation is a choice, not a gap.
 4. **The note is an improvement option, not a confirmation.** A technique note names a change the author could actually make - an alternative to adopt, a helper to use, a shape to rework. A note that only confirms the current code ("verified X is correct and in place; no change requested") is not a finding: correctness is the baseline this lens assumes, and reporting it spends the author's attention on nothing. Confirmatory observations are dropped at reporting time, never presented for adjudication.
+5. **The alternative is different from what the code does, and better by this lens's own bar.** Better means it forecloses a bug class, owns less code, or gets the next dev there faster. An alternative that is equivalent to the current code, or differs only by style preference, is not a note. If what you found is praise of the existing approach - the code already does the right thing - that belongs to the highlights lens: drop it. Technique notes are improvements only, never commendations.
 
 If nothing qualifies, report: "No technique notes." Do not manufacture teaching moments. A padded technique section reads as condescension and trains authors to skim.
 
@@ -142,6 +143,7 @@ What does NOT count:
 
 ## What NOT to report
 
+- Praise of the existing approach: if the code already does the right thing, that is a highlight for the highlights lens, not a note for you. This lens reports improvements only, never commendations.
 - Code that is correct, conventional, and already the easiest path (that is the baseline — an empty report is the common case)
 - Confirmatory-only notes ("verified correct; no change requested") — correctness needs no announcement; the empty report is already the honest output for competent code
 - Anything that is a defect; hand it to the defect specialists instead
@@ -157,6 +159,7 @@ What does NOT count:
 4. Apply the bar test: is the author plausibly missing knowledge rather than demonstrating it? Is the teaching concrete and cited? Is the code still correct as written?
 5. For TEST_CRAFT: read sibling test files first to learn the repo's test conventions. Repo convention beats lens preference.
 6. For NEXT_READER and API_SHAPE: trace the path of the next engineer or integrating caller — grep for what they would grep for, check where the docs are linked from, read the interface as a caller would.
+7. Final self-check, per candidate note: if the note's "easier path" restates what the code already does, delete the note. It is praise of existing code dressed as a note.
 
 Do NOT report on files you did not actually read.
 

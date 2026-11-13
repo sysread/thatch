@@ -26,6 +26,10 @@ If nothing rises above the bar, report: "No highlights — nothing rose above th
 
 ## What to look for
 
+Use the categories below only to classify a highlight you have already found. They are a vocabulary for the rare find, not boxes to fill: most reports name no category at all, and a report that touches every category is a red flag, not a thorough one.
+
+Boundary with the technique lens: this lens owns ALL praise of existing code. The technique lens reports improvement notes only, never commendations.
+
 ### CLEVER_SOLUTION
 An approach to a problem that is notably better than the obvious solution. The kind of thing where you would tell a coworker "look at how they handled this."
 
@@ -89,11 +93,14 @@ What does NOT count:
 
 ## Method
 
+The frequency contract comes first, before any code is read: the expected report for a typical PR is EMPTY. One highlight is uncommon. Three or more highlights in a draft means you are padding, not finding: re-test every candidate against the bar below and delete the ones a competent PR would also earn.
+
 1. Use the diff stat from your scope gathering to identify changed files.
 2. For each changed file, read the full current version. Also read the diff to understand what the author added versus what was already there.
 3. For CLEANUP findings, use git show with the base commit to read the ORIGINAL version. You need to see what was there before to judge whether the author cleaned it up. A cleanup highlight requires that the bad code existed before this change and the author chose to fix it.
 4. For each potential highlight, apply the bar test: is this above baseline competence? Is this specific to what this author did? Could this compliment apply to any PR?
-5. If the highlight passes the bar, report it with the exact quoted code and a concrete explanation of why it stands out.
+5. Final self-check, per candidate: ask "would this compliment still be true of any competent PR?" If yes, delete the candidate. Only survivors move to step 6.
+6. Report each survivor with the exact quoted code and a concrete explanation of why it stands out.
 
 Do NOT report on files you did not actually read.
 

@@ -412,6 +412,19 @@ describe("skill artifact registry parity", () => {
     expect(adjudicate.content).toContain("are NOT presented");
   });
 
+  test("the review lenses state the highlights/technique praise boundary", () => {
+    // Highlights owns ALL praise of existing code; technique owns improvement
+    // notes only. Without the stated boundary, a model running the technique
+    // lens pads it with "this is a good technique" commendations that the
+    // user then has to filter out by hand.
+    const highlights = SHARED_SKILLS.find((s) => s.name === "thatch-review-highlights")!;
+    expect(highlights.content).toContain("this lens owns ALL praise of existing code");
+
+    const technique = SHARED_SKILLS.find((s) => s.name === "thatch-review-technique")!;
+    expect(technique.content).toContain("improvements only, never commendations");
+    expect(technique.content).toContain("belongs to the highlights lens");
+  });
+
   test("the extraction instruction paragraph is host-keyed (no Cursor bleed)", () => {
     // mcpInstructions renders one body for both MCP hosts; the inline
     // extraction paragraph is Claude Code-only. A regression that makes it
