@@ -218,18 +218,77 @@ describe("get_extraction_payload session_id", () => {
   });
   const def = TOOL_DEFS.find((t) => t.name === "get_extraction_payload")!;
 
-  test("an omitted session_id falls back to the invoking session's host context", async () => {
+  test("an omitted session_id resolves to the invoking session's host context", async () => {
     providerCalls.length = 0;
     const out = await def.execute({}, payloadCtx(), { sessionID: "ses_current", agent: "build" });
     expect(out).toBe("payload-json");
     expect(providerCalls).toEqual(["ses_current"]);
   });
 
-  test("an explicit session_id wins over the host context (sub-agent drains the parent's queue)", async () => {
+  test("an explicit session_id that resolves a payload is used as-is (unlinked sub-agent naming its target)", async () => {
     providerCalls.length = 0;
     const out = await def.execute({ session_id: "ses_parent" }, payloadCtx(), { sessionID: "ses_current", agent: "build" });
     expect(out).toBe("payload-json");
     expect(providerCalls).toEqual(["ses_parent"]);
+  });
+
+  test("a session_id that resolves nothing falls back to the calling session's host context", async () => {
+    // The 2026-11-13 corrupted-id shape: the model copied the parent's id
+    // wrong by one character. The corrupted id reads as an empty queue, and
+    // the model cannot catch its own misread - so the tool retries with the
+    // host-owned resolution before reporting an empty result.
+    providerCalls.length = 0;
+    const corruptCtx = (): CoreContext => ({
+      ...ctx,
+      extractionPayloadProvider: (sessionID: string) => {
+        providerCalls.push(sessionID);
+        return sessionID === "ses_current" ? "payload-json" : null;
+      },
+    });
+    const out = await def.execute({ session_id: "ses_e52rd7be" }, corruptCtx(), { sessionID: "ses_current", agent: "build" });
+    expect(out).toBe("payload-json");
+    expect(providerCalls).toEqual(["ses_e52rd7be", "ses_current"]);
+  });
+
+  test("a wired resolver retargets a linked caller before the host context", async () => {
+    // The bundled server shape: the resolver's key (the raw host session
+    // id) differs from the dispatcher's hash-based host context, so the
+    // resolver must take priority.
+    providerCalls.length = 0;
+    const resolverCtx = (): CoreContext => ({
+      ...ctx,
+      extractionPayloadProvider: (sessionID: string) => {
+        providerCalls.push(sessionID);
+        return "payload-json";
+      },
+      extractionTargetResolver: () => ({ sessionID: "ses_linked_parent", retargeted: true }),
+    });
+    const out = await def.execute({}, resolverCtx(), { sessionID: "mcp_hashcontext", agent: "build" });
+    expect(out).toBe("payload-json");
+    expect(providerCalls).toEqual(["ses_linked_parent"]);
+  });
+
+  test("an empty result after a retarget names the parent link", async () => {
+    const emptyCtx = (): CoreContext => ({
+      ...ctx,
+      extractionPayloadProvider: () => null,
+      extractionTargetResolver: () => ({ sessionID: "ses_linked_parent", retargeted: true }),
+    });
+    const out = await def.execute({}, emptyCtx(), { sessionID: "ses_child", agent: "general" });
+    expect(out).toContain("parent session your session is linked to");
+    expect(out).toContain("empty or already drained");
+    expect(out).toContain("extraction_done");
+  });
+
+  test("an empty result with no host resolution explains the id is the only key", async () => {
+    // Standalone MCP (Cursor, the hooks fallback): no session context, so
+    // a param that finds nothing gets the honest hint instead of a silent
+    // "empty queue" that masquerades as a purged session.
+    const emptyCtx = (): CoreContext => ({ ...ctx, extractionPayloadProvider: () => null });
+    const out = await def.execute({ session_id: "ses_gone" }, emptyCtx(), undefined);
+    expect(out).toContain('session_id "ses_gone"');
+    expect(out).toContain("character by character");
+    expect(out).toContain("no session context");
   });
 
   test("an omitted session_id without host context returns the pass-the-parent-id rule", async () => {
@@ -238,5 +297,49 @@ describe("get_extraction_payload session_id", () => {
     const out = await def.execute({}, payloadCtx(), undefined);
     expect(out).toContain("session_id is required");
     expect(out).toContain("parent");
+  });
+});
+
+describe("extraction_done session_id", () => {
+  const drains: string[] = [];
+  const drainCtx = (): CoreContext => ({
+    ...ctx,
+    drainExtractionQueue: (sessionID: string) => {
+      drains.push(sessionID);
+    },
+  });
+  const def = TOOL_DEFS.find((t) => t.name === "extraction_done")!;
+
+  test("a bare ack drains the host-resolved session when a resolver is wired", async () => {
+    drains.length = 0;
+    const resolverCtx = (): CoreContext => ({
+      ...drainCtx(),
+      extractionTargetResolver: () => ({ sessionID: "raw-host-session", retargeted: false }),
+    });
+    const out = await def.execute({}, resolverCtx(), { sessionID: "mcp_hashcontext", agent: "build" });
+    expect(out).toBe("[acknowledged]");
+    expect(drains).toEqual(["raw-host-session"]);
+  });
+
+  test("an explicit session_id takes priority over the resolution (the standalone drain signal)", async () => {
+    drains.length = 0;
+    const resolverCtx = (): CoreContext => ({
+      ...drainCtx(),
+      extractionTargetResolver: () => ({ sessionID: "raw-host-session", retargeted: false }),
+    });
+    const out = await def.execute({ session_id: "ses_named" }, resolverCtx(), { sessionID: "mcp_hashcontext", agent: "build" });
+    expect(out).toBe("[acknowledged]");
+    expect(drains).toEqual(["ses_named"]);
+  });
+
+  test("a bare ack without a resolver or host context drains nothing (the Cursor parent ack)", async () => {
+    // The accept-before-fetch guard: on the standalone path a parent acks
+    // bare right after dispatching its extractor, and that ack must NOT
+    // delete the queue before the sub-agent fetches. Only the parameter's
+    // presence drains there.
+    drains.length = 0;
+    const out = await def.execute({}, drainCtx(), undefined);
+    expect(out).toBe("[acknowledged]");
+    expect(drains).toEqual([]);
   });
 });

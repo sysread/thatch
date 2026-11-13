@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { detectFlushHost, buildExtractionStage, type FlushPayload } from "../src/flush";
+import { pluginToolName } from "../src/prompts";
 import type { ToolInteraction } from "../src/extraction";
 
 let dir: string;
@@ -105,6 +106,18 @@ describe("buildExtractionStage", () => {
     expect(out).toContain("Read that file first");
     expect(out).toContain("queued at");
     expect(out).not.toContain('"interactions"');
+  });
+
+  test("the plugin regime's stage acks bare - no session id to copy", () => {
+    // The bundled server resolves the acking session through its raw-id
+    // anchor, so the plugin regime's stage nudge teaches the no-id ack.
+    // The hooks fallback (above) keeps the id: its standalone server has
+    // no session context, and there the id's presence is the drain
+    // signal.
+    const out = buildExtractionStage({ interactions, missedCount: 0, host: "claude-code", sessionID: "s1", repo: "r", ackWithoutSessionId: true, toolNamer: pluginToolName });
+    expect(out).toContain("no session id needed, the host resolves your session automatically");
+    expect(out).not.toContain('session_id "s1"');
+    expect(out).toContain('"interactions"');
   });
 });
 

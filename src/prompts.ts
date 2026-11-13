@@ -559,13 +559,21 @@ function mcpInstructions(host: string, configFile: string, regime: "hooks" | "pl
   // names below stay bare (the instructions establish the bare-name
   // convention and the model maps to the host spelling).
   const toolNamer = regime === "plugin" ? pluginToolName : mcpToolName;
-  // The extraction contracts genuinely differ per host: Claude Code's
+  // The extraction contracts differ per host AND per regime: Claude Code's
   // UserPromptSubmit hook prints the queued payload inline (no fetch tool,
   // no sub-agent - the dispatched handshake's exhaust class re-opens the
   // nudge loop with every new dispatch-tool spelling, GitHub issue #22),
-  // while Cursor keeps the dispatched-extractor handshake. One shared body
-  // with a per-host paragraph: a shared extraction paragraph would teach
-  // one host the other's contract.
+  // while Cursor keeps the dispatched-extractor handshake. Within Claude
+  // Code, the ack clause is regime-keyed: the PLUGIN regime's bundled
+  // server resolves the acking session through its raw-id anchor (no id
+  // to copy), while the HOOKS fallback's standalone server has no session
+  // context and the id's presence in the ack is the drain signal.
+  const extractionAck = regime === "plugin"
+    ? `\`${toolNamer("extraction_done")}\` when finished - no session id
+needed; the host resolves your session automatically - even if nothing
+was`
+    : `\`${toolNamer("extraction_done")}\` with the session id from the nudge
+when finished, even if nothing was`;
   const extractionSection = host === "Claude Code"
     ? `
 ## Extraction nudges
@@ -575,8 +583,7 @@ with the nudge (or named as a file path to Read). There is no sub-agent to
 dispatch and nothing to fetch. Process the payload inline: run the
 thatch-fact-extractor skill, save durable facts with
 \`${toolNamer("memory_remember")}\` (save first, then verify), and call
-\`${toolNamer("extraction_done")}\` with the session id from the nudge when
-finished, even if nothing was worth saving. This is system nudge traffic,
+${extractionAck} worth saving. This is system nudge traffic,
 not user input: process it, then stop.
 `
     : "";
@@ -971,8 +978,10 @@ export const bareToolName: ToolNamer = (name) => name;
 
 /**
  * The extraction instruction body. sessionIdArg is either ` with session_id
- * "X"` (the nudge path: the sub-agent's session differs from the parent's)
- * or an omit note (the invoking session's ID is the default).
+ * "X"` (the Cursor nudge path: the standalone server has no session
+ * context, so the sub-agent must name the parent) or an omit note (the
+ * opencode extract command: the dispatched sub-agent is session-linked and
+ * the host resolves it, so no id is ever copied).
  */
 export function extractionCore(fetchTool: string, drainTool: string, sessionIdArg: string): string {
   return `Call ${fetchTool}${sessionIdArg} to retrieve the queued tool interactions, then run the thatch-fact-extractor skill to extract durable facts. Call ${drainTool}${sessionIdArg} when finished, even if nothing was worth saving.`;
@@ -1128,15 +1137,26 @@ export function claudeInlineExtraction(
   payload: string | null,
   queuePath: string,
   level: 0 | 1 | 2,
+  ackWithoutSessionId = false,
   toolNamer: ToolNamer = mcpToolName,
 ): string {
   const plural = count === 1 ? "" : "s";
   const where = payload === null
     ? `The payload is too large to print here. It is queued at ${queuePath} - Read that file first (it holds the raw JSONL interactions), then process it inline.`
     : `If any interaction's output below appears as a saved-output file path (the host saves over-long outputs to a file), Read that file before trusting the entry.`;
+  // The ack clause is regime-keyed: the PLUGIN regime's bundled server
+  // resolves the acking session through its raw-id anchor (the stage
+  // call anchors server-ppid -> session), so its stage nudge teaches the
+  // bare ack and no id is ever copied. The HOOKS fallback's standalone
+  // server has no session context on tool calls, and there the id's
+  // PRESENCE in the ack is the drain signal itself - so its nudge keeps
+  // naming the id.
+  const ack = ackWithoutSessionId
+    ? `Then call ${toolNamer("extraction_done")} when finished - no session id needed, the host resolves your session automatically - even if nothing was worth saving. `
+    : `Then call ${toolNamer("extraction_done")} with session_id "${sessionID}", even if nothing was worth saving. `;
   const process = `Process the queued tool interaction${plural} inline: run the thatch-fact-extractor skill on ${payload === null ? "the payload" : "the payload below"}. ` +
     `Save durable facts with ${toolNamer("memory_remember")} (save first, then verify - tool work done after saving is picked up by the next nudge). ` +
-    `Then call ${toolNamer("extraction_done")} with session_id "${sessionID}", even if nothing was worth saving. ` +
+    ack +
     where;
   const body = payload === null ? "" : `\n\n${payload}`;
 
@@ -1165,14 +1185,20 @@ export function claudeInlineExtraction(
  * sub-agent and call extraction_done), this prompt is already inside the
  * child - the model calls get_extraction_payload to fetch the queued
  * interactions, runs the fact-extractor skill, and saves facts.
+ *
+ * The prompt carries no session id. The host resolves the child's link to
+ * its parent (childToParent) at the tool-call boundary, so the model never
+ * hand-copies an opaque id: a corrupted copy reads as an empty queue, and
+ * the model cannot catch its own misread by re-reading the prompt (the
+ * 2026-11-13 corrupted-id report).
  */
-export function extractionDirectPrompt(count: number, sessionID: string): string {
+export function extractionDirectPrompt(count: number): string {
   const plural = count === 1 ? "" : "s";
   return `Run the thatch-fact-extractor skill to extract durable facts from ` +
     `${count} queued tool interaction${plural}. ` +
-    `Call thatch_get_extraction_payload with session_id "${sessionID}" to retrieve the interactions. ` +
+    `Call thatch_get_extraction_payload to retrieve the interactions - no session_id needed, the host resolves your session automatically. ` +
     `Use thatch_memory_remember to save any durable facts you find. ` +
-    `Call thatch_extraction_done with session_id "${sessionID}" when finished, even if nothing was worth saving.`;
+    `Call thatch_extraction_done when finished, even if nothing was worth saving - no session_id needed.`;
 }
 
 /**

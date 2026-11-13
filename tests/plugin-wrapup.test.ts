@@ -322,12 +322,17 @@ describe("action commands", () => {
     }
   });
 
-  test("extract action fetches by explicit session id learned from get_session_info", async () => {
+  test("extract action dispatches with no session id (the host resolves the child)", async () => {
+    // The 2026-11-13 corrupted-id fix: the dispatched sub-agent is
+    // session-linked and the host resolves its queue, so the command must
+    // not teach an id to learn, substitute, or copy.
     const { opencodeCommandDefs } = await import("../src/commands");
     const extract = opencodeCommandDefs().find((d) => d.name === "extract")!;
-    expect(extract.content).toContain("thatch_get_session_info");
-    expect(extract.content).toContain('session_id \\"SESSION_ID\\"');
+    expect(extract.content).toContain("thatch_get_extraction_payload");
     expect(extract.content).toContain("thatch_extraction_done");
+    expect(extract.content).toContain("no session_id");
+    expect(extract.content).not.toContain("SESSION_ID");
+    expect(extract.content).not.toContain("thatch_get_session_info");
   });
 
   test("frontmatter descriptions are always quoted YAML scalars", async () => {

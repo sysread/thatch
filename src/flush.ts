@@ -65,6 +65,13 @@ const INLINE_OUTPUT_BUDGET = 9500;
  * payload body degrades to the queue file's path (the instructions then
  * say to Read it) - delivery degrades to a two-step fetch, never to
  * silence. Cursor keeps the dispatched-extractor handshake.
+ *
+ * `ackWithoutSessionId` selects the plugin regime's ack clause: the
+ * bundled server resolves the acking session through its raw-id anchor,
+ * so its stage nudge teaches the bare ack and no id is ever copied. The
+ * hooks fallback (the default) keeps the id - its standalone server has
+ * no session context, and there the id's presence in the ack is the
+ * drain signal.
  */
 export function buildExtractionStage(opts: {
   interactions: ToolInteraction[];
@@ -72,6 +79,7 @@ export function buildExtractionStage(opts: {
   host: FlushHost;
   sessionID: string;
   repo: string;
+  ackWithoutSessionId?: boolean;
   toolNamer?: ToolNamer;
 }): string {
   const { interactions, missedCount, host, sessionID, repo } = opts;
@@ -81,9 +89,9 @@ export function buildExtractionStage(opts: {
   const payload = buildExtractionPayload(interactions, repo);
   const queuePath = queueFilePath(sessionID);
   const level = escalationLevel(missedCount);
-  const output = claudeInlineExtraction(interactions.length, sessionID, payload, queuePath, level, opts.toolNamer);
+  const output = claudeInlineExtraction(interactions.length, sessionID, payload, queuePath, level, opts.ackWithoutSessionId ?? false, opts.toolNamer);
   if (output.length <= INLINE_OUTPUT_BUDGET) return output;
-  return claudeInlineExtraction(interactions.length, sessionID, null, queuePath, level, opts.toolNamer);
+  return claudeInlineExtraction(interactions.length, sessionID, null, queuePath, level, opts.ackWithoutSessionId ?? false, opts.toolNamer);
 }
 
 /**
@@ -136,7 +144,7 @@ export async function computePluginStage(
     if (interactions.length > 0) {
       const missed = getMissedCount(sessionID);
       incrementMissedCount(sessionID);
-      stageText = buildExtractionStage({ interactions, missedCount: missed, host: "claude-code", sessionID, repo: deps.repo, toolNamer: deps.toolNamer });
+      stageText = buildExtractionStage({ interactions, missedCount: missed, host: "claude-code", sessionID, repo: deps.repo, ackWithoutSessionId: true, toolNamer: deps.toolNamer });
     }
   } catch (err) {
     // Extraction is best-effort at stage level: the later tiers still run.

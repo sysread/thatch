@@ -80,10 +80,15 @@ const useCase: UseCase = {
         return "FAIL";
       }
 
-      // Step 2: extract action's session-id rule.
+      // Step 2: extract action teaches no id to copy (the host resolves
+      // the session-linked sub-agent).
       const extract = readFileSync(join(dir, "extract.md"), "utf8");
-      if (!extract.includes("thatch_get_session_info") || !extract.includes("SESSION_ID")) {
-        console.log("  FAIL: extract.md does not teach the get_session_info flow");
+      if (!extract.includes("thatch_get_extraction_payload") || !extract.includes("no session_id")) {
+        console.log("  FAIL: extract.md does not teach the no-id extraction flow");
+        return "FAIL";
+      }
+      if (extract.includes("SESSION_ID") || extract.includes("thatch_get_session_info")) {
+        console.log("  FAIL: extract.md still teaches a session id to learn or copy");
         return "FAIL";
       }
 

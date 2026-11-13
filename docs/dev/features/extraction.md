@@ -96,9 +96,12 @@ timed-out accepted entries to pending:
    `parentSnapshots` (a snapshot of the full pending buffer at dispatch
    time — journal-recovery data only; claims subsumed the snapshot drain)
 5. Adds the child ID to the `extractionChildren` set
-6. Prompts the child with `extractionDirectPrompt(count, sessionID)` — the
-   plugin interpolates the parent's session ID into the prompt, so no
-   model ever has to copy one
+6. Prompts the child with `extractionDirectPrompt(count)` — the prompt
+   carries no session id at all: the extraction tools resolve the
+   child's parent link (childToParent) at the tool-call boundary, so no
+   model ever copies an opaque id (a corrupted copy reads as an empty
+   queue, and the model cannot catch its own misread — the 2026-11-13
+   corrupted-id report)
 7. If background sub-agents are enabled
    (`OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS`): `promptAsync`. Otherwise:
    fire-and-forget `prompt`
@@ -108,8 +111,12 @@ timed-out accepted entries to pending:
 
 The child session then:
 
-- Calls `thatch_get_extraction_payload` — the fetch **claims** the entries
-  for this fetcher (claim = accept + delivery record)
+- Calls `thatch_get_extraction_payload` with no arguments — the host
+  resolves the child to its parent's queue through the session link, and
+  the fetch **claims** the entries for this fetcher (claim = accept +
+  delivery record). A supplied `session_id` is tried first and one that
+  resolves nothing falls back to the host resolution, so a corrupted copy
+  of the parent's id cannot strand the run
 - Runs the [thatch-fact-extractor](../skills.md) skill
 - Writes memories via `thatch_memory_remember`
 - Goes idle
@@ -154,7 +161,13 @@ nudge — and the two hosts take different delivery shapes:
   10,000-character stdout cap), the payload body is replaced by the queue
   file's path — the instructions say to Read that file first — so
   delivery degrades to a two-step fetch, never to silence. The payload is
-  delivered at every escalation level; only the tone changes.
+  delivered at every escalation level; only the tone changes. The ack
+  clause is regime-keyed within Claude Code: the HOOKS fallback's
+  standalone server has no session context on tool calls, so its nudge
+  keeps naming the id (there the id's PRESENCE in the ack is the drain
+  signal); the PLUGIN regime's bundled server resolves the acking session
+  through its raw-id anchor, so its stage nudge teaches the bare ack —
+  no id to copy at all.
 - **Cursor (dispatched):** the nudge carries the session ID and fetch tool
   name — not the full payload — so the sub-agent calls
   `thatch_get_extraction_payload` to retrieve the interactions as a tool
@@ -240,13 +253,21 @@ The payload fetch is the delivery record:
 
 ### The `extraction_done` tool
 
-- No-op confirmation (`[acknowledged]`) unless `session_id` is passed and
-  `drainExtractionQueue` is wired
-- On the MCP path with `session_id`: resets the missed-nudge count +
-  consumes (deletes) the file-backed queue
-- The real state transitions happen in the host's post-tool hook
-  (`tool.execute.after` for opencode, `PostToolBatch`/`appendBatch` for MCP)
+- No-op confirmation (`[acknowledged]`) on opencode: the real state
+  transitions happen in the host's post-tool hook
+  (`tool.execute.after`), which keys every branch on the CALLING session
+  — completion is claim-scoped to the caller, so a corrupted `session_id`
+  parameter cannot misroute it
 - The tool exists primarily so the model has a recognizable name to key on
+- Drain behavior (MCP, where `drainExtractionQueue` is wired): an explicit
+  `session_id` drains that session's file-backed queue — on the standalone
+  server the parameter's PRESENCE is the drain signal itself (Cursor's
+  parent acks bare after dispatching, and that bare ack must not delete
+  the queue before the extractor fetches; the inline parent and the
+  extractor both drain by naming the session). A bare ack drains through
+  the host-owned resolution where one is wired (the bundled Claude Code
+  server resolves the acking session's raw id — extraction there is
+  inline-only, so a bare ack unambiguously drains the acker's own queue)
 - On opencode there is no parent ack any more: a parent-side
   `extraction_done` is tolerated as a non-destructive accept (entries
   held, not dropped) for backward compatibility with an in-flight older
@@ -259,12 +280,26 @@ The payload fetch is the delivery record:
 - **opencode**: peeks accepted + pending interactions, builds JSON via
   `buildExtractionPayload`
 - **MCP**: peeks the file-backed queue, builds the same JSON payload
-- `session_id` is optional: omitted, it resolves to the invoking session
-  via `HostToolContext.sessionID` (opencode path). On MCP hosts there is no
-  session context, so an omitted `session_id` returns a "pass the parent
-  session's session_id" error. Explicit IDs always win - that is how a
-  sub-agent drains the parent's queue
-- Returns `null` when no interactions are queued
+- Target resolution order (the 2026-11-13 corrupted-id fix):
+  1. A supplied `session_id` is tried first — the residual
+     unlinked-sub-agent path naming an explicit target
+  2. An id that resolves NOTHING falls back to the host-owned resolution
+     of the calling session — the model cannot detect its own
+     transcription corruption by re-reading the prompt, so the corrupted
+     copy must not strand the run. The host resolution retargets a linked
+     child to its parent's queue (`childToParent`, via the
+     `extractionTargetResolver` CoreContext seam) and resolves any other
+     caller to itself
+  3. With neither (standalone MCP — no session context on tool calls),
+     the parameter is the only key and an omitted one errors with the
+     pass-the-parent-id rule
+- Empty results are REPORTED WITH CAUSE: a host-resolved fetch that finds
+  nothing says so authoritatively (the queue is empty or already drained
+  — ack and finish); a retargeted child's empty fetch names the parent
+  link; a param-only empty fetch on a context-less host says the id is
+  the only key there and to check it against the source character by
+  character (one wrong character reads exactly like an empty queue, and a
+  purged session reads the same)
 - Read-only — it peeks the queue; it does not consume it. Consumption is
   `extraction_done`'s job
 
@@ -363,12 +398,17 @@ undone by the extractor re-deriving the memory from a buffered bash
    are never buffered. Buffering them would echo the store into itself or
    re-trigger the extraction nudge with the pipeline's own exhaust.
 2. **Extraction never depends on model cooperation on opencode.** The
-   plugin creates the extraction child, interpolates the session ID, and
-   drives the lifecycle from events. The old model-driven handshake (model
-   dispatches, parent acks, child copies the ID) raced its own state
-   machine — the September 2026 dispatch-loop report (accept-before-fetch
-   loss + never-terminating re-nudge) — and was removed. The opencode
-   `chat.message` hook computes no extraction nudge.
+   plugin creates the extraction child, drives the lifecycle from
+   events, and resolves every session id host-side — the dispatch prompt
+   carries no id, and the tools resolve the calling session (retargeting
+   a linked child to its parent) before trusting a prompt-supplied one.
+   The old model-driven handshake (model dispatches, parent acks, child
+   copies the ID) raced its own state machine — the September 2026
+   dispatch-loop report (accept-before-fetch loss +
+   never-terminating re-nudge) — and was removed; the residual id-copy
+   contract (the 2026-11-13 corrupted-id report, fixed the same day)
+   went with it. The opencode `chat.message` hook computes no extraction
+   nudge.
 3. **Completion is claim-scoped.** Only a fetcher that recorded a claim
    (via `get_extraction_payload`) can consume entries, and only the entries
    it received. No-claim completions are no-ops; no transition drops

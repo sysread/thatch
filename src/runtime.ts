@@ -1866,7 +1866,7 @@ export async function createRuntime(input: {
     extracting.add(parentID);
 
     const batch = extraction.peek(parentID);
-    const promptText = extractionDirectPrompt(batch.length, parentID);
+    const promptText = extractionDirectPrompt(batch.length);
 
     const result = await caps.sessionCreate({
       title: EXTRACTION_CHILD_TITLE,
@@ -2079,14 +2079,16 @@ export async function createRuntime(input: {
         // (no host session context) the fetch is a pure peek - legacy
         // behavior.
         //
-        // An omitted (or self-named) target resolves to the fetcher's own
-        // session - which for a child is the WRONG key: the buffer belongs
-        // to the parent. When the plugin knows the parent link
-        // (childToParent - populated for plugin-created extraction
-        // children, and for v1 model-dispatched ones), retarget to the
-        // parent so the model never has to copy a session ID at all. v2
-        // model-dispatched sub-agents carry no parentID, so no link exists
-        // for them and the explicit-ID path remains the only signal.
+        // A self-named target resolves to the fetcher's own session -
+        // which for a child is the WRONG key: the buffer belongs to the
+        // parent. When the plugin knows the parent link (childToParent -
+        // populated for plugin-created extraction children and for
+        // model-dispatched sub-agents), retarget to the parent so the
+        // model never has to copy a session ID at all. The extraction
+        // tools resolve linked callers through extractionTargetResolver
+        // BEFORE calling the provider, so this retarget is the fallback
+        // for a self-named fetch arriving without the tool-side
+        // resolution (direct provider calls, older hosts).
         const resolved = (fetcherID && targetID === fetcherID && childToParent.has(fetcherID))
           ? childToParent.get(fetcherID)!
           : targetID;
@@ -2095,6 +2097,24 @@ export async function createRuntime(input: {
           : [...extraction.peekAccepted(resolved), ...extraction.peek(resolved)];
         if (all.length === 0) return null;
         return extraction.buildPayload(all, repo);
+      },
+      // Host-owned resolution of the extraction target for the CALLING
+      // session - the tool-side half of the 2026-11-13 corrupted-id fix.
+      // The opencode host context always carries the calling session's
+      // id. A linked child - plugin-created extraction children (set
+      // eagerly at creation) and task-dispatched sub-agents (linked via
+      // the session.created parentID) - retargets to its parent's
+      // buffer; every other caller resolves to itself. The extraction
+      // tools consult this BEFORE trusting a prompt-supplied session_id,
+      // and fall back to it when a supplied id resolves nothing (a
+      // model cannot detect its own transcription corruption by
+      // re-reading the prompt).
+      extractionTargetResolver: (callerID?: string): { sessionID: string; retargeted: boolean } | null => {
+        if (callerID === undefined) return null;
+        const parentID = childToParent.get(callerID);
+        return parentID !== undefined
+          ? { sessionID: parentID, retargeted: true }
+          : { sessionID: callerID, retargeted: false };
       },
       watcherRegistry: watchers,
       projectDir: worktree,

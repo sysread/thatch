@@ -203,9 +203,11 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
   }
 
   // Extraction payload provider: peeks the file-backed queue and returns the
-  // serialized JSON payload. Called by the get_extraction_payload tool when a
-  // sub-agent needs to fetch the parent's queued interactions. Returns null
-  // when no interactions are queued.
+  // serialized JSON payload. Called by the get_extraction_payload tool when
+  // an extractor needs to fetch the queued interactions (Cursor's
+  // dispatched path; a residual on the plugin regime, whose payload is
+  // delivered inline by the stage). Returns null when no interactions are
+  // queued.
   const extractionPayloadProvider = (sessionID: string): string | null => {
     const interactions = peekQueue(sessionID);
     if (interactions.length === 0) return null;
@@ -213,9 +215,10 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
   };
 
   // Drain a session's file-backed queue and reset its missed-nudge counter.
-  // Called by extraction_done when a sub-agent passes the parent's session_id.
-  // Without this, the MCP path's appendBatch self-detection would drain the
-  // sub-agent's (empty) queue instead of the parent's.
+  // Called by extraction_done with an explicit target (the standalone
+  // path's session_id parameter - the drain signal there, since a parent's
+  // bare post-dispatch ack must not drain) or with the host-resolved raw
+  // session id (the bundled path, wired below).
   const drainExtractionQueue = (sessionID: string): void => {
     resetMissedCount(sessionID);
     consumeQueue(sessionID);
@@ -319,6 +322,19 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
           },
           pluginLifecycle: (event) => lifecycle!.handle(event),
           pluginChatWake: (sessionID: string) => computePluginChatWake(db, sessionID),
+          // Host-owned extraction resolution for the bundled regime: the
+          // queue here is keyed by the RAW host session id (the lifecycle
+          // buffers under the mod's event.sessionID; the stage call
+          // anchors server-ppid -> raw id), NOT the dispatcher's
+          // hash-based host context - so the extraction tools resolve
+          // through this anchor instead. Extraction on this regime is
+          // inline-only (the host has no session-creation API, so no
+          // sub-agents exist), which makes a bare extraction_done
+          // unambiguous: it drains the acking session's own queue.
+          extractionTargetResolver: () => {
+            const raw = rawSessionByPid.get(process.ppid);
+            return raw !== undefined ? { sessionID: raw, retargeted: false } : null;
+          },
           ...(watchers ? { watchers } : {}),
           projectDir,
         }

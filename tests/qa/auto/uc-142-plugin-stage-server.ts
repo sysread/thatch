@@ -33,8 +33,10 @@ const useCase: UseCase = {
     "- The bundled server lists plugin_stage (standalone servers do not -",
     "  pinned in tests/mcp.test.ts).",
     "- The stage response carries the inline nudge: the fact-extractor",
-    "  instruction, the session id, the payload JSON, and no dispatch",
-    "  wording; the liveness stamp file exists afterward.",
+    "  instruction, the bare ack contract (no session id - the bundled",
+    "  server resolves the acking session through its raw-id anchor), the",
+    "  payload JSON, and no dispatch wording; the liveness stamp file",
+    "  exists afterward.",
     "- With a stale liveness stamp, the FIRST tools/call response is",
     "  prepended with the plugin-not-delivering warning, exactly once.",
   ].join("\n"),
@@ -97,8 +99,15 @@ const useCase: UseCase = {
       if (!names.includes("plugin_stage")) failures.push(`bundled tools/list lacks plugin_stage (has ${names.length} tools)`);
       const stage = await c.request("tools/call", { name: "plugin_stage", arguments: { prompt: "What is the meaning of life?", session_id: sessionID } });
       const text = stage.result?.content?.[0]?.text ?? "";
-      if (!text.includes("fact-extractor") || !text.includes(sessionID) || !text.includes('"interactions"')) {
+      // The 2026-11-13 corrupted-id fix: the stage nudge teaches the BARE
+      // ack (the bundled server resolves the acking session through its
+      // raw-id anchor), so the raw session id must not appear in the ack
+      // clause at all.
+      if (!text.includes("fact-extractor") || !text.includes('"interactions"') || !text.includes("no session id needed")) {
         failures.push(`stage response missing the inline nudge shape: ${text.slice(0, 160)}`);
+      }
+      if (text.includes(`session_id "${sessionID}"`)) {
+        failures.push("stage response must not teach a session id to copy");
       }
       if (text.includes("Spawn a background sub-agent") || text.includes("get_extraction_payload")) {
         failures.push("stage response must not dispatch or name a fetch tool");

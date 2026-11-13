@@ -119,21 +119,20 @@ A parity-guard test asserts the three sets are the same actions minus the
 documented exclusions: opencode = Claude Code set + `extract`, `whois`;
 MCP prompts = Claude Code's set.
 
-## The extract action and session IDs
+## The extract action and session resolution
 
-`/thatch/extract` runs the extraction flow on demand: learn the session ID
-from `thatch_get_session_info`, dispatch the extractor sub-agent with an
-explicit `session_id`, acknowledge with `thatch_extraction_done`. The
-explicit ID matters because the sub-agent's session differs from the
-parent's — the same reason the extraction nudge passes it.
+`/thatch/extract` runs the extraction flow on demand: dispatch the
+extractor sub-agent, which fetches with `thatch_get_extraction_payload`
+and acks with `thatch_extraction_done` — neither call carries a session
+id. The command teaches no id to learn or copy (the 2026-11-13
+corrupted-id fix): the dispatched sub-agent is session-linked, and the
+host resolves the caller at the tool-call boundary.
 
-`get_extraction_payload` accepts an omitted `session_id`: on the opencode
-path the wrapper supplies the invoking session's `HostToolContext.sessionID`.
-The zod arg shape is shared between hosts, so optionality cannot be
-per-host at the schema level; on MCP hosts (no session context) an omitted
-`session_id` returns a clear "pass the parent's session_id" error. The rule
-the model applies, stated in the arg descriptions and the dev docs:
-
-> Omit `session_id` when acting on the session you are running in. Pass the
-> parent session's `session_id` when running inside a sub-agent dispatched
-> to process another session's extraction queue.
+`get_extraction_payload` resolves its target in this order: a supplied
+`session_id` is tried first; one that resolves nothing falls back to the
+host-owned resolution of the calling session (a linked child retargets to
+its parent's queue through `childToParent`); with neither — standalone
+MCP, whose tool calls carry no session context — the parameter is the
+only key, and an omitted one returns a clear "pass the parent's
+session_id" error. The zod arg shape is shared between hosts, so the
+per-host behavior lives in the tool's `execute`, never in the schema.

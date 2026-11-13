@@ -328,9 +328,10 @@ describe("plugin entry", () => {
     // knows the CALLING session's id (every tool call carries it); the
     // parent link for plugin-created extraction children is in
     // childToParent - so an omitted (or self-named) session_id from a
-    // linked child retargets to the parent's buffer. This is the safety
-    // net for a child that mis-parrots the ID from its dispatch prompt;
-    // the prompt still carries the explicit ID.
+    // linked child retargets to the parent's buffer. The dispatch prompt
+    // carries no id at all (the 2026-11-13 corrupted-id fix); the
+    // self-named shape is the belt-and-suspenders for a child that
+    // mis-parrots one anyway.
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await toolAfterHook!({
       tool: "bash",
@@ -372,6 +373,52 @@ describe("plugin entry", () => {
     const drained = await payloadTool.execute(
       { session_id: "ses_autoparent" },
       { sessionID: "ses_autoparent_other", agent: "general" },
+    );
+    expect(textOf(drained)).not.toContain("file.txt");
+  });
+
+  test("a corrupted session_id copy falls back to the child's parent resolution", async () => {
+    // The 2026-11-13 incident shape, verbatim: the dispatch prompt's
+    // parent id (ses_e52dd7be) copied wrong by one character
+    // (ses_e52rd7be). The corrupted id has no buffer, so the fetch would
+    // no-op as an empty queue - and the model cannot catch its own
+    // misread by re-reading the prompt. The tool falls back to the
+    // host-owned resolution (the child's childToParent link) before
+    // reporting empty, the run completes, and the parent drains.
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    await toolAfterHook!({
+      tool: "bash",
+      sessionID: "ses_e52dd7be",
+      input: { command: "ls" },
+      status: "completed",
+      result: { content: "file.txt" },
+    });
+    await queueEvent(sessionEvent("session.created", {
+      sessionID: "ses_e52dd7be_child",
+      info: { id: "ses_e52dd7be_child", parentID: "ses_e52dd7be" },
+    }));
+
+    const payloadTool = addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
+    // The child passes the CORRUPTED copy of the parent's id.
+    const served = await payloadTool.execute(
+      { session_id: "ses_e52rd7be" },
+      { sessionID: "ses_e52dd7be_child", agent: "general" },
+    );
+    expect(textOf(served)).toContain("file.txt");
+
+    // The corrupted param recorded a claim on a session that does not
+    // exist; the fallback's claim on the real parent must REPLACE it, so
+    // the child's ack still completes the delivery it actually received.
+    await toolAfterHook!({
+      tool: "thatch_extraction_done",
+      sessionID: "ses_e52dd7be_child",
+      input: {},
+      status: "completed",
+      result: { content: "[acknowledged]" },
+    });
+    const drained = await payloadTool.execute(
+      { session_id: "ses_e52dd7be" },
+      { sessionID: "ses_e52dd7be_other", agent: "general" },
     );
     expect(textOf(drained)).not.toContain("file.txt");
   });

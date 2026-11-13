@@ -159,9 +159,23 @@ export interface CoreContext {
   /** Drains a session's extraction queue. On the MCP path this deletes the
    *  file-backed queue and resets the missed-nudge counter. On the opencode
    *  path this is unused (the tool.execute.after hook handles drain via
-   *  childToParent). Called by extraction_done when the sub-agent passes
-   *  the parent's session_id. */
+   *  childToParent). Called by extraction_done when the ack carries a
+   *  target: the prompt-supplied session_id on the standalone MCP path,
+   *  or the host-resolved calling session on the bundled path. */
   drainExtractionQueue?: (sessionID: string) => void;
+  /** Host-owned resolution of the extraction target for the CALLING
+   *  session (the 2026-11-13 corrupted-id fix: a model copying an opaque
+   *  session id from a prompt corrupts it without any way to notice, and
+   *  the corrupted id reads as an empty queue). Returns the resolved
+   *  queue/buffer key plus whether the resolution retargeted through a
+   *  child-to-parent link, or null when the host cannot resolve its
+   *  caller. Wired by the opencode runtime (childToParent retarget) and
+   *  by the bundled Claude Code server (the raw host session id the
+   *  mod's stage call anchored - the queue key on that regime, distinct
+   *  from the dispatcher's hash-based host context). Standalone MCP
+   *  wires nothing: tool calls carry no session identity there, so the
+   *  prompt-supplied session_id is the only key. */
+  extractionTargetResolver?: (callerID?: string) => { sessionID: string; retargeted: boolean } | null;
   /** The plugin's in-memory watcher registry. Only wired on the opencode
    *  path - MCP hosts have no poller, no event bus, and no way to deliver a
    *  proactive prompt, so watch tools are opencode-only. */
@@ -937,49 +951,93 @@ const markCheckedDef: ToolDef = {
 };
 
 /**
- * Fetches the queued extraction payload for a session. The sub-agent calls
- * this with the parent's session ID to retrieve the tool interactions that
- * need fact extraction, instead of receiving them inline in the nudge text.
- * This keeps the full payload out of the main session's context window.
+ * Fetches the queued extraction payload for a session. The extractor
+ * calls this to retrieve the tool interactions that need fact
+ * extraction instead of receiving them inline in the nudge text. This
+ * keeps the full payload out of the main session's context window.
+ *
+ * The host owns the target resolution (the 2026-11-13 corrupted-id fix):
+ * the host knows the calling session and retargets a linked extraction
+ * child to its parent's queue, so a bare call resolves entirely
+ * host-side and the model never hand-copies an opaque session id. A
+ * supplied session_id is still accepted and tried first (the residual
+ * unlinked-sub-agent path naming an explicit target), but an id that
+ * resolves nothing falls back to the host resolution - the model cannot
+ * detect its own transcription corruption by re-reading the prompt. On
+ * hosts without session context (standalone MCP - Cursor, the Claude
+ * Code hooks fallback) the parameter is the only key.
  */
 const getExtractionPayloadDef: ToolDef = {
   name: "get_extraction_payload",
   description:
     "Retrieve the queued tool interactions for extraction. Call this with " +
-    "the session_id from the extraction nudge to get the JSON payload " +
-    "(interactions, projectStore, globalStore). Then run the " +
-    "thatch-fact-extractor skill on the returned payload. Omit session_id " +
-    "when acting on the session you are running in. If you are an " +
-    "extraction child whose parent link the plugin knows, an omitted or " +
-    "self-named session_id resolves to the parent's queue automatically. " +
-    "(Cursor only on the MCP path: a Claude Code parent receives the " +
-    "payload inline with the extraction nudge - there is nothing to fetch " +
-    "there.)",
+    "no arguments to get the JSON payload (interactions, projectStore, " +
+    "globalStore) - the host resolves your calling session automatically, " +
+    "and an extraction child resolves to its parent's queue through the " +
+    "session link. Then run the thatch-fact-extractor skill on the " +
+    "returned payload. A supplied session_id is accepted and tried first, " +
+    "falling back to the host resolution when it finds nothing queued. " +
+    "Only a host that reports it has no session context (Cursor's server, " +
+    "the Claude Code hooks fallback) requires the id from the nudge.",
   args: {
     session_id: z.string().optional().describe(
       "The session whose tool interactions are queued for extraction. " +
-      "Omit when acting on the session you are running in - the invoking " +
-      "session's ID is used. Pass the parent session's ID when running " +
-      "inside a sub-agent dispatched to process another session's queue.",
+      "Omit it - the host resolves your calling session (an extraction " +
+      "child resolves to its parent's queue through the session link). " +
+      "Pass an id only on a host that reports it has no session " +
+      "context; there the id from the extraction nudge is the only key.",
     ),
   },
   async execute(args, ctx, host) {
     if (!ctx.extractionPayloadProvider) {
       return "Extraction payload retrieval is not available in this host.";
     }
+    const param = args.session_id as string | undefined;
+    const callerID = host?.sessionID;
+    // The host-owned resolution of the CALLING session. A wired resolver
+    // either retargets a linked child to its parent (opencode) or anchors
+    // the raw host session id (the bundled Claude Code server, whose
+    // queue key is the raw id, not the dispatcher's hash context).
+    // Without a resolver, the host context itself is the resolution -
+    // the runtime's provider retargets a self-named fetch (targetID ===
+    // fetcherID) through childToParent, the 2026-10-01 zero-id design.
+    const resolved = ctx.extractionTargetResolver
+      ? ctx.extractionTargetResolver(callerID)
+      : callerID !== undefined
+        ? { sessionID: callerID, retargeted: false }
+        : null;
+    // An explicit id is tried first, but one that resolves nothing cannot
+    // be trusted to mean "empty queue": the model cannot detect its own
+    // transcription corruption by re-reading the prompt (it misreads the
+    // same character every pass - the 2026-11-13 report). Fall back to
+    // the host resolution before reporting an empty result.
+    if (param !== undefined) {
+      const payload = ctx.extractionPayloadProvider(param, callerID);
+      if (payload !== null) return payload;
+    }
+    if (resolved !== null) {
+      const payload = ctx.extractionPayloadProvider(resolved.sessionID, callerID);
+      if (payload !== null) return payload;
+      if (resolved.retargeted) {
+        return "No queued tool interactions found for the parent session your session is linked to. " +
+          "The host resolved your session automatically, so this is authoritative: the parent's queue is empty or already drained. " +
+          "Call extraction_done to complete the run.";
+      }
+      return "No queued tool interactions found for your session. " +
+        "The host resolved your session automatically (no session_id needed), so this is authoritative: the queue is empty or already drained. " +
+        "Call extraction_done to complete the run.";
+    }
+    if (param !== undefined) {
+      return `No queued tool interactions found for session_id "${param}". ` +
+        "If the id was hand-copied from a nudge, check it against the source character by character: " +
+        "one wrong character reads exactly like an empty queue, and a purged session reads the same. " +
+        "This host has no session context, so the session_id is the only key here.";
+    }
     // The zod shape is shared across hosts, so optionality cannot be
     // per-host at the schema level: MCP hosts have no session context to
     // fall back on, so an omitted session_id only resolves on the
     // opencode path, where the wrapper supplies the invoking session.
-    const sessionID = (args.session_id as string | undefined) ?? host?.sessionID;
-    if (!sessionID) {
-      return 'session_id is required on this host (it has no session context). Pass the parent session\'s session_id from the extraction nudge.';
-    }
-    const payload = ctx.extractionPayloadProvider(sessionID, host?.sessionID);
-    if (!payload) {
-      return "No queued tool interactions found for this session.";
-    }
-    return payload;
+    return 'session_id is required on this host (it has no session context). Pass the parent session\'s session_id from the extraction nudge.';
   },
 };
 
@@ -990,52 +1048,68 @@ const getExtractionPayloadDef: ToolDef = {
  * entries THIS child claimed via its payload fetch complete - never the
  * whole accepted set, so a sibling sub-agent's completion cannot drop
  * another extractor's in-flight payload. Completion includes no-save runs
- * that write no memory. Pass session_id (the parent's) to drain the
- * parent's file-backed queue on the MCP path. If the child errors or is
- * deleted before either signal, the host requeues the entries so the facts
- * are not lost.
+ * that write no memory.
  *
- * On the MCP path the parent session may also call this after dispatching
- * the fact-extractor, to reset the nudge escalation counter. That ack does
- * NOT drain the parent's queue - a drain at ack time deleted the queue
- * before the sub-agent's payload fetch (the accept-before-fetch loss); the
- * queue is consumed by the extractor's completion instead. That no-drain
- * rule is DISPATCH-PATH-ONLY (Cursor): on the Claude Code inline path the
- * parent processes the payload itself, so its own ack IS the intended hard
- * drain of a delivered payload.
+ * The ack resolves host-first on hosts that know the calling session: a
+ * bare call is the whole contract there (an opencode child completes its
+ * own claim via the post-tool hook; the Claude Code plugin regime's
+ * parent drains its own file-backed queue through the raw-id anchor).
+ * On the standalone MCP path the session_id parameter is the drain
+ * signal itself and cannot be retired: Cursor's parent acks bare after
+ * dispatching - a bare ack must NOT drain there, it would delete the
+ * queue before the extractor fetches (the accept-before-fetch loss) -
+ * while the same host's inline parent (the Claude Code hooks fallback)
+ * and the dispatched extractor both drain by naming the session. Only
+ * the parameter's presence distinguishes them, so it stays load-bearing
+ * there.
  *
  * The actual state changes happen in the host's post-tool hook
  * (tool.execute.after for opencode, PostToolBatch/appendBatch for MCP) -
- * this tool's execute function is a no-op confirmation. The tool exists so
- * the model has a recognizable tool name to key on.
+ * on opencode this tool's execute function is a no-op confirmation. The
+ * tool exists so the model has a recognizable tool name to key on.
  *
  * On the opencode plugin path there is no parent ack any more: the plugin
- * drives extraction end-to-end (triggerExtraction at session idle), so the
- * model never runs the dispatch handshake. A parent-side extraction_done
- * there is tolerated as a non-destructive accept (entries held, not
- * dropped) for backward compatibility with an in-flight older nudge.
+ * drives extraction end-to-end (triggerExtraction at session idle). A
+ * parent-side extraction_done there is tolerated as a non-destructive
+ * accept (entries held, not dropped) for backward compatibility with an
+ * in-flight older nudge.
  */
 const extractionDoneDef: ToolDef = {
   name: "extraction_done",
   description:
     "Acknowledge extraction-buffer work. In the fact-extractor sub-agent, " +
     "call at the end of the run to mark the entries you claimed complete, " +
-    "even when nothing was worth saving. Pass session_id (the parent " +
-    "session's ID from the extraction nudge) to drain the parent's queue.",
+    "even when nothing was worth saving. No session_id needed on hosts " +
+    "that resolve your session (an opencode child completes its own " +
+    "claim; the Claude Code plugin regime drains your queue through the " +
+    "host's session anchor). On the standalone MCP path the parameter is " +
+    "the drain signal: pass the parent session's ID from the extraction " +
+    "nudge there (Cursor's extractor, the Claude Code hooks fallback's " +
+    "inline ack); a parent that just dispatched an extractor acks " +
+    "without it.",
   args: {
     session_id: z.string().optional().describe(
-      "The parent session's ID, when called from a sub-agent. Drains the " +
-      "parent's file-backed queue (MCP path) and completes the entries " +
-      "this sub-agent claimed. On the dispatched path (Cursor) a parent " +
-      "session may omit it - the ack only resets the escalation counter. " +
-      "On the inline path (Claude Code) the parent ALWAYS passes its own " +
-      "session id from the nudge: the ack is the drain of the delivered " +
-      "payload, and omitting it strands the post-save re-feed tail.",
+      "The session whose queue this ack drains. Omit it on hosts that " +
+      "resolve your session automatically. Pass the parent session's ID " +
+      "from the extraction nudge only on the standalone MCP path, where " +
+      "the parameter is the drain signal: the extractor's ack with it " +
+      "drains the queue, and a parent's bare post-dispatch ack does not.",
     ),
   },
-  async execute(args, ctx) {
-    const sessionID = args.session_id as string | undefined;
-    if (sessionID && ctx.drainExtractionQueue) {
+  async execute(args, ctx, host) {
+    const param = args.session_id as string | undefined;
+    const callerID = host?.sessionID;
+    const resolved = ctx.extractionTargetResolver
+      ? ctx.extractionTargetResolver(callerID)
+      : callerID !== undefined
+        ? { sessionID: callerID, retargeted: false }
+        : null;
+    // The param takes priority: on the standalone MCP path its PRESENCE
+    // is the drain signal (see the tool comment above). A bare call
+    // drains only through the host-owned resolution - the hosts where
+    // the acking session unambiguously owns the queue.
+    const sessionID = param ?? resolved?.sessionID;
+    if (sessionID !== undefined && ctx.drainExtractionQueue) {
       ctx.drainExtractionQueue(sessionID);
     }
     return "[acknowledged]";
@@ -2002,10 +2076,9 @@ const notifyUserDef: ToolDef = {
 /**
  * Reports the calling session's identity. opencode does not surface its
  * session ID to the model, so the model cannot learn it any other way -
- * yet it needs the ID to call thatch_get_extraction_payload /
- * thatch_extraction_done on the parent's behalf and for session
- * archaeology against opencode.db. MCP hosts have no session concept,
- * hence opencodeOnly.
+ * for session archaeology against opencode.db (the extraction tools no
+ * longer need it: they resolve the calling session host-side). MCP hosts
+ * have no session concept, hence opencodeOnly.
  */
 const getSessionInfoDef: ToolDef = {
   name: "get_session_info",
@@ -2014,8 +2087,9 @@ const getSessionInfoDef: ToolDef = {
     "Return the current session's identity: the host session ID and the " +
     "agent name running this turn (e.g. build, plan, or a sub-agent type). " +
     "opencode-only: MCP hosts have no session concept. Use the session ID " +
-    "when a nudge tells you to call a tool with the parent's session_id, " +
-    "or to query past sessions in ~/.local/share/opencode/opencode.db.",
+    "to query past sessions in ~/.local/share/opencode/opencode.db (the " +
+    "extraction tools resolve your session automatically - no ID needed " +
+    "for them).",
   args: {},
   opencodeOnly: true,
   async execute(_args, _ctx, host) {
@@ -3569,6 +3643,7 @@ export const TOOL_DEFS: ToolDef[] = [
 export interface CoreContextExtensions {
   extractionPayloadProvider?: CoreContext["extractionPayloadProvider"];
   drainExtractionQueue?: CoreContext["drainExtractionQueue"];
+  extractionTargetResolver?: CoreContext["extractionTargetResolver"];
   pluginStage?: CoreContext["pluginStage"];
   pluginLifecycle?: CoreContext["pluginLifecycle"];
   pluginChatWake?: CoreContext["pluginChatWake"];
@@ -3602,6 +3677,7 @@ export function buildCoreContext(
     defaultStore,
     extractionPayloadProvider: extensions?.extractionPayloadProvider,
     drainExtractionQueue: extensions?.drainExtractionQueue,
+    extractionTargetResolver: extensions?.extractionTargetResolver,
     pluginStage: extensions?.pluginStage,
     pluginLifecycle: extensions?.pluginLifecycle,
     pluginChatWake: extensions?.pluginChatWake,

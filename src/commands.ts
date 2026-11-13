@@ -117,7 +117,9 @@ function coreSplice(name: string): string {
     case "reflect":
       return reflectCore(opencodeToolName);
     case "extract":
-      return extractionCore("thatch_get_extraction_payload", "thatch_extraction_done", ' with session_id \\"SESSION_ID\\"');
+      // The dispatched sub-agent is session-linked (task dispatch), and
+      // the host resolves the caller - the prompt teaches no id to copy.
+      return extractionCore("thatch_get_extraction_payload", "thatch_extraction_done", " (no session_id; the host resolves the session)");
     default:
       throw new Error(`unknown command template core: ${name}`);
   }

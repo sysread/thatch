@@ -82,12 +82,27 @@ here first. These are the things that have already cost time.
   in-flight accepted sets, and mis-targeted session ids made every
   transition a silent no-op - so the same buffered count re-fired forever
   (the September 2026 dispatch-loop report). Extraction is now plugin-driven
-  end-to-end: `triggerExtraction` at session idle creates the child and
-  interpolates the session ID itself; the child's payload fetch records the
-  claim; completions are claim-scoped; the 15-minute stale reaper bounds
-  crashed extractors. The nudge survives on MCP hosts only, where no plugin
-  can create sessions and the file-backed queue is durable until the
-  extractor completes.
+  end-to-end: `triggerExtraction` at session idle creates the child; the
+  child's payload fetch records the claim; completions are claim-scoped;
+  the 15-minute stale reaper bounds crashed extractors. The nudge survives
+  on MCP hosts only, where no plugin can create sessions and the
+  file-backed queue is durable until the extractor completes.
+- **Never make a model copy an opaque id a host can resolve.** The
+  2026-11-13 corrupted-id report: a dispatch prompt taught an extractor
+  child to copy the parent's session id, the model corrupted one character
+  on every pass, and the fetch no-oped as an empty queue - masquerading as
+  the legitimate purged-session case. The model cannot catch its own
+  transcription corruption by re-reading the prompt (it misreads the same
+  character every pass); only host-side resolution or an external ground
+  truth breaks the loop. The rule: resolve the caller from the
+  tool-call context (host context, an anchored map, `childToParent`) and
+  treat a prompt-supplied id as a hint to verify, never as the key.
+  Applied in the extraction tools (`extractionTargetResolver` in
+  `CoreContext`): a supplied id that resolves nothing falls back to the
+  host-owned resolution before an empty result is reported. The
+  standalone MCP path is the documented exception - its tool calls carry
+  no session identity, and on the dispatch contract the id's PRESENCE in
+  the ack is the drain signal, so it stays.
 - **A child's `thatch_memory_remember` completes only its claimed delivery**
   via the `childToParent` Map and the claim recorded by its payload fetch.
   A child that never fetched has no claim, and its memory write (or idle
@@ -156,9 +171,10 @@ runs no settings hooks: the mod delivers in-process (the stage replaces
   arg shape in `TOOL_DEFS` is shared by the opencode plugin and the MCP
   server, so making an arg optional (e.g. `get_extraction_payload`'s
   `session_id`) makes it optional everywhere. Per-host enforcement has to
-  happen in the tool's `execute`: fall back to `HostToolContext.sessionID`
-  on the opencode path, return a "pass the parent's session_id" error on
-  MCP hosts, which have no session context. See
+  happen in the tool's `execute`: resolve the host-owned target
+  (`extractionTargetResolver`, then `HostToolContext.sessionID`) on hosts
+  that know the caller, return a "pass the parent's session_id" error on
+  standalone MCP hosts, which have no session context. See
   [features/commands.md](features/commands.md).
 
 ## Tests

@@ -109,6 +109,32 @@ describe("systemPrompt content", () => {
     expect(skill).toContain("Extraction complete - processed inline; the queue is drained.");
   });
 
+  test("the fact-extractor skill teaches no id copy on host-resolving paths", () => {
+    // The 2026-11-13 corrupted-id fix: the skill must not instruct the
+    // model to copy an opaque session id on hosts that resolve the caller
+    // themselves. The standalone exception (Cursor, the hooks fallback)
+    // stays because the id's presence in the ack is the drain signal
+    // there.
+    const skill = readFileSync(join(__dirname, "../artifacts/skills/thatch-fact-extractor.md"), "utf8");
+    expect(skill).toContain("with NO arguments");
+    expect(skill).toContain("the host resolves your session automatically");
+    expect(skill).not.toContain("pass the session id from the nudge to your final");
+    expect(skill).not.toContain("with that session ID to retrieve");
+  });
+
+  test("the ack clause is regime-keyed in the Claude Code instructions", () => {
+    // The plugin regime's bundled server resolves the acking session
+    // (raw-id anchor), so its CLAUDE.md block teaches the bare ack. The
+    // hooks fallback's standalone server has no session context and the
+    // id's presence in the ack is the drain signal, so it keeps the id.
+    const plugin = claudeInstructions("plugin");
+    const hooks = claudeInstructions();
+    expect(plugin).toContain("no session id");
+    expect(plugin).toContain("the host resolves your session automatically");
+    expect(plugin).not.toContain("with the session id from the nudge");
+    expect(hooks).toContain("with the session id from the nudge");
+  });
+
   test("claudeInstructions includes situational behaviors section", () => {
     const text = claudeInstructions();
     expect(text).toContain("Situational Behaviors");

@@ -14,9 +14,10 @@ you.
 2. **Extraction**: When the session goes idle (after the agent's turn
    completes), the plugin creates a child session and prompts it to run
    the `thatch-fact-extractor` skill. The child fetches the buffered
-   tool interactions via `thatch_get_extraction_payload`, extracts
-   durable facts, and writes them as memories via
-   `thatch_memory_remember`.
+   tool interactions via `thatch_get_extraction_payload` - no session id
+   needed, the host resolves the child's link to your session
+   automatically - extracts durable facts, and writes them as memories
+   via `thatch_memory_remember`.
 
 3. **Cleanup**: When the child finishes, the parent's buffer is
    drained and a toast notification shows the results (`[thatch] new: 2,
@@ -57,6 +58,13 @@ The two hosts deliver it differently:
   sub-agent for the fact-extractor skill, which fetches the payload with
   `thatch_get_extraction_payload`, then calls `thatch_extraction_done` to
   acknowledge.
+
+On these MCP hosts the session id from the nudge is still passed along
+with the acknowledgment: their hook processes have no way to know which
+session is calling, so the id itself is the signal that drains the queue.
+Everywhere else (opencode, the Claude Code plugin regime) the host
+resolves the calling session itself - no id is ever copied, so a
+mistyped id can no longer make an extraction run silently read as empty.
 
 ## What gets extracted
 

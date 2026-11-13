@@ -236,10 +236,8 @@ describe("extractionNudge escalation (MCP hosts only)", () => {  const sessionID
 });
 
 describe("extractionDirectPrompt", () => {
-  const sessionID = "sess-direct";
-
   test("tells the model to run the skill directly, no task dispatch", () => {
-    const prompt = extractionDirectPrompt(3, sessionID);
+    const prompt = extractionDirectPrompt(3);
     expect(prompt).toContain("thatch-fact-extractor");
     expect(prompt).toContain("thatch_memory_remember");
     expect(prompt).toContain("thatch_extraction_done");
@@ -247,26 +245,31 @@ describe("extractionDirectPrompt", () => {
     expect(prompt).not.toContain("background: true");
   });
 
-  test("includes the session ID and fetch tool name", () => {
-    const prompt = extractionDirectPrompt(1, sessionID);
-    expect(prompt).toContain(sessionID);
+  test("carries no session id - the host resolves the child's link", () => {
+    // The 2026-11-13 corrupted-id fix: the prompt must not teach an id to
+    // copy. A model hand-copying an opaque id corrupts it without any way
+    // to notice, and the corrupted id reads as an empty queue.
+    const prompt = extractionDirectPrompt(1);
     expect(prompt).toContain("thatch_get_extraction_payload");
+    expect(prompt).toContain("no session_id needed");
+    expect(prompt).not.toContain("session_id \"");
+    expect(prompt).not.toMatch(/ses_[a-z0-9]+/i);
   });
 
   test("does not include the raw JSON payload", () => {
-    const prompt = extractionDirectPrompt(1, sessionID);
+    const prompt = extractionDirectPrompt(1);
     expect(prompt).not.toContain('"interactions"');
     expect(prompt).not.toContain('"projectStore"');
   });
 
   test("singular form for one interaction", () => {
-    const prompt = extractionDirectPrompt(1, sessionID);
+    const prompt = extractionDirectPrompt(1);
     expect(prompt).toContain("1 queued tool interaction.");
     expect(prompt).not.toContain("1 queued tool interactions");
   });
 
   test("plural form for multiple interactions", () => {
-    const prompt = extractionDirectPrompt(5, sessionID);
+    const prompt = extractionDirectPrompt(5);
     expect(prompt).toContain("5 queued tool interactions");
   });
 });
