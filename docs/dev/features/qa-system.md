@@ -66,11 +66,12 @@ execution directly via bun assertions. These are fast and run in parallel.
 | UC-028 | behavior-delete | semantic-match deletion with cascade |
 | UC-131 | cli-memory-write | `thatch remember` end to end over the single write path |
 | UC-143 | memory-display-stamp | stamped displays withheld at both buffer sites + the funnel (Layer 1) |
-| UC-144 | forget-tombstones | deletion guards hold matching re-writes; `thatch tombstones` list/clear (Layer 2) |
+| UC-144 | forget-tombstones | deletion guards hold matching re-creations; `thatch tombstones` list/clear (Layer 2) |
 | UC-145 | doctor-diagnostics | `thatch doctor` verdicts, the orphaned-marker fail, the read-only contract |
 | UC-146 | prediction-tool-guards | signal-value refusals, id-exact delete, mark_checked id validation, phantom-pair sweep |
 | UC-147 | notification-journal | notify journal rows record every delivery attempt and outcome |
 | UC-148 | prediction-find-duplicates | `prediction_find_duplicates` enumerates pending pairs with ids; hygiene line names ids inline under the cap |
+| UC-149 | memory-tombstone-scope | deletion guards govern creation only: overwrite onto a live row passes, guards stand until the CLI clear |
 
 ### Live use cases
 

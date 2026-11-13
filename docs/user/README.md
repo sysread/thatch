@@ -114,7 +114,7 @@ Stores are created automatically. No setup required.
 | `thatch_memory_recall` | Search for relevant information using natural language. Searches both the current project's store and `global` by default. |
 | `thatch_memory_list` | List all memory labels in a store. |
 | `thatch_memory_show` | Read the full content of a memory by its exact, full label. A call without the label returns guidance pointing at `memory_list`/`memory_recall`; a typo'd label gets a `Did you mean "..."?` suggestion when one is close. |
-| `thatch_memory_forget` | Delete a memory by its exact, full label. A call without the label returns guidance pointing at `memory_list`/`memory_recall`; a typo'd label gets a `Did you mean "..."?` suggestion when one is close. Deleting also leaves a guard: re-saving the same content is held until cleared (`thatch tombstones --clear`). |
+| `thatch_memory_forget` | Delete a memory by its exact, full label. A call without the label returns guidance pointing at `memory_list`/`memory_recall`; a typo'd label gets a `Did you mean "..."?` suggestion when one is close. Deleting also leaves a guard: creating a memory with the same content is held until cleared (`thatch tombstones --clear`). |
 
 ### Store tools
 
@@ -502,10 +502,11 @@ ln -s ~/dev/thatch/bin/thatch ~/.local/bin/thatch
 `search` uses the same cosine-similarity search as `thatch_memory_recall`.
 `remember` is the write path: the same code as the agent's
 `memory_remember` tool, from any terminal or script. It prints
-`[saved] <store> :: <label>` on success. A write whose content matches
-a deleted memory is held instead: it prints `[held] <store> :: <label>`
+`[saved] <store> :: <label>` on success. Creating a memory whose content
+matches a deleted memory is held instead: it prints `[held] <store> :: <label>`
 with the guard's label and the `tombstones --clear` command that
 re-admits it (see the memory guide's "Deleted memories are guarded").
+Updating a live memory with `--overwrite` is never held.
 `forget` deletes the memory and leaves a guard behind;
 `tombstones` lists the standing guards and `--clear` removes one.
 Store defaults to your current git repo.

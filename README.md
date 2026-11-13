@@ -78,7 +78,7 @@ The embedding model downloads once at first use and is cached per user
 
 ## What you get
 
-- **Memory** -- save, search, and recall knowledge across sessions with local embeddings and SQLite; one store per project plus a shared global store. Deleting is guarded: a tombstone holds any re-save of deleted content until you clear it (`thatch tombstones`).
+- **Memory** -- save, search, and recall knowledge across sessions with local embeddings and SQLite; one store per project plus a shared global store. Deleting is guarded: a tombstone holds any re-creation of deleted content until you clear it (`thatch tombstones`); updating a live memory is never held.
 - **Prediction engine** -- a statistical model of your decision-making preferences; strong predictions apply silently, ambiguous ones surface.
 - **Behavior engine** -- the agent codifies its own operational rules ("when X, I do Y") that auto-fire in similar situations.
 - **Extraction** -- durable facts are pulled from the session's tool activity automatically; nobody has to remember to save.

@@ -62,9 +62,12 @@ agent calls memory_remember(label?, content, opts) - label is derived from the c
   → model.passageEmbed("# label\n\ncontent")  →  Float32Array
   → db.findSimilar(store, embedding, { excludeSlug })  →  write-time collision check
   → db.remember(store, label, content, embedding, model.name, opts)
-      tombstone check FIRST (see Deletion guards) → held on a match
-      overwrite:false  →  atomic INSERT (PK constraint rejects duplicates)
-      overwrite:true   →  upsert + clear stale dedup verdicts for that slug
+      one write-lock-first transaction (BEGIN IMMEDIATE) around everything below
+      entry creation (bare save, or overwrite onto an absent label):
+        tombstone check FIRST (see Deletion guards) → held on a match
+        bare save onto an existing label → the "already exists" error (PK constraint)
+      entry update (overwrite: true resolving to a live row):
+        tombstone check skipped → upsert + clear stale dedup verdicts for that slug
   → return confirmation + warning if similar memories found
 ```
 
@@ -75,6 +78,10 @@ The `findSimilar` call is a write-time collision check with no telemetry. It exc
 The save always proceeds. The warning asks the agent to reconcile — merge into one entry (overwrite + forget the other) or record that they are genuinely distinct via `dedup_mark_checked`.
 
 On overwrite, the upsert clears stale dedup verdicts: any `dedup_pairs` rows referencing that slug are deleted, since the content change may resolve or create duplicates.
+
+The transaction is write-lock-first (`BEGIN IMMEDIATE`, `forgetEntry`'s pattern): the lock is taken before the tombstone and entry reads, so two thatch processes doing label maintenance on one store serialize — one commits, the other re-reads fresh state under the lock and upserts — instead of racing a deferred read snapshot into a spurious busy failure the agent must retry its way out of. A busy error is caught onto the failure arm rather than thrown (a thrown remember would surface as a host tool error and drain the extraction buffer through the fail-open gate on unreadable output shapes).
+
+The tool description carries the overwrite hygiene line — an overwrite replaces the entry's whole content; do not overwrite with placeholder or test text. Prompt-level guidance by design: a mechanical similarity floor would block a legitimate two-word correction exactly as well as it blocks junk (both are dissimilar to the old content).
 
 ### Deletion guards (tombstones)
 
@@ -89,17 +96,35 @@ embedding under the lock, INSERT OR REPLACEs a `memory_tombstones` row,
 then deletes the entry and its dedup verdicts. Tombstone before delete,
 the chat subsystem's ordering for the same hazard class.
 
-`db.remember` checks the store's tombstones FIRST - before the label
-checks, before `overwrite` handling, and before `ensureStore` (a held
-write creates nothing). A write is held when the content hash matches
-exactly or the embedding's cosine similarity against a tombstone
-embedding is ≥ 0.90 (`MEMORY_TOMBSTONE_THRESHOLD`; higher than
-`findSimilar`'s 0.85 because a hold is heavier than a warning, and the
-asymmetry favors matching: a false hold is visible and one-step
-recoverable, a false miss silently undoes a deliberate forget). The
-check and the insert run inside one transaction; a busy/snapshot error
-from that wrapping is caught onto the failure arm rather than thrown
-(a thrown remember would drain the buffer through the fail-open gate on
+`db.remember` runs the tombstone check FIRST on entry-creation writes -
+before the label checks and before `ensureStore` (a held write creates
+nothing). A creation is held when the content hash matches exactly or
+the embedding's cosine similarity against a tombstone embedding is ≥
+0.90 (`MEMORY_TOMBSTONE_THRESHOLD`; higher than `findSimilar`'s 0.85
+because a hold is heavier than a warning, and the asymmetry favors
+matching: a false hold is visible and one-step recoverable, a false
+miss silently undoes a deliberate forget).
+
+Scope inversion (November 2026): the guard originally policed every
+write path (`bd2872c`); it now governs entry creation only. A write
+carrying `overwrite: true` that resolves to a live row at `(slug,
+store)` is an update and skips the guard entirely — updating a live
+record cannot resurrect a deleted one, and the deleted sibling stays
+deleted. Three live reports drove the narrowing: a keeper restore, an
+enriched correction, and a polarity-negating correction of live
+siblings were all held by tombstones of deleted near-duplicates.
+Deleting a near-duplicate plants a guard in the content neighborhood
+the live sibling shares, and an embedding of a negation sits close to
+what it negates — so on the overwrite path the guard's only observable
+effect was holding legitimate corrections. Accepted cost: a deliberate
+overwrite can carry deliberately forgotten content under a live label
+without a hold. The create-path hold and the CLI un-guard remain the
+deliberate-deletion defenses.
+
+The check and the insert run inside remember's write-lock-first
+transaction (see the write path above); a busy/snapshot error from that
+wrapping is caught onto the failure arm rather than thrown (a thrown
+remember would drain the buffer through the fail-open gate on
 unreadable output shapes).
 
 The held write returns `{ ok: false, error, held }` - the error field

@@ -557,6 +557,27 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   after the session consumes prompts again. (2026-11-05, location-switch
   fix)
 
+## bun's db.transaction() begins DEFERRED - read-then-write paths need explicit BEGIN IMMEDIATE
+
+- **Symptom**: under two thatch processes sharing one database (a session
+  plus its extraction child, both doing memory maintenance), write-path
+  calls fail with `SQLITE_BUSY`/snapshot errors even though
+  `busy_timeout` is set, and the failures arrive as spurious
+  "store was busy" retry prompts rather than serialization.
+- **Cause**: `db.transaction(fn)` wraps fn in `BEGIN` - deferred mode.
+  The transaction's SELECTs take only a read snapshot; the first write
+  statement then upgrades to the write lock. If another process
+  committed in between, SQLite returns a snapshot conflict immediately -
+  `busy_timeout` retries plain lock waits but never snapshot conflicts,
+  because waiting cannot make a stale snapshot fresh.
+- **Fix**: any transaction that reads then writes must take the write
+  lock first: explicit `this.#db.exec("BEGIN IMMEDIATE")` before the
+  reads, with COMMIT/ROLLBACK in a try/catch (the pattern in
+  `forgetEntry` and `remember` in src/db.ts). Concurrent writers then
+  queue on `busy_timeout` and the loser re-reads fresh state under the
+  lock instead of failing. (2026-11-13, memory-write-race: the two-process
+  maintenance incident)
+
 ## An extensionless shim re-export target fails a naive existsSync
 
 - **Symptom**: a doctor (or any file-checking tool) reports a dev shim's
