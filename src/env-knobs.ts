@@ -98,6 +98,12 @@ export const ENV_KNOBS: EnvKnob[] = [
     default: "1 (every 30s cycle)",
   },
   {
+    name: "THATCH_CHAT_WAKE_SPREAD_MS",
+    description:
+      "Window in milliseconds over which one chat poll cycle spreads its wake prompts when it wakes multiple recipients; 0 fires them back to back (clamped to 0..30000).",
+    default: "5000",
+  },
+  {
     name: "THATCH_CHILD_RECONCILE_MS",
     description: "How often the runtime reconciles background extraction child sessions, in milliseconds.",
     default: "10000",

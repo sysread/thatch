@@ -820,6 +820,130 @@ describe("ChatPoller", () => {
       expect(condemned).toEqual([]);
     });
   });
+
+  describe("wake spreading", () => {
+    // The injected sleep records the gaps instead of waiting, so the
+    // assertions pin the spacing the poller chose, not wall-clock time.
+    const recordingSleep = (gaps: number[]) => async (ms: number) => {
+      gaps.push(ms);
+    };
+
+    test("a multi-recipient cycle spreads wake prompts evenly across the window", async () => {
+      const recipients = [
+        ["ses_c", "carol"],
+        ["ses_d", "dave"],
+        ["ses_e", "erin"],
+        ["ses_f", "frank"],
+      ] as const;
+      for (const [id, base] of recipients) reg(id, base);
+      for (const [, base] of recipients) db.sendChatMessage("ses_a", `${base}-00001`, `ping ${base}`);
+      const gaps: number[] = [];
+      const woken: string[] = [];
+      const spread = new ChatPoller({
+        store: db,
+        hostedSessions: () => recipients.map(([id]) => id),
+        deliver: async (sessionID) => {
+          woken.push(sessionID);
+        },
+        canDeliver: () => true,
+        pollIntervalMs: 60_000,
+        wakeSpreadMs: 5_000,
+        sleep: recordingSleep(gaps),
+      });
+      try {
+        await spread.deliverPending();
+        // First wake immediate; each later one one window/count further
+        // in (5000/4 = 1250ms gaps).
+        expect(woken.length).toBe(4);
+        expect(gaps).toEqual([1_250, 1_250, 1_250]);
+        // Every recipient's delivered_at landed despite the gaps.
+        expect(db.pendingChatNotifications(recipients.map(([id]) => id), cutoffAgo(15)).length).toBe(0);
+      } finally {
+        spread.dispose();
+      }
+    });
+
+    test("a single-recipient cycle adds no delay", async () => {
+      const gaps: number[] = [];
+      const single = new ChatPoller({
+        store: db,
+        hostedSessions: () => ["ses_b"],
+        deliver: async () => {},
+        canDeliver: () => true,
+        pollIntervalMs: 60_000,
+        wakeSpreadMs: 5_000,
+        sleep: recordingSleep(gaps),
+      });
+      try {
+        db.sendChatMessage("ses_a", "bob-00001", "solo ping");
+        await single.deliverPending();
+        expect(gaps).toEqual([]);
+      } finally {
+        single.dispose();
+      }
+    });
+
+    test("a zero window fires wakes back to back", async () => {
+      reg("ses_c", "carol");
+      db.sendChatMessage("ses_a", "bob-00001", "to bob");
+      db.sendChatMessage("ses_a", "carol-00001", "to carol");
+      const gaps: number[] = [];
+      const woken: string[] = [];
+      const off = new ChatPoller({
+        store: db,
+        hostedSessions: () => ["ses_b", "ses_c"],
+        deliver: async (sessionID) => {
+          woken.push(sessionID);
+        },
+        canDeliver: () => true,
+        pollIntervalMs: 60_000,
+        wakeSpreadMs: 0,
+        sleep: recordingSleep(gaps),
+      });
+      try {
+        await off.deliverPending();
+        expect(woken.length).toBe(2);
+        expect(gaps).toEqual([]);
+      } finally {
+        off.dispose();
+      }
+    });
+
+    test("a large batch finishes inside the window", async () => {
+      // 60 recipients: 59 gaps of window/60 sum to just under the window,
+      // so the pass completes well before the next 30s poll tick.
+      const ids: string[] = [];
+      for (let i = 0; i < 60; i++) {
+        const base = `bulk${i}`;
+        const id = `ses_bulk_${i}`;
+        reg(id, base);
+        db.sendChatMessage("ses_a", `${base}-00001`, `ping ${i}`);
+        ids.push(id);
+      }
+      const gaps: number[] = [];
+      const woken: string[] = [];
+      const bulk = new ChatPoller({
+        store: db,
+        hostedSessions: () => ids,
+        deliver: async (sessionID) => {
+          woken.push(sessionID);
+        },
+        canDeliver: () => true,
+        pollIntervalMs: 60_000,
+        wakeSpreadMs: 5_000,
+        sleep: recordingSleep(gaps),
+      });
+      try {
+        await bulk.deliverPending();
+        expect(woken.length).toBe(60);
+        expect(gaps.length).toBe(59);
+        expect(gaps.every((g) => g === 5_000 / 60)).toBe(true);
+        expect(gaps.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(5_000);
+      } finally {
+        bulk.dispose();
+      }
+    });
+  });
 });
 
 describe("wake gate", () => {

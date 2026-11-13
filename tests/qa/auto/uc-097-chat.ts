@@ -12,9 +12,9 @@ import { ChatPoller, nowIso, isoMinutesAgo as cutoffAgo } from "../../../src/cha
  *
  * Automatable: yes - the store is real SQLite in a tempdir and the poller
  * takes injected deliver/canDeliver functions, so the full lifecycle
- * (register, send, gate, deliver, read, re-nudge, rate cap, unregister)
- * runs with no network and no opencode session. The live cross-session path
- * (two real sessions exchanging a message) is UC-098.
+ * (register, send, gate, deliver, wake spreading, read, re-nudge, rate
+ * cap, unregister) runs with no network and no opencode session. The live
+ * cross-session path (two real sessions exchanging a message) is UC-098.
  */
 
 const useCase: UseCase = {
@@ -29,9 +29,10 @@ const useCase: UseCase = {
     "4. Send a message and confirm send validation (ghost recipient, unregistered sender, self-send).",
     "5. Poll with the delivery gate closed; confirm messages stay pending.",
     "6. Open the gate; confirm one grouped wake prompt with sender names, and messages marked delivered.",
-    "7. Read the inbox; confirm it drains and stamps read.",
-    "8. Confirm the re-nudge path re-queues delivered-but-unread mail, and the rate cap blocks repeats.",
-    "9. Unregister; confirm message history survives and wake prompts stop for the unregistered recipient.",
+    "7. Wake two recipients in one cycle; confirm the prompts fire one wake-window slot apart, not simultaneously.",
+    "8. Read the inbox; confirm it drains and stamps read.",
+    "9. Confirm the re-nudge path re-queues delivered-but-unread mail, and the rate cap blocks repeats.",
+    "10. Unregister; confirm message history survives and wake prompts stop for the unregistered recipient.",
   ].join("\n"),
   expected: [
     "- chat_register, chat_list, chat_send, chat_read, chat_unregister, chat_broadcast, and chat_status are shared tools (no opencodeOnly flag): MCP hosts pass the hook-assigned name as `as`, and wake-up delivery is the only opencode-only part.",
@@ -40,6 +41,7 @@ const useCase: UseCase = {
     "- Send requires both endpoints registered and distinct, and returns the resolved recipient.",
     "- The poller delivers only when canDeliver passes; undelivered mail stays pending.",
     "- Delivery groups a recipient's messages into one prompt (senders + count) and stamps delivered_at.",
+    "- A poll cycle waking multiple recipients spreads the prompts evenly across the wake window (THATCH_CHAT_WAKE_SPREAD_MS, default 5s; 0 restores back-to-back wakes); a single-recipient cycle adds no delay.",
     "- read drains the inbox oldest-first and stamps read_at on exactly the returned rows; read mail is never re-nudged.",
     "- The per-recipient nudge cap stops repeated wake prompts within the hour window, and only binds re-nudges: a first delivery of never-delivered mail lands even with the budget spent.",
     "- Unregister keeps messages as history (senders keep the name snapshotted at send time) and stops wake selection for the unregistered recipient's unread mail.",
@@ -159,7 +161,40 @@ const useCase: UseCase = {
         return "FAIL";
       }
 
-      // Step 7: read drains and stamps.
+      // Step 7: one cycle waking two recipients spreads the prompts
+      // across the wake window - one gap of window/count between the two
+      // dispatches, recorded by the injected sleep instead of waited out.
+      const delta = db.registerChatSession("ses_delta", "p", null, "opencode", "delta");
+      const epsilon = db.registerChatSession("ses_epsilon", "p", null, "opencode", "epsilon");
+      if (!delta.ok || !epsilon.ok) {
+        console.log("  FAIL: wake-spread registrations failed");
+        return "FAIL";
+      }
+      db.sendChatMessage("ses_alpha", delta.name, "spread ping d");
+      db.sendChatMessage("ses_alpha", epsilon.name, "spread ping e");
+      const spreadGaps: number[] = [];
+      const spreadWoken: string[] = [];
+      const spreadPoller = new ChatPoller({
+        store: db,
+        hostedSessions: () => ["ses_delta", "ses_epsilon"],
+        deliver: async (sessionID) => {
+          spreadWoken.push(sessionID);
+        },
+        canDeliver: () => true,
+        pollIntervalMs: 60_000,
+        wakeSpreadMs: 5_000,
+        sleep: async (ms) => {
+          spreadGaps.push(ms);
+        },
+      });
+      await spreadPoller.deliverPending();
+      spreadPoller.dispose();
+      if (spreadWoken.length !== 2 || spreadGaps.length !== 1 || spreadGaps[0] !== 2_500) {
+        console.log(`  FAIL: wake spread invalid (woken ${spreadWoken.length}, gaps ${JSON.stringify(spreadGaps)})`);
+        return "FAIL";
+      }
+
+      // Step 8: read drains and stamps.
       const inbox = db.readChatMessages("ses_beta");
       if (inbox.length !== 1 || inbox[0].body !== "ping from alpha" || inbox[0].from_name !== alpha.name) {
         console.log(`  FAIL: unexpected inbox: ${JSON.stringify(inbox)}`);
@@ -170,7 +205,7 @@ const useCase: UseCase = {
         return "FAIL";
       }
 
-      // Step 8: re-nudge and the rate cap.
+      // Step 9: re-nudge and the rate cap.
       if (!db.sendChatMessage("ses_alpha", beta.name, "second ping").ok) {
         console.log("  FAIL: second send rejected");
         return "FAIL";
@@ -241,7 +276,7 @@ const useCase: UseCase = {
       }
       gammaHosted.dispose();
 
-      // Step 9: unregister keeps history - and unregistering the recipient
+      // Step 10: unregister keeps history - and unregistering the recipient
       // stops wake selection for kept-but-unread mail.
       db.unregisterChatSession("ses_alpha");
       if (db.findChatSession(alpha.name)) {

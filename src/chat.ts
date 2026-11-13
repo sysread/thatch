@@ -424,6 +424,19 @@ export const CHAT_SWALLOW_DEAD_COUNT = 3;
 // "every cycle" is the cheap option, and a faster catch beats a stale host.
 export const CHAT_DIRECTORY_REVERIFY_CYCLES = envChatInt("THATCH_CHAT_DIRECTORY_REVERIFY_CYCLES", 1, 1, 120);
 
+// Wake spreading. A broadcast fans out to many recipients in one poll
+// cycle, and each wake prompt makes its recipient immediately start an
+// LLM completion - without a gap the whole fleet's requests hit the
+// model API within milliseconds of each other and get throttled
+// (observed live on Fireworks, Nov 2026). When a cycle wakes multiple
+// recipients, the prompts fire at even gaps across this window: the
+// first immediately, each later one at (index/count) * window, so the
+// batch finishes inside the window and far inside the 30s poll cadence.
+// 0 disables - wakes fire back to back, as before. Clamped to at most
+// one poll interval so a spread can never push a delivery past the
+// next tick.
+export const CHAT_WAKE_SPREAD_MS = envChatInt("THATCH_CHAT_WAKE_SPREAD_MS", 5_000, 0, CHAT_POLL_INTERVAL_MS);
+
 /** Human-readable age of an ISO timestamp: "45s ago", "5m ago", "3h ago",
  *  "2d ago". Shared by the CLI roster and the chat_list tool so both
  *  surfaces render the same last-check-in wording. */
@@ -2650,6 +2663,15 @@ export interface ChatPollerOptions {
    *  CHAT_DIRECTORY_REVERIFY_CYCLES (1 - the check is one point lookup per
    *  hosted session, cheap enough for every cycle). */
   reverifyEveryCycles?: number;
+  /** Window over which one cycle's wake prompts to multiple recipients
+   *  spread (see CHAT_WAKE_SPREAD_MS). The first wake fires immediately;
+   *  each later one lands at (index/count) * window, so a fan-out never
+   *  hits the model API with every completion request at once. 0 restores
+   *  back-to-back wakes. */
+  wakeSpreadMs?: number;
+  /** Sleeps between spread wake prompts. Injected so tests assert the
+   *  spacing without waiting; the default is a real unref'd timer. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -2713,8 +2735,17 @@ export function unexpiredGraceRehosts(grace: Map<string, number>, now: number): 
   return live;
 }
 
+/** Default inter-wake sleep: resolves after `ms`, with the timer unref'd
+ *  so the tail of a wake spread never keeps the host process alive -
+ *  the poller's own interval does the same. */
+const sleepFor = (ms: number) =>
+  new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+
 export class ChatPoller {
-  #opts: ChatPollerOptions & Required<Pick<ChatPollerOptions, "pollIntervalMs" | "renudgeMinutes" | "maxNudgesPerHour" | "swallowWatchMs" | "swallowDeadCount" | "reverifyEveryCycles">>;
+  #opts: ChatPollerOptions & Required<Pick<ChatPollerOptions, "pollIntervalMs" | "renudgeMinutes" | "maxNudgesPerHour" | "swallowWatchMs" | "swallowDeadCount" | "reverifyEveryCycles" | "wakeSpreadMs" | "sleep">>;
   #timer: ReturnType<typeof setInterval> | null = null;
   #polling = false;
   #delivering = false;
@@ -2755,6 +2786,8 @@ export class ChatPoller {
       swallowWatchMs: CHAT_SWALLOW_WATCH_MS,
       swallowDeadCount: CHAT_SWALLOW_DEAD_COUNT,
       reverifyEveryCycles: CHAT_DIRECTORY_REVERIFY_CYCLES,
+      wakeSpreadMs: CHAT_WAKE_SPREAD_MS,
+      sleep: sleepFor,
       ...opts,
     };
   }
@@ -2946,6 +2979,21 @@ export class ChatPoller {
       let openTabs: ReadonlySet<string> | null = null;
       const userWakeTabs = () => (openTabs ??= this.#opts.openTabs?.() ?? new Set<string>());
 
+      // Wake spreading: one cycle waking several recipients fires the
+      // prompts at even gaps across the window instead of all at once
+      // (every wake starts an LLM completion, and a whole fleet's
+      // requests landing together gets throttled by the model API). The
+      // denominator is the batch's recipient count, so a cycle where
+      // every recipient delivers lands wake i at ~(i/count)*window and
+      // finishes inside the window; a gated-out recipient only shrinks
+      // the actual span. Single-recipient cycles (the common case) and a
+      // zero window add no delay at all.
+      const spreadStepMs =
+        this.#opts.wakeSpreadMs > 0 && byRecipient.size > 1
+          ? this.#opts.wakeSpreadMs / byRecipient.size
+          : 0;
+      let wakes = 0;
+
       for (const [recipient, messages] of byRecipient) {
         if (!(await this.#opts.canDeliver(recipient))) continue;
         // Split the batch: a row is a re-nudge when it was already
@@ -2999,8 +3047,17 @@ export class ChatPoller {
           // contradict the fence note on exactly the rows that matter.
           const userRows = deliverRows.filter((m) => m.from_session === CHAT_CLI_SENDER);
           const batch = { fromUser: userRows.length > 0, mixed: userRows.length > 0 && userRows.length < deliverRows.length };
+          // The gap sleeps between the previous recipient's stamps and
+          // this dispatch: no DB statement or transaction is open during
+          // it, and every recipient's delivered_at still lands right
+          // after its OWN wake, so the stamp keeps reporting real wake
+          // times.
+          if (wakes > 0 && spreadStepMs > 0) {
+            await this.#opts.sleep(spreadStepMs);
+          }
           await this.#opts.deliver(recipient, senders, deliverRows.length, batch);
           prompted = true;
+          wakes++;
           // Every prompt counts, fresh or re-nudge: the cap bounds prompts
           // actually sent, not stamp writes, so a failing stamp cannot turn
           // the exempt path into an uncounted re-delivery loop. The
