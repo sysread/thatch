@@ -33,6 +33,7 @@ const useCase: UseCase = {
     "4. Run /thatch/exit, call the thatch_exit tool, then fire the idle. Verify the adapter emitted the exit-tab-closed rpc event (a TUI-only close of the session's own tab).",
     "5. Run /thatch/compact but let an un-greenlit idle pass first. Verify no host action fires and no warning toast is shown; the arm survives and still resolves on a later greenlight + idle.",
     "6. Fire session.deleted for a session with a pending wrap-up, then its idle. Verify no action fires.",
+    "7. Simulate a mid-checklist location switch (the merged-worktree re-home): boot a SECOND adapter instance bound to a different directory against the same db, arm /thatch/exit through the FIRST instance, then greenlight (thatch_exit) and idle through the SECOND. Verify the exit still completes: the close event fires from the new location's instance and the arm row is gone.",
   ].join("\n"),
   expected: [
     "- The action command files exist under the fixture's opencode/command/thatch/ after plugin load; the wrap-up files (compact.md, exit.md) do not, and pre-drop leftovers are removed.",
@@ -40,6 +41,7 @@ const useCase: UseCase = {
     "- A compact greenlight (the thatch_compact tool call) triggers session.compact({sessionID}); an exit greenlight (thatch_exit) makes the following idle emit the exit-tab-closed rpc event {sessionID}.",
     "- An un-greenlit arm survives idles untouched - no host action, no warning toast.",
     "- session.deleted clears a pending wrap-up so a later idle cannot fire it.",
+    "- A wrap-up armed in one location completes from another: the greenlight adopts the journaled arm (pid-scoped, directory-blind) in the new location's instance, and the closing idle fires the host action there.",
   ].join("\n"),
 
   async run(ctx: QaContext) {
@@ -200,6 +202,57 @@ const useCase: UseCase = {
       if (harness.calls.compact.length !== beforeBlock.compact + 1) {
         console.log("  FAIL: pending wrap-up fired after session.deleted");
         return "FAIL";
+      }
+
+      // Step 7: the mid-checklist location switch (the 2026-11-13
+      // emma-bedding-00033 incident). A session whose worktree is merged
+      // and deleted under it re-homes to another directory; every later
+      // tool call and idle then resolves through the NEW location's plugin
+      // instance (one serve hosts one instance per directory). Arm through
+      // the ORIGINAL instance, then complete the whole greenlight + close
+      // from the NEW one: the greenlight must adopt the journaled arm
+      // (pid-scoped, directory-blind), and the closing idle must fire the
+      // host action from the new instance.
+      const movedDir = join(ctx.dir, "moved-home");
+      mkdirSync(movedDir, { recursive: true });
+      const movedHarness = makeV2Harness(movedDir, { childID: "qa-103-moved-child" });
+      // Same env discipline as the first adapter load: the fixture db and
+      // config home must be in place before setup (the first load's
+      // finally restored the developer's real environment).
+      process.env.XDG_CONFIG_HOME = ctx.env.XDG_CONFIG_HOME;
+      process.env.THATCH_DB_PATH = ctx.env.THATCH_DB_PATH;
+      let movedDispose: (() => Promise<void>) | undefined;
+      try {
+        movedDispose = (await setupV2(movedHarness.context as any)) as () => Promise<void>;
+      } finally {
+        process.env.XDG_CONFIG_HOME = prevXdg;
+        process.env.THATCH_DB_PATH = prevDb;
+      }
+      try {
+        await exitCmd.execute({ sessionID: "ses-qa-103f" });
+        if (!wrapupArmed("ses-qa-103f")) {
+          console.log("  FAIL: /thatch/exit did not arm before the simulated move");
+          return "FAIL";
+        }
+        const movedExitTool = movedHarness.addedTools.find((t) => t.name === "thatch_exit")!;
+        const movedResult = (await movedExitTool.execute({}, { sessionID: "ses-qa-103f" })) as { content: string };
+        if (!String(movedResult?.content).includes("Greenlit")) {
+          console.log(`  FAIL: the moved session's thatch_exit must adopt the journaled arm, got ${JSON.stringify(movedResult)}`);
+          return "FAIL";
+        }
+        const movedExits = () => movedHarness.calls.emitted.filter((e) => e.name === EXIT_TAB_CLOSED_EVENT);
+        await movedHarness.queue({
+          type: "session.execution.succeeded",
+          location: { directory: movedDir },
+          data: { sessionID: "ses-qa-103f" },
+        });
+        if (!(await v2wait("moved session's exit close", () => movedExits().some((e) => e.data?.sessionID === "ses-qa-103f")))) return "FAIL";
+        if (wrapupArmed("ses-qa-103f")) {
+          console.log("  FAIL: the moved session's resolved arm row must be gone");
+          return "FAIL";
+        }
+      } finally {
+        await movedDispose();
       }
 
       return "PASS";

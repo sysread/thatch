@@ -426,6 +426,194 @@ describe("runtime rehydration through setup()", () => {
     }
   });
 
+  test("a command-armed wrap-up survives a full reload cycle: arm, dispose, reboot, greenlight", async () => {
+    // The write-side pin for reload persistence (the rehydrate tests above
+    // seed rows by hand; this one drives the REAL arming path - the
+    // registered command's execute - then the reload's full teardown and
+    // re-setup, then the greenlight tool). The friction report behind the
+    // 2026-11-13 exit-arming bug suspected this cycle; the cycle holds, and
+    // this test keeps it held.
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    let first: (() => Promise<void>) | undefined;
+    let second: (() => Promise<void>) | undefined;
+    try {
+      process.env.THATCH_DB_PATH = dbPath;
+      process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+      ({ dispose: first } = await bootV2());
+
+      // The command's execute arms the map AND journals the row (the
+      // disposed guard at the write must not fire on a live instance).
+      const cmd = currentHarness.commands.find((c) => c.name === "thatch/exit");
+      expect(cmd).toBeDefined();
+      await cmd!.execute({ sessionID: "ses_wrap_cycle", prompt: { text: "" } });
+      const armed = new ThatchDB(dbPath);
+      expect(armed.runtimeStateGet("wrapup", "ses_wrap_cycle")).toMatchObject({
+        directory: WORK_DIR,
+        pid: process.pid,
+        value: { kind: "exit" },
+      });
+      armed.close();
+
+      // The reload: opencode closes the old activation's scope (the
+      // adapter's cleanup) and runs setup fresh in the same process.
+      await first!();
+      first = undefined;
+      ({ dispose: second } = await bootV2());
+
+      const exitTool = currentHarness.addedTools.find((t) => t.name === "thatch_exit")!;
+      const result = (await exitTool.execute({}, { sessionID: "ses_wrap_cycle", agent: "build" } as any)) as { content: string };
+      expect(result.content).not.toContain("No exit in progress");
+      const green = new ThatchDB(dbPath);
+      expect((green.runtimeStateGet("wrapup", "ses_wrap_cycle")?.value as any)?.greenlit).toBe(true);
+      green.close();
+    } finally {
+      await first?.();
+      await second?.();
+      if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevConfig;
+      if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+      else process.env.THATCH_DB_PATH = prevDbPath;
+    }
+  });
+
+  test("a session that switches locations mid-checklist greenlights from the journal in the new location's instance", async () => {
+    // The 2026-11-13 emma-bedding-00033 incident: opencode re-homed a
+    // session whose worktree was merged and deleted under it, mid-checklist.
+    // Every later tool call resolved through the NEW location's plugin
+    // instance (one serve hosts one instance per directory), whose
+    // pendingWrapUp never held the arm - thatch_exit refused with "No exit
+    // in progress" even though the arm was durably journaled under the OLD
+    // directory. The fix: the greenlight falls back to the journaled row
+    // (pid-scoped, directory-blind), adopts it, and the greenlight write
+    // re-stamps the row with the ADOPTING instance's directory.
+    const OTHER_DIR = "/tmp/thatch-state-b"; // created eagerly at file top
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    let home: (() => Promise<void>) | undefined;
+    let moved: (() => Promise<void>) | undefined;
+    try {
+      process.env.THATCH_DB_PATH = dbPath;
+      process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+      // The arming instance: the session's original location.
+      ({ dispose: home } = await bootV2());
+      const cmd = currentHarness.commands.find((c) => c.name === "thatch/exit")!;
+      await cmd.execute({ sessionID: "ses_wrap_moved", prompt: { text: "" } });
+      const armed = new ThatchDB(dbPath);
+      expect(armed.runtimeStateGet("wrapup", "ses_wrap_moved")?.directory).toBe(WORK_DIR);
+      armed.close();
+
+      // The new location's instance in the SAME process: a live sibling
+      // sharing the db. Its rehydrate skips the old directory's rows, so
+      // the arm exists only as a journal row here - the fallback's case.
+      ({ dispose: moved } = await bootV2({ dir: OTHER_DIR, worktree: OTHER_DIR }));
+      const exitTool = currentHarness.addedTools.find((t) => t.name === "thatch_exit")!;
+      const result = (await exitTool.execute({}, { sessionID: "ses_wrap_moved", agent: "build" } as any)) as { content: string };
+      expect(result.content).toContain("Greenlit");
+      // The greenlight write migrated the row to the adopting instance.
+      const after = new ThatchDB(dbPath);
+      const row = after.runtimeStateGet("wrapup", "ses_wrap_moved");
+      expect(row?.directory).toBe(OTHER_DIR);
+      expect((row?.value as any)?.greenlit).toBe(true);
+      after.close();
+    } finally {
+      await moved?.();
+      await home?.();
+      if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevConfig;
+      if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+      else process.env.THATCH_DB_PATH = prevDbPath;
+    }
+  });
+
+  test("a greenlit arm whose session switched locations still closes on the new location's idle", async () => {
+    // The same move, one step later: the model greenlit in the OLD
+    // location, then the session re-homed before its closing idle. The new
+    // instance's idle resolution falls back to the journaled (greenlit) row
+    // and fires the host action - without the fallback the close would
+    // strand and the session would sit open armed forever.
+    const OTHER_DIR = "/tmp/thatch-state-b";
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    let home: (() => Promise<void>) | undefined;
+    let moved: (() => Promise<void>) | undefined;
+    try {
+      process.env.THATCH_DB_PATH = dbPath;
+      process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+      ({ dispose: home } = await bootV2());
+      const homeHarness = currentHarness;
+      const cmd = homeHarness.commands.find((c) => c.name === "thatch/exit")!;
+      await cmd.execute({ sessionID: "ses_wrap_moved2", prompt: { text: "" } });
+      await homeHarness.addedTools.find((t) => t.name === "thatch_exit")!
+        .execute({}, { sessionID: "ses_wrap_moved2", agent: "build" } as any);
+
+      // The new location's instance; the session's next idle lands here.
+      ({ dispose: moved } = await bootV2({ dir: OTHER_DIR, worktree: OTHER_DIR }));
+      const movedHarness = currentHarness;
+      await movedHarness.queue({
+        type: "session.execution.succeeded",
+        location: { directory: OTHER_DIR },
+        data: { sessionID: "ses_wrap_moved2" },
+      });
+      await waitForWiring(
+        () => movedHarness.calls.emitted.some((e) => e.name === EXIT_TAB_CLOSED_EVENT && e.data?.sessionID === "ses_wrap_moved2"),
+        "the moved session's greenlit exit never closed on the new location's idle",
+      );
+      const after = new ThatchDB(dbPath);
+      expect(after.runtimeStateGet("wrapup", "ses_wrap_moved2")).toBeNull();
+      after.close();
+    } finally {
+      await moved?.();
+      await home?.();
+      if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevConfig;
+      if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+      else process.env.THATCH_DB_PATH = prevDbPath;
+    }
+  });
+
+  test("the journal fallback never adopts a foreign-pid arm, greenlit or not", async () => {
+    // The restart skip stays absolute: an arm written by a dead process
+    // must not greenlight or fire through the fallback any more than it
+    // rehydrates. The row is seeded in a THIRD directory so the booting
+    // instance's rehydrate partition would leave it alone either way -
+    // this test pins the FALLBACK's pid check, not the partition's.
+    const OTHER_DIR = "/tmp/thatch-state-b";
+    const THIRD_DIR = "/tmp/thatch-state-a";
+    const db = new ThatchDB(dbPath);
+    db.runtimeStatePut("wrapup", "ses_wrap_foreign", { kind: "exit", greenlit: true }, THIRD_DIR, process.pid + 999);
+    db.close();
+    const prevConfig = process.env.XDG_CONFIG_HOME;
+    const prevDbPath = process.env.THATCH_DB_PATH;
+    let dispose: (() => Promise<void>) | undefined;
+    try {
+      process.env.THATCH_DB_PATH = dbPath;
+      process.env.XDG_CONFIG_HOME = join(dbDir, "config");
+      ({ dispose } = await bootV2({ dir: OTHER_DIR, worktree: OTHER_DIR }));
+      const harness = currentHarness;
+
+      const exitTool = harness.addedTools.find((t) => t.name === "thatch_exit")!;
+      const result = (await exitTool.execute({}, { sessionID: "ses_wrap_foreign", agent: "build" } as any)) as { content: string };
+      expect(result.content).toContain("No exit in progress");
+
+      // A greenlit foreign-pid row must not fire on idle either.
+      await harness.queue({
+        type: "session.execution.succeeded",
+        location: { directory: OTHER_DIR },
+        data: { sessionID: "ses_wrap_foreign" },
+      });
+      await new Promise((r) => setTimeout(r, 300));
+      expect(harness.calls.emitted.some((e) => e.name === EXIT_TAB_CLOSED_EVENT)).toBe(false);
+      expect(harness.calls.compact.length).toBe(0);
+    } finally {
+      await dispose?.();
+      if (prevConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevConfig;
+      if (prevDbPath === undefined) delete process.env.THATCH_DB_PATH;
+      else process.env.THATCH_DB_PATH = prevDbPath;
+    }
+  });
+
   test("a same-pid reload restores journaled watcher pending events to the live registry", async () => {
     // Regression wiring test for the reload-loss incident (watch_qn449jio):
     // pending events journaled while the session was busy must come back
@@ -1115,8 +1303,9 @@ describe("extraction journal sweep", () => {
   // The sweep's decision core is planJournalPrune (unit-tested in
   // extraction.test.ts); here it is wired to the real db API: rows seeded
   // through ThatchDB, one backdated past the TTL through raw SQL, deletes
-  // applied the way runtime.ts applies them.
-  test("prunes dead-directory and past-TTL extraction rows, leaves other kinds", () => {
+  // applied the way runtime.ts applies them (the swept kinds are the
+  // runtime call site's set: extraction kinds, watcher_death, wrapup).
+  test("prunes dead-directory and past-TTL rows including wrapup, leaves watcher_death pickup rows", () => {
     const live = "/tmp/thatch-state-a"; // created eagerly at file top
     const dead = join(dbDir, "swept-away-dir"); // never created
     const db = new ThatchDB(dbPath);
@@ -1124,7 +1313,16 @@ describe("extraction journal sweep", () => {
     db.runtimeStatePut("buffer", "ses_live", [ix("ses_live")], live);
     db.runtimeStatePut("buffer", "ses_stale", [ix("ses_stale")], live);
     db.runtimeStatePut("accepted", "ses_dead", [ix("ses_dead")], dead);
-    db.runtimeStatePut("wrapup", "ses_wrap", { kind: "compact" }, dead);
+    // A wrap-up arm in a dead directory: the location-switch orphan (the
+    // session re-homed when its worktree was merged and deleted; no
+    // instance will ever boot in the dead directory to prune the row) -
+    // the sweep is its only reclaim. A LIVE-directory arm survives.
+    db.runtimeStatePut("wrapup", "ses_wrap_dead", { kind: "compact" }, dead);
+    db.runtimeStatePut("wrapup", "ses_wrap_live", { kind: "exit" }, live);
+    // A stamped watcher death row is exempt from the path check: its
+    // coordinator picks it up from the MAIN checkout, so a dead worktree
+    // must not eat it (age is its only doom criterion).
+    db.runtimeStatePut("watcher_death", "ses_death_pickup", { coordinatorSessionID: "ses_coord", at: new Date().toISOString() }, dead);
     // Backdate one live-directory row past the TTL (8 days).
     const raw = new Database(dbPath);
     raw.run(`UPDATE runtime_state SET created_at = ? WHERE kind = 'buffer' AND session_id = 'ses_stale'`, [
@@ -1132,7 +1330,7 @@ describe("extraction journal sweep", () => {
     ]);
     raw.close();
 
-    const doomed = planJournalPrune(db.runtimeStateJournalRows(EXTRACTION_JOURNAL_KINDS), {
+    const doomed = planJournalPrune(db.runtimeStateJournalRows([...EXTRACTION_JOURNAL_KINDS, "watcher_death", "wrapup"]), {
       nowMs: Date.now(),
       ttlMs: RUNTIME_STATE_TTL_MS,
       pathExists: (p) => p === live,
@@ -1140,7 +1338,7 @@ describe("extraction journal sweep", () => {
     for (const r of doomed) db.runtimeStateDelete(r.kind, r.sessionID);
 
     const survivors = db.runtimeStateAll().map((r) => `${r.kind}:${r.sessionID}`);
-    expect(survivors.sort()).toEqual(["buffer:ses_live", "wrapup:ses_wrap"]);
+    expect(survivors.sort()).toEqual(["buffer:ses_live", "watcher_death:ses_death_pickup", "wrapup:ses_wrap_live"]);
     db.close();
   });
 

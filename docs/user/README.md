@@ -270,6 +270,9 @@ Beyond the tools, thatch hooks into opencode itself:
   (opencode closes the session's own tab; the Claude Code plugin regime
   fires the host compaction, and its exit reports it is safe to close -
   no mod API can close a session).
+  The armed wrap-up is durable: it survives plugin reloads, and it follows
+  the session when opencode re-homes it mid-checklist (a merged and deleted
+  worktree) - the checklist completes wherever the session lands.
   Either way the session's watches are cancelled, and reopening or resuming
   the session does not re-arm them - re-create watches you still want with
   `thatch_watch_create`. With items outstanding, the agent lists them and

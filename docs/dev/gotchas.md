@@ -210,6 +210,20 @@ runs no settings hooks: the mod delivers in-process (the stage replaces
   (`tests/mocks/opencode-v2-harness.ts`'s setupTestEnv, the `startServer`
   helpers in `state-persistence.test.ts`) sets and restores both; copy one
   rather than hand-rolling a boot.
+- **A re-homed session leaves its instance-scoped state behind.** One
+  opencode serve hosts one thatch plugin instance per location directory;
+  a session whose worktree is merged and deleted under it re-homes to
+  another directory mid-life, and every later tool call, prompt hook, and
+  idle event resolves through the NEW location's instance. In-memory maps
+  and `runtime_state` rows stamped with the old directory never reach it
+  again - the old instance holds stale copies that no event wakes, and the
+  rows wait for an instance that will never boot (a deleted worktree).
+  Anything a session owns must therefore be readable through the journal
+  pid-scoped (the wrap-up arm fallback in `src/runtime.ts` is the pattern)
+  or ride the dead-directory journal sweep. Symptom signature: a tool
+  answers "nothing armed/pending" while the journal row plainly exists -
+  check the row's `directory` against the session's current one in
+  opencode.db (`session_v2.directory`) before suspecting the writer.
 - **osascript exits 0 even when macOS drops the banner.** Focus/Do Not Disturb
   or missing notification permission silently swallow it. `notify_user` result
   text therefore reports command success only; never interpret exit 0 as

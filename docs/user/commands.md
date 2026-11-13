@@ -58,7 +58,10 @@ invoke it. The remaining commands (`refine`, `self-review`, `peer-review`,
 - `/thatch/compact` and `/thatch/exit` — the wrap-up commands. They run a
   pre-flight checklist (flush extraction, finish promised memory writes,
   surface loose ends) before a compaction or an exit, gated by a greenlight
-  (the zero-arg `thatch_compact` or `thatch_exit` tool call).
+  (the zero-arg `thatch_compact` or `thatch_exit` tool call). The armed
+  wrap-up survives plugin reloads and follows the session across a
+  mid-checklist location move, so the checklist completes wherever the
+  session lands.
   opencode and the Claude Code plugin regime; the greenlight mechanics are
   described in the
   [user guide overview](README.md).

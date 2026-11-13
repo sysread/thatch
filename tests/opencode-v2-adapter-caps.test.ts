@@ -226,6 +226,34 @@ describe("opencode v2 adapter", () => {
     expect(sessionPromptCalls[0].text).not.toContain("$ARGUMENTS");
   });
 
+  test("the v2.3.0 command invocation shape (delivery field present) still arms the wrap-up", async () => {
+    // opencode v2.3.0's CommandInvocation is { sessionID, prompt, delivery }
+    // (SessionInbox.Delivery) - same as 2.2.5, verified against the
+    // v2.3.0 tag's packages/plugin/src/promise/command.ts. The adapter
+    // destructures { sessionID, prompt } only, so the extra field must pass
+    // through unnoticed; this pins that the CURRENT upstream shape arms and
+    // resolves end-to-end (the 2026-11-13 exit-arming report post-dates the
+    // v2.3.0 upgrade, so the surface is pinned where the bug was filed).
+    cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const compact = addedCommands.find((c) => c.name === "thatch/compact")!;
+    await compact.execute({
+      sessionID: "ses_v2_delivery",
+      prompt: { text: "wrap it up", files: [], agents: [], skills: [] },
+      delivery: "steer",
+    });
+    expect(wrapupArmed("ses_v2_delivery")).toBe(true);
+    const compactTool = addedTools.find((t) => t.name === "thatch_compact")!;
+    const result = (await compactTool.execute({}, { sessionID: "ses_v2_delivery", agent: "build" })) as { content: string };
+    expect(result).toMatchObject({ content: expect.stringContaining("Greenlit") });
+    await queueEvent({
+      type: "session.execution.succeeded",
+      location: { directory: SESSION_DIR },
+      data: { sessionID: "ses_v2_delivery" },
+    });
+    await waitFor("session.compact called", () => sessionCompactCalls.length === 1);
+    expect(wrapupArmed("ses_v2_delivery")).toBe(false);
+  });
+
   // Wrap-up completion actions: the armed journal row is the resolution
   // observable (the greenlit branch deletes it, so its absence proves the
   // branch ran to completion - not that it never ran). The greenlight is

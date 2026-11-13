@@ -903,6 +903,29 @@ export async function createRuntime(input: {
   // write resets greenlit).
   const pendingWrapUp = new Map<string, { kind: "compact" | "exit"; greenlit?: boolean }>();
 
+  // The wrap-up arm's durable fallback (the 2026-11-13 location-switch bug,
+  // emma-bedding-00033): opencode re-homes a session whose worktree was
+  // merged and deleted under it, mid-checklist, and every later tool call
+  // and idle then resolves through the NEW location's plugin instance. The
+  // arming instance's map - and the journal row's directory stamp - still
+  // name the OLD location, so a map-only lookup answers "no exit in
+  // progress" even though the arm is durably journaled. The journal row is
+  // pid-scoped, not directory-scoped: on a map miss, a row written by THIS
+  // process is the arm wherever the session now lives. Foreign-pid rows are
+  // invisible here on purpose - an arm inherited across a process restart
+  // is the restart skip the rehydration partition already enforces (a
+  // restored greenlit exit would close a session the new process has no
+  // context for). Disposed instances skip the fallback: a straggler tool
+  // call must not adopt rows the reloaded instance now owns.
+  const journaledWrapUpArm = (sessionID: string): { kind: "compact" | "exit"; greenlit?: boolean } | undefined => {
+    if (disposed) return undefined;
+    const row = db.runtimeStateGet("wrapup", sessionID);
+    if (!row || row.pid !== process.pid) return undefined;
+    const value = row.value as { kind?: unknown; greenlit?: unknown } | null;
+    if (value?.kind !== "compact" && value?.kind !== "exit") return undefined;
+    return { kind: value.kind, ...(value.greenlit === true ? { greenlit: true } : {}) };
+  };
+
   /** Whether a watcher_death row still has a care party worth keeping it
    *  for: stamped with the dead subordinate's coordinator AND not yet past
    *  the runtime-state TTL (the env-tunable 7-day default - the same knob
@@ -1588,7 +1611,13 @@ export async function createRuntime(input: {
     if (disposed) return;
     try {
       const ttlMs = Number(process.env.THATCH_RUNTIME_STATE_TTL_MS) || RUNTIME_STATE_TTL_MS;
-      const doomed = planJournalPrune(db.runtimeStateJournalRows([...EXTRACTION_JOURNAL_KINDS, "watcher_death"]), {
+      // wrapup rides the sweep for the location-switch orphans: an armed
+      // session whose worktree was merged and deleted re-homes to another
+      // directory, and the arm row keeps the dead directory's stamp - no
+      // instance will ever boot there to prune it through the rehydration
+      // partition. Dead-directory and TTL rules are safe for live arms: an
+      // in-flight arm is minutes old in a directory that exists.
+      const doomed = planJournalPrune(db.runtimeStateJournalRows([...EXTRACTION_JOURNAL_KINDS, "watcher_death", "wrapup"]), {
         nowMs: Date.now(),
         ttlMs,
         pathExists: (p) => existsSync(p),
@@ -1847,15 +1876,20 @@ export async function createRuntime(input: {
   };
 
   // The wrap-up tools' greenlight callback factory (the state-access seam:
-  // pendingWrapUp is module-local to this file, and the journal has no
-  // per-key read). ONE factory builds both kinds' closures, so the
+  // pendingWrapUp is module-local to this file, and the journal fallback
+  // reads the row per key). ONE factory builds both kinds' closures, so the
   // disposed-guard + journal body is written once - two verbatim closures
   // is how a disposed-guard drifts. Each callback owns the kind check: the
   // other kind's arm reads as "none" (a cross-kind tool call is a refusal,
   // never a greenlight), and no arm at all reads as "none" too.
   const makeWrapUpGreenlight = (kind: "compact" | "exit"): CoreContext["wrapUpGreenlight"] =>
     (sessionID: string) => {
-      const arm = pendingWrapUp.get(sessionID);
+      // Map first; on a miss, adopt the journaled arm (a session that
+      // switched locations mid-checklist armed in the OLD location's
+      // instance - see journaledWrapUpArm). The adoption seeds this map, so
+      // the kind check and the write below treat it like any local arm, and
+      // the row's directory stamp migrates here on the greenlight write.
+      const arm = pendingWrapUp.get(sessionID) ?? journaledWrapUpArm(sessionID);
       if (!arm || arm.kind !== kind) return { status: "none" };
       if (arm.greenlit) return { status: "greenlit", already: true };
       arm.greenlit = true;
@@ -2547,8 +2581,13 @@ export async function createRuntime(input: {
         // un-greenlit idle just falls through to the normal pipeline
         // (blockers are prose per the templates; there is no runtime
         // "blocked" concept to toast about). The next idle after greenlit
-        // runs the host action below.
-        const wrapUp = sessionID ? pendingWrapUp.get(sessionID) : undefined;
+        // runs the host action below. The journal fallback covers the
+        // location-switch case: a greenlit arm whose session re-homed to
+        // THIS instance mid-checklist exists only as a journaled row here
+        // (the arming instance holds the map copy but never sees this
+        // session's events again), so without the fallback the closing idle
+        // would pass with the session left open.
+        const wrapUp = sessionID ? (pendingWrapUp.get(sessionID) ?? journaledWrapUpArm(sessionID)) : undefined;
         if (wrapUp?.greenlit) {
           // The wrap-up executor. Arm + journal row deleted FIRST: the v2
           // no-bridge strand (emit skipped with no TUI bridge) stays a

@@ -1621,6 +1621,33 @@ export class ThatchDB {
     this.#db.query(`DELETE FROM runtime_state WHERE kind = ? AND session_id = ?`).run(kind, sessionId);
   }
 
+  /**
+   * One runtime-state record by its (kind, session) primary key, or null.
+   * An indexed point read, unlike runtimeStateAll's full scan - callers on
+   * per-event paths (the wrap-up arm fallback) use this one.
+   */
+  runtimeStateGet(kind: string, sessionId: string): { kind: string; sessionID: string; directory: string; value: unknown; pid: number } | null {
+    const row = this.#db
+      .query(`SELECT kind, session_id, directory, value, pid FROM runtime_state WHERE kind = ? AND session_id = ?`)
+      .get(kind, sessionId ?? "") as
+      | { kind: string; session_id: string; directory: string | null; value: string; pid: number }
+      | null;
+    if (!row) return null;
+    let value: unknown;
+    try {
+      value = JSON.parse(row.value);
+    } catch {
+      value = null;
+    }
+    return {
+      kind: row.kind as string,
+      sessionID: row.session_id as string,
+      directory: (row.directory ?? "") as string,
+      value,
+      pid: row.pid as number,
+    };
+  }
+
   /** Every runtime-state record, oldest first (rehydration source). */
   runtimeStateAll(): { kind: string; sessionID: string; directory: string; value: unknown; pid: number }[] {
     return this.#db

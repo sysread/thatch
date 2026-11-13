@@ -109,6 +109,8 @@ The greenlight protocol is the same for both kinds:
 
 - The model greenlights by calling the kind's zero-arg tool (`thatch_compact` / `thatch_exit`, both opencode-only; the calling session resolves from the per-call host context, never a model-supplied argument). The tool flips `greenlit` on the arm and rewrites the journal row with the flag, so a same-pid plugin reload between the call and the closing idle cannot strand a greenlit session. The templates' rescind rule lives in the prompt channel: with outstanding blockers the model must NOT call the tool, and if the user moves on to unrelated work after blockers were listed, the user re-runs the command when ready (the arm has no runtime expiry).
 
+The arm lookup is map-first with a journaled fallback. opencode can re-home a session mid-checklist (its worktree merged and deleted under it -- one serve hosts one plugin instance per directory, so every later tool call and idle resolves through the NEW location's instance): the arming instance's map and the journal row's directory stamp still name the OLD location, and a map-only lookup would refuse the greenlight ("no exit in progress", the 2026-11-13 emma-bedding-00033 incident). On a map miss, both the greenlight lookup and the idle resolution read the journal row pid-scoped (THIS process, any directory): a hit is adopted as the arm, the greenlight write re-stamps the row with the adopting instance's directory, and a greenlit row fires the host action from wherever the session's idle lands. Foreign-pid rows are invisible to the fallback -- the restart skip stays absolute (a restored greenlit exit would close a session the new process has no context for).
+
 Both arms are journaled to `runtime_state` (kind `wrapup`) at arming. Resolution:
 
 1. `command.execute.before` arms the session in `pendingWrapUp` when the command runs (on v2 the registered command's `execute` runs the same arming through `onCommandExecuteBefore`). A re-arm overwrites and resets `greenlit`.
@@ -219,7 +221,11 @@ row on every tool call, so a week of silence means nobody is coming back) or
 whose directory no longer exists. It touches only thatch.db, so
 `THATCH_STRAND_SWEEP=off` does not cover it, and the `-c`/`-s` startup
 resume's inherited rows are always kept - the rehydrate pass deliberately
-kept those, and the sweep must not contradict it. Three companion bounds
+kept those, and the sweep must not contradict it. `wrapup` rows ride the
+same sweep (a location-switched session's arm can strand in a dead worktree
+directory - the 2026-11-13 incident left one there; an in-flight arm is
+minutes old in a live directory, so the dead-directory/TTL rules cannot
+touch it). Three companion bounds
 keep rows small in the first place: journaled tool outputs and top-level
 string args are truncated to `INTERACTION_OUTPUT_MAX` (2000 chars; the
 extractor payload reads only 500 chars of output and 120 of args), a deleted
@@ -236,7 +242,7 @@ itself.
 - **extracting**: `Set<parentID>` -- parent IDs with an active direct-extraction child (gates re-triggering)
 - **extractionChildren**: `Set<childID>` -- distinguishes extraction children from task-dispatched sub-agents
 - **compacting**: `Set<sessionID>` -- sessions currently being compacted (suppresses nudges)
-- **pendingWrapUp**: `Map<sessionID, {kind, greenlit?}>` -- wrap-up commands awaiting their greenlight; armed by `command.execute.before` (a re-arm overwrites and resets `greenlit`), greenlit by the kind's zero-arg tool (`thatch_compact` / `thatch_exit`) and fired on the next idle, cleared on session deletion
+- **pendingWrapUp**: `Map<sessionID, {kind, greenlit?}>` -- wrap-up commands awaiting their greenlight; armed by `command.execute.before` (a re-arm overwrites and resets `greenlit`), greenlit by the kind's zero-arg tool (`thatch_compact` / `thatch_exit`) and fired on the next idle, cleared on session deletion. Map-first with a pid-scoped journal fallback on both the greenlight and the idle lookups (a session that switched locations mid-checklist armed in another instance -- see the wrap-up commands section); wrapup rows also ride the journal sweep, so an arm orphaned in a dead worktree directory (the location-switch case) is reclaimed by the dead-directory/TTL rules
 
 ## Interactions with other features
 
