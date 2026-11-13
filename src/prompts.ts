@@ -177,6 +177,7 @@ Tools: thatch_memory_remember, thatch_memory_recall, thatch_memory_list,
         thatch_extraction_done, thatch_get_extraction_payload,
         thatch_prediction_query, thatch_prediction_update, thatch_prediction_list,
         thatch_prediction_delete, thatch_prediction_mark_checked,
+        thatch_prediction_find_duplicates,
         thatch_behavior_codify, thatch_behavior_feedback, thatch_behavior_list,
         thatch_behavior_delete, thatch_config_get, thatch_config_set,
         thatch_notify_user, thatch_get_session_info,
@@ -395,12 +396,15 @@ about their preferences:
 3. Use thatch_prediction_delete to remove a prediction created in error
 
 When the hygiene nudge reports "prediction duplicate pairs pending review",
-read both predictions (thatch_prediction_list shows their ids), then either
-merge them (thatch_prediction_update with the winner's statement against the
-loser's matcher texts to move the edges over), record the verdict with
-thatch_prediction_mark_checked, and only then thatch_prediction_delete the
-loser (the verdict needs both ids live), or judge them distinct and record
-that verdict. Either way the pair stops resurfacing.
+thatch_prediction_find_duplicates lists the pending pairs with their ids
+(the nudge line names the pair ids inline when the count is small). For
+each pair, read both predictions (thatch_prediction_list shows their ids),
+then either merge them (thatch_prediction_update with the winner's statement
+against the loser's matcher texts to move the edges over), record the
+verdict with thatch_prediction_mark_checked, and only then
+thatch_prediction_delete the loser (the verdict needs both ids live), or
+judge them distinct and record that verdict. Either way the pair stops
+resurfacing.
 
 Code review discussions are high-signal prediction material. When working
 through potential review comments with the user, watch for preferences about
@@ -611,7 +615,7 @@ wake-up delivery is opencode-only, so check chat_status or your inbox each turn.
 
 Thatch provides persistent memory across ${host} sessions. Use it to persist
 knowledge so future sessions can build on what you've already learned.
-Tools are prefixed in ${host}: ${["memory_remember", "memory_recall", "memory_list", "memory_show", "memory_forget", "store_list", "find_duplicates", "dedup_mark_checked", "extraction_done", "get_extraction_payload", "prediction_query", "prediction_update", "prediction_list", "prediction_delete", "prediction_mark_checked", "behavior_codify", "behavior_feedback", "behavior_list", "behavior_delete", "config_get", "config_set", "notify_user", "chat_register", "chat_list", "chat_send", "chat_read", "chat_unregister", "chat_broadcast", "chat_status"].map((n) => `\`${toolNamer(n)}\``).join(",\n")}. Bare names
+Tools are prefixed in ${host}: ${["memory_remember", "memory_recall", "memory_list", "memory_show", "memory_forget", "store_list", "find_duplicates", "dedup_mark_checked", "extraction_done", "get_extraction_payload", "prediction_query", "prediction_update", "prediction_list", "prediction_delete", "prediction_mark_checked", "prediction_find_duplicates", "behavior_codify", "behavior_feedback", "behavior_list", "behavior_delete", "config_get", "config_set", "notify_user", "chat_register", "chat_list", "chat_send", "chat_read", "chat_unregister", "chat_broadcast", "chat_status"].map((n) => `\`${toolNamer(n)}\``).join(",\n")}. Bare names
 used below for readability. ${availabilitySection}
 Argument shapes (one JSON object argument, never a bare positional string):
 - \`memory_remember\` with \`{"content": "..."}\` - content carries the information; label is optional (derived from the content's first heading or line)
@@ -759,8 +763,11 @@ about their preferences:
 3. Use prediction_delete to remove a prediction created in error
 
 When the hygiene nudge reports "prediction duplicate pairs pending review",
-read both predictions (${toolNamer("prediction_list")} shows their ids), then
-either merge them (${toolNamer("prediction_update")}
+${toolNamer("prediction_find_duplicates")} lists the pending pairs with
+their ids (the nudge line names the pair ids inline when the count is
+small). For each pair, read both predictions
+(${toolNamer("prediction_list")} shows their ids), then either merge them
+(${toolNamer("prediction_update")}
 with the winner's statement against the loser's matcher texts to move the
 edges over), record the verdict with ${toolNamer("prediction_mark_checked")},
 and only then ${toolNamer("prediction_delete")} the loser (the verdict needs

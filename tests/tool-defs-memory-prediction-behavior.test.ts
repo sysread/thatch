@@ -861,6 +861,67 @@ describe("prediction tool execute functions", () => {
     expect(list).toContain(`(id: ${id})`);
   });
 
+  test("prediction_find_duplicates renders the pending pairs with ids and statements", async () => {
+    // The enumeration prediction_mark_checked's id args come from: a
+    // count-only surface taught agents to fabricate ids.
+    const text = "prefer minimal dependencies";
+    const embed = await model.passageEmbed(text);
+    const idA = db.createPrediction(defaultStore, text, "first wording", embed, model.name);
+    const idB = db.createPrediction(defaultStore, "keep the dependency list small", "reworded later", embed, model.name);
+    db.createPrediction(defaultStore, "prefer tabs for indentation", "unrelated", await model.passageEmbed("prefer tabs for indentation"), model.name);
+
+    const result = await findTool("prediction_find_duplicates").execute({}, ctx);
+    expect(result).toContain("Cluster of 2");
+    expect(result).toContain(`"${text}" (id: ${idA})`);
+    expect(result).toContain(`"keep the dependency list small" (id: ${idB})`);
+    expect(result).toContain("[score:1]");
+    expect(result).not.toContain("prefer tabs for indentation");
+  });
+
+  test("prediction_find_duplicates reports a clean store with an empty message", async () => {
+    db.createPrediction(defaultStore, "prefer minimal dependencies", "only wording", await model.passageEmbed("prefer minimal dependencies"), model.name);
+
+    const result = await findTool("prediction_find_duplicates").execute({}, ctx);
+    expect(result).toContain("No prediction duplicate pairs found");
+    expect(result).toContain(defaultStore);
+  });
+
+  test("prediction_find_duplicates scopes to the store argument", async () => {
+    const embed = await model.passageEmbed("prefer minimal dependencies");
+    const idA = db.createPrediction("global", "prefer minimal dependencies", "first wording", embed, model.name);
+    const idB = db.createPrediction("global", "keep the dependency list small", "reworded later", embed, model.name);
+
+    // The pair lives in global only: the default project-store scan sees
+    // nothing, the explicit store argument finds it.
+    const projectScan = await findTool("prediction_find_duplicates").execute({}, ctx);
+    expect(projectScan).toContain("No prediction duplicate pairs found");
+    expect(projectScan).toContain(defaultStore);
+
+    const globalScan = await findTool("prediction_find_duplicates").execute({ store: "global" }, ctx);
+    expect(globalScan).toContain(`(id: ${idA})`);
+    expect(globalScan).toContain(`(id: ${idB})`);
+  });
+
+  test("prediction_find_duplicates output feeds prediction_mark_checked: the loop closes", async () => {
+    // The bug this tool exists for: the nudge reported a count, no tool
+    // named the pairs, and the pairs went unreviewed forever. Listing a
+    // pair, verdicting it, and re-listing must empty the surface.
+    const embed = await model.passageEmbed("prefer minimal dependencies");
+    const idA = db.createPrediction(defaultStore, "prefer minimal dependencies", "first wording", embed, model.name);
+    const idB = db.createPrediction(defaultStore, "keep the dependency list small", "reworded later", embed, model.name);
+
+    const verdict = await findTool("prediction_mark_checked").execute({
+      id_a: idA,
+      id_b: idB,
+      status: "distinct",
+    }, ctx);
+    expect(verdict).toContain("[marked distinct]");
+
+    const after = await findTool("prediction_find_duplicates").execute({}, ctx);
+    expect(after).toContain("No prediction duplicate pairs found");
+    expect(db.findPredictionDuplicates(defaultStore)).toEqual([]);
+  });
+
   test("prediction_list includes provenance entries", async () => {
     await findTool("prediction_update").execute({
       matcher: "reviewing code",

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ThatchDB, DedupCandidate, MemoryRow } from "./db";
+import type { ThatchDB, DedupCandidate, MemoryRow, PredictionDedupCandidate } from "./db";
 import type { EmbeddingModel } from "./embeddings";
 import { MEMORY_DISPLAY_STAMP } from "./extraction";
 import {
@@ -515,6 +515,40 @@ function renderClusters(candidates: DedupCandidate[]): string {  const parent = 
       const labels = new Set(pairs.flatMap((p) => [p.labelA, p.labelB]));
       const lines = pairs.map((p) => `  [score:${p.score}] "${p.labelA}" ↔ "${p.labelB}"`);
       return `Cluster of ${labels.size}:\n${lines.join("\n")}`;
+    })
+    .join("\n\n");
+}
+
+/** The renderClusters treatment for prediction dedup candidates: pairs
+ *  that share a prediction id land in one cluster (a preference
+ *  fragmented across rewordings). Each line carries both ids - the
+ *  enumeration prediction_mark_checked's id args come from. */
+function renderPredictionPairs(candidates: PredictionDedupCandidate[]): string {
+  const parent = new Map<string, string>();
+  const find = (x: string): string => {
+    let root = parent.get(x) ?? x;
+    while (root !== (parent.get(root) ?? root)) root = parent.get(root) ?? root;
+    parent.set(x, root);
+    return root;
+  };
+  const union = (a: string, b: string): void => {
+    parent.set(find(a), find(b));
+  };
+
+  for (const c of candidates) union(c.predictionA, c.predictionB);
+
+  const clusters = new Map<string, PredictionDedupCandidate[]>();
+  for (const c of candidates) {
+    const root = find(c.predictionA);
+    clusters.set(root, [...(clusters.get(root) ?? []), c]);
+  }
+
+  return [...clusters.values()]
+    .map((pairs) => {
+      const members = new Set(pairs.flatMap((p) => [p.predictionA, p.predictionB]));
+      const lines = pairs.map((p) =>
+        `  [score:${p.cosine}] "${p.statementA}" (id: ${p.predictionA}) ↔ "${p.statementB}" (id: ${p.predictionB})`);
+      return `Cluster of ${members.size}:\n${lines.join("\n")}`;
     })
     .join("\n\n");
 }
@@ -1287,17 +1321,19 @@ const predictionMarkCheckedDef: ToolDef = {
   name: "prediction_mark_checked",
   description:
     "Record a verdict on a prediction dedup pair so it stops resurfacing " +
-    "in the hygiene nudge. Use after reviewing a pair from the 'prediction " +
-    "duplicate pairs pending review' line: status 'duplicate' once you have " +
+    "in the hygiene nudge. Use after reviewing a pair listed by " +
+    "prediction_find_duplicates (the scan behind the 'prediction duplicate " +
+    "pairs pending review' hygiene line, which also names the pair ids " +
+    "inline when the count is small): status 'duplicate' once you have " +
     "folded the loser's matchers onto the winner (prediction_update with the " +
     "winner's statement against the loser's matcher texts) - record the " +
     "verdict BEFORE deleting the loser, because both ids must be live " +
     "predictions when the verdict is written - or 'distinct' to leave both " +
-    "in place. Both ids must exist in the pair's store; prediction_list " +
-    "shows the ids.",
+    "in place. Both ids must exist in the pair's store; " +
+    "prediction_find_duplicates and prediction_list show the ids.",
   args: {
     id_a: z.string().describe(
-      "First prediction id of the pair (from the dedup candidate).",
+      "First prediction id of the pair (from prediction_find_duplicates).",
     ),
     id_b: z.string().describe(
       "Second prediction id of the pair.",
@@ -1337,6 +1373,40 @@ const predictionMarkCheckedDef: ToolDef = {
 
     ctx.db.markPredictionPairChecked(store, idA, idB, args.status as string);
     return `[marked ${args.status}] (${idA}, ${idB}) in "${store}"`;
+  },
+};
+
+const predictionFindDuplicatesDef: ToolDef = {
+  name: "prediction_find_duplicates",
+  description:
+    "List the pending prediction dedup pairs - rewordings of one " +
+    "preference that landed below the write-time 0.85 floor - with both " +
+    "ids, statements, and similarity scores, so prediction_mark_checked " +
+    "has the real ids to record a verdict on. This is the same scan " +
+    "behind the hygiene nudge's 'prediction duplicate pairs pending " +
+    "review' count (that line names the pair ids inline when the count " +
+    "is small). Pairs already verdicted via prediction_mark_checked " +
+    "are skipped. Related pairs are grouped into clusters - a cluster " +
+    "of three or more usually means one preference fragmented across " +
+    "rewordings.",
+  args: {
+    store: z.string().optional().describe(
+      "Which store to check. Defaults to the project store.",
+    ),
+    threshold: z.number().min(0).max(1).optional().describe(
+      "Similarity threshold (0-1). Default 0.70.",
+    ),
+  },
+  async execute(args, ctx) {
+    const store = resolveStore(args, ctx);
+    const threshold = (args.threshold as number) ?? 0.70;
+    const candidates = ctx.db.findPredictionDuplicates(store, threshold);
+
+    if (candidates.length === 0) {
+      return `No prediction duplicate pairs found in "${store}" above threshold ${threshold}.`;
+    }
+
+    return renderPredictionPairs(candidates);
   },
 };
 
@@ -3462,6 +3532,7 @@ export const TOOL_DEFS: ToolDef[] = [
   predictionListDef,
   predictionDeleteDef,
   predictionMarkCheckedDef,
+  predictionFindDuplicatesDef,
   behaviorCodifyDef,
   behaviorFeedbackDef,
   behaviorListDef,

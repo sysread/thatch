@@ -11,8 +11,8 @@ setupToolDefsHarness();
 
 describe("TOOL_DEFS", () => {
   test("exports the full tool catalog", () => {
-    // 41 shared + session_tab_open (main) + the four plugin-regime tools.
-    expect(TOOL_DEFS.length).toBe(46);
+    // 42 shared + session_tab_open (main) + the four plugin-regime tools.
+    expect(TOOL_DEFS.length).toBe(47);
     const names = TOOL_DEFS.map((t) => t.name);
     expect(names).toEqual([
       "memory_remember",
@@ -34,6 +34,7 @@ describe("TOOL_DEFS", () => {
       "prediction_list",
       "prediction_delete",
       "prediction_mark_checked",
+      "prediction_find_duplicates",
       "behavior_codify",
       "behavior_feedback",
       "behavior_list",

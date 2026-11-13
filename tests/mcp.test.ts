@@ -121,8 +121,8 @@ describe("MCP compileTools", () => {
     }
   });
 
-  test("exposes 29 shared tools (session_tab is opencode-only)", () => {
-    expect(compileTools().size).toBe(29);
+  test("exposes 30 shared tools (session_tab is opencode-only)", () => {
+    expect(compileTools().size).toBe(30);
   });
 
   test("accept-then-teach keys drop out of the compiled required array", () => {

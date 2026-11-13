@@ -585,8 +585,25 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   and the tool accepted any string, so a compliant agent had to invent
   ids. The pair table has no FK, so nothing rejected the write.
 - **Fix shape**: every tool that takes a row id needs a surface that shows
-  that id (`prediction_list` now prints ids), and every id-taking write
+  that id (`prediction_list` now prints ids; `prediction_find_duplicates`
+  lists the pending pairs with both ids, and the hygiene nudge names the
+  pair ids inline when the count is small), and every id-taking write
   validates its ids before writing (mark_checked refuses unknown and
   wrong-store ids). The init sweep (`#sweepPhantomPredictionPairs`,
   src/db.ts) collects the residue class. (2026-11-11, prediction tool
-  guards)
+  guards; pair enumeration closed 2026-11-13, prediction_find_duplicates)
+
+## Prediction pair surfaces render ids in scan order, not creation order
+
+- **Symptom**: a test asserting the hygiene line's or
+  `prediction_find_duplicates` output as `(idA, idB)` in creation order
+  fails about half the runs (first seen in UC-148, November 2026).
+- **Cause**: `findPredictionDuplicates` reads rows with `ORDER BY id`, so
+  the first row of a pair is the lexicographically smaller id. The pair
+  renders as `(min, max)` - a coin flip against creation order, since
+  ids are random UUIDs.
+- **Fix shape**: assert pairs order-agnostically - `[idA, idB].sort().join(", ")`
+  for tuple lines, or per-statement-with-own-id `toContain` assertions for
+  the listing (statement and id always come from the same row, so the
+  binding is stable even when the pair order is not). (2026-11-13,
+  prediction_find_duplicates)

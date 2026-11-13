@@ -59,6 +59,35 @@ describe("hygieneReport", () => {
     expect(report).toContain("1 prediction duplicate pair pending review");
   });
 
+  test("prediction duplicate line names the pair ids when few", async () => {
+    // The nudge -> verdict loop needs the pair ids; naming them inline
+    // closes it without a listing call (prediction_find_duplicates for
+    // the full list). The scan orders rows by id, so the pair renders
+    // in sorted order, not creation order.
+    const reworded = new Float32Array(emb);
+    reworded[0] += 0.001;
+    const idA = db.createPrediction(repo, "prefer minimal diffs", "", emb, "m");
+    const idB = db.createPrediction(repo, "prefer small diffs", "", reworded, "m");
+
+    const report = await hygieneReport(db, repo, dir);
+    const pair = [idA, idB].sort().join(", ");
+    expect(report).toContain(`1 prediction duplicate pair pending review: (${pair})`);
+  });
+
+  test("prediction duplicate line keeps the count only past the id cap", async () => {
+    // Four rows sharing one embedding pair up six ways - past the cap the
+    // ids would crowd out the line, so the count stands alone.
+    const ids = ["a", "b", "c", "d"].map((s) =>
+      db.createPrediction(repo, `prefer ${s} diffs`, "", emb, "m"));
+    expect(db.findPredictionDuplicates(repo).length).toBe(6);
+
+    const report = await hygieneReport(db, repo, dir);
+    expect(report).toContain("6 prediction duplicate pairs pending review");
+    for (const id of ids) {
+      expect(report).not.toContain(id);
+    }
+  });
+
   test("counts stale memories", async () => {
     db.remember(repo, "ancient", "content", emb, "m");
     const raw = new Database(dbPath);

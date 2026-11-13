@@ -7,7 +7,8 @@ calls and updates it based on user feedback.
 ## What it does
 
 - Tools: `prediction_query`, `prediction_update`, `prediction_list`,
-  `prediction_delete`, `prediction_mark_checked`. All defined in
+  `prediction_delete`, `prediction_mark_checked`,
+  `prediction_find_duplicates`. All defined in
   `src/tool-defs.ts`.
 - Auto-fires at every user message: embeds the prompt, cosine-matches against
   matchers, injects scored predictions as a synthetic nudge part.
@@ -141,12 +142,18 @@ later — land below that floor and accumulate. The dedup pass finds them:
   Distinct verdicts are the load-bearing case — a destroyed duplicate is
   gone, but a judged-distinct pair re-surfaces every session start unless
   recorded.
-- The hygiene report surfaces `N prediction duplicate pairs pending review`;
-  the agent merges (fold the loser's matchers with `prediction_update`,
+- The hygiene report surfaces `N prediction duplicate pairs pending review`,
+  naming the pair ids inline while the count is small (capped at five
+  pairs - past the cap the ids would crowd out the line, and the listing
+  tool carries them). The `prediction_find_duplicates` tool is the full
+  listing: every pending pair with both ids, statements, and cosine,
+  clustered by shared prediction ids the way the memory side clusters by
+  slug (`renderPredictionPairs` in `src/tool-defs.ts`). The agent merges
+  (fold the loser's matchers with `prediction_update`,
   mark the pair with `prediction_mark_checked`, then `prediction_delete`
   the loser by id - the verdict must be recorded while both ids are live)
-  or judges distinct and records that verdict. `prediction_list` shows the
-  ids. Scans are per-store: cross-store writes are edge-linked at write
+  or judges distinct and records that verdict. Scans are per-store:
+  cross-store writes are edge-linked at write
   time instead of duplicated.
 - The pair table is swept at every DB open (`#sweepPhantomPredictionPairs`
   in `src/db.ts`): verdict rows whose ids are not both live predictions in
@@ -293,7 +300,7 @@ that user preferences are stable, not time-sensitive.
 | `src/prediction.ts` | Thin wrapper around `ScoringEngine` with prediction-specific table names, plus the corpus dedup pass (`findPredictionDuplicates`, pair verdicts) |
 | `src/scoring-engine.ts` | Generic four-table scoring engine with Bayesian confidence (shared base for prediction and behavior) |
 | `src/db.ts` | Prediction tables, `scorePredictionNudge`, pair-verdict sweep on open |
-| `src/tool-defs.ts` | Five prediction tools (`query`, `update`, `list`, `delete`, `mark_checked`) |
+| `src/tool-defs.ts` | Six prediction tools (`query`, `update`, `list`, `delete`, `mark_checked`, `find_duplicates`) |
 | `src/prompts.ts` | `predictionNudge` formatting, verb selection, dedup-merge guidance |
 | `src/sideband.ts` | `predictions` method for the MCP path |
 

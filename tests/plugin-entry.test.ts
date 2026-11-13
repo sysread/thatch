@@ -90,6 +90,7 @@ describe("plugin entry", () => {
       "thatch_memory_show",
       "thatch_notify_user",
       "thatch_prediction_delete",
+      "thatch_prediction_find_duplicates",
       "thatch_prediction_list",
       "thatch_prediction_mark_checked",
       "thatch_prediction_query",

@@ -90,6 +90,7 @@ where your rationale would change the model.
 | `thatch_prediction_update` | Create, reinforce, or weaken a prediction. Takes a matcher (situation), prediction (preference), signal (confirm/disconfirm/soft/create), and rationale. Refuses a call that puts a signal value where the situation or preference text belongs. |
 | `thatch_prediction_list` | List all predictions with their ids, matchers, confidence, evidence count, and provenance history. |
 | `thatch_prediction_delete` | Delete a prediction by exact id (preferred; the list shows ids) or by semantic match on the statement. Statements under three words are refused as too short to match safely; pass the id instead. |
+| `thatch_prediction_find_duplicates` | List the pending prediction dedup pairs with both ids, statements, and similarity scores. The enumeration behind the hygiene nudge's pair count; pairs already verdicted are skipped. |
 | `thatch_prediction_mark_checked` | Record a verdict (duplicate/distinct) on a pair the hygiene nudge flagged, so it stops resurfacing. Both ids must be live predictions in the pair's store. |
 
 ## Configuration
@@ -118,10 +119,11 @@ where your rationale would change the model.
 ## Keeping the model tidy
 
 If the same preference gets recorded twice in different words, the hygiene
-nudge reports `prediction duplicate pairs pending review`. The agent reads
-both predictions (`thatch_prediction_list` shows their ids), then either
-merges them (moves the loser's matchers onto the winner with
-`thatch_prediction_update`, records the verdict with
+nudge reports `prediction duplicate pairs pending review` - naming the pair
+ids inline when the count is small. `thatch_prediction_find_duplicates`
+lists the pending pairs with both ids, statements, and similarity scores
+either way. The agent then either merges them (moves the loser's matchers
+onto the winner with `thatch_prediction_update`, records the verdict with
 `thatch_prediction_mark_checked`, and only then deletes the loser with
 `thatch_prediction_delete`; the verdict must be recorded while both
 predictions still exist) or judges them distinct and records that. Either
