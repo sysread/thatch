@@ -1562,12 +1562,15 @@ export class ThatchDB {
     return this.#chat.broadcast(fromSession, body, this.#chatOpenTabs?.());
   }
 
-  /** The CLI's user-voiced broadcast: sentinel sender, mail-check
-   *  delivery, optional project filter. Deliberately NOT routed through
-   *  the tab provider - a terminal has no tab signal, and the
-   *  mail-check path does not need one. */
-  broadcastChatMessageFromUser(body: string, opts: { projects?: string[]; senderName: string }) {
-    return this.#chat.broadcastFromUser(body, opts);
+  /** The CLI's user-voiced broadcast: sentinel sender, optional project
+   *  filter, flag-gated audience (includeClosed/includeStale are the
+   *  --closed/--stale flags). Routed through the tab provider: the
+   *  default audience is ACTIVE rows, and an open tab is what makes an
+   *  opencode row active (the report reads the same signal CLI-side).
+   *  Degrades to an empty set - a no-tab-signal caller sees every fresh
+   *  row as closed-tab, excluded by default. */
+  broadcastChatMessageFromUser(body: string, opts: { projects?: string[]; senderName: string; includeClosed?: boolean; includeStale?: boolean }) {
+    return this.#chat.broadcastFromUser(body, { ...opts, openTabs: this.#chatOpenTabs?.() });
   }
 
   /**

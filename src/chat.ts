@@ -759,11 +759,16 @@ export interface BroadcastRecipient {
 }
 
 /** A row the fan-out did NOT deliver to, with the reason it was left
- *  out: "stale" (host process gone) or "no open tab" (wake not
+ *  out: "stale" (host process gone), "no open tab" (wake not
  *  reliably deliverable; only possible when the caller requires an
- *  open tab). */
+ *  open tab), "closed tab" (fresh row with no open tab, excluded by
+ *  the CLI's default audience), or "stale (default)" (stale row
+ *  excluded by the CLI's default audience - the resumability consult
+ *  did not even run). The two default-audience reasons are gating,
+ *  not delivery failures, so the report renders them as aggregate
+ *  flag-hint lines instead of per-project counts. */
 export interface BroadcastSkip extends BroadcastRecipient {
-  reason: "stale" | "no open tab";
+  reason: "stale" | "no open tab" | "closed tab" | "stale (default)";
 }
 
 export interface BroadcastResult {
@@ -816,6 +821,15 @@ export function broadcastDeliveryKind(
  * (jowi-dev/tskmstr's board) reads delivered names off exactly that
  * prefix.
  *
+ * The default audience is ACTIVE only (open tabs plus mcp rows), so two
+ * skip reasons mark flag-gated exclusions rather than delivery
+ * failures: "closed tab" (fresh row, no open tab) and "stale (default)"
+ * (stale row; the resumability consult never ran). They render as
+ * aggregate lines naming the flag that includes them - "skipped 67
+ * closed-tab sessions (--closed to include)" - because the flag, not
+ * the project breakdown, is what a human acts on. Delivery-failure
+ * skips ("stale" dead rows, "no open tab") keep the per-project counts.
+ *
  * `rowsByName` is the post-write roster keyed by display name (names
  * are never reused, so the join is stable); `openTabs` and `now` are
  * the same single-sample liveness inputs the roster render uses.
@@ -853,11 +867,22 @@ export function renderBroadcastReport(
   // fleet-scale (hundreds of rows on a busy machine), and the project
   // breakdown is the part a human acts on. Projects render
   // alphabetically, rows with no project last, so repeated runs of the
-  // same broadcast produce identical output.
-  const skippedLines = countByProject(result.skipped.map((s) => [s.reason, s.project] as const)).flatMap(([reason, groups]) =>
+  // same broadcast produce identical output. The default-audience
+  // exclusions ("closed tab", "stale (default)") are gating, not
+  // failures: they render as aggregate flag-hint lines after the
+  // per-project counts, so every excluded row is accounted for exactly
+  // once and the report says how to widen the audience.
+  const gated = result.skipped.filter((s) => s.reason === "closed tab" || s.reason === "stale (default)");
+  const skippedLines = countByProject(result.skipped.filter((s) => !gated.includes(s)).map((s) => [s.reason, s.project] as const)).flatMap(([reason, groups]) =>
     groups.map(([project, n]) => `  - ${n} ${reason} session${n === 1 ? "" : "s"} ${project === null ? "with no project" : `in ${project}`}`),
   );
-  if (skippedLines.length > 0) lines.push("Skipped:", ...skippedLines);
+  const gatedLines = ([
+    [gated.filter((s) => s.reason === "closed tab").length, "closed-tab session", "--closed to include"],
+    [gated.filter((s) => s.reason === "stale (default)").length, "stale session", "--stale to include"],
+  ] as const)
+    .filter(([n]) => n > 0)
+    .map(([n, noun, flag]) => `  skipped ${n} ${noun}${n === 1 ? "" : "s"} (${flag})`);
+  if (skippedLines.length > 0 || gatedLines.length > 0) lines.push("Skipped:", ...skippedLines, ...gatedLines);
   const outOfScopeLines = countByProject(result.outOfScope.map((o) => ["out of scope", o.project] as const)).flatMap(([, groups]) =>
     groups.map(([project, n]) => `  - ${n} session${n === 1 ? "" : "s"} ${project === null ? "with no project" : `in ${project}`}`),
   );
@@ -1296,7 +1321,7 @@ export class ChatStore {
     return this.#fanOut(
       { sessionID: fromSession, name: sender.name },
       body,
-      { openTabs, requireOpen: true },
+      { openTabs, requireOpen: true, includeStale: true },
     );
   }
 
@@ -1312,22 +1337,35 @@ export class ChatStore {
    * and RECENT opencode rows (fresh heartbeat, tab closed) that miss
    * the single nudge and MCP rows read their mail at the next prompt.
    * requireOpen is false - the CLI has no tab signal, and a delivery
-   * that waits for the next prompt needs none. STALE rows split on the
-   * resumability check: a row the host session database still knows is
-   * resumable and receives a queued row for its next run, and a row
-   * opencode has forgotten is skipped and reported - a dead host never
-   * reads the mail.
+   * that waits for the next prompt needs none. The DEFAULT audience is
+   * ACTIVE only (open-tab opencode rows plus mcp rows): closed-tab and
+   * stale rows are excluded unless the caller's flags include them.
+   * With includeStale, STALE rows split on the resumability check: a
+   * row the host session database still knows is resumable and
+   * receives a queued row for its next run, and a row opencode has
+   * forgotten is skipped and reported - a dead host never reads the
+   * mail.
    * `projects` (exact whole-value matches against the registered
    * project) narrows the fan-out; rows outside the filter - including
    * rows with no project at all - land in the `outOfScope` bucket so
    * the caller's report shows the omission instead of hiding it.
+   * `includeClosed` and `includeStale` gate the two non-active
+   * audience classes (the CLI's --closed / --stale flags): by default
+   * the CLI audience is ACTIVE only - open-tab opencode rows and mcp
+   * rows - and closed-tab and stale rows are skipped with the
+   * flag-hinted reasons. The stale resumability consult only runs
+   * when the stale class is actually in the audience. `openTabs` is
+   * the caller's open-tab signal (production: the same
+   * src/tab-state.ts reader the roster uses); without it every fresh
+   * opencode row counts as closed-tab, so a no-signal caller's default
+   * audience is mcp rows only.
    * `senderName` is sanitized (sanitizeCliSenderName) and then refused
    * if it case-insensitively matches a registered session's name: a CLI
    * message must never be mistaken for a member of the directory.
    */
   broadcastFromUser(
     body: string,
-    opts: { projects?: string[]; senderName: string },
+    opts: { projects?: string[]; senderName: string; includeClosed?: boolean; includeStale?: boolean; openTabs?: ReadonlySet<string> },
   ): BroadcastResult | { ok: false; error: string } {
     const senderName = sanitizeCliSenderName(opts.senderName);
     const clash = this.#findByName(senderName);
@@ -1340,7 +1378,13 @@ export class ChatStore {
     return this.#fanOut(
       { sessionID: CHAT_CLI_SENDER, name: senderName },
       body,
-      { projects: opts.projects, requireOpen: false },
+      {
+        projects: opts.projects,
+        requireOpen: false,
+        includeClosed: opts.includeClosed,
+        includeStale: opts.includeStale,
+        openTabs: opts.openTabs,
+      },
     );
   }
 
@@ -1361,7 +1405,7 @@ export class ChatStore {
   #fanOut(
     sender: { sessionID: string; name: string },
     body: string,
-    opts: { openTabs?: ReadonlySet<string>; requireOpen: boolean; projects?: string[] },
+    opts: { openTabs?: ReadonlySet<string>; requireOpen: boolean; projects?: string[]; includeClosed?: boolean; includeStale?: boolean },
   ): BroadcastResult | { ok: false; error: string } {
     const trimmed = body.trim();
     if (!trimmed) return { ok: false, error: `Message body cannot be empty (attempted ${body.length} characters).` };
@@ -1378,6 +1422,12 @@ export class ChatStore {
     // RECENT (honest - an unknown tab state never reads as open).
     const open = opts.openTabs ?? new Set<string>();
     const requireOpen = opts.requireOpen;
+    // Audience gates for the two non-active classes. Both default to
+    // false; the agent tool path passes includeStale: true explicitly
+    // (its shipped audience always consulted and queued resumable
+    // stale rows), while the CLI gates each class behind its flag.
+    const includeClosed = opts.includeClosed ?? false;
+    const includeStale = opts.includeStale ?? false;
     const projects = opts.projects;
     const recipients: BroadcastRecipient[] = [];
     const skipped: BroadcastSkip[] = [];
@@ -1391,7 +1441,7 @@ export class ChatStore {
     // a fleet-scale broadcast hits hundreds of them.
     const rows = this.list();
     let resumable = new Set<string>();
-    if (this.#resumableSessions) {
+    if (includeStale && this.#resumableSessions) {
       const staleInScope = rows.filter(
         (row) =>
           row.session_id !== sender.sessionID &&
@@ -1415,25 +1465,42 @@ export class ChatStore {
           outOfScope.push({ name: row.name, project: row.project });
           continue;
         }
-        // Skip classes for opencode rows: STALE splits on the
-        // resumability scan - a session the host db still knows receives
-        // a queued row (no wake; it reads the mail when its harness
-        // returns), a session opencode has forgotten is dead and never
-        // reads the mail. RECENT (fresh heartbeat, no open tab) is
-        // skipped only when the caller requires an open tab - the wake
-        // is not guaranteed to run a turn. An mcp row between turns
-        // reads its mail at the next prompt, so it always receives -
-        // even a stale one, whose mail-check still fires at its next
-        // prompt.
+        // Skip classes for opencode rows. The CLI's default audience is
+        // ACTIVE only (Jeff's 2026-11-16 ruling: a Monday broadcast hit
+        // 264 of 398 sessions, most of them dead or tab-closed), so the
+        // two non-active classes are gated: STALE rows are excluded
+        // wholesale unless the caller included them, and a fresh row
+        // with no open tab is excluded unless --closed did. The gated
+        // exclusions carry their own skip reasons so the report can
+        // name the flag that includes each bucket. When the stale class
+        // IS included it splits on the resumability scan - a session
+        // the host db still knows receives a queued row (no wake; it
+        // reads the mail when its harness returns), a session opencode
+        // has forgotten is dead and never reads the mail. When the
+        // caller requires an open tab (the agent tool path), a fresh
+        // row without one is skipped - the wake is not guaranteed to
+        // run a turn. An mcp row between turns reads its mail at the
+        // next prompt, so it always receives - even a stale one, whose
+        // mail-check still fires at its next prompt.
         if (row.host_kind === "opencode") {
           if (isStale(row)) {
+            if (!includeStale) {
+              skipped.push({ name: row.name, project: row.project, reason: "stale (default)" });
+              continue;
+            }
             if (!resumable.has(row.session_id)) {
               skipped.push({ name: row.name, project: row.project, reason: "stale" });
               continue;
             }
-          } else if (requireOpen && !open.has(row.session_id)) {
-            skipped.push({ name: row.name, project: row.project, reason: "no open tab" });
-            continue;
+          } else if (!open.has(row.session_id)) {
+            if (requireOpen) {
+              skipped.push({ name: row.name, project: row.project, reason: "no open tab" });
+              continue;
+            }
+            if (!includeClosed) {
+              skipped.push({ name: row.name, project: row.project, reason: "closed tab" });
+              continue;
+            }
           }
         }
         // A retried broadcast counts as delivered (the original batch

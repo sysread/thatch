@@ -450,6 +450,8 @@ describe("ChatStore via ThatchDB", () => {
     const result = db.broadcastChatMessageFromUser("lunch run", { senderName: "Jeff Ober" });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    // Default audience is ACTIVE only: bob's tab is open (the fixture's
+    // provider marks every registered session open), mickey is mcp.
     expect(result.recipients.map((r) => r.name).sort()).toEqual(["bob-00001", "mickey-00001"]);
     // Rows carry the sentinel sender and the explicit name snapshot, and
     // the CLI write path never stamps delivery: read_at/delivered_at
@@ -465,28 +467,96 @@ describe("ChatStore via ThatchDB", () => {
     }
   });
 
-  test("broadcastFromUser requires no open tab: RECENT rows receive; STALE rows skip without a resumability check", () => {
+  test("broadcastFromUser default audience is ACTIVE only: closed-tab and stale rows get no rows, no consult", () => {
     reg("ses_a", "alice");
     reg("ses_b", "bob");
     reg("ses_g", "ghost");
     raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_g'");
-    // No tab provider (the CLI's situation) and no resumability provider:
-    // every fresh opencode row is RECENT and receives, while the stale row
-    // is unverifiable, so the fan-out stays conservative and skips it,
-    // with its project reported.
-    const noTabs = new ThatchDB(dbPath);
+    // No tab provider (a terminal's situation): every fresh opencode row
+    // degrades to RECENT, so the default audience here is EMPTY - no
+    // inbox row for the closed-tab sessions, and the stale row is
+    // excluded without even consulting resumability. Every exclusion is
+    // reported with its flag-gated reason.
+    let consulted: string[] | null = null;
+    const noTabs = new ThatchDB(dbPath, {
+      chatResumableSessions: (ids) => {
+        consulted = ids;
+        return new Set(ids);
+      },
+    });
     try {
       const result = noTabs.broadcastChatMessageFromUser("anyone there?", { senderName: "cli user" });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.recipients.map((r) => r.name).sort()).toEqual(["alice-00001", "bob-00001"]);
-      expect(result.skipped).toEqual([{ name: "ghost-00001", project: "p", reason: "stale" }]);
+      expect(result.recipients).toEqual([]);
+      expect(result.skipped).toEqual([
+        { name: "alice-00001", project: "p", reason: "closed tab" },
+        { name: "bob-00001", project: "p", reason: "closed tab" },
+        { name: "ghost-00001", project: "p", reason: "stale (default)" },
+      ]);
+      expect(consulted).toBeNull();
+      const n = raw.query("SELECT COUNT(*) AS n FROM chat_messages").get() as any;
+      expect(n.n).toBe(0);
     } finally {
       noTabs.close();
     }
   });
 
-  test("broadcast queues mail for STALE-but-resumable rows; rows the host db forgot stay skipped", () => {
+  test("--closed adds the closed-tab class (nudge-once mail); stale stays out without --stale", () => {
+    reg("ses_a", "alice");
+    reg("ses_g", "ghost");
+    raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id = 'ses_g'");
+    // No tab provider: alice is RECENT. includeClosed is the --closed
+    // flag: her row is ordinary pending mail, so the shipped poller
+    // behavior applies (single first-delivery nudge, then read at the
+    // next prompt). The stale row stays excluded by default.
+    const noTabs = new ThatchDB(dbPath);
+    try {
+      const result = noTabs.broadcastChatMessageFromUser("anyone there?", { senderName: "cli user", includeClosed: true });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.recipients.map((r) => r.name)).toEqual(["alice-00001"]);
+      expect(result.skipped).toEqual([{ name: "ghost-00001", project: "p", reason: "stale (default)" }]);
+      const rows = raw.query("SELECT to_session, delivered_at, read_at FROM chat_messages").all() as any[];
+      expect(rows.length).toBe(1);
+      expect(rows[0].to_session).toBe("ses_a");
+      expect(rows[0].delivered_at).toBeNull();
+      expect(rows[0].read_at).toBeNull();
+    } finally {
+      noTabs.close();
+    }
+  });
+
+  test("the --closed and --stale flags compose into the full reach", () => {
+    reg("ses_a", "alice");
+    reg("ses_b", "bob");
+    reg("ses_r", "returns");
+    reg("ses_d", "dead");
+    reg("ses_m", "mickey");
+    raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id IN ('ses_r', 'ses_d')");
+    raw.run("UPDATE chat_sessions SET host_kind = 'mcp' WHERE session_id = 'ses_m'");
+    // alice's tab is open; bob's is closed; returns is stale but the
+    // host db still knows it; dead is stale and forgotten; mickey is mcp.
+    openTabsFixture = new Set(["ses_a"]);
+    const withCheck = new ThatchDB(dbPath, {
+      chatResumableSessions: (ids) => new Set(ids.filter((id) => id === "ses_r")),
+    });
+    try {
+      const result = withCheck.broadcastChatMessageFromUser("full house", {
+        senderName: "cli user",
+        includeClosed: true,
+        includeStale: true,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.recipients.map((r) => r.name).sort()).toEqual(["alice-00001", "bob-00001", "mickey-00001", "returns-00001"]);
+      expect(result.skipped).toEqual([{ name: "dead-00001", project: "p", reason: "stale" }]);
+    } finally {
+      withCheck.close();
+    }
+  });
+
+  test("--stale queues mail for STALE-but-resumable rows; rows the host db forgot stay skipped", () => {
     reg("ses_a", "alice");
     reg("ses_r", "returns");
     reg("ses_d", "dead");
@@ -494,16 +564,18 @@ describe("ChatStore via ThatchDB", () => {
     // The resumability check (production: opencode.db's session_v2 table
     // via resumableSessionIds) knows ses_r and has forgotten ses_d. The
     // consult sees exactly the stale in-scope opencode ids - never fresh
-    // rows, never the sender.
+    // rows, never the sender - and runs ONLY because includeStale is
+    // set (the --stale flag).
     let consulted: string[] = [];
     const withCheck = new ThatchDB(dbPath, {
+      chatOpenTabs: () => new Set(["ses_a"]),
       chatResumableSessions: (ids) => {
         consulted = ids;
         return new Set(ids.filter((id) => id === "ses_r"));
       },
     });
     try {
-      const result = withCheck.broadcastChatMessageFromUser("outage over", { senderName: "cli user" });
+      const result = withCheck.broadcastChatMessageFromUser("outage over", { senderName: "cli user", includeStale: true });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(consulted.slice().sort()).toEqual(["ses_d", "ses_r"]);
@@ -517,11 +589,13 @@ describe("ChatStore via ThatchDB", () => {
       expect(queued.length).toBe(1);
       expect(queued[0].delivered_at).toBeNull();
       expect(queued[0].read_at).toBeNull();
-      // The agent tool path queues resumable stale rows too: the mail is
-      // not wake traffic, so the open-tab requirement never applied to it.
+      // The agent tool path queues resumable stale rows too, and runs
+      // the consult without any flag: its shipped audience is unchanged.
+      consulted = [];
       const tool = withCheck.broadcastChatMessage("ses_a", "agent words");
       expect(tool.ok).toBe(true);
       if (!tool.ok) return;
+      expect(consulted.slice().sort()).toEqual(["ses_d", "ses_r"]);
       expect(tool.recipients.map((r) => r.name)).toEqual(["returns-00001"]);
       expect(tool.skipped.map((s) => s.name)).toEqual(["dead-00001"]);
     } finally {
@@ -603,14 +677,13 @@ describe("ChatStore via ThatchDB", () => {
       projects: [],
     });
     expect(lines).toEqual([
-      "Broadcast from Jeff Ober to 4 of 7 registered sessions:",
+      "Broadcast from Jeff Ober to 3 of 7 registered sessions:",
       "  delivered: alice-00001 (sysread/thatch) [open]",
       "  delivered: bob-00001 (sysread/thatch) [open]",
-      "  delivered to 1 session with no open tab (single nudge; otherwise read at next prompt)",
       "  delivered to 1 mcp session (read at next prompt)",
       "Skipped:",
-      "  - 2 stale sessions in sysread/thog",
-      "  - 1 stale session with no project",
+      "  skipped 1 closed-tab session (--closed to include)",
+      "  skipped 3 stale sessions (--stale to include)",
     ]);
   });
 
@@ -623,10 +696,11 @@ describe("ChatStore via ThatchDB", () => {
     reg("ses_d", "dies", "sysread/thog");
     raw.run("UPDATE chat_sessions SET last_seen = '2020-01-01T00:00:00Z' WHERE session_id IN ('ses_r', 'ses_d')");
     const withCheck = new ThatchDB(dbPath, {
+      chatOpenTabs: () => new Set(["ses_a"]),
       chatResumableSessions: (ids) => new Set(ids.filter((id) => id === "ses_r")),
     });
     try {
-      const result = withCheck.broadcastChatMessageFromUser("outage mail", { senderName: "cli user" });
+      const result = withCheck.broadcastChatMessageFromUser("outage mail", { senderName: "cli user", includeStale: true });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       const lines = renderBroadcastReport(result, {

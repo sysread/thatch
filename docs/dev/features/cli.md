@@ -183,11 +183,11 @@ A window on the cross-session chat directory ([cross-session-chat.md](cross-sess
   messages stay invisible (their read events too). A `--until` in the past
   exits after the backlog; one in the future follows until the window
   closes. `parseChatTimeBound()` accepts `YYYY-MM-DD [HH:MM]` local time.
-- `chat broadcast <msg> [--project P]...` is the CLI's one write path:
-  it voices the human user (sentinel from_session "cli", explicit
-  `from_name` from `git config user.name` or `$USER`, sanitized by
-  `sanitizeCliSenderName()` and refused on a NOCASE match with a
-  registered session), stores the message through
+- `chat broadcast <msg> [--project P]... [--closed] [--stale]` is the
+  CLI's one write path: it voices the human user (sentinel from_session
+  "cli", explicit `from_name` from `git config user.name` or `$USER`,
+  sanitized by `sanitizeCliSenderName()` and refused on a NOCASE match
+  with a registered session), stores the message through
   `broadcastFromUser()` with `cliBroadcastFrame()`'s fence note
   prepended (the note tells each recipient that the message is the
   human user speaking, and that the recipient answers in its own
@@ -197,12 +197,18 @@ A window on the cross-session chat directory ([cross-session-chat.md](cross-sess
   [open]` shape is a consumer contract, parsed by tskmstr's board -
   with no-tab, mcp, and stale-queued recipients counted by delivery
   state, skips and out-of-scope rows counted per project (the
-  repeatable exact-match `--project` filter), and the dedupe/split
-  notes. Delivery is the ordinary poll with the sender-kind wake gate:
-  open sessions wake immediately, closed-tab sessions get one nudge,
-  mcp sessions read at their next prompt, and stale-but-resumable
-  sessions hold queued mail for their next run, `delivered_at` left to
-  the wake machinery; failures print
+  repeatable exact-match `--project` filter), flag-hinted skip lines
+  for the default-excluded buckets, and the dedupe/split notes. The
+  DEFAULT audience is ACTIVE only - open-tab opencode sessions plus mcp
+  sessions (Jeff's 2026-11-16 ruling); `--closed` adds the closed-tab
+  sessions (one nudge, then read at next prompt) and `--stale` adds
+  stale-but-resumable sessions (queued mail for their next run; the
+  resumability consult runs only under `--stale`). Delivery is the
+  ordinary poll with the sender-kind wake gate: open sessions wake
+  immediately, closed-tab sessions get one nudge when `--closed` let
+  them through, mcp sessions read at their next prompt, and
+  stale-but-resumable sessions hold queued mail for their next run,
+  `delivered_at` left to the wake machinery; failures print
   plainly (`[thatch chat broadcast] failed: ...`), matching the tail's
   friendly-failure treatment. Unknown flags
   die loudly rather than going out to every session as message text.

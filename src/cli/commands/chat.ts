@@ -1,9 +1,12 @@
 /**
  * The chat namespace: a window on the cross-session chat. Read-only
  * everywhere except `chat broadcast`, the one deliberate write path: it
- * voices the human user (sentinel sender), whose rows land in every
- * fresh inbox plus every stale-but-resumable one, while the poller
- * wakes open-tab recipients immediately and closed-tab recipients once.
+ * voices the human user (sentinel sender) to the ACTIVE sessions by
+ * default - open-tab rows plus mcp rows (which read at their next
+ * prompt, so no wake or API fire is spent on them) - with --closed and
+ * --stale widening the audience to closed-tab and stale-resumable rows.
+ * The poller wakes open-tab recipients immediately and, when --closed
+ * let them through, closed-tab recipients once.
  * A namespace is a Subcommand whose run dispatches a child registry;
  * each child was a case of chatCommand's switch before the registry
  * replaced it.
@@ -426,30 +429,39 @@ const tail: Subcommand = {
 
 const broadcast: Subcommand = {
   name: "broadcast",
-  summary: "Send a message from you (the human user, at a terminal) to every live chat session",
+  summary: "Send a message from you (the human user, at a terminal) to the active chat sessions",
   usage: () => ({
-    synopsis: "thatch chat broadcast <msg> [--project P]...",
+    synopsis: "thatch chat broadcast <msg> [--project P]... [--closed] [--stale]",
     flags: [
       { long: "--project", short: null, description: "Narrow the audience to those projects (exact match; repeatable)." },
+      { long: "--closed", short: null, description: "Also deliver to closed-tab sessions (fresh heartbeat, no open tab): one wake nudge, then they read at their next prompt." },
+      { long: "--stale", short: null, description: "Also queue the message for stale sessions the opencode session database can still resume (no wake; delivered when the session next runs)." },
     ],
     notes: [
-      "You are not in the chat: delivered bodies carry a note saying so, and recipients answer you in their own session, not in chat. Delivery wakes OPEN sessions immediately and closed-tab sessions exactly once (no re-nudges); MCP sessions read the message at their next prompt. A stale opencode session that can still be resumed gets the message queued for its next run; a gone one is skipped. The report names each open-tab delivery and summarizes the rest (no-tab, mcp, stale-queued, skipped, out-of-scope) as counts.",
+      "Default audience is ACTIVE sessions only: open-tab opencode sessions (woken immediately) plus MCP sessions (read at their next prompt).",
+      "You are not in the chat: delivered bodies carry a note saying so, and recipients answer you in their own session, not in chat.",
+      "The report names each open-tab delivery and summarizes the rest as counts; the excluded closed-tab and stale buckets get skip lines naming the flag that includes them.",
     ],
   }),
   async run(args, ctx) {
     // The one chat write path: the user speaking from a terminal. The
     // sender is a sentinel (never a registered session), delivery wakes
-    // open-tab sessions immediately and closed-tab sessions once (the
-    // poller's sender-kind gate), and the fence note in the body tells
-    // recipients the protocol. A typo'd flag must not go out to every
-    // session as message text, so unknown `--` tokens die loudly instead
-    // of joining the message.
+    // open-tab sessions immediately and - with --closed - closed-tab
+    // sessions once (the poller's sender-kind gate), and the fence note
+    // in the body tells recipients the protocol. The default audience
+    // is ACTIVE only (Jeff's 2026-11-16 ruling: the default broadcast
+    // must not spend nudges on closed tabs or queue mail for the
+    // stale); --closed and --stale add those classes back. A typo'd
+    // flag must not go out to every session as message text, so unknown
+    // `--` tokens die loudly instead of joining the message.
     if (!chatEnabled(loadConfig(ctx.dbPath).config)) {
       console.error("error: cross-session chat is off (chat.enabled: false in the thatch config); nothing was sent.");
       process.exit(1);
     }
     const projects: string[] = [];
     const message: string[] = [];
+    let includeClosed = false;
+    let includeStale = false;
     // End-of-flags: a bare `--` puts every later token in the message,
     // so a body that starts with `--` can still be sent.
     let afterDashDash = false;
@@ -461,6 +473,10 @@ const broadcast: Subcommand = {
       }
       if (arg === "--") {
         afterDashDash = true;
+      } else if (arg === "--closed") {
+        includeClosed = true;
+      } else if (arg === "--stale") {
+        includeStale = true;
       } else if (arg === "--project") {
         const value = args[++i];
         // The sibling-flag rule (the --stale precedent): a token
@@ -482,7 +498,7 @@ const broadcast: Subcommand = {
         }
         projects.push(value.trim());
       } else if (arg.startsWith("--")) {
-        console.error(`error: unknown flag "${arg}" (only --project is supported; put -- before the message to send text that starts with --)`);
+        console.error(`error: unknown flag "${arg}" (supported: --project, --closed, --stale; put -- before the message to send text that starts with --)`);
         process.exit(1);
       } else {
         message.push(arg);
@@ -490,7 +506,7 @@ const broadcast: Subcommand = {
     }
     const body = message.join(" ").trim();
     if (!body) {
-      console.error("usage: thatch chat broadcast <message> [--project P]...");
+      console.error("usage: thatch chat broadcast <message> [--project P]... [--closed] [--stale]");
       process.exit(1);
     }
     // The cap check runs on the FRAMED body (the fence note rides in
@@ -514,6 +530,8 @@ const broadcast: Subcommand = {
       result = ctx.db.broadcastChatMessageFromUser(cliBroadcastFrame(body), {
         projects: projects.length > 0 ? projects : undefined,
         senderName: sanitizeCliSenderName(rawName),
+        includeClosed,
+        includeStale,
       });
     } catch (err) {
       console.error(`[thatch chat broadcast] failed: ${err}`);

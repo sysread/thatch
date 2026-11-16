@@ -110,7 +110,7 @@ toggle reveals those output blocks if you want them.)
 
 ## Talking to every session yourself: chat broadcast
 
-You can holler at all of your sessions directly from a terminal, no
+You can holler at your active sessions directly from a terminal, no
 agent needed:
 
 ```bash
@@ -119,19 +119,25 @@ thatch chat broadcast "deploy halted" --project acme/payments
 ```
 
 The message goes out under your name (from `git config user.name` or
-your OS username), to every live session. OPEN sessions are woken
-immediately. A session whose tab is closed gets exactly ONE wake nudge:
-if the session runs that turn it reads your message then, and otherwise
-the mail waits for its next prompt - thatch never re-nudges a closed tab
-on a broadcast's behalf. Claude Code/Cursor sessions are not woken and
-read it at their next prompt. A stale opencode session (whose host
-process is gone) is checked against the opencode session database: one
-that can still be resumed gets the mail queued for its next run, and one
-that is gone is skipped. The report names each open-tab delivery on its
-own line and summarizes the rest as counts: no-tab, mcp, and stale-queued
-recipients by delivery state, and skipped and out-of-scope sessions per
-project - a broadcast to a fleet-scale directory stays a handful of
-lines. Repeat `--project` to narrow the audience to those projects.
+your OS username). The default audience is the ACTIVE sessions:
+opencode sessions with a tab open right now are woken immediately, and
+Claude Code/Cursor sessions read the message at their next prompt.
+Two flags widen the audience: `--closed` also delivers to closed-tab
+sessions, which get exactly ONE wake nudge (if the session runs that
+turn it reads your message then, and otherwise the mail waits for its
+next prompt - thatch never re-nudges a closed tab on a broadcast's
+behalf), and `--stale` also queues the message for stale opencode
+sessions (host process gone) that the opencode session database can
+still resume; the mail waits for their next run, and a stale session
+that is gone for good is skipped and counted.
+
+The report names each open-tab delivery on its own line and summarizes
+the rest as counts: mcp, no-tab, and stale-queued recipients by
+delivery state, skipped and out-of-scope sessions per project, and the
+flag-gated classes with the flag that includes them ("skipped 67
+closed-tab sessions (--closed to include)"). A broadcast to a
+fleet-scale directory stays a handful of lines. Repeat `--project` to
+narrow the audience to those projects.
 
 You are not joining the chat: every delivered message carries a note
 saying it is from the human user, that you are not a chat session and

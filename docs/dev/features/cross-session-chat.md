@@ -414,7 +414,9 @@ The sender-kind wake gate: a batch whose rows are ALL from the CLI
 sentinel (the human user's terminal broadcast) wakes an open-tab
 recipient normally (the poller's `openTabs` option, fed by the same
 tab-state reader as the roster), and wakes a closed-tab recipient
-exactly ONCE - the batch's first delivery, a single wake prompt.
+exactly ONCE - the batch's first delivery, a single wake prompt (when
+`--closed` put that row in the audience at all; the CLI's default
+audience is active only - see "The CLI broadcast" below).
 Re-nudges of that tab's already-delivered rows stay held until the tab
 reopens, so the renudge machinery cannot loop on a tab that may never
 run a turn. The once-nudge deliberately reverses half of the original
@@ -602,25 +604,33 @@ rides in part 1 only, with each row still naming the sender through the
 Delivery is the store's `broadcastFromUser()` (both entry points share
 the `#fanOut` core): the cap check, split, single transaction,
 per-recipient dedupe, and name snapshots are byte-identical to the tool
-path, but `requireOpen` is false - the mail itself lands in every fresh
-inbox (rows are cheap, and every reader that misses the wake still gets
-its copy at the next prompt). A CLI row is delivered by the ordinary
-poller under the sender-kind wake gate (below): open opencode sessions
-are woken immediately, closed-tab RECENT opencode rows get the batch's
-single first-delivery nudge, and MCP rows read their mail at the next
-prompt; the wake nudge is user-voiced (`chatNotificationNudge`'s
-`fromUser` framing - the agent-mail "not user input" rule would be a
-lie here). STALE opencode rows split on the fan-out's resumability
-check: a session opencode.db still knows is resumable and gets a queued
-row (no wake - the mail is there when its harness returns), and a
-session opencode has forgotten is skipped and reported; a stale MCP row
-still receives. A repeatable `--project` flag narrows the audience by
-exact whole-value match against the registered project (the comparison
-`pendingByProject` uses); non-matching rows, including NULL-project
-rows, land in the report's out-of-scope bucket so the omission is
-visible. `delivered_at` is never stamped by the CLI write: the
-wake/poll machinery owns delivery stamping. The tool's
-`chat_broadcast` surface is unchanged and cannot name its sender.
+path, but `requireOpen` is false and the audience is FLAG-GATED (Jeff's
+2026-11-16 ruling: a Monday-morning broadcast delivered to 264 of 398
+sessions, most of them closed-tab or stale). The DEFAULT audience is
+ACTIVE only: open-tab opencode rows (the fan-out reads the same
+tab-state provider the roster uses) plus mcp rows, which read their
+mail at the next prompt - no wake, no API fire spent on them. The two
+non-active classes ride behind boolean flags: `--closed`
+(`includeClosed`) adds the closed-tab RECENT rows (single
+first-delivery nudge, then read at next prompt), and `--stale`
+(`includeStale`) adds the stale rows, which split on the fan-out's
+resumability check - a session opencode.db still knows is resumable
+and gets a queued row (no wake - the mail is there when its harness
+returns), and a session opencode has forgotten is skipped and
+reported. The resumability consult (a host-db read) runs ONLY when
+`--stale` put the stale class in the audience. A stale MCP row still
+receives: mcp rows are always in the audience. A repeatable
+`--project` flag narrows the audience by exact whole-value match
+against the registered project (the comparison `pendingByProject`
+uses); non-matching rows, including NULL-project rows, land in the
+report's out-of-scope bucket so the omission is visible.
+`delivered_at` is never stamped by the CLI write: the wake/poll
+machinery owns delivery stamping. The wake nudge, when a delivery gets
+one, is user-voiced (`chatNotificationNudge`'s `fromUser` framing -
+the agent-mail "not user input" rule would be a lie here). The tool's
+`chat_broadcast` surface is unchanged - it always required an open tab
+and still consults and queues resumable stale rows - and cannot name
+its sender.
 
 The CLI report is summarized, not per-recipient
 (`renderBroadcastReport()` in `src/chat.ts`): the open-tab recipients -
@@ -630,9 +640,14 @@ consumer contract: jowi-dev/tskmstr's board parses delivered names off
 that prefix), while no-tab (single nudge), mcp, and stale-queued
 recipients, skips, and out-of-scope rows collapse into count lines by
 delivery state and per project (`BroadcastDeliveryKind` is the bucket
-union). The per-recipient report once rendered a one-line terminal FYI
-as ~600 lines (94 delivered plus ~490 stale skips, observed 2026-11-09);
-the counts keep the report fleet-scale-safe in both directions.
+union). The flag-gated exclusions ("closed tab", "stale (default)" in
+`BroadcastSkip.reason`) are audience gating, not delivery failures, so
+they render as aggregate lines naming the flag that includes each
+bucket - "skipped 67 closed-tab sessions (--closed to include)" -
+instead of per-project counts. The per-recipient report once rendered a
+one-line terminal FYI as ~600 lines (94 delivered plus ~490 stale
+skips, observed 2026-11-09); the counts keep the report fleet-scale-safe
+in both directions.
 
 ## Interactions with other features
 
@@ -745,7 +760,9 @@ returns the ids opencode.db still knows, wired into ChatStore through
 the ThatchDB constructor's `chatResumableSessions` option. A resumable
 row receives queued mail; a forgotten row is skipped. An unreadable,
 missing, or v1-era host db yields an empty set, so an unverifiable row
-is never queued - the conservative pre-check behavior. Broadcast also
+is never queued - the conservative pre-check behavior. The CLI path
+runs the consult only under `--stale` (the flag puts the stale class
+in the audience at all; see "The CLI broadcast" above). Broadcast also
 skips fresh opencode rows with no open tab on the tool path (see the
 open-tab reader) - the skip classes are reported by name either way.
 
@@ -818,9 +835,10 @@ within their clamps - invalid values silently fall back to the default.
 - `tests/qa/auto/uc-099-chat-cli.ts` - `chat list` roster and `chat tail`
   JSONL and `--pretty` contracts over a seeded DB
 - `tests/qa/auto/uc-128-chat-cli-broadcast.ts` - the CLI broadcast:
-  summarized report (open tabs named, the rest counted - stale-queued
-  included, through an opencode.db fixture that keeps one stale row
-  resumable), fence note,
+  flag-gated default audience (active only; flag-hinted skip lines),
+  full reach under --closed --stale, summarized report (open tabs
+  named, the rest counted - stale-queued included, through an
+  opencode.db fixture that keeps one stale row resumable), fence note,
   sentinel rows, dedupe, and failure paths over a seeded DB
 - `tests/qa/auto/uc-116-chat-send-dedupe.ts` - a retried send is suppressed
 - `tests/qa/auto/uc-119-chat-split-long-messages.ts` - an oversized body is

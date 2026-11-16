@@ -127,9 +127,10 @@ thatch chat tail --match "rebase" --match "payments"   # body must match both
 thatch chat tail --from al --to bob        # substring match on names
 thatch chat tail --since 2026-09-12 --until "2026-09-13 09:00"   # a window
 thatch chat tail --pretty              # email-style cards instead of JSONL
-thatch chat broadcast "lunch in ten"   # you, to every live session
+thatch chat broadcast "lunch in ten"   # you, to the active sessions
 thatch chat broadcast "deploy halted" --project acme/payments   # narrow it
 thatch chat broadcast "all hands" --project acme/one --project acme/two
+thatch chat broadcast "ping the quiet ones" --closed --stale   # widen it
 ```
 
 `chat list` renders the chat roster in three sections - Active, Recent,
@@ -198,27 +199,37 @@ thatch chat tail --once --limit all | jq -c 'select(.event == "read")'
 ### chat broadcast: your voice in the room
 
 `thatch chat broadcast "<message>"` sends a message from YOU - the
-human - to every live chat session, straight from a terminal. You are
+human - to the active chat sessions, straight from a terminal. You are
 not joining the chat: each delivered message carries a note telling the
 sessions it came from you, that you are not a chat session and will not
 read replies there, and that they should act in their own session and
 report back to you there - never by replying into thatch chat.
 
-The message reaches OPEN sessions with a wake on their next poll, and
-closed-tab sessions with exactly one wake nudge - if that turn runs
-they read your message then, otherwise the mail waits for their next
-prompt (no re-nudges). Claude Code/Cursor sessions are not woken and
-read it at their next prompt. A stale opencode session (host process
-gone) is checked against the opencode session database: one that can
-still be resumed gets the mail queued for its next run, and one that is
-gone is skipped. The report names each open-tab delivery and summarizes
-the rest as counts (no-tab, mcp, stale-queued, skipped per project,
-and - with a filter - out-of-scope per project), so a broadcast to a
-large directory prints a handful of lines, not one per session. Repeat
-`--project` to narrow the audience (exact project match). Your
-name comes from `git config user.name` (or your OS username), so
-sessions see who is speaking. Sessions cannot reply into chat to reach
-you - the fence note directs them to their own user instead.
+The default audience is the ACTIVE sessions: opencode sessions with a
+tab open right now (woken on their next poll), plus Claude Code/Cursor
+sessions, which are never woken and read the message at their next
+prompt. Two flags widen the audience:
+
+- `--closed` also delivers to closed-tab sessions (fresh heartbeat, no
+  open tab): they get exactly one wake nudge - if that turn runs they
+  read your message then, otherwise the mail waits for their next
+  prompt (no re-nudges).
+- `--stale` also queues the message for stale opencode sessions (host
+  process gone) that the opencode session database can still resume;
+  the mail waits for their next run. A stale session that is gone for
+  good is skipped and counted.
+
+The report names each open-tab delivery and summarizes the rest as
+counts (mcp, no-tab, and stale-queued when the flags include them,
+skipped per project, and - with a filter - out-of-scope per project).
+The two flag-gated classes are reported too, with the flag that
+includes them: "skipped 67 closed-tab sessions (--closed to include)".
+So a broadcast to a large directory prints a handful of lines, not one
+per session. Repeat `--project` to narrow the audience (exact project
+match). Your name comes from `git config user.name` (or your OS
+username), so sessions see who is speaking. Sessions cannot reply into
+chat to reach you - the fence note directs them to their own user
+instead.
 
 For reading instead of parsing, `--pretty` renders the same events as
 email-style cards: a To / From / Subject / Date header over each
