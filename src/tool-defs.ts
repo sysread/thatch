@@ -2304,8 +2304,10 @@ const watchCreateDef: ToolDef = {
   description:
     "Watch a GitHub PR for events and get notified in this session when they " +
     "happen: new top-level comments, inline review comments and replies, " +
-    "review thread resolutions, new commits (head SHA change), PR status " +
-    "changes, title/description edits, and completed CI check runs. For CI " +
+    "review thread resolutions, review submissions (approve, request changes, " +
+    "comment, or dismiss - even a bare review with no comment text), new " +
+    "commits (head SHA change), PR status changes, title/description edits, " +
+    "and completed CI check runs. For CI " +
     "waits: a short bounded wait (about 2-3 minutes) is fine as a single " +
     "in-turn gh poll; for longer or unknown waits, use this watcher instead " +
     "of sleep-polling. The watcher polls about every 60s by default - the " +

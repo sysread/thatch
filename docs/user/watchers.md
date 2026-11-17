@@ -28,6 +28,9 @@ PR watched events:
 - `pr_review_comment` - new inline comments on the diff
 - `pr_review_reply` - replies to an existing review comment
 - `pr_review_resolved` - a review thread resolved or reopened
+- `pr_review_submitted` - a review submission landed (approve, request
+  changes, comment, or dismiss), even a bare review with no comment
+  text; the notification names the reviewer and the state
 - `pr_commit` - new commits (the head SHA moved)
 - `pr_status` - the PR opened, closed, or merged
 - `pr_description` - title or description edited

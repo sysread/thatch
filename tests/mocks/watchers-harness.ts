@@ -18,8 +18,10 @@ export function baseState(overrides: Partial<PrState> = {}): PrState {
     bodySha: "body-hash-1",
     lastIssueCommentId: 100,
     lastReviewCommentId: 200,
+    lastReviewId: 0,
     issueComments: [{ id: 100, author: "alice", url: "https://github.com/acme/widgets/pull/7#issuecomment-100", isReply: false }],
     reviewComments: [],
+    reviews: [],
     resolvedThreads: [],
     checkRuns: {
       "1": { name: "ci", status: "completed", conclusion: "success", url: "https://example.com/ci" },
@@ -54,12 +56,14 @@ export function prResponse(overrides: Record<string, unknown> = {}): unknown {
 export const RE_PULL = /\/pulls\/\d+$/;
 export const RE_ISSUE_COMMENTS = /\/issues\/\d+\/comments/;
 export const RE_REVIEW_COMMENTS = /\/pulls\/\d+\/comments/;
+export const RE_REVIEWS = /\/pulls\/\d+\/reviews/;
 export const RE_CHECK_RUNS = /\/check-runs/;
 export const RE_GRAPHQL = /^graphql/;
 
 export const quietRoutes = (): Array<[RegExp, unknown]> => [
   [RE_ISSUE_COMMENTS, []],
   [RE_REVIEW_COMMENTS, []],
+  [RE_REVIEWS, []],
   [RE_CHECK_RUNS, { check_runs: [] }],
   [RE_GRAPHQL, { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }],
   [RE_PULL, prResponse()],

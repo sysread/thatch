@@ -51,8 +51,8 @@ const useCase: UseCase = {
     }
 
     // The event vocabulary is stable and documented.
-    if (WATCHER_EVENT_TYPES.length !== 13) {
-      console.log(`  FAIL: expected 13 event types, got ${WATCHER_EVENT_TYPES.length}`);
+    if (WATCHER_EVENT_TYPES.length !== 14) {
+      console.log(`  FAIL: expected 14 event types, got ${WATCHER_EVENT_TYPES.length}`);
       return "FAIL";
     }
 
@@ -65,8 +65,10 @@ const useCase: UseCase = {
       bodySha: "body",
       lastIssueCommentId: 0,
       lastReviewCommentId: 0,
+      lastReviewId: 0,
       issueComments: [],
       reviewComments: [],
+      reviews: [],
       resolvedThreads: [],
       checkRuns: {},
     };
@@ -78,6 +80,9 @@ const useCase: UseCase = {
           : [];
       }
       if (/\/pulls\/\d+\/comments/.test(joined)) return [];
+      if (/\/pulls\/\d+\/reviews/.test(joined)) {
+        return state.reviews.map((r) => ({ id: r.id, user: { login: r.author }, state: r.state, html_url: r.url }));
+      }
       if (/\/check-runs/.test(joined)) return { check_runs: [] };
       if (/^graphql/.test(joined)) {
         return { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } };
@@ -100,7 +105,7 @@ const useCase: UseCase = {
     });
 
     // Step 2: baseline capture.
-    const created = await registry.createPr("ses_uc95", "acme/widgets", 7, ["pr_comment", "pr_commit"]);
+    const created = await registry.createPr("ses_uc95", "acme/widgets", 7, ["pr_comment", "pr_commit", "pr_review_submitted"]);
     if (!created.ok) {
       console.log(`  FAIL: create failed: ${created.error}`);
       return "FAIL";
@@ -118,6 +123,9 @@ const useCase: UseCase = {
     // Step 3: change the PR, poll, gate is closed so events stay pending.
     state.headSha = "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222";
     state.issueComments = [{ id: 1, author: "alice", url: "https://github.com/acme/widgets/pull/7#issuecomment-1", isReply: false }];
+    // A bare review submission (no body, no inline comments) - the exact
+    // shape this event exists for: nothing else in the vocabulary fires.
+    state.reviews = [{ id: 1, author: "dave", state: "APPROVED", url: "https://github.com/acme/widgets/pull/7#pullrequestreview-1" }];
     await registry.poll();
     if (registry.pendingCount("ses_uc95") === 0) {
       console.log("  FAIL: changed PR should have queued events");
@@ -136,8 +144,20 @@ const useCase: UseCase = {
       return "FAIL";
     }
     const types = delivered[0].events.map((e) => e.type).sort();
-    if (!(types.includes("pr_commit") && types.includes("pr_comment"))) {
+    if (!(types.includes("pr_commit") && types.includes("pr_comment") && types.includes("pr_review_submitted"))) {
       console.log(`  FAIL: unexpected delivered event types: ${types.join(",")}`);
+      return "FAIL";
+    }
+    const reviewEvent = delivered[0].events.find((e) => e.type === "pr_review_submitted");
+    if (!reviewEvent || !reviewEvent.summary.includes("dave") || !reviewEvent.summary.includes("APPROVED")) {
+      console.log(`  FAIL: review event summary missing actor or state: ${reviewEvent?.summary}`);
+      return "FAIL";
+    }
+
+    // Re-poll with no further change: nothing may re-fire.
+    await registry.poll();
+    if (registry.pendingCount("ses_uc95") !== 0) {
+      console.log("  FAIL: re-poll with unchanged state re-fired events");
       return "FAIL";
     }
 

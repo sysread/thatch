@@ -67,9 +67,10 @@ process exit is the real lifetime boundary in both TUI and serve mode
 ### Registration (`watch_create`)
 
 `create()` immediately fetches the PR's state as a baseline via
-`fetchPrState()` - five gh calls (the pull, issue comments, review
-comments, check runs on the head SHA, and one GraphQL query for
-review-thread resolution state), four of them in parallel. The
+`fetchPrState()` - six gh calls (the pull, issue comments, review
+comments, review submissions, check runs on the head SHA, and one
+GraphQL query for review-thread resolution state), five of them in
+parallel. The
 baseline doubles as validation: a missing PR, wrong repo, or broken
 gh setup fails registration with a real error instead of producing a
 watcher that never fires. Watch creation is also gated on a cached
@@ -357,10 +358,11 @@ boot and on the 6h interval.
 ### Event vocabulary
 
 `pr_comment`, `pr_review_comment`, `pr_review_reply`,
-`pr_review_resolved`, `pr_commit`, `pr_status`, `pr_description`,
-`pr_ci`. The tool's `events` argument selects a subset; the default is
-all eight. Branch watchers add `branch_commit`, `branch_ci`, and
-`branch_workflow`; command watchers register the single
+`pr_review_resolved`, `pr_review_submitted`, `pr_commit`, `pr_status`,
+`pr_description`, `pr_ci`. The tool's `events` argument selects a
+subset; the default is all nine. Branch watchers add `branch_commit`,
+`branch_ci`, and `branch_workflow`; command watchers register the
+single
 `command_exit` type (fired on the first exit in the watched exit-code
 set; see "Watched exit codes" above). The registry itself emits one
 lifecycle type

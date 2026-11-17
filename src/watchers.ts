@@ -36,6 +36,7 @@ export type PrWatcherEventType =
   | "pr_review_comment"
   | "pr_review_reply"
   | "pr_review_resolved"
+  | "pr_review_submitted"
   | "pr_commit"
   | "pr_status"
   | "pr_description"
@@ -65,6 +66,7 @@ export const PR_EVENT_TYPES: PrWatcherEventType[] = [
   "pr_review_comment",
   "pr_review_reply",
   "pr_review_resolved",
+  "pr_review_submitted",
   "pr_commit",
   "pr_status",
   "pr_description",
@@ -119,6 +121,20 @@ export interface CommentRef {
   isReply: boolean;
 }
 
+/**
+ * A review submission seen on the PR (the reviews list). Only identifying
+ * fields - never the review body. Covers the bare-review case: an APPROVED
+ * or CHANGES_REQUESTED with no body and no inline comments produces no
+ * comment or thread events, so this is the only signal such a review gives.
+ */
+export interface ReviewRef {
+  id: number;
+  author: string;
+  /** The GitHub review state: APPROVED, CHANGES_REQUESTED, COMMENTED, or DISMISSED. */
+  state: string;
+  url: string;
+}
+
 /** One CI check run, keyed by id in state snapshots. */
 export interface CheckRunRef {
   name: string;
@@ -158,8 +174,12 @@ export interface PrState {
   bodySha: string;
   lastIssueCommentId: number;
   lastReviewCommentId: number;
+  /** High-water mark over review submission ids - the pr_review_submitted diff. */
+  lastReviewId: number;
   issueComments: CommentRef[];
   reviewComments: CommentRef[];
+  /** Review submissions, kept whole so each diff can name each new one; capped at the fetch page size (100). */
+  reviews: ReviewRef[];
   /** Sorted ids of review threads currently in the resolved state. */
   resolvedThreads: string[];
   checkRuns: Record<string, CheckRunRef>;
@@ -644,7 +664,26 @@ function toCommentRefs(raw: unknown): CommentRef[] {
     }));
 }
 
-function maxCommentId(refs: CommentRef[]): number {
+interface RawReview {
+  id?: number;
+  user?: { login?: string };
+  state?: string;
+  html_url?: string;
+}
+
+function toReviewRefs(raw: unknown): ReviewRef[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((r): r is RawReview => typeof (r as RawReview).id === "number")
+    .map((r) => ({
+      id: r.id!,
+      author: r.user?.login ?? "unknown",
+      state: r.state ?? "unknown",
+      url: r.html_url ?? "",
+    }));
+}
+
+function maxCommentId(refs: { id: number }[]): number {
   return refs.reduce((max, c) => Math.max(max, c.id), 0);
 }
 
@@ -708,11 +747,11 @@ function parseResolvedThreads(raw: unknown): string[] {
 
 /**
  * Fetches the current state of a PR plus everything the diff functions need.
- * Five gh calls per poll per watcher: the PR itself, issue comments
- * (top-level PR conversation), review comments (inline diff comments), check
- * runs on the head SHA, and one GraphQL query for review-thread resolution
- * state (isResolved exists only in GraphQL, not the REST API). All
- * non-pull fetches run in parallel.
+ * Six gh calls per poll per watcher: the PR itself, issue comments
+ * (top-level PR conversation), review comments (inline diff comments), review
+ * submissions (the reviews list), check runs on the head SHA, and one GraphQL
+ * query for review-thread resolution state (isResolved exists only in
+ * GraphQL, not the REST API). All non-pull fetches run in parallel.
  */
 export async function fetchPrState(gh: GhRunner, repo: string, pr: number): Promise<PrState> {
   const pull = (await gh([`/repos/${repo}/pulls/${pr}`])) as {
@@ -727,15 +766,17 @@ export async function fetchPrState(gh: GhRunner, repo: string, pr: number): Prom
   const graphqlQuery =
     `query { repository(owner: "${owner}", name: "${repoName}") { ` +
     `pullRequest(number: ${pr}) { reviewThreads(first: 100) { nodes { id isResolved } } } } }`;
-  const [issueComments, reviewComments, checkRuns, threads] = await Promise.all([
+  const [issueComments, reviewComments, checkRuns, threads, reviews] = await Promise.all([
     gh([`/repos/${repo}/issues/${pr}/comments?per_page=100&sort=created&direction=desc`]),
     gh([`/repos/${repo}/pulls/${pr}/comments?per_page=100&sort=created&direction=desc`]),
     gh([`/repos/${repo}/commits/${headSha}/check-runs?per_page=100`]),
     gh(["graphql", "-f", `query=${graphqlQuery}`]),
+    gh([`/repos/${repo}/pulls/${pr}/reviews?per_page=100`]),
   ]);
 
   const issueRefs = toCommentRefs(issueComments);
   const reviewRefs = toCommentRefs(reviewComments);
+  const reviewSubmissionRefs = toReviewRefs(reviews);
 
   return {
     headSha,
@@ -745,8 +786,10 @@ export async function fetchPrState(gh: GhRunner, repo: string, pr: number): Prom
     bodySha: sha256(pull.body ?? ""),
     lastIssueCommentId: maxCommentId(issueRefs),
     lastReviewCommentId: maxCommentId(reviewRefs),
+    lastReviewId: maxCommentId(reviewSubmissionRefs),
     issueComments: issueRefs,
     reviewComments: reviewRefs,
+    reviews: reviewSubmissionRefs,
     resolvedThreads: parseResolvedThreads(threads),
     checkRuns: parseCheckRuns(checkRuns),
   };
@@ -847,9 +890,9 @@ function diffCheckRuns(
 
 /**
  * Pure diff between the last-seen and current PR state. Detects comments by
- * id monotonicity, commits by head SHA, description by body hash, CI by
- * check-run transitions, thread resolution by symmetric difference of the
- * sorted resolved-id lists.
+ * id monotonicity, commits by head SHA, description by body hash, review
+ * submissions by id monotonicity, CI by check-run transitions, thread
+ * resolution by symmetric difference of the sorted resolved-id lists.
  */
 export function diffPrState(before: PrState, after: PrState, target: string, baseUrl: string): WatcherEvent[] {
   const events: WatcherEvent[] = [];
@@ -879,6 +922,19 @@ export function diffPrState(before: PrState, after: PrState, target: string, bas
       target,
       summary: `comment by ${c.author}`,
       url: c.url || baseUrl,
+    });
+  }
+  for (const r of after.reviews) {
+    // id monotonicity like the comment diffs. A snapshot from before the
+    // reviews field existed hydrates without lastReviewId, and every id
+    // compares false against undefined, so no spurious fire on the first
+    // poll after an upgrade; the state journal refreshes on that poll.
+    if (!(r.id > before.lastReviewId)) continue;
+    events.push({
+      type: "pr_review_submitted",
+      target,
+      summary: `review by ${r.author}: ${r.state}`,
+      url: r.url || baseUrl,
     });
   }
 

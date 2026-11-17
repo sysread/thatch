@@ -157,6 +157,7 @@ describe("WatcherRegistry journal + hydrate", () => {
     if (/\/pulls\/\d+$/.test(joined)) return { head: { sha: "aaaa1111" }, state: "open", merged: false, title: "t", body: "" };
     if (/issues\/\d+\/comments/.test(joined)) return [];
     if (/pulls\/\d+\/comments/.test(joined)) return [];
+    if (/pulls\/\d+\/reviews/.test(joined)) return [];
     if (/check-runs/.test(joined)) return { check_runs: [] };
     if (/^graphql/.test(joined)) return { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } };
     throw new Error(`no route: ${joined}`);
@@ -722,6 +723,7 @@ describe("WatcherRegistry rearm (dormant recovery)", () => {
     if (/\/pulls\/\d+$/.test(joined)) return { head: { sha: "aaaa1111" }, state: "open", merged: false, title: "t", body: "" };
     if (/issues\/\d+\/comments/.test(joined)) return [];
     if (/pulls\/\d+\/comments/.test(joined)) return [];
+    if (/pulls\/\d+\/reviews/.test(joined)) return [];
     if (/check-runs/.test(joined)) return { check_runs: [] };
     if (/^graphql/.test(joined)) return { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } };
     throw new Error(`no route: ${joined}`);

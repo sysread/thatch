@@ -49,8 +49,10 @@ const useCase: UseCase = {
       bodySha: "body",
       lastIssueCommentId: 0,
       lastReviewCommentId: 0,
+      lastReviewId: 0,
       issueComments: [],
       reviewComments: [],
+      reviews: [],
       resolvedThreads: [],
       checkRuns: {},
     };
@@ -62,6 +64,9 @@ const useCase: UseCase = {
           : [];
       }
       if (/\/pulls\/\d+\/comments/.test(joined)) return [];
+      if (/\/pulls\/\d+\/reviews/.test(joined)) {
+        return state.reviews.map((r) => ({ id: r.id, user: { login: r.author }, state: r.state, html_url: r.url }));
+      }
       if (/\/check-runs/.test(joined)) return { check_runs: [] };
       if (/^graphql/.test(joined)) {
         return { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } };

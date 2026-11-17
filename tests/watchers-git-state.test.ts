@@ -11,6 +11,7 @@ import {
   WATCHER_EVENT_TYPES,
   type GhRunner,
   type WatcherEventType,
+  type PrState,
 } from "../src/watchers";
 import {
   TGT,
@@ -22,6 +23,7 @@ import {
   RE_PULL,
   RE_ISSUE_COMMENTS,
   RE_REVIEW_COMMENTS,
+  RE_REVIEWS,
   RE_CHECK_RUNS,
   RE_GRAPHQL,
 } from "./mocks/watchers-harness";
@@ -120,6 +122,51 @@ describe("diffPrState", () => {
     expect(events.map((e) => e.type)).toContain("pr_ci");
   });
 
+  test("a bare review submission emits pr_review_submitted with author and state, once", () => {
+    const before = baseState();
+    const after = baseState({
+      lastReviewId: 301,
+      reviews: [{ id: 301, author: "dave", state: "APPROVED", url: "https://github.com/acme/widgets/pull/7#pullrequestreview-301" }],
+    });
+    const events = diffPrState(before, after, TGT, URL);
+    const review = events.find((e) => e.type === "pr_review_submitted");
+    expect(review).toBeDefined();
+    expect(review!.summary).toContain("dave");
+    expect(review!.summary).toContain("APPROVED");
+    expect(review!.url).toContain("pullrequestreview-301");
+
+    // Re-polling the same snapshot must not re-fire.
+    expect(diffPrState(after, after, TGT, URL)).toEqual([]);
+  });
+
+  test("CHANGES_REQUESTED submissions emit pr_review_submitted too", () => {
+    const before = baseState();
+    const after = baseState({
+      lastReviewId: 302,
+      reviews: [{ id: 302, author: "erin", state: "CHANGES_REQUESTED", url: "" }],
+    });
+    const events = diffPrState(before, after, TGT, URL);
+    const review = events.find((e) => e.type === "pr_review_submitted");
+    expect(review).toBeDefined();
+    expect(review!.summary).toContain("CHANGES_REQUESTED");
+    expect(review!.url).toBe(URL);
+  });
+
+  test("a legacy snapshot without review fields fires no spurious review events", () => {
+    // Definitions journaled before the reviews field existed hydrate their
+    // state verbatim without it. The first post-upgrade diff must not fire
+    // every pre-existing review back at the session.
+    const legacy = { ...baseState() } as Record<string, unknown>;
+    delete legacy.reviews;
+    delete legacy.lastReviewId;
+    const after = baseState({
+      lastReviewId: 301,
+      reviews: [{ id: 301, author: "dave", state: "APPROVED", url: "https://x/301" }],
+    });
+    const events = diffPrState(legacy as unknown as PrState, after, TGT, URL);
+    expect(events.filter((e) => e.type === "pr_review_submitted")).toEqual([]);
+  });
+
   test("comment floods cap at 10 events", () => {
     const before = baseState();
     const fresh = Array.from({ length: 25 }, (_, i) => ({
@@ -156,6 +203,7 @@ describe("fetchPrState", () => {
     expect(called.some((p) => RE_PULL.test(p))).toBe(true);
     expect(called.some((p) => RE_ISSUE_COMMENTS.test(p))).toBe(true);
     expect(called.some((p) => RE_CHECK_RUNS.test(p))).toBe(true);
+    expect(called.some((p) => RE_REVIEWS.test(p))).toBe(true);
     expect(state.headSha).toBe("aaaa1111");
     expect(state.checkRuns["1"]).toEqual({ name: "lint", status: "completed", conclusion: "failure", url: "https://ci/1" });
     const again = await fetchPrState(gh, "acme/widgets", 7);
@@ -197,13 +245,28 @@ describe("fetchPrState", () => {
     expect(state.reviewComments[1].isReply).toBe(true);
     expect(state.lastReviewCommentId).toBe(301);
   });
+  test("review refs capture author, state, and the last review id", async () => {
+    const gh = mockGh([
+      [RE_REVIEWS, [
+        { id: 400, user: { login: "frank" }, state: "CHANGES_REQUESTED", html_url: "https://x/r400" },
+        { id: 401, user: { login: "gina" }, state: "APPROVED", html_url: "https://x/r401" },
+      ]],
+      ...quietRoutes(),
+    ]);
+    const state = await fetchPrState(gh, "acme/widgets", 7);
+    expect(state.reviews).toEqual([
+      { id: 400, author: "frank", state: "CHANGES_REQUESTED", url: "https://x/r400" },
+      { id: 401, author: "gina", state: "APPROVED", url: "https://x/r401" },
+    ]);
+    expect(state.lastReviewId).toBe(401);
+  });
 });
 
 describe("watcher event types", () => {
   test("covers the documented vocabulary", () => {
     const expected: WatcherEventType[] = [...PR_EVENT_TYPES, ...BRANCH_EVENT_TYPES, ...COMMAND_EVENT_TYPES, "watch_expired"];
     expect(WATCHER_EVENT_TYPES).toEqual(expected);
-    expect(expected).toHaveLength(13);
+    expect(expected).toHaveLength(14);
   });
 });
 

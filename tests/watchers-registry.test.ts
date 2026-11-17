@@ -16,6 +16,7 @@ import {
   RE_PULL,
   RE_ISSUE_COMMENTS,
   RE_REVIEW_COMMENTS,
+  RE_REVIEWS,
   RE_CHECK_RUNS,
   RE_GRAPHQL,
 } from "./mocks/watchers-harness";
@@ -365,6 +366,7 @@ describe("WatcherRegistry", () => {
           [RE_PULL, prResponse({ head: { sha: "bbbb0000" } })],
           [RE_ISSUE_COMMENTS, []],
           [RE_REVIEW_COMMENTS, []],
+          [RE_REVIEWS, []],
           [RE_CHECK_RUNS, { check_runs: [] }],
           [RE_GRAPHQL, { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }],
         ])(apiArgs);

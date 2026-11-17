@@ -28,7 +28,7 @@ const useCase: UseCase = {
     "6. Register with exit_codes including a watched non-zero code; confirm a terminal non-zero exit fires and an unwatched one never does.",
   ].join("\n"),
   expected: [
-    "- watch_command_create is opencodeOnly; command_exit is one of the 13 event types in WATCHER_EVENT_TYPES.",
+    "- watch_command_create is opencodeOnly; command_exit is one of the 14 event types in WATCHER_EVENT_TYPES.",
     "- createCommand captures the baseline exit code; a baseline exit that is already watched is refused (condition already met) and exit 127 is refused.",
     "- Unmet conditions poll silently; the first watched exit fires exactly one event and the watcher self-cancels at detection.",
     "- A timed-out run leaves the last-seen exit untouched and keeps the watch alive (the unit suite in tests/watchers-commands.test.ts also covers the shared per-session limit).",
