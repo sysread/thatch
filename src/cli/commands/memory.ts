@@ -4,7 +4,7 @@
  * bodies are the same dispatch logic, with the shared DB and store
  * resolution arriving in CliContext instead of module scope.
  */
-import { createEmbeddingModel } from "../../embeddings";
+import { createEmbeddingModel, DEFAULT_EMBEDDING_MODEL } from "../../embeddings";
 import { MEMORY_DISPLAY_STAMP } from "../../extraction";
 import { printCommandHelp } from "../help";
 import type { Subcommand } from "../types";
@@ -150,7 +150,7 @@ export const search: Subcommand = {
     // (the hermetic test tier) must reach the CLI's embeds too. The CLI
     // one-shots still never resolve the DAEMON resolver (a recorded
     // non-goal in docs/plans/embedding-daemon.md) - they embed in-process.
-    const model = createEmbeddingModel(process.env.THATCH_MODEL ?? "Xenova/bge-small-en-v1.5");
+    const model = createEmbeddingModel(process.env.THATCH_MODEL ?? DEFAULT_EMBEDDING_MODEL);
     const queryEmb = await model.queryEmbed(query);
     const results = ctx.db.recall(storesToSearch, queryEmb, { limit: 10 });
 
@@ -204,7 +204,7 @@ export const remember: Subcommand = {
     // Through the factory (see the search subcommand): THATCH_MODEL=mock
     // reaches the CLI write path, so a mock-seeded db round-trips mock
     // vectors end to end. No daemon resolver here (deliberate).
-    const model = createEmbeddingModel(process.env.THATCH_MODEL ?? "Xenova/bge-small-en-v1.5");
+    const model = createEmbeddingModel(process.env.THATCH_MODEL ?? DEFAULT_EMBEDDING_MODEL);
     const result = await def.execute(
       {
         content: parsed.request.content,

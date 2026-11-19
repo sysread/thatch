@@ -3,6 +3,7 @@ import { z } from "zod";
 import { ThatchDB, repoPathCache } from "./db";
 import { mcpSessionID } from "./chat";
 import { resolveEmbeddingModel } from "./embed-daemon/client";
+import { DEFAULT_EMBEDDING_MODEL } from "./embeddings";
 import { detectRepo } from "./git";
 import { checkSetup, setupClaudeCode, setupCursor } from "./setup";
 import { TOOL_DEFS, trimHostContext, type CoreContext, type HostToolContext, type ToolDef } from "./tool-defs";
@@ -177,7 +178,7 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
   const home = process.env.HOME ?? "/tmp";
   const configHome = process.env.XDG_CONFIG_HOME ?? `${home}/.config`;
   const dbPath = process.env.THATCH_DB_PATH ?? `${configHome}/thatch/thatch.db`;
-  const modelName = process.env.THATCH_MODEL ?? "Xenova/bge-small-en-v1.5";
+  const modelName = process.env.THATCH_MODEL ?? DEFAULT_EMBEDDING_MODEL;
 
   // The DB must exist before identity detection: detectRepo consults the
   // repo_paths cache when the project directory is gone (deleted worktree).

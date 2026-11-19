@@ -107,7 +107,7 @@ describe("common findings", () => {
     expect(f[0]!.detail).toContain(`v${pkg.version}, the latest known`);
   });
 
-  test("the embed daemon check: serving, not-running, blocked, disabled", async () => {
+  test("the embed daemon check: serving, not-running, blocked, corrupt, disabled", async () => {
     // The preload forces the knob off (the harness default); the check runs
     // in the enabled state first, then the disabled branch. Restored after.
     const savedKnob = process.env.THATCH_EMBED_DAEMON;
@@ -120,14 +120,21 @@ describe("common findings", () => {
     expect(serving[0]!.detail).toContain("pid 4242");
 
     // Not running: no listener, no held lock - the designed steady state.
-    const notRunning = byCheck(await commonFindings(deps({ embedDaemonProbe: async () => null, embedDaemonLockHeld: () => false })), "embed daemon");
+    const notRunning = byCheck(await commonFindings(deps({ embedDaemonProbe: async () => null, embedDaemonLockHeld: () => "free" })), "embed daemon");
     expect(notRunning[0]!.verdict).toBe("info");
     expect(notRunning[0]!.detail).toContain("not running");
 
     // Blocked: the lock is held but no socket answers.
-    const blocked = byCheck(await commonFindings(deps({ embedDaemonProbe: async () => null, embedDaemonLockHeld: () => true })), "embed daemon");
+    const blocked = byCheck(await commonFindings(deps({ embedDaemonProbe: async () => null, embedDaemonLockHeld: () => "held" })), "embed daemon");
     expect(blocked[0]!.verdict).toBe("warn");
     expect(blocked[0]!.detail).toContain("lock is held");
+
+    // A corrupt lock db is a FAIL naming the file and the fix - a finding,
+    // never a crash and never a "busy" that hunts a nonexistent holder.
+    const corrupt = byCheck(await commonFindings(deps({ embedDaemonProbe: async () => null, embedDaemonLockHeld: () => "unusable" })), "embed daemon");
+    expect(corrupt[0]!.verdict).toBe("fail");
+    expect(corrupt[0]!.detail).toContain("embed.lock.db");
+    expect(corrupt[0]!.fix).toContain("delete");
 
     // Disabled by the knob: info, and no probe was attempted.
     process.env.THATCH_EMBED_DAEMON = "off";

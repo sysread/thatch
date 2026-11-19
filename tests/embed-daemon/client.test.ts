@@ -209,8 +209,58 @@ describe("RemoteEmbeddingModel", () => {
     d.embedError = null;
     expect([...await model.queryEmbed("c")]).toEqual([1, 2, 3]);
     // The first-delegation note was emitted exactly once across the outage.
-    const fallbackNotes = notes.filter((n) => n.includes("embedding in-process (the embed daemon is unreachable"));
+    const fallbackNotes = notes.filter((n) => n.includes("embedding in-process (the embed daemon answered with an error"));
     expect(fallbackNotes).toHaveLength(1);
+  });
+
+  test("mid-life connect failure delegates to local and keeps the remote state", async () => {
+    // The stale-socket death shape: the daemon is GONE, the connect
+    // itself fails. One request delegates; the state must NOT change -
+    // the next embed re-probes, so a returning daemon is used again.
+    process.env.THATCH_EMBED_DAEMON = "on";
+    const daemon = new FakeDaemon();
+    const { model } = build({ daemon });
+    expect([...await model.queryEmbed("a")]).toEqual([1, 2, 3]);
+    daemon.dead = true;
+    expect([...await model.queryEmbed("b")]).toEqual([7, 7, 7]);
+    expect(model.state).toBe("remote");
+    expect(notes.join("\n")).toContain("the embed daemon is unreachable");
+  });
+
+  test("mid-life model mismatch locks local with only the lock note", async () => {
+    // The daemon restarted serving a different model. The lock note and
+    // the generic fallback note would contradict each other ("this
+    // session's lifetime" vs "will re-probe") - only the lock note flies.
+    process.env.THATCH_EMBED_DAEMON = "on";
+    const daemon = new FakeDaemon();
+    const { model } = build({ daemon });
+    expect([...await model.queryEmbed("a")]).toEqual([1, 2, 3]);
+    daemon.helloModel = "other-model";
+    expect([...await model.queryEmbed("b")]).toEqual([7, 7, 7]);
+    expect(model.state).toBe("local-locked");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain("model mismatch");
+    expect(notes.join("\n")).not.toContain("will re-probe");
+  });
+
+  test("a connect-stage timeout closes the connection when the dial completes late", async () => {
+    // The transport resolves AFTER the connect timeout fired. The late
+    // connection must be destroyed on arrival - one leaked fd per
+    // connect timeout, repeating, is exactly the leak this pins shut.
+    process.env.THATCH_EMBED_DAEMON = "on";
+    const late = new FakeConnection(new FakeDaemon(), 0);
+    let lateCloses = 0;
+    late.close = () => {
+      lateCloses += 1;
+    };
+    const slowTransport: Transport = () =>
+      new Promise<DaemonConnection>((resolve) => {
+        setTimeout(() => resolve(late), 80);
+      });
+    const { model } = build({ transport: slowTransport, requestTimeoutMs: 20 });
+    expect([...await model.queryEmbed("hello")]).toEqual([7, 7, 7]);
+    await new Promise((r) => setTimeout(r, 120));
+    expect(lateCloses).toBe(1);
   });
 
   test("a wedged-but-live daemon times out, delegates to local, and never hangs", async () => {

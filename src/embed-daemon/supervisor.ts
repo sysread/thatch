@@ -1,7 +1,8 @@
 /**
  * The embed daemon's spawn-once logic: ensureDaemonRunning. Called by the
- * client resolver when the initial probe found no listener; also what a
- * manual `thatch embed-daemon` run does by hand, minus the spawn.
+ * client resolver when the initial probe found no listener; a manual
+ * `thatch embed-daemon` run fills the same role by hand, without this
+ * spawn step.
  *
  * ONE spawn attempt per process, guarded by a module-level promise - the
  * `activeChecker` singleton idiom from src/version-check.ts. Deterministic
@@ -17,6 +18,8 @@
  */
 import { DaemonProtocolError, decodeResponse, encodeMessage } from "./protocol";
 import type { HelloResponse } from "./protocol";
+import { dialSocket } from "./socket";
+import type { Socket } from "node:net";
 
 export type ProbeResult = { ok: true; hello: HelloResponse } | { ok: false; reason: string };
 
@@ -60,38 +63,38 @@ function defaultSpawn(cmd: string[]): void {
  */
 export function helloProbe(socketPath: string, timeoutMs = 500): () => Promise<ProbeResult> {
   return async () => {
+    let socket: Socket;
     try {
-      const { Socket } = await import("node:net");
-      return await new Promise<ProbeResult>((resolve) => {
-        const socket = new Socket();
-        let buf = "";
-        const done = (result: ProbeResult) => {
-          clearTimeout(timer);
-          socket.destroy();
-          resolve(result);
-        };
-        const timer = setTimeout(() => done({ ok: false, reason: "hello timed out" }), timeoutMs);
-        socket.once("error", (err: NodeJS.ErrnoException) => {
-          done({ ok: false, reason: `connect failed (${err.code ?? err.message})` });
-        });
-        socket.once("connect", () => socket.write(encodeMessage({ method: "hello" })));
-        socket.on("data", (chunk: Buffer) => {
-          buf += chunk.toString();
-          const nl = buf.indexOf("\n");
-          if (nl < 0) return;
-          try {
-            const res = decodeResponse(buf.slice(0, nl));
-            if (res.ok) done({ ok: true, hello: res });
-            else done({ ok: false, reason: res.error });
-          } catch (err) {
-            done({ ok: false, reason: err instanceof DaemonProtocolError ? err.message : "malformed hello" });
-          }
-        });
-        socket.connect(socketPath);
-      });
+      socket = await dialSocket(socketPath, timeoutMs);
     } catch (err) {
-      return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      return { ok: false, reason: `connect failed (${code ?? (err instanceof Error ? err.message : String(err))})` };
     }
+    return await new Promise<ProbeResult>((resolve) => {
+      let buf = "";
+      const done = (result: ProbeResult) => {
+        clearTimeout(timer);
+        socket.destroy();
+        resolve(result);
+      };
+      const timer = setTimeout(() => done({ ok: false, reason: "hello timed out" }), timeoutMs);
+      socket.once("error", (err: NodeJS.ErrnoException) => {
+        done({ ok: false, reason: `connect failed (${err.code ?? err.message})` });
+      });
+      socket.on("data", (chunk: Buffer) => {
+        buf += chunk.toString();
+        const nl = buf.indexOf("\n");
+        if (nl < 0) return;
+        try {
+          const res = decodeResponse(buf.slice(0, nl));
+          if (res.ok) done({ ok: true, hello: res });
+          else done({ ok: false, reason: res.error });
+        } catch (err) {
+          done({ ok: false, reason: err instanceof DaemonProtocolError ? err.message : "malformed hello" });
+        }
+      });
+      socket.write(encodeMessage({ method: "hello" }));
+    });
   };
 }
 

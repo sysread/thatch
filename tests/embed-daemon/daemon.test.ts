@@ -1,9 +1,9 @@
 import { describe, test, expect, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer as netCreateServer, Socket, type Server as NetServer } from "node:net";
-import { EmbedDaemon, embedIdleExitMs, embedLockHeld, DEFAULT_IDLE_EXIT_MS } from "../../src/embed-daemon/daemon";
+import { EmbedDaemon, embedIdleExitMs, probeEmbedLock, DEFAULT_IDLE_EXIT_MS } from "../../src/embed-daemon/daemon";
 import { decodeResponse, type DaemonResponse } from "../../src/embed-daemon/protocol";
 import type { EmbeddingModel } from "../../src/embeddings";
 
@@ -158,7 +158,7 @@ function openConnection(socketPath: string, timeoutMs = 2000): Promise<{
       }
     });
     socket.once("connect", () => {
-      awaiting = (res) => {
+      awaiting = () => {
         clearTimeout(timer);
         resolveOpen({
           send: (msg) => new Promise<DaemonResponse>((resolve, reject) => {
@@ -456,11 +456,11 @@ describe("embedIdleExitMs", () => {
   });
 });
 
-describe("embedLockHeld (the doctor's read)", () => {
-  test("false with no lock db, true under a live holder", async () => {
+describe("probeEmbedLock (the doctor's read)", () => {
+  test("free with no lock db, held under a live holder, unusable on a corrupt file", async () => {
     const dir = tempDir();
     const lockPath = join(dir, "embed.lock.db");
-    expect(embedLockHeld(lockPath)).toBe(false);
+    expect(probeEmbedLock(lockPath)).toBe("free");
 
     const holder = new EmbedDaemon({
       dbPath: join(dir, "thatch.db"),
@@ -475,6 +475,54 @@ describe("embedLockHeld (the doctor's read)", () => {
     daemons.push(holder);
     void holder.serve();
     await waitReady(holder);
-    expect(embedLockHeld(lockPath)).toBe(true);
+    expect(probeEmbedLock(lockPath)).toBe("held");
+
+    // A file that is not a sqlite db at all: a FINDING, not a crash -
+    // and never a "held" that would send the doctor hunting for a holder
+    // that does not exist.
+    const corrupt = join(dir, "corrupt.lock.db");
+    writeFileSync(corrupt, "this is definitely not a sqlite database file");
+    expect(probeEmbedLock(corrupt)).toBe("unusable");
+  });
+
+  test("a corrupt lock db makes serve() exit with an error, not a quiet busy", async () => {
+    const dir = tempDir();
+    const lockPath = join(dir, "embed.lock.db");
+    writeFileSync(lockPath, "this is definitely not a sqlite database file");
+    const daemon = new EmbedDaemon({
+      dbPath: join(dir, "thatch.db"),
+      socketPath: join(dir, "embed.sock"),
+      lockPath,
+      version: VERSION,
+      idleMs: 0,
+      log: () => {},
+      modelName: "mock",
+      modelFactory: () => new SpyModel(),
+    });
+    daemons.push(daemon);
+    const exit = await daemon.serve();
+    expect(exit).toEqual({ code: 1, reason: "error" });
+  });
+
+  test("an EADDRINUSE bind exits 0 quietly (the raced winner is serving)", async () => {
+    // A directory occupies the socket path: the connect probe fails, the
+    // unlink fails (a directory, caught), and the bind reports EADDRINUSE
+    // - the shape of losing a bind race against a live winner.
+    const dir = tempDir();
+    const socketPath = join(dir, "embed.sock");
+    mkdirSync(socketPath);
+    const daemon = new EmbedDaemon({
+      dbPath: join(dir, "thatch.db"),
+      socketPath,
+      lockPath: join(dir, "embed.lock.db"),
+      version: VERSION,
+      idleMs: 0,
+      log: () => {},
+      modelName: "mock",
+      modelFactory: () => new SpyModel(),
+    });
+    daemons.push(daemon);
+    const exit = await withDeadline(daemon.serve(), 5000);
+    expect(exit).toEqual({ code: 0, reason: "eaddrinuse" });
   });
 });

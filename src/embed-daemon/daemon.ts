@@ -35,7 +35,7 @@ import { createServer, Socket, type Server } from "node:net";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
 import { createDebugLog, type DebugLog } from "../debug";
-import { createEmbeddingModel, type EmbeddingModel } from "../embeddings";
+import { createEmbeddingModel, DEFAULT_EMBEDDING_MODEL, type EmbeddingModel } from "../embeddings";
 import { loadConfig } from "../config";
 import {
   DaemonProtocolError,
@@ -46,6 +46,7 @@ import {
   type HelloResponse,
 } from "./protocol";
 import { embedLockPath, embedSocketPath } from "./client";
+import { dialSocket } from "./socket";
 import pkg from "../../package.json";
 
 /** The built-in idle exit: 30 minutes (see docs/plans/embedding-daemon.md,
@@ -87,9 +88,10 @@ export interface EmbedDaemonDeps {
    *  embedIdleExitMs(dbPath). */
   idleMs?: number;
   log?: DebugLog;
-  /** The stale-socket probe's connect timeout. */
-  staleProbeTimeoutMs?: number;
 }
+
+/** The stale-socket probe's connect timeout. */
+const STALE_PROBE_TIMEOUT_MS = 250;
 
 export type DaemonExitReason = "busy" | "socket-live" | "eaddrinuse" | "idle" | "signal" | "error";
 
@@ -106,7 +108,6 @@ export class EmbedDaemon {
   #modelName: string;
   #version: string;
   #modelFactory: () => EmbeddingModel;
-  #staleProbeTimeoutMs: number;
 
   #server: Server | null = null;
   #lockDb: Database | null = null;
@@ -116,28 +117,20 @@ export class EmbedDaemon {
   #shuttingDown = false;
   #shutdownPromise: Promise<DaemonExit> | null = null;
   #resolveExit: ((exit: DaemonExit) => void) | null = null;
+  #signalHandler: (() => void) | null = null;
 
   constructor(deps: EmbedDaemonDeps) {
-    this.#modelName = deps.modelName ?? process.env.THATCH_MODEL ?? "Xenova/bge-small-en-v1.5";
+    this.#modelName = deps.modelName ?? process.env.THATCH_MODEL ?? DEFAULT_EMBEDDING_MODEL;
     this.#version = deps.version ?? pkg.version;
     this.#socketPath = deps.socketPath ?? embedSocketPath(deps.dbPath);
     this.#lockPath = deps.lockPath ?? embedLockPath(deps.dbPath);
     this.#idleMs = deps.idleMs ?? embedIdleExitMs(deps.dbPath);
     this.#log = deps.log ?? createDebugLog(deps.dbPath);
     this.#modelFactory = deps.modelFactory ?? (() => createEmbeddingModel(this.#modelName));
-    this.#staleProbeTimeoutMs = deps.staleProbeTimeoutMs ?? 250;
   }
 
   get socketPath(): string {
     return this.#socketPath;
-  }
-
-  get lockPath(): string {
-    return this.#lockPath;
-  }
-
-  get model(): EmbeddingModel | null {
-    return this.#model;
   }
 
   /**
@@ -149,16 +142,23 @@ export class EmbedDaemon {
 
     // Formation, step 1: the lock. A second daemon loses here and exits
     // BEFORE touching the socket - see the module doc for why the lock is
-    // sqlite's own and why there is no stale-lock path.
-    this.#lockDb = new Database(this.#lockPath, { create: true });
-    this.#lockDb.exec("PRAGMA busy_timeout = 0");
+    // sqlite's own and why there is no stale-lock path. SQLITE_BUSY is the
+    // designed loss; every other failure (a corrupt or unwritable lock db)
+    // exits with an error - classifying it as "busy" would block formation
+    // forever with no diagnostic.
     try {
+      this.#lockDb = new Database(this.#lockPath, { create: true });
+      this.#lockDb.exec("PRAGMA busy_timeout = 0");
       this.#lockDb.exec("BEGIN EXCLUSIVE");
     } catch (err) {
-      this.#log("embed-daemon:lock", `another daemon holds the lock: ${err}`);
-      this.#lockDb.close();
+      this.#lockDb?.close();
       this.#lockDb = null;
-      return { code: 0, reason: "busy" };
+      if (isSqliteBusy(err)) {
+        this.#log("embed-daemon:lock", `another daemon holds the lock: ${err}`);
+        return { code: 0, reason: "busy" };
+      }
+      this.#log("embed-daemon:lock", `the lock database is unusable: ${err}`);
+      return { code: 1, reason: "error" };
     }
 
     // Formation, step 2: a stale socket file (an idle-exit leftover) is
@@ -208,10 +208,15 @@ export class EmbedDaemon {
     // re-arms it. Signals share the shutdown path with the idle exit, so
     // the model's dispose runs on every exit path.
     this.#armIdle();
+    // One named handler per daemon, removed at shutdown: instances come
+    // and go in tests, and a leaked handler would shut a dead instance
+    // down twice.
+    const signalHandler = () => {
+      void this.shutdown("signal");
+    };
+    this.#signalHandler = signalHandler;
     for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-      process.on(signal, () => {
-        void this.shutdown("signal");
-      });
+      process.on(signal, signalHandler);
     }
     this.#log("embed-daemon:ready", `serving ${this.#modelName} at ${this.#socketPath} (pid ${process.pid})`);
     return exitPromise;
@@ -251,6 +256,12 @@ export class EmbedDaemon {
         this.#lockDb.close();
         this.#lockDb = null;
       }
+      if (this.#signalHandler) {
+        for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+          process.off(signal, this.#signalHandler);
+        }
+        this.#signalHandler = null;
+      }
       this.#log("embed-daemon:exit", reason);
       const exit: DaemonExit = { code: reason === "error" ? 1 : 0, reason };
       this.#resolveExit?.(exit);
@@ -285,25 +296,13 @@ export class EmbedDaemon {
   }
 
   async #probeSocketLive(): Promise<boolean> {
-    return new Promise((resolve) => {
-      // Handlers attach BEFORE the dial: a stale path can fail the connect
-      // synchronously under bun.
-      const socket = new Socket();
-      const timer = setTimeout(() => {
-        socket.destroy();
-        resolve(false);
-      }, this.#staleProbeTimeoutMs);
-      socket.once("connect", () => {
-        clearTimeout(timer);
-        socket.destroy();
-        resolve(true);
-      });
-      socket.once("error", () => {
-        clearTimeout(timer);
-        resolve(false);
-      });
-      socket.connect(this.#socketPath);
-    });
+    try {
+      const socket = await dialSocket(this.#socketPath, STALE_PROBE_TIMEOUT_MS);
+      socket.destroy();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   #handleConnection(socket: Socket): void {
@@ -409,21 +408,42 @@ export function runEmbedDaemon(deps: EmbedDaemonDeps): Promise<DaemonExit> {
 }
 
 /**
+ * SQLITE_BUSY (a held lock) is the lock protocol's designed outcome; every
+ * other sqlite failure (a corrupt or unwritable lock db) is an error the
+ * operator must see, never a "busy" that blocks formation forever.
+ */
+function isSqliteBusy(err: unknown): boolean {
+  if ((err as { code?: string } | null)?.code === "SQLITE_BUSY") return true;
+  return err instanceof Error && /database is locked/.test(err.message);
+}
+
+/** How the embed daemon's lock db reads: free, held by a live daemon, or
+ *  unusable (a corrupt or unwritable file - the doctor's finding). */
+export type LockProbe = "free" | "held" | "unusable";
+
+/**
  * Read-only diagnostic for the doctor: is the embed daemon's lock held?
  * Opens the lock db (existsSync-guarded, so nothing is created) and tries
- * its own BEGIN EXCLUSIVE; SQLITE_BUSY means a live daemon holds it.
+ * its own BEGIN EXCLUSIVE; SQLITE_BUSY means a live daemon holds it. A
+ * lock db that cannot be opened or read is "unusable" - a finding for the
+ * doctor to report, never a crash.
  */
-export function embedLockHeld(lockPath: string): boolean {
-  if (!existsSync(lockPath)) return false;
-  const db = new Database(lockPath);
+export function probeEmbedLock(lockPath: string): LockProbe {
+  if (!existsSync(lockPath)) return "free";
+  let db: Database;
+  try {
+    db = new Database(lockPath);
+  } catch {
+    return "unusable";
+  }
   try {
     db.exec("PRAGMA busy_timeout = 0");
     try {
       db.exec("BEGIN EXCLUSIVE");
       db.exec("ROLLBACK");
-      return false;
-    } catch {
-      return true;
+      return "free";
+    } catch (err) {
+      return isSqliteBusy(err) ? "held" : "unusable";
     }
   } finally {
     db.close();

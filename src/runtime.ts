@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { createDebugLog, type DebugLog } from "./debug";
 import { ThatchDB, repoPathCache, MEMORY_HELD_MARKER } from "./db";
 import { chatOpenTabs as chatOpenTabsProvider } from "./tab-state";
-import { SharedModelPool } from "./embeddings";
+import { SharedModelPool, DEFAULT_EMBEDDING_MODEL } from "./embeddings";
 import { detectRepo, detectWorktreeKind, resolveSpawnCwd } from "./git";
 import { buildCoreContext, MEMORY_SAVED_MARKER, MEMORY_FORGOTTEN_MARKER } from "./tool-defs";
 import {
@@ -319,7 +319,7 @@ export async function createRuntime(input: {
   const home = process.env.HOME ?? "/tmp";
   const configHome = process.env.XDG_CONFIG_HOME ?? join(home, ".config");
   const dbPath = process.env.THATCH_DB_PATH ?? join(configHome, "thatch", "thatch.db");
-  const modelName = process.env.THATCH_MODEL ?? "Xenova/bge-small-en-v1.5";
+  const modelName = process.env.THATCH_MODEL ?? DEFAULT_EMBEDDING_MODEL;
 
   // Set by dispose(). Delayed async work (the child-reconcile timer, the
   // extraction pipeline's queued finalization, queued event handlers) can

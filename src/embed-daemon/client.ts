@@ -32,12 +32,14 @@ import pkg from "../../package.json";
 import type { EmbeddingModel } from "../embeddings";
 import { createEmbeddingModel } from "../embeddings";
 import {
+  DaemonProtocolError,
   decodeResponse,
   encodeMessage,
   type DaemonResponse,
   type EmbedRequest,
   type HelloResponse,
 } from "./protocol";
+import { dialSocket } from "./socket";
 
 /**
  * The daemon socket path, from the DB path. The cache-dir derivation
@@ -95,56 +97,72 @@ export class EmbedTimeoutError extends Error {
 
 export class EmbedHandshakeError extends Error {}
 
-function defaultTransport(socketPath: string): Promise<DaemonConnection> {
-  return new Promise((resolveTransport, rejectTransport) => {
-    // Handlers attach BEFORE the dial: bun can surface a connect failure
-    // (ENOENT on a stale socket path) synchronously, and an error listener
-    // attached after connect() would miss it.
-    const socket: Socket = new Socket();
-    let buf = "";
+/** The daemon answered with an error response (ok: false): the daemon is
+ *  alive and spoke. Distinct from transport failures only so the fallback
+ *  note can say which failure class happened (M: the old note blamed
+ *  "unreachable" for every failure class). */
+class DaemonErrorResponse extends Error {}
 
-    const fail = (err: Error) => {
+async function defaultTransport(socketPath: string): Promise<DaemonConnection> {
+  let socket: Socket;
+  try {
+    socket = await dialSocket(socketPath);
+  } catch (err) {
+    // Surface the connect failure with its errno (ENOENT, ECONNREFUSED)
+    // so the resolver can classify it.
+    const wrapped = new Error(`embed daemon connect failed: ${err instanceof Error ? err.message : err}`);
+    (wrapped as NodeJS.ErrnoException).code = (err as NodeJS.ErrnoException | undefined)?.code;
+    throw wrapped;
+  }
+
+  let buf = "";
+  // A request in flight when close() destroys the socket must still
+  // settle: destroy emits no 'error' event, so close rejects them here.
+  const orphans = new Set<(err: Error) => void>();
+
+  function request(msg: EmbedRequest | { method: "hello" }): Promise<DaemonResponse> {
+    return new Promise((resolveRequest, rejectRequest) => {
+      function onError(err: Error): void {
+        cleanup();
+        rejectRequest(err);
+      }
+      function ondata(chunk: Buffer): void {
+        buf += chunk.toString();
+        const nl = buf.indexOf("\n");
+        if (nl < 0) return;
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        cleanup();
+        try {
+          resolveRequest(decodeResponse(line));
+        } catch (err) {
+          rejectRequest(err);
+        }
+      }
+      function cleanup(): void {
+        socket.off("data", ondata);
+        socket.off("error", onError);
+        orphans.delete(rejectOrphan);
+      }
+      function rejectOrphan(err: Error): void {
+        rejectRequest(err);
+      }
+      orphans.add(rejectOrphan);
+      socket.on("data", ondata);
+      socket.once("error", onError);
+      socket.write(encodeMessage(msg));
+    });
+  }
+
+  return {
+    hello: () => request({ method: "hello" }),
+    embed: (kind, text) => request({ method: "embed", kind, text } satisfies EmbedRequest),
+    close: () => {
+      for (const reject of orphans) reject(new Error("the embed daemon connection closed"));
+      orphans.clear();
       socket.destroy();
-      rejectTransport(err);
-    };
-    socket.once("error", (err: NodeJS.ErrnoException) => {
-      // Surface the connect failure with its errno (ENOENT, ECONNREFUSED)
-      // so the resolver can classify it; later (post-connect) errors are
-      // delivered through the pending request's rejection instead.
-      const wrapped = new Error(`embed daemon connect failed: ${err.message}`);
-      (wrapped as NodeJS.ErrnoException).code = err.code;
-      fail(wrapped);
-    });
-    socket.once("connect", () => {
-      resolveTransport({
-        hello: () => request({ method: "hello" }),
-        embed: (kind, text) => request({ method: "embed", kind, text } satisfies EmbedRequest),
-        close: () => socket.destroy(),
-      });
-    });
-    socket.connect(socketPath);
-
-    function request(msg: EmbedRequest | { method: "hello" }): Promise<DaemonResponse> {
-      return new Promise((resolveRequest, rejectRequest) => {
-        socket.write(encodeMessage(msg));
-        const ondata = (chunk: Buffer) => {
-          buf += chunk.toString();
-          const nl = buf.indexOf("\n");
-          if (nl < 0) return;
-          const line = buf.slice(0, nl);
-          buf = buf.slice(nl + 1);
-          socket.off("data", ondata);
-          try {
-            resolveRequest(decodeResponse(line));
-          } catch (err) {
-            rejectRequest(err);
-          }
-        };
-        socket.on("data", ondata);
-        socket.once("error", (err: Error) => rejectRequest(err));
-      });
-    }
-  });
+    },
+  };
 }
 
 export interface RemoteEmbeddingModelOptions {
@@ -239,10 +257,17 @@ export class RemoteEmbeddingModel implements EmbeddingModel {
     if (this.#now() < this.#cooldownUntil) return this.#localEmbed(kind, text);
     try {
       const vector = await this.#remoteEmbed(kind, text);
-      // A healthy round trip resets the wedge counter.
+      // A healthy round trip resets the timeout count.
       this.#consecutiveTimeouts = 0;
       return vector;
     } catch (err) {
+      if (err instanceof EmbedHandshakeError) {
+        // Mid-life model mismatch: the mismatch path locked local and
+        // noted it. A local-locked state can never re-probe, so the
+        // generic fallback note (which promises a re-probe) would
+        // contradict it - delegate quietly.
+        return this.#localEmbed(kind, text);
+      }
       if (err instanceof EmbedTimeoutError) {
         this.#consecutiveTimeouts += 1;
         if (this.#consecutiveTimeouts >= this.#timeoutThreshold) {
@@ -255,10 +280,16 @@ export class RemoteEmbeddingModel implements EmbeddingModel {
         }
       }
       // One request's failure never changes state: the next embed re-probes
-      // the socket, so a daemon that returns mid-life is used again.
+      // the socket, so a daemon that returns mid-life is used again. The
+      // note names the failure class: a daemon that ANSWERED (an error
+      // response, a malformed line) is a different animal from one that
+      // could not be reached at all.
+      const message = err instanceof Error ? err.message : String(err);
+      const isDaemonError = err instanceof DaemonErrorResponse || err instanceof DaemonProtocolError;
+      const cause = isDaemonError ? "the embed daemon answered with an error" : "the embed daemon is unreachable";
       this.#noteOnce(
         "fallback",
-        `embedding in-process (the embed daemon is unreachable: ${err instanceof Error ? err.message : err}); will re-probe on the next embed`,
+        `embedding in-process (${cause}: ${message}); will re-probe on the next embed`,
       );
       return this.#localEmbed(kind, text);
     }
@@ -341,25 +372,24 @@ export class RemoteEmbeddingModel implements EmbeddingModel {
   }
 
   async #probe(): Promise<{ ok: true; hello: HelloResponse } | { ok: false; reason: string }> {
+    let conn: DaemonConnection | null = null;
     try {
-      const conn = await this.#withTimeout(Promise.resolve(this.#transport(this.#socketPath)), "connect");
-      try {
-        const res = await this.#withTimeout(conn.hello(), "hello");
-        if (!res.ok) return { ok: false, reason: res.error };
-        return { ok: true, hello: res };
-      } finally {
-        conn.close();
-      }
+      conn = await this.#dial();
+      const res = await this.#withTimeout(conn.hello(), "hello");
+      if (!res.ok) return { ok: false, reason: res.error };
+      return { ok: true, hello: res };
     } catch (err) {
       return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    } finally {
+      conn?.close();
     }
   }
 
   async #remoteEmbed(kind: "query" | "passage", text: string): Promise<Float32Array> {
-    const conn = await this.#withTimeout(Promise.resolve(this.#transport(this.#socketPath)), "connect");
+    const conn = await this.#dial();
     try {
       const hello = await this.#withTimeout(conn.hello(), "hello");
-      if (!hello.ok) throw new Error(hello.error);
+      if (!hello.ok) throw new DaemonErrorResponse(hello.error);
       if (hello.model !== this.name) {
         // Mid-life model change on the daemon: same unusable-space logic as
         // resolve time. Locked for the process lifetime.
@@ -367,7 +397,7 @@ export class RemoteEmbeddingModel implements EmbeddingModel {
         throw new EmbedHandshakeError(`model mismatch: ${hello.model}`);
       }
       const res = await this.#withTimeout(conn.embed(kind, text), "embed");
-      if (!res.ok) throw new Error(res.error);
+      if (!res.ok) throw new DaemonErrorResponse(res.error);
       if (!("vector" in res)) throw new Error("the embed response carried no vector");
       return Float32Array.from(res.vector);
     } finally {
@@ -375,9 +405,34 @@ export class RemoteEmbeddingModel implements EmbeddingModel {
     }
   }
 
-  #withTimeout<T>(p: Promise<T>, op: string): Promise<T> {
+  /**
+   * Opens a connection under the connect timeout. A timed-out dial is
+   * destroyed when (or before) it finishes connecting, so a connect-stage
+   * timeout never leaks the socket fd - the module doc's "a timeout
+   * destroys the connection" holds for connect too, not just hello/embed.
+   */
+  async #dial(): Promise<DaemonConnection> {
+    const dialing = Promise.resolve(this.#transport(this.#socketPath));
+    // Whoever loses the race (a timeout firing, a transport failure after
+    // one) closes the connection when - or if - the dial completes.
+    const closeOnArrival = () => {
+      void dialing.then(
+        (c) => c.close(),
+        () => {},
+      );
+    };
+    try {
+      return await this.#withTimeout(dialing, "connect", closeOnArrival);
+    } catch (err) {
+      closeOnArrival();
+      throw err;
+    }
+  }
+
+  #withTimeout<T>(p: Promise<T>, op: string, onTimeout?: () => void): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
+        onTimeout?.();
         reject(new EmbedTimeoutError(op));
       }, this.#requestTimeoutMs);
       p.then(

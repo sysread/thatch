@@ -26,7 +26,8 @@ import { realpathSync } from "node:fs";
 import pkg from "../package.json";
 import { compareSemver, readRegimeMarker, readModLiveness, MOD_LIVENESS_STALE_MS, npmCachePath } from "./version-check";
 import { embedSocketPath, embedLockPath, daemonEnabled } from "./embed-daemon/client";
-import { embedLockHeld } from "./embed-daemon/daemon";
+import { probeEmbedLock, type LockProbe } from "./embed-daemon/daemon";
+import { helloProbe } from "./embed-daemon/supervisor";
 import type { HelloResponse } from "./embed-daemon/protocol";
 import {
   claudeConfigDir,
@@ -81,9 +82,10 @@ export interface DoctorDeps {
    *  answers. Read-only - it never unlinks the socket. Injectable so tests
    *  stay hermetic. */
   embedDaemonProbe?: () => Promise<HelloResponse | null>;
-  /** Reports whether the embed daemon's sqlite lock is held. Injectable
-   *  for tests. */
-  embedDaemonLockHeld?: () => boolean;
+  /** Reports the embed daemon's sqlite lock state: "held" (a live daemon
+   *  holds it), "free", or "unusable" (a corrupt or unreadable file).
+   *  Injectable so tests never touch the real tmpdir. */
+  embedDaemonLockHeld?: () => LockProbe;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,13 +176,14 @@ export async function commonFindings(deps: DoctorDeps): Promise<DoctorFinding[]>
 }
 
 /**
- * The embed daemon's health check. Three outcomes, none failing: a hello
+ * The embed daemon's health check. Four outcomes, none crashing: a hello
  * answer reports serving (pass); no listener and no held lock is the
  * DESIGNED steady state on machines without MCP sessions and after an
  * idle exit (info); a held lock with no socket answering means formation
- * was won but the endpoint is not answering (warn). The probe is
- * read-only: it must NOT reuse the sideband client's unlink-on-error
- * behavior - the daemon owns the endpoint.
+ * was won but the endpoint is not answering (warn); an unreadable lock db
+ * is a finding with its fix named (fail) - a corrupt file is a finding,
+ * never a crash. The probe is read-only: it must NOT reuse the sideband
+ * client's unlink-on-error behavior - the daemon owns the endpoint.
  */
 async function embedDaemonFinding(deps: DoctorDeps): Promise<DoctorFinding> {
   if (!daemonEnabled()) {
@@ -200,8 +203,18 @@ async function embedDaemonFinding(deps: DoctorDeps): Promise<DoctorFinding> {
       detail: `serving "${hello.model}" v${hello.version} (pid ${hello.pid}) - MCP sessions on this database share its model`,
     };
   }
-  const lockHeld = deps.embedDaemonLockHeld ? deps.embedDaemonLockHeld() : embedLockHeld(embedLockPath(deps.dbPath));
-  if (lockHeld) {
+  const lockPath = embedLockPath(deps.dbPath);
+  const lock = deps.embedDaemonLockHeld ? deps.embedDaemonLockHeld() : probeEmbedLock(lockPath);
+  if (lock === "unusable") {
+    return {
+      section: "common",
+      check: "embed daemon",
+      verdict: "fail",
+      detail: `the daemon's lock database is corrupt or unreadable (${lockPath}) - no daemon can form while it exists`,
+      fix: `delete ${lockPath} (it holds no data - it is only the daemon's lock); the next MCP session spawns a fresh daemon`,
+    };
+  }
+  if (lock === "held") {
     return {
       section: "common",
       check: "embed daemon",
@@ -220,7 +233,6 @@ async function embedDaemonFinding(deps: DoctorDeps): Promise<DoctorFinding> {
 
 function defaultEmbedDaemonProbe(deps: DoctorDeps): () => Promise<HelloResponse | null> {
   return async () => {
-    const { helloProbe } = await import("./embed-daemon/supervisor");
     const result = await helloProbe(embedSocketPath(deps.dbPath))();
     return result.ok ? result.hello : null;
   };

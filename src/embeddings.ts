@@ -204,6 +204,15 @@ export class SharedModelPool {
 }
 
 /**
+ * The embedding model every surface uses when THATCH_MODEL is unset. Lives
+ * here beside the factory: the daemon's hello handshake compares this name
+ * ACROSS processes, so every construction site must read one constant - a
+ * drifted hand-copied default would read as a model mismatch and silently
+ * local-lock every session.
+ */
+export const DEFAULT_EMBEDDING_MODEL = "Xenova/bge-small-en-v1.5";
+
+/**
  * Lazy-loads an embedding model via @huggingface/transformers.
  * Model files (~34 MB for the default) are downloaded once and cached by HF Hub.
  */
@@ -216,7 +225,7 @@ export class BgeEmbeddingModel implements EmbeddingModel {
   #idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
-    modelName = "Xenova/bge-small-en-v1.5",
+    modelName: string = DEFAULT_EMBEDDING_MODEL,
     pipelineFactory?: PipelineFactory,
     options: BgeEmbeddingModelOptions = {},
   ) {
