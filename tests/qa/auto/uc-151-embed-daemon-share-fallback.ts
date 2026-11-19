@@ -4,6 +4,7 @@ import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
+import { mockEmbeddingVector, QUERY_PREFIX } from "../../../src/embeddings";
 
 /**
  * UC-151: the shared embed daemon - one daemon per DB path, every MCP
@@ -87,7 +88,9 @@ const useCase: UseCase = {
     };
 
     /** Hello handshake against the daemon socket, on every tmpdir base
-     *  (the spawned server's env drops TMPDIR - see uc-142's note). */
+     *  (the spawned server's env drops TMPDIR - see uc-142's note). The
+     *  found socket path is remembered for the embed-level probe. */
+    let socketPath: string | null = null;
     const helloAny = async (timeoutMs = 300): Promise<{ ok: true; model: string; version: string; pid: number } | null> => {
       const hash = createHash("sha256").update(dbPath).digest("hex").slice(0, 16);
       for (const base of [...new Set([tmpdir(), "/tmp"])]) {
@@ -115,9 +118,50 @@ const useCase: UseCase = {
           socket.once("connect", () => socket.write(Buffer.from(JSON.stringify({ method: "hello" }) + "\n")));
           socket.connect(sockPath);
         });
-        if (res) return res;
+        if (res) {
+          socketPath = sockPath;
+          return res;
+        }
       }
       return null;
+    };
+
+    /** One embed over a fresh daemon connection: hello, ack, embed. */
+    const daemonEmbed = (path: string | null, kind: "query" | "passage", text: string): Promise<number[] | null> => {
+      if (!path) return Promise.resolve(null);
+      return new Promise((resolve) => {
+        const socket = new Socket();
+        let buf = "";
+        let sawHello = false;
+        const timer = setTimeout(() => { socket.destroy(); resolve(null); }, 2000);
+        socket.once("error", () => { clearTimeout(timer); resolve(null); });
+        socket.on("data", (chunk: Buffer) => {
+          buf += chunk.toString();
+          let nl: number;
+          while ((nl = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line) continue;
+            if (!sawHello) {
+              sawHello = true;
+              socket.write(Buffer.from(JSON.stringify({ method: "embed", kind, text }) + "\n"));
+              continue;
+            }
+            clearTimeout(timer);
+            try {
+              const parsed = JSON.parse(line);
+              resolve(parsed.ok ? parsed.vector : null);
+            } catch {
+              resolve(null);
+            } finally {
+              socket.destroy();
+            }
+            return;
+          }
+        });
+        socket.once("connect", () => socket.write(Buffer.from(JSON.stringify({ method: "hello" }) + "\n")));
+        socket.connect(path);
+      });
     };
 
     const waitForDaemon = async (timeoutMs = 20000) => {
@@ -162,7 +206,15 @@ const useCase: UseCase = {
       if (helloB.pid !== helloA.pid) {
         failures.push(`two daemons for one DB path (pids ${helloA.pid} and ${helloB.pid})`);
       }
-      // Cross-session vector agreement: recall on server A finds what
+      // Exact-vector agreement across processes: an embed over the daemon
+      // socket must equal the mock's deterministic derivation for the same
+      // text (query prefix included) - the hermetic vector contract itself.
+      const daemonVector = await daemonEmbed(socketPath, "query", "the daemon shares its vectors");
+      const expected = mockEmbeddingVector(QUERY_PREFIX + "the daemon shares its vectors");
+      if (!daemonVector || [...daemonVector].join() !== [...expected].join()) {
+        failures.push("the daemon's embed vector does not match the mock's deterministic derivation");
+      }
+      // Recall keeps working end to end: server A's recall surfaces what
       // server B stored through the same daemon.
       const recall = await clientA.request("tools/call", {
         name: "memory_recall",
