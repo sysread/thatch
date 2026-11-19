@@ -684,3 +684,25 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
   the listing (statement and id always come from the same row, so the
   binding is stable even when the pair order is not). (2026-11-13,
   prediction_find_duplicates)
+
+## bun delivers server listen callbacks late and connect errors early
+
+- **Symptom**: a bun test driving a real `net.Server` over a Unix socket
+  hangs or fails with an unhandled `error` event, though the same code runs
+  fine as a standalone script. Two shapes: the `listen(path, cb)` callback
+  fires seconds late (after the whole test body - while the socket file
+  already exists and ACCEPTS connections), and a connect to a nonexistent
+  path emits `error` before a listener attached after `connect()` is
+  registered, surfacing as an unhandled `error` event that fails the
+  running test.
+- **Cause**: bun's event-delivery ordering for node:net differs from Node's
+  in both directions: the listen callback is deferred past later I/O (bun
+  1.3.14, observed in the embed-daemon suite), and a synchronous connect
+  failure can beat a handler registered on the next line.
+- **Fix shape**: never gate readiness or exit-promise resolution on the
+  listen callback - create the exit/readiness promise first, call
+  `listen()` fire-and-forget, and measure readiness by probing the socket
+  (the supervisor's `helloProbe`). On the client side, always create the
+  socket with `new Socket()`, attach the `error`/`connect` handlers, THEN
+  call `socket.connect(path)`. Every connect site in `src/embed-daemon/`
+  follows this. (2026-11-19, embed daemon)
