@@ -10,6 +10,7 @@ ${REVIEW_COMMON}
 You care about:
 - **Data flow coherency**: Does data transform correctly as it passes between modules? Are there type mismatches, dropped fields, or shape changes that break downstream consumers?
 - **Implicit state machines**: Many workflows have implicit states (e.g. "project selected then skill loaded then skill validated then skill executed"). Are state transitions guarded? Can you reach an invalid state?
+- **Environment as hidden state input**: The process environment (TMPDIR, HOME, sandbox and container variables) is state the code reads without declaring it. For any value derived from it - a temp path, socket path, or cache dir - ask which separate processes must compute the same value, and whether every one of them inherits the same environment. A cross-process singleton (socket, lock, pid file) anchored to an env-derived path exists once per environment, not once globally.
 - **Contracts between modules**: When module A calls module B, what does A assume about B's return value, side effects, and error shapes? Are those assumptions documented or enforced? Could a change to B silently break A?
 - **Separation of concerns**: Does each module own a single responsibility? Do the changes introduce coupling between modules that should be independent?
 - **Testability**: Can each component be tested in isolation? Do the changes introduce dependencies that make testing harder?
@@ -78,6 +79,7 @@ For each new module or significant change:
 
 - **CONTRACT_MISMATCH**: Caller assumes a return shape/error type/behavior not guaranteed by callee
 - **STATE_VIOLATION**: Workflow can reach invalid state, skip required transition, or get stuck
+- **ENV_VARIANT**: Separate processes must agree on an environment-derived value (a temp path, a socket location) that can differ between them, so the "shared" thing is silently per-environment
 - **ERROR_SWALLOWED**: Error caught/converted/ignored losing information needed upstream
 - **COUPLING**: Module depends on another module's internals in a fragile way
 - **DEAD_PATH**: Code path exists but cannot be reached given current callers/preconditions

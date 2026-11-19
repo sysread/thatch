@@ -45,6 +45,7 @@ For each user-facing feature touched by the changes:
 - What does an experienced user expect? Does it match?
 - When something goes wrong, does the error guide the user to recovery?
 - Are there silent failures (operation "succeeds" but does nothing)?
+- Walk the journey in at least one second environment: a different shell (direnv, nix-shell), container, or sandbox can run the same command with a different TMPDIR, HOME, or PATH. If the workflow assumes two processes share one of those values, determine what happens when they do not. The failure surfaces as a resource or state mess the user finds later, not as an error message.
 
 ### 5. Check integration boundaries
 - Do other features depend on the changed behavior?
