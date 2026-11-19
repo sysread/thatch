@@ -160,8 +160,9 @@ export type McpServerMode = "standalone" | "bundled";
  * Repo identity is resolved from CLAUDE_PROJECT_DIR (set by Claude Code for
  * stdio servers) or the current working directory as a fallback. The embedding
  * model loads lazily on the first tool call that needs it, so the server
- * starts instantly and only pays the ~34 MB download cost when a memory is
- * actually written or recalled.
+ * starts instantly and only pays the model cost when a memory is actually
+ * written or recalled AND the shared embed daemon is unreachable (the
+ * daemon-served path imports no model at all).
  *
  * A Unix domain socket sideband is opened at startup so that one-shot hook
  * processes (thatch flush-tools) can ask the warm MCP server to embed a

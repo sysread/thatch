@@ -11,8 +11,8 @@ import { registerUseCase, type UseCase, type QaContext } from "../runner";
  * (THATCH_DB_PATH, XDG_CONFIG_HOME, CLAUDE_CONFIG_DIR, THATCH_QUEUE_DIR) have
  * observable side effects through the CLI. THATCH_RECALL_THRESHOLD and
  * THATCH_MODEL are smoke-tested (the CLI reads THATCH_RECALL_THRESHOLD in
- * flush-tools; THATCH_MODEL is only used by the plugin and MCP server, not
- * bin/thatch).
+ * flush-tools; THATCH_MODEL is used by the plugin, MCP server, daemon, and
+ * CLI embed commands).
  */
 
 const useCase: UseCase = {
@@ -134,11 +134,12 @@ const useCase: UseCase = {
       }
     }
 
-    // THATCH_MODEL: not read by bin/thatch (it uses BgeEmbeddingModel
-    // directly). THATCH_MODEL is consumed by the plugin (the THATCH_MODEL
-    // env read in createRuntime, src/runtime.ts)
-    // and MCP server (src/mcp.ts). We verify the CLI still works when
-    // it is set, confirming it does not interfere with CLI operations.
+    // THATCH_MODEL: consumed by the plugin (the THATCH_MODEL env read in
+    // createRuntime, src/runtime.ts), the MCP server (src/mcp.ts), the
+    // daemon (src/embed-daemon/daemon.ts), and the CLI embed commands
+    // (src/cli/commands/memory.ts, through the embedding factory). We
+    // verify the CLI still works when it is set, confirming it does not
+    // interfere with CLI operations.
     {
       const env = { ...ctx.env, THATCH_MODEL: "mock-model" };
       const result = await $`${bin} stores`.env(env).quiet().nothrow();

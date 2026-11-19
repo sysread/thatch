@@ -42,7 +42,7 @@ export const ENV_KNOBS: EnvKnob[] = [
   {
     name: "THATCH_MODEL",
     description:
-      "Embedding model id used by the plugin and MCP server for similarity scoring (the CLI always uses the default).",
+      "Embedding model id used by the plugin, MCP server, daemon, and CLI embed commands.",
     default: "Xenova/bge-small-en-v1.5",
   },
   {

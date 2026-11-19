@@ -411,10 +411,13 @@ export class MockEmbeddingModel implements EmbeddingModel {
 
 /**
  * The embedding factory: one name, one model implementation. Every
- * construction site that honors THATCH_MODEL builds through this, so the
- * mock branch is reachable from every tier at once. The CLI one-shots keep
- * constructing the default model directly (a recorded non-goal in
- * docs/plans/embedding-daemon.md).
+ * construction site that honors THATCH_MODEL builds through this - the
+ * plugin, the MCP server, the daemon, and the CLI embed commands - so the
+ * mock branch is reachable from every tier at once. The one surviving
+ * non-goal is the daemon RESOLVER, not the factory: the CLI one-shots
+ * construct the model here but never resolve the shared daemon (a recorded
+ * decision in docs/plans/embedding-daemon.md) - they always embed
+ * in-process.
  */
 export function createEmbeddingModel(modelName: string): EmbeddingModel {
   if (modelName === MOCK_MODEL_NAME) return new MockEmbeddingModel();

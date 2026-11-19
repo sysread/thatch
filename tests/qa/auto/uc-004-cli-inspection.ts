@@ -28,7 +28,7 @@ const useCase: UseCase = {
     "- Steps 1-4 behave as described; search results are ranked with scores.",
     "- Step 5 exits non-zero with an error telling you to quote the query.",
     "- Step 6 exits non-zero listing the stores that do exist.",
-    "- Step 7: the remember saves and the search surfaces the memory with a score - real mock-vector paths (THATCH_MODEL=mock used to be aspirational and embeds failed).",
+    "- Step 7: the remember saves and the search surfaces the memory with a score of 1.000 - the mock-vector contract end to end (identical vectors cosine to exactly 1).",
     "- All commands respect THATCH_DB_PATH and $XDG_CONFIG_HOME.",
   ].join("\n"),
 
@@ -41,9 +41,9 @@ const useCase: UseCase = {
     };
 
     // Seed a memory so stores/list/show have data to work with.
-    // The CLI doesn't have a "remember" subcommand, so we use the DB directly
-    // via a bun one-liner. For now, just test the empty-store paths and error
-    // handling — those don't need seeded data.
+    // The CLI HAS a "remember" subcommand (it routes through the
+    // memory_remember tool's execute); the empty-store steps and error
+    // handling below need no seed, so the first write happens at step 7.
 
     // Step 1: thatch stores (empty DB — should show "global" at minimum).
     const storesResult = await $`${bin} stores`.env(env).quiet().nothrow();
@@ -90,8 +90,12 @@ const useCase: UseCase = {
     }
     const searchResult = await $`${bin} search ${memoryText}`.env(env).quiet().nothrow();
     const searchOut = searchResult.stdout.toString();
-    if (searchResult.exitCode !== 0 || !searchOut.includes("mock-vector-contract") || !searchOut.includes("[score:")) {
-      console.log(`  FAIL: \`thatch search\` missed the mock-stored memory: ${searchOut.slice(0, 200)}`);
+    // The mock's exact-vector contract: the stored content carries the
+    // query prefix, so the search hashes the SAME string - cosine exactly
+    // 1.000. A reverted factory (real model) could never print this score,
+    // which is the assertion's teeth.
+    if (searchResult.exitCode !== 0 || !searchOut.includes("mock-vector-contract") || !searchOut.includes("[score:1.000]")) {
+      console.log(`  FAIL: \`thatch search\` missed the mock-stored memory at cosine 1.000: ${searchOut.slice(0, 200)}`);
       return "FAIL";
     }
 
