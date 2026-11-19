@@ -1,5 +1,6 @@
 import { $ } from "bun";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
+import { mockEmbeddingVector } from "../../../src/embeddings";
 
 /**
  * UC-004: Inspecting stores from the shell.
@@ -28,7 +29,7 @@ const useCase: UseCase = {
     "- Steps 1-4 behave as described; search results are ranked with scores.",
     "- Step 5 exits non-zero with an error telling you to quote the query.",
     "- Step 6 exits non-zero listing the stores that do exist.",
-    "- Step 7: the remember saves and the search surfaces the memory with a score of 1.000 - the mock-vector contract end to end (identical vectors cosine to exactly 1).",
+    "- Step 7: the remember saves and the search surfaces the memory at the mock's deterministic exact score (computed from the same derivation the model uses) - a mock-exclusive signal.",
     "- All commands respect THATCH_DB_PATH and $XDG_CONFIG_HOME.",
   ].join("\n"),
 
@@ -90,12 +91,21 @@ const useCase: UseCase = {
     }
     const searchResult = await $`${bin} search ${memoryText}`.env(env).quiet().nothrow();
     const searchOut = searchResult.stdout.toString();
-    // The mock's exact-vector contract: the stored content carries the
-    // query prefix, so the search hashes the SAME string - cosine exactly
-    // 1.000. A reverted factory (real model) could never print this score,
-    // which is the assertion's teeth.
-    if (searchResult.exitCode !== 0 || !searchOut.includes("mock-vector-contract") || !searchOut.includes("[score:1.000]")) {
-      console.log(`  FAIL: \`thatch search\` missed the mock-stored memory at cosine 1.000: ${searchOut.slice(0, 200)}`);
+    // Mock-exclusive teeth: the mock is exact-deterministic, so the score
+    // is computable. The write path embeds "# label\n\ncontent"
+    // (memory-store.md's write path); a reverted CLI factory (real model
+    // instead of the mock) could never land on this exact value.
+    const stored = mockEmbeddingVector(`# mock-vector-contract\n\n${QUERY_PREFIX + memoryText}`);
+    const query = mockEmbeddingVector(QUERY_PREFIX + memoryText);
+    let dot = 0, normA = 0, normB = 0;
+    for (let i = 0; i < stored.length; i++) {
+      dot += stored[i] * query[i];
+      normA += stored[i] * stored[i];
+      normB += query[i] * query[i];
+    }
+    const expectedScore = (dot / (Math.sqrt(normA) * Math.sqrt(normB))).toFixed(3);
+    if (searchResult.exitCode !== 0 || !searchOut.includes("mock-vector-contract") || !searchOut.includes(`[score:${expectedScore}]`)) {
+      console.log(`  FAIL: \`thatch search\` missed the mock-stored memory at the deterministic mock score ${expectedScore}: ${searchOut.slice(0, 200)}`);
       return "FAIL";
     }
 
