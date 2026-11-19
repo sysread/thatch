@@ -31,7 +31,11 @@ model-name handshake ("The handshake"); the riskiest mechanical detail is
 the spawn race ("Daemon lifecycle"). The testing section maps every policy
 branch to a test that can fail, and names one precondition (a
 characterization test). All three user rulings are recorded under
-"Rulings". Nothing in this plan is implemented yet.
+"Rulings". Implemented and merged as 5926282 (November 2026); the
+architecture's living documentation is docs/dev/features/memory-store.md
+("The shared embedding daemon"), and this file is the design record - the
+rulings and the testing strategy's branch-to-test map are the parts still
+worth reading.
 
 ## Background
 
@@ -198,7 +202,9 @@ bounded by the local model's own 10-minute idle release. A WEDGED daemon
 (alive, unresponsive) pays the per-request timeout, not a hang; after 3
 consecutive timeouts the wrapper prefers local for a 60 s cool-down
 before re-probing, so a wedge costs at most 3 slow embeds per minute
-instead of +2 s on every embed. Both counters (timeout count, cool-down
+instead of up to ~6 s on every embed (the implementation bounds connect,
+hello, and embed with independent timeouts; the plan's original +2 s
+figure assumed one shared timeout). Both counters (timeout count, cool-down
 window) are injectable, not env knobs. The step-4 lock applies only to
 spawn decisions, never to serving requests.
 
@@ -361,7 +367,11 @@ resolve the real user db.
   only assert failed-embed paths) or skip embed-path assertions for lack
   of a hermetic model, and extend them to assert the real mock-vector
   paths. The known instances are uc-004 and uc-142; the sweep is the
-  deliverable, not a fixed list.
+  deliverable, not a fixed list. DIVERGENCE, recorded at the site in
+  uc-142: extending uc-142 to assert mock-vector embed paths was attempted
+  and dropped as unsatisfiable -- the mock's query-prefix design makes
+  same-text recall assertions impossible by construction. uc-004 and
+  uc-151 carry the mock-vector assertions instead.
 - QA: one new auto use case in `tests/qa/auto/` seeding a temp db and
   asserting the share-and-fallback contract, following the uc-128
   seeded-DB pattern and uc-142's stdio client pattern. Dependencies:
@@ -403,9 +413,13 @@ resolve the real user db.
 
 ## Observability and knobs
 
-- stderr notes from the resolver (daemon pid, fallback reason, version-skew
+- stderr notes from the resolver (fallback reason, version-skew
   warning) and a one-time note from the client on first per-embed
-  delegation; nothing on stdout (transport). The daemon's own stderr
+  delegation; nothing on stdout (transport). The daemon's pid appears
+  only in the version-skew note and the doctor's hello report - a clean
+  adoption is silent (the finding that planned a pid note on adoption
+  was dropped as noise; every note is one a user must act on or know
+  about). The daemon's own stderr
   routes through the existing `createDebugLog` (src/debug.ts) when
   `THATCH_DEBUG` is set -- bind failures, `exited-error` reasons -- and
   is discarded otherwise, so the detached process never holds a terminal

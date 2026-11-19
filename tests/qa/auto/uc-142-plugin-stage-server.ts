@@ -90,6 +90,13 @@ const useCase: UseCase = {
     };
 
     // Step 1+2: the bundled server serves plugin_stage and stamps liveness.
+    // Divergence from the plan's mock-sweep bullet (docs/plans/
+    // embedding-daemon.md): extending this use case to assert mock-vector
+    // embed paths was attempted and dropped as unsatisfiable - the mock's
+    // query-prefix design makes same-text recall assertions impossible by
+    // construction (the stage prompt is embedded query-side, and a recall
+    // of the same text cannot be asserted through plugin_stage's response).
+    // uc-004 and uc-151 carry the mock-vector assertions instead.
     const proc = Bun.spawn([bin, "mcp", "--bundled"], { env, stdin: "pipe", stdout: "pipe", stderr: "ignore" });
     try {
       const c = client(proc);
