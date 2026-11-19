@@ -25,6 +25,9 @@ import { join, dirname, resolve } from "node:path";
 import { realpathSync } from "node:fs";
 import pkg from "../package.json";
 import { compareSemver, readRegimeMarker, readModLiveness, MOD_LIVENESS_STALE_MS, npmCachePath } from "./version-check";
+import { embedSocketPath, embedLockPath, daemonEnabled } from "./embed-daemon/client";
+import { embedLockHeld } from "./embed-daemon/daemon";
+import type { HelloResponse } from "./embed-daemon/protocol";
 import {
   claudeConfigDir,
   cursorConfigDir,
@@ -74,6 +77,13 @@ export interface DoctorDeps {
   claudeMcpGetThatch?: () => Promise<{ exitCode: number }>;
   /** The installed opencode's `--version` output; null when absent. */
   opencodeVersion?: () => string | null;
+  /** Probes the embed daemon with a hello handshake; null when no daemon
+   *  answers. Read-only - it never unlinks the socket. Injectable so tests
+   *  stay hermetic. */
+  embedDaemonProbe?: () => Promise<HelloResponse | null>;
+  /** Reports whether the embed daemon's sqlite lock is held. Injectable
+   *  for tests. */
+  embedDaemonLockHeld?: () => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +149,7 @@ function cursorHooksFiles(deps: DoctorDeps): string[] {
 // Common: the database and thatch's own version
 // ---------------------------------------------------------------------------
 
-export function commonFindings(deps: DoctorDeps): DoctorFinding[] {
+export async function commonFindings(deps: DoctorDeps): Promise<DoctorFinding[]> {
   const findings: DoctorFinding[] = [];
   try {
     const stores = deps.db.listStores();
@@ -159,7 +169,61 @@ export function commonFindings(deps: DoctorDeps): DoctorFinding[] {
     });
   }
   findings.push(npmUpdateFinding(deps));
+  findings.push(await embedDaemonFinding(deps));
   return findings;
+}
+
+/**
+ * The embed daemon's health check. Three outcomes, none failing: a hello
+ * answer reports serving (pass); no listener and no held lock is the
+ * DESIGNED steady state on machines without MCP sessions and after an
+ * idle exit (info); a held lock with no socket answering means formation
+ * was won but the endpoint is not answering (warn). The probe is
+ * read-only: it must NOT reuse the sideband client's unlink-on-error
+ * behavior - the daemon owns the endpoint.
+ */
+async function embedDaemonFinding(deps: DoctorDeps): Promise<DoctorFinding> {
+  if (!daemonEnabled()) {
+    return {
+      section: "common",
+      check: "embed daemon",
+      verdict: "info",
+      detail: "disabled (THATCH_EMBED_DAEMON=off): every session embeds in-process",
+    };
+  }
+  const hello = await (deps.embedDaemonProbe ?? defaultEmbedDaemonProbe(deps))();
+  if (hello) {
+    return {
+      section: "common",
+      check: "embed daemon",
+      verdict: "pass",
+      detail: `serving "${hello.model}" v${hello.version} (pid ${hello.pid}) - MCP sessions on this database share its model`,
+    };
+  }
+  const lockHeld = deps.embedDaemonLockHeld ? deps.embedDaemonLockHeld() : embedLockHeld(embedLockPath(deps.dbPath));
+  if (lockHeld) {
+    return {
+      section: "common",
+      check: "embed daemon",
+      verdict: "warn",
+      detail: "the daemon's lock is held but no socket answers - a daemon process formed but is not serving; it should exit on its own (idle timer)",
+      fix: "if it persists: kill the stale daemon process (the lock's holder) - the next MCP session spawns a fresh one",
+    };
+  }
+  return {
+    section: "common",
+    check: "embed daemon",
+    verdict: "info",
+    detail: "not running - the steady state when no MCP session needs it; the first one to embed spawns it",
+  };
+}
+
+function defaultEmbedDaemonProbe(deps: DoctorDeps): () => Promise<HelloResponse | null> {
+  return async () => {
+    const { helloProbe } = await import("./embed-daemon/supervisor");
+    const result = await helloProbe(embedSocketPath(deps.dbPath))();
+    return result.ok ? result.hello : null;
+  };
 }
 
 /** The version-currency check: this binary against the npm cache a
@@ -826,7 +890,7 @@ export function cursorFindings(deps: DoctorDeps): DoctorFinding[] {
 
 /** Runs every section, in output order: common, opencode, claude, cursor. */
 export async function collectDoctorFindings(deps: DoctorDeps): Promise<DoctorFinding[]> {
-  return [...commonFindings(deps), ...opencodeFindings(deps), ...(await claudeFindings(deps)), ...cursorFindings(deps)];
+  return [...(await commonFindings(deps)), ...opencodeFindings(deps), ...(await claudeFindings(deps)), ...cursorFindings(deps)];
 }
 
 /** 1 when any finding failed, 0 otherwise - warnings never fail the run,

@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import { ThatchDB, repoPathCache } from "./db";
 import { mcpSessionID } from "./chat";
-import { createEmbeddingModel } from "./embeddings";
+import { resolveEmbeddingModel } from "./embed-daemon/client";
 import { detectRepo } from "./git";
 import { checkSetup, setupClaudeCode, setupCursor } from "./setup";
 import { TOOL_DEFS, trimHostContext, type CoreContext, type HostToolContext, type ToolDef } from "./tool-defs";
@@ -194,10 +194,13 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
   // alignment keeps hook-registered and server-registered rows comparable
   // by project - which the `as` identity binding depends on.
   const repo = detected === "unknown" ? "global" : detected;
-  // The mock branch (THATCH_MODEL=mock) is what makes spawned-server tests
-  // hermetic; construction goes through the factory for that branch. The
-  // daemon resolver replaces this call site - see docs/plans/embedding-daemon.md.
-  const model = createEmbeddingModel(modelName);
+  // The daemon resolver (issue #26): direct construction replaced. The
+  // wrapper resolves lazily on the first embed - probe, spawn, or fall back
+  // to the local model - so a session served by a healthy daemon never
+  // imports the ONNX runtime at all. Standalone's startup behavior seed is
+  // the de-facto resolution point (the first session starts the daemon);
+  // bundled mode resolves on the first tool embed.
+  const model = resolveEmbeddingModel(dbPath, modelName, mode);
 
   // Bundled mode (plugin regime) skips everything that exists to bridge
   // "no in-process runtime" - see the McpServerMode doc comment.

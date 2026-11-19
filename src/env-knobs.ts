@@ -56,6 +56,18 @@ export const ENV_KNOBS: EnvKnob[] = [
     default: "wasm",
   },
   {
+    name: "THATCH_EMBED_DAEMON",
+    description:
+      "Embed-daemon policy for the MCP paths: off forces every embedding model in-process (tests); otherwise each MCP server shares one daemon per database path.",
+    default: "on (the daemon is used)",
+  },
+  {
+    name: "THATCH_EMBED_DAEMON_IDLE_MS",
+    description:
+      "Idle milliseconds before the shared embedding daemon exits; overrides the config file's embedDaemon.idleExitMinutes.",
+    default: "1800000 (30 minutes)",
+  },
+  {
     name: "THATCH_QUEUE_DIR",
     description: "Directory where pending extraction interactions are queued.",
     default: "~/.cache/thatch/queue",

@@ -9,9 +9,11 @@ import {
   alertsPrefsSchema,
   chatEnabled,
   chatPrefsSchema,
+  embedDaemonPrefsSchema,
   loadConfig,
   mergeAlertsPrefs,
   mergeChatPrefs,
+  mergeEmbedDaemonPrefs,
   mergeNotificationPrefs,
   notificationDefaults,
   notificationPrefsSchema,
@@ -20,6 +22,7 @@ import {
   type ChatPrefs,
   type Config,
   type ConfigSection,
+  type EmbedDaemonPrefs,
   type NotificationPrefs,
 } from "./config";
 import { renderEnvKnobs } from "./env-knobs";
@@ -1758,6 +1761,16 @@ function renderAlertsSection(prefs: AlertsPrefs | undefined): string {
   return lines.join("\n");
 }
 
+/** Renders the embedDaemon section. The idle exit defaults to 30 minutes;
+ *  the env knob THATCH_EMBED_DAEMON_IDLE_MS (see config_get's environment
+ *  section) overrides whatever the file says. */
+function renderEmbedDaemonSection(prefs: EmbedDaemonPrefs | undefined): string {
+  return [
+    "embedDaemon:",
+    `  idleExitMinutes: ${prefs?.idleExitMinutes ?? "<unset>"} (default: 30; THATCH_EMBED_DAEMON_IDLE_MS overrides)`,
+  ].join("\n");
+}
+
 /** Drops keys explicitly set to undefined so a merge never overwrites. */
 function stripUndefined(obj: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
@@ -1773,7 +1786,7 @@ const configGetDef: ToolDef = {
     "(~/.config/thatch/config.json, beside thatch.db) is also hand-editable. " +
     "Call this before config_set.",
   args: {
-    section: z.enum(["notifications", "chat", "alerts", "environment"]).optional().describe(
+    section: z.enum(["notifications", "chat", "alerts", "embedDaemon", "environment"]).optional().describe(
       "Restrict output to one section. Omit to read all sections.",
     ),
   },
@@ -1801,6 +1814,9 @@ const configGetDef: ToolDef = {
       }
       if (name === "alerts") {
         lines.push(renderAlertsSection(loaded.config.alerts));
+      }
+      if (name === "embedDaemon") {
+        lines.push(renderEmbedDaemonSection(loaded.config.embedDaemon));
       }
       if (name === "environment") {
         lines.push(renderEnvKnobs());
@@ -1879,6 +1895,18 @@ const configSetDef: ToolDef = {
       "pauses or finishes). Each event takes a mode: both, banner only, " +
       "voice only, or none; null unsets it. Default: banner.",
     ),
+    embedDaemon: z.strictObject({
+      idleExitMinutes: z.number().positive().nullable().optional().describe(
+        "Idle minutes before the shared embedding daemon (one per database " +
+        "path, shared by every MCP session) exits. Default: 30. The " +
+        "THATCH_EMBED_DAEMON_IDLE_MS environment variable overrides this. " +
+        "Pass null to unset (the default applies again).",
+      ),
+    }).optional().describe(
+      "Embed-daemon preferences to update. Fields you omit keep their " +
+      "current values; a field set to null is deleted from the config so " +
+      "its default applies again.",
+    ),
     environment: z.unknown().optional().describe(
       "Read-only. Environment knobs are set per process; export them in " +
       "your shell.",
@@ -1908,6 +1936,7 @@ const configSetDef: ToolDef = {
       { section: "notifications", patch: args.notifications, fields: Object.keys(notificationPrefsSchema.shape) },
       { section: "chat", patch: args.chat, fields: Object.keys(chatPrefsSchema.shape) },
       { section: "alerts", patch: args.alerts, fields: ALERT_EVENT_KINDS },
+      { section: "embedDaemon", patch: args.embedDaemon, fields: Object.keys(embedDaemonPrefsSchema.shape) },
     ];
     for (const { section, patch, fields } of sectionFieldChecks) {
       if (patch === null || typeof patch !== "object") continue;
@@ -1939,7 +1968,7 @@ const configSetDef: ToolDef = {
     // A null section object is never valid - null unsets FIELDS, not whole
     // sections. Hosts that validate args reject it at the schema; this
     // guard covers calls that reach execute without validation.
-    if (args.notifications === null || args.chat === null || args.alerts === null) {
+    if (args.notifications === null || args.chat === null || args.alerts === null || args.embedDaemon === null) {
       return "Invalid config_set: null is not a section value. To unset a " +
         "field, pass null as the field's value (e.g. notifications: { voice: null }).";
     }
@@ -1958,15 +1987,23 @@ const configSetDef: ToolDef = {
     const notifPatch = args.notifications as Record<string, unknown> | undefined;
     const chatPatch = args.chat as Record<string, unknown> | undefined;
     const alertsPatch = args.alerts as Record<string, unknown> | undefined;
+    const embedDaemonPatch = args.embedDaemon as Record<string, unknown> | undefined;
     const notifClean = notifPatch ? stripUndefined(notifPatch) : {};
     const chatClean = chatPatch ? stripUndefined(chatPatch) : {};
     const alertsClean = alertsPatch ? stripUndefined(alertsPatch) : {};
-    if (Object.keys(notifClean).length === 0 && Object.keys(chatClean).length === 0 && Object.keys(alertsClean).length === 0) {
+    const embedDaemonClean = embedDaemonPatch ? stripUndefined(embedDaemonPatch) : {};
+    if (
+      Object.keys(notifClean).length === 0 &&
+      Object.keys(chatClean).length === 0 &&
+      Object.keys(alertsClean).length === 0 &&
+      Object.keys(embedDaemonClean).length === 0
+    ) {
       return (
         "Nothing to update: pass a section with fields to change.\n" +
         renderNotificationSection(config.notifications) + "\n" +
         renderChatSection(config.chat) + "\n" +
-        renderAlertsSection(config.alerts)
+        renderAlertsSection(config.alerts) + "\n" +
+        renderEmbedDaemonSection(config.embedDaemon)
       );
     }
     if (Object.keys(notifClean).length > 0) {
@@ -1984,12 +2021,18 @@ const configSetDef: ToolDef = {
         mergeAlertsPrefs(config.alerts, alertsClean),
       );
     }
+    if (Object.keys(embedDaemonClean).length > 0) {
+      config.embedDaemon = embedDaemonPrefsSchema.parse(
+        mergeEmbedDaemonPrefs(config.embedDaemon, embedDaemonClean),
+      );
+    }
     const path = saveConfig(config);
     return (
       `[saved] ${path}\n` +
       (Object.keys(notifClean).length > 0 ? renderNotificationSection(config.notifications) + "\n" : "") +
       (Object.keys(chatClean).length > 0 ? renderChatSection(config.chat) + "\n" : "") +
-      (Object.keys(alertsClean).length > 0 ? renderAlertsSection(config.alerts) : "")
+      (Object.keys(alertsClean).length > 0 ? renderAlertsSection(config.alerts) + "\n" : "") +
+      (Object.keys(embedDaemonClean).length > 0 ? renderEmbedDaemonSection(config.embedDaemon) : "")
     );
   },
 };

@@ -77,42 +77,42 @@ afterEach(() => {
 });
 
 describe("common findings", () => {
-  test("a reachable database passes with the store count", () => {
-    const f = byCheck(commonFindings(deps()), "database");
+  test("a reachable database passes with the store count", async () => {
+    const f = byCheck(await commonFindings(deps()), "database");
     expect(f).toHaveLength(1);
     expect(f[0]!.verdict).toBe("pass");
     expect(f[0]!.detail).toContain("reachable");
     expect(f[0]!.detail).toContain("2 stores");
   });
 
-  test("an unreadable database fails with a fix", () => {
+  test("an unreadable database fails with a fix", async () => {
     const d = deps({ db: { listStores: () => { throw new Error("locked"); }, listChatSessions: () => [] } });
-    const f = byCheck(commonFindings(d), "database");
+    const f = byCheck(await commonFindings(d), "database");
     expect(f[0]!.verdict).toBe("fail");
     expect(f[0]!.detail).toContain("locked");
     expect(f[0]!.fix).toBeTruthy();
   });
 
-  test("no npm cache yet is info, not a warning", () => {
-    const f = byCheck(commonFindings(deps()), "update");
+  test("no npm cache yet is info, not a warning", async () => {
+    const f = byCheck(await commonFindings(deps()), "update");
     expect(f[0]!.verdict).toBe("info");
     expect(f[0]!.detail).toContain("no npm update check has run yet");
   });
 
-  test("a current cached version passes naming the check age", () => {
+  test("a current cached version passes naming the check age", async () => {
     mkdirSync(join(npmCachePath(dbPath), ".."), { recursive: true });
     writeFileSync(npmCachePath(dbPath), JSON.stringify({ version: pkg.version, checkedAt: Date.now() - 60_000 }), "utf-8");
-    const f = byCheck(commonFindings(deps()), "update");
+    const f = byCheck(await commonFindings(deps()), "update");
     expect(f[0]!.verdict).toBe("pass");
     expect(f[0]!.detail).toContain(`v${pkg.version}, the latest known`);
   });
 
-  test("a newer cached version warns with the update fix", () => {
+  test("a newer cached version warns with the update fix", async () => {
     const newer = pkg.version.split(".").map(Number);
     newer[2] = (newer[2] ?? 0) + 1;
     mkdirSync(join(npmCachePath(dbPath), ".."), { recursive: true });
     writeFileSync(npmCachePath(dbPath), JSON.stringify({ version: newer.join("."), checkedAt: Date.now() }), "utf-8");
-    const f = byCheck(commonFindings(deps()), "update");
+    const f = byCheck(await commonFindings(deps()), "update");
     expect(f[0]!.verdict).toBe("warn");
     expect(f[0]!.fix).toContain("npm update");
   });

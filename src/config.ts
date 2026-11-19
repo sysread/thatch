@@ -34,16 +34,23 @@ export const alertsPrefsSchema = z.strictObject({
   error: alertEventPrefsSchema.optional(),
 });
 
+export const embedDaemonPrefsSchema = z.strictObject({
+  /** Idle minutes before the shared embedding daemon exits. */
+  idleExitMinutes: z.number().positive().optional(),
+});
+
 export const configSchema = z.strictObject({
   notifications: notificationPrefsSchema.optional(),
   chat: chatPrefsSchema.optional(),
   alerts: alertsPrefsSchema.optional(),
+  embedDaemon: embedDaemonPrefsSchema.optional(),
 });
 
 export type NotificationPrefs = z.infer<typeof notificationPrefsSchema>;
 export type ChatPrefs = z.infer<typeof chatPrefsSchema>;
 export type AlertEventPrefs = z.infer<typeof alertEventPrefsSchema>;
 export type AlertsPrefs = z.infer<typeof alertsPrefsSchema>;
+export type EmbedDaemonPrefs = z.infer<typeof embedDaemonPrefsSchema>;
 export type Config = z.infer<typeof configSchema>;
 
 /** The automatic alert events, in the order config_get renders them. */
@@ -67,7 +74,7 @@ export type AlertsPrefsPatch = {
 /** File sections in presentation order. config_get iterates this plus the
  *  presentation-only "environment" section (which reads no file);
  *  config_set iterates exactly this and refuses "environment". */
-export const CONFIG_SECTIONS = ["notifications", "chat", "alerts"] as const;
+export const CONFIG_SECTIONS = ["notifications", "chat", "alerts", "embedDaemon"] as const;
 export type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 
 /**
@@ -196,6 +203,14 @@ export function mergeAlertsPrefs(
     else delete merged[kind];
   }
   return merged as AlertsPrefs;
+}
+
+/** Field-level merge for one section; null deletes the field (see mergeSection). */
+export function mergeEmbedDaemonPrefs(
+  current: EmbedDaemonPrefs | undefined,
+  patch: SectionPatch<EmbedDaemonPrefs>,
+): EmbedDaemonPrefs {
+  return mergeSection(current, patch);
 }
 
 /**

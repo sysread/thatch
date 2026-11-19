@@ -16,7 +16,7 @@ import { join } from "node:path";
 const REPO_ROOT = join(import.meta.dir, "..");
 
 interface SpawnedServer {
-  proc: Bun.Subprocess<"ignore", "pipe", "pipe">;
+  proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
   request: (method: string, params?: Record<string, unknown>) => Promise<Record<string, any>>;
   close: () => void;
 }
