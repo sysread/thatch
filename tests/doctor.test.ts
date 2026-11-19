@@ -107,6 +107,40 @@ describe("common findings", () => {
     expect(f[0]!.detail).toContain(`v${pkg.version}, the latest known`);
   });
 
+  test("the embed daemon check: serving, not-running, blocked, disabled", async () => {
+    // The preload forces the knob off (the harness default); the check runs
+    // in the enabled state first, then the disabled branch. Restored after.
+    const savedKnob = process.env.THATCH_EMBED_DAEMON;
+    process.env.THATCH_EMBED_DAEMON = "on";
+    const hello = { ok: true as const, model: "mock", version: pkg.version, pid: 4242 };
+
+    // Serving: a hello answer with model, version, and pid - never a fail.
+    const serving = byCheck(await commonFindings(deps({ embedDaemonProbe: async () => hello })), "embed daemon");
+    expect(serving[0]!.verdict).toBe("pass");
+    expect(serving[0]!.detail).toContain("pid 4242");
+
+    // Not running: no listener, no held lock - the designed steady state.
+    const notRunning = byCheck(await commonFindings(deps({ embedDaemonProbe: async () => null, embedDaemonLockHeld: () => false })), "embed daemon");
+    expect(notRunning[0]!.verdict).toBe("info");
+    expect(notRunning[0]!.detail).toContain("not running");
+
+    // Blocked: the lock is held but no socket answers.
+    const blocked = byCheck(await commonFindings(deps({ embedDaemonProbe: async () => null, embedDaemonLockHeld: () => true })), "embed daemon");
+    expect(blocked[0]!.verdict).toBe("warn");
+    expect(blocked[0]!.detail).toContain("lock is held");
+
+    // Disabled by the knob: info, and no probe was attempted.
+    process.env.THATCH_EMBED_DAEMON = "off";
+    try {
+      const disabled = byCheck(await commonFindings(deps({ embedDaemonProbe: async () => { throw new Error("must not probe"); } })), "embed daemon");
+      expect(disabled[0]!.verdict).toBe("info");
+      expect(disabled[0]!.detail).toContain("THATCH_EMBED_DAEMON=off");
+    } finally {
+      if (savedKnob === undefined) delete process.env.THATCH_EMBED_DAEMON;
+      else process.env.THATCH_EMBED_DAEMON = savedKnob;
+    }
+  });
+
   test("a newer cached version warns with the update fix", async () => {
     const newer = pkg.version.split(".").map(Number);
     newer[2] = (newer[2] ?? 0) + 1;
