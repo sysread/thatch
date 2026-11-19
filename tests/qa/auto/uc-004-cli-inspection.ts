@@ -16,17 +16,19 @@ const useCase: UseCase = {
     "- At least one memory saved via opencode",
   ].join("\n"),
   steps: [
-    "1. `thatch stores` — list all stores.",
-    "2. `cd` into the project's repo, then `thatch list` — labels default to the repo's store.",
-    "3. `thatch show <label>` — full content.",
-    '4. `thatch search "some topic"` — semantic search.',
+    "1. `thatch stores` - list all stores.",
+    "2. `cd` into the project's repo, then `thatch list` - labels default to the repo's store.",
+    "3. `thatch show <label>` - full content.",
+    "4. `thatch search <topic>` - semantic search.",
     "5. `thatch search some topic` (unquoted, multi-word).",
     '6. `thatch search "query" bogus-store`.',
+    "7. `thatch remember` a memory under THATCH_MODEL=mock, then `thatch search` for it - the mock vectors round-trip through the CLI end to end.",
   ].join("\n"),
   expected: [
     "- Steps 1-4 behave as described; search results are ranked with scores.",
     "- Step 5 exits non-zero with an error telling you to quote the query.",
     "- Step 6 exits non-zero listing the stores that do exist.",
+    "- Step 7: the remember saves and the search surfaces the memory with a score - real mock-vector paths (THATCH_MODEL=mock used to be aspirational and embeds failed).",
     "- All commands respect THATCH_DB_PATH and $XDG_CONFIG_HOME.",
   ].join("\n"),
 
@@ -73,6 +75,23 @@ const useCase: UseCase = {
     const bogusResult = await $`${bin} search "query" bogus-store`.env(env).quiet().nothrow();
     if (bogusResult.exitCode === 0) {
       console.log('  FAIL: `thatch search "query" bogus-store` should exit non-zero');
+      return "FAIL";
+    }
+
+    // Step 7: the real mock-vector round. The mock's query path applies the
+    // query prefix, so the stored CONTENT carries it - then a search for the
+    // bare text hashes the same prefixed string and matches (cosine 1.0).
+    const QUERY_PREFIX = "Represent this sentence for searching relevant passages: ";
+    const memoryText = "the qa fixture remembers the mock vector contract";
+    const rememberResult = await $`${bin} remember ${QUERY_PREFIX + memoryText} --label mock-vector-contract`.env(env).quiet().nothrow();
+    if (rememberResult.exitCode !== 0 || !rememberResult.stdout.toString().includes("[saved]")) {
+      console.log(`  FAIL: \`thatch remember\` failed under THATCH_MODEL=mock: ${rememberResult.stderr.toString().slice(0, 200)}`);
+      return "FAIL";
+    }
+    const searchResult = await $`${bin} search ${memoryText}`.env(env).quiet().nothrow();
+    const searchOut = searchResult.stdout.toString();
+    if (searchResult.exitCode !== 0 || !searchOut.includes("mock-vector-contract") || !searchOut.includes("[score:")) {
+      console.log(`  FAIL: \`thatch search\` missed the mock-stored memory: ${searchOut.slice(0, 200)}`);
       return "FAIL";
     }
 

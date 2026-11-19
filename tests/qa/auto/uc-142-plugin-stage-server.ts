@@ -39,6 +39,8 @@ const useCase: UseCase = {
     "  exists afterward.",
     "- With a stale liveness stamp, the FIRST tools/call response is",
     "  prepended with the plugin-not-delivering warning, exactly once.",
+    "- The stage's recall tier runs on real mock vectors: a memory seeded",
+    "  through the bundled server is surfaced by a later stage call.",
   ].join("\n"),
 
   async run(ctx: QaContext) {
@@ -156,10 +158,24 @@ const useCase: UseCase = {
     try {
       const c2 = client(proc2);
       await c2.request("initialize", {});
+      // Seed a memory whose content carries the mock's query prefix: the
+      // stage's recall tier hashes the prefixed string for the prompt, so
+      // this round-trips a real mock-vector path (THATCH_MODEL=mock used to
+      // be aspirational - embeds failed and the recall tier never ran).
+      await c2.request("tools/call", {
+        name: "memory_remember",
+        arguments: {
+          content: "Represent this sentence for searching relevant passages: What is the meaning of life?",
+          label: "uc142-recall-probe",
+        },
+      });
       const first = await c2.request("tools/call", { name: "plugin_stage", arguments: { prompt: "What is the meaning of life?", session_id: "uc133-empty" } });
       const firstText = first.result?.content?.[0]?.text ?? "";
       if (!firstText.includes("may not be delivering")) {
         failures.push(`stale-liveness warning missing on the first call: ${firstText.slice(0, 160)}`);
+      }
+      if (!firstText.includes("uc142-recall-probe")) {
+        failures.push(`the recall tier did not surface the mock-stored memory: ${firstText.slice(0, 200)}`);
       }
       const second = await c2.request("tools/call", { name: "plugin_stage", arguments: { prompt: "again", session_id: "uc133-empty" } });
       const secondText = second.result?.content?.[0]?.text ?? "";

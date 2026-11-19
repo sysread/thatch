@@ -4,7 +4,7 @@
  * bodies are the same dispatch logic, with the shared DB and store
  * resolution arriving in CliContext instead of module scope.
  */
-import { BgeEmbeddingModel } from "../../embeddings";
+import { createEmbeddingModel } from "../../embeddings";
 import { MEMORY_DISPLAY_STAMP } from "../../extraction";
 import { printCommandHelp } from "../help";
 import type { Subcommand } from "../types";
@@ -146,7 +146,11 @@ export const search: Subcommand = {
     const storesToSearch = store === "all" ? [await ctx.defaultStore(), "global"] : [store];
 
     console.error("Loading embedding model...");
-    const model = new BgeEmbeddingModel();
+    // Through the factory, not a direct BgeEmbeddingModel: THATCH_MODEL=mock
+    // (the hermetic test tier) must reach the CLI's embeds too. The CLI
+    // one-shots still never resolve the DAEMON resolver (a recorded
+    // non-goal in docs/plans/embedding-daemon.md) - they embed in-process.
+    const model = createEmbeddingModel(process.env.THATCH_MODEL ?? "Xenova/bge-small-en-v1.5");
     const queryEmb = await model.queryEmbed(query);
     const results = ctx.db.recall(storesToSearch, queryEmb, { limit: 10 });
 
@@ -197,7 +201,10 @@ export const remember: Subcommand = {
     const { TOOL_DEFS, MEMORY_SAVED_MARKER } = await import("../../tool-defs");
     const def = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
     console.error("Loading embedding model...");
-    const model = new BgeEmbeddingModel();
+    // Through the factory (see the search subcommand): THATCH_MODEL=mock
+    // reaches the CLI write path, so a mock-seeded db round-trips mock
+    // vectors end to end. No daemon resolver here (deliberate).
+    const model = createEmbeddingModel(process.env.THATCH_MODEL ?? "Xenova/bge-small-en-v1.5");
     const result = await def.execute(
       {
         content: parsed.request.content,
