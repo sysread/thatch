@@ -10,6 +10,7 @@ import {
   saveConfig,
   mergeNotificationPrefs,
   mergeAlertsPrefs,
+  mergeEmbedDaemonPrefs,
   alertVoice,
   notificationDefaults,
   type Config,
@@ -218,5 +219,68 @@ describe("chat config", () => {
     expect(mergeChatPrefs(undefined, { enabled: false })).toEqual({ enabled: false });
     expect(mergeChatPrefs({ enabled: false }, {})).toEqual({ enabled: false });
     expect(mergeChatPrefs({ enabled: false }, { enabled: true })).toEqual({ enabled: true });
+  });
+});
+
+describe("embedDaemon config", () => {
+  test("unset idleExitMinutes renders <unset>", () => {
+    expect(mergeEmbedDaemonPrefs(undefined, {})).toEqual({});
+    expect(mergeEmbedDaemonPrefs(undefined, { idleExitMinutes: 45 })).toEqual({ idleExitMinutes: 45 });
+  });
+
+  test("mergeEmbedDaemonPrefs is a field-level merge; null unsets", () => {
+    expect(mergeEmbedDaemonPrefs({ idleExitMinutes: 30 }, {})).toEqual({ idleExitMinutes: 30 });
+    expect(mergeEmbedDaemonPrefs({ idleExitMinutes: 30 }, { idleExitMinutes: 45 })).toEqual({ idleExitMinutes: 45 });
+    expect(mergeEmbedDaemonPrefs({ idleExitMinutes: 30 }, { idleExitMinutes: null })).toEqual({});
+  });
+
+  test("non-positive idleExitMinutes fails validation and is ignored", () => {
+    const dbPath = join(dbDir, "thatch.db");
+    saveConfig({}, dbPath);
+    const path = configFilePath(dbPath);
+    writeFileSync(path, JSON.stringify({ embedDaemon: { idleExitMinutes: 0 } }));
+    const loaded = loadConfig(dbPath);
+    expect(loaded.config).toEqual({});
+    expect(loaded.warning).toContain("invalid");
+  });
+
+  test("unknown embedDaemon keys fail validation and are ignored", () => {
+    const dbPath = join(dbDir, "thatch.db");
+    saveConfig({}, dbPath);
+    const path = configFilePath(dbPath);
+    writeFileSync(path, JSON.stringify({ embedDaemon: { idleExitMinutes: 30, daemon: "yes" } }));
+    const loaded = loadConfig(dbPath);
+    expect(loaded.config).toEqual({});
+    expect(loaded.warning).toContain("invalid");
+  });
+
+  test("config_get and config_set round-trip the embedDaemon section", async () => {
+    const { TOOL_DEFS } = await import("../src/tool-defs");
+    const findTool = (name: string) => TOOL_DEFS.find((t) => t.name === name)!;
+    const dbPath = join(dbDir, "thatch.db");
+    // The config tools read the file beside THATCH_DB_PATH.
+    const prev = process.env.THATCH_DB_PATH;
+    process.env.THATCH_DB_PATH = dbPath;
+    try {
+      const setResult = await findTool("config_set").execute({ embedDaemon: { idleExitMinutes: 45 } }, {} as never);
+      expect(setResult).toContain("[saved]");
+      expect(setResult).toContain("idleExitMinutes: 45");
+      expect(JSON.parse(readFileSync(configFilePath(dbPath), "utf8"))).toEqual({
+        embedDaemon: { idleExitMinutes: 45 },
+      });
+
+      const getResult = await findTool("config_get").execute({ section: "embedDaemon" }, {} as never);
+      expect(getResult).toContain("idleExitMinutes: 45");
+
+      // Null unsets; the section renders the default again. The file
+      // keeps the emptied section (the same shape every section leaves).
+      await findTool("config_set").execute({ embedDaemon: { idleExitMinutes: null } }, {} as never);
+      expect(JSON.parse(readFileSync(configFilePath(dbPath), "utf8"))).toEqual({ embedDaemon: {} });
+      const unsetResult = await findTool("config_get").execute({ section: "embedDaemon" }, {} as never);
+      expect(unsetResult).toContain("idleExitMinutes: <unset>");
+    } finally {
+      if (prev === undefined) delete process.env.THATCH_DB_PATH;
+      else process.env.THATCH_DB_PATH = prev;
+    }
   });
 });
