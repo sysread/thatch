@@ -49,3 +49,11 @@ for (const [key, value] of Object.entries(defaults)) {
 // composition itself (tests/notify.test.ts) clear the var for the duration of
 // the file and restore it - bun shares one process across all test files.
 process.env.THATCH_NO_NOTIFY = "1";
+
+// Shared embedding daemon suppression, same forced mechanism as
+// THATCH_NO_NOTIFY above: the default for every test process is the LOCAL
+// model path, so no unit test can probe, spawn, or leak a detached
+// embed-daemon. Tests exercising the daemon itself opt in explicitly
+// (set and restore, or their own subprocess env) - the daemon feature
+// lives in src/embed-daemon/ (docs/plans/embedding-daemon.md).
+process.env.THATCH_EMBED_DAEMON = "off";
