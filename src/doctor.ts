@@ -210,7 +210,7 @@ async function embedDaemonFinding(deps: DoctorDeps): Promise<DoctorFinding> {
       section: "common",
       check: "embed daemon",
       verdict: "fail",
-      detail: `the daemon's lock database is corrupt or unreadable (${lockPath}) - no daemon can form while it exists`,
+      detail: `the daemon's lock database is corrupt or unreadable (${lockPath}) - no daemon can start while it exists`,
       fix: `delete ${lockPath} (it holds no data - it is only the daemon's lock); the next MCP session spawns a fresh daemon`,
     };
   }
@@ -219,7 +219,7 @@ async function embedDaemonFinding(deps: DoctorDeps): Promise<DoctorFinding> {
       section: "common",
       check: "embed daemon",
       verdict: "warn",
-      detail: "the daemon's lock is held but no socket answers - a daemon process formed but is not serving; it should exit on its own (idle timer)",
+      detail: "the daemon's lock is held but no socket answers - a daemon process started but is not serving; it should exit on its own (idle timer)",
       fix: "if it persists: kill the stale daemon process (the lock's holder) - the next MCP session spawns a fresh one",
     };
   }

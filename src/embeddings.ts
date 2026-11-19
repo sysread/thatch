@@ -387,8 +387,8 @@ export const MOCK_MODEL_NAME = "mock";
  * runtime. Supported in production source on purpose: the spawned tiers
  * (MCP server, embed daemon, hook one-shots) need embeds that succeed and
  * reproduce bit-for-bit across processes, which is what makes the
- * integration tests and the QA use cases hermetic. Without this branch the
- * QA suites' THATCH_MODEL=mock values were aspirational - embeds failed.
+ * integration tests and the QA use cases hermetic. Without this branch,
+ * THATCH_MODEL=mock in the QA suites had no effect: every embed failed.
  */
 export class MockEmbeddingModel implements EmbeddingModel {
   readonly loaded = true;

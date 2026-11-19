@@ -91,19 +91,19 @@ Key decisions:
   `THATCH_NO_NOTIFY` kill switch, which is infrastructure: it silences
   dispatch entirely (see below) rather than tuning a preference.
 - **The `embedDaemon` section** (`idleExitMinutes`, the shared embedding
-  daemon's idle exit) joins the sections with the same rules: strict
+  daemon's idle exit) follows the same rules as the other sections: strict
   schema, field-level merge, null unsets. Its precedence has THREE layers -
   built-in default (30 minutes) < `embedDaemon.idleExitMinutes` <
   `THATCH_EMBED_DAEMON_IDLE_MS` - the one section where an env knob
   intentionally overrides the file, because the daemon is infrastructure
   (a process lifetime) rather than a delivery preference. The section is
   host-agnostic on purpose: one daemon serves every stdio client from one
-  DB path (see `docs/dev/features/memory-store.md`).
+  DB path (see [memory-store.md](memory-store.md#the-shared-embedding-daemon-mcp-paths)).
 
 ### The environment section
 
 The `THATCH_*` environment knobs are invisible in the config file (they are process
-environment, not file state), so `config_get` gained a fourth section name,
+environment, not file state), so `config_get` gained a fifth section name,
 `environment`: `src/env-knobs.ts` holds the single registry (name,
 one-sentence description, default) and renders one line per knob with the
 effective value read from `process.env` at call time. `config_set` refuses

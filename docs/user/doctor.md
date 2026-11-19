@@ -38,11 +38,14 @@ The exit code is 0 when no check failed and 1 when any check failed
 
 **Common**: the database answers a query; this thatch's version against
 the latest npm release a running process has seen (the hourly poll any
-host's long-running process performs); the shared embed daemon's health -
-serving (the daemon answers hello, with its model, version, and pid), not
-running (the designed steady state when no MCP session needs it), or a held
-lock with no live socket (a daemon formed but is not answering - it should
-exit on its own idle timer). Never a failing verdict.
+host's long-running process performs); the shared embedding daemon's
+health - one of four outcomes: serving (the daemon answers hello, with
+its model, version, and pid), not running (the designed steady state when
+no MCP session needs it), a held lock with no live socket (a daemon
+started but is not answering - it should exit on its own idle timer), or
+disabled (`THATCH_EMBED_DAEMON=off`, every session embeds in-process). A
+corrupt lock db is the one failing verdict: the fix names the file to
+delete.
 
 **OpenCode**: the opencode binary and its version against the 2.1 plugin
 floor; the plugin install surfaces (the `@jeffober/thatch` entry in

@@ -39,7 +39,7 @@ The "global" store always exists — it is inserted at schema init (`INSERT OR I
 - Query prefix: `"Represent this sentence for searching relevant passages: "` — the BGE asymmetric search convention. Queries get the prefix; passages do not.
 - Mean pooling and L2 normalization are applied via pipeline options.
 - Output is a `Float32Array`.
-- `THATCH_MODEL=mock` selects `MockEmbeddingModel`: deterministic vectors derived from the exact input text (query path includes the prefix), no download and no ONNX. Supported in production source so the spawned tiers (MCP server, embed daemon, hook one-shots) can assert real vectors hermetically; the in-process test mock in `tests/mocks/embeddings.ts` shares the same derivation.
+- `THATCH_MODEL=mock` selects `MockEmbeddingModel`: deterministic vectors derived from the exact input text (query path includes the prefix), no download and no ONNX. Supported in production source so the spawned tiers (MCP server, embedding daemon, hook one-shots) can assert real vectors hermetically; the in-process test mock in `tests/mocks/embeddings.ts` shares the same derivation.
 - The model can be overridden via the `THATCH_MODEL` environment variable.
 - Backend: runs on onnxruntime-web's pure-JS/wasm runtime by default. Before
   transformers initializes, `configureBackend()` pins
@@ -55,18 +55,19 @@ The "global" store always exists — it is inserted at schema init (`INSERT OR I
   `dispose` hook releases them at shutdown. All release paths are
   best-effort and never throw.
 
-### The shared embed daemon (MCP paths)
+### The shared embedding daemon (MCP paths)
 
 On Claude Code, every session runs its own `thatch mcp` process, and each
-would otherwise load its own copy of the model (~1.6 GB warm RSS; issue #26
-measured ~935 MB per session across 72 concurrent sessions). The MCP paths
+would otherwise load its own copy of the model (~1.6 GB warm RSS at 0.4.3;
+issue #26 measured ~935 MB per session across 72 concurrent sessions on
+0.3.5). The MCP paths
 therefore share ONE model through a daemon: `src/embed-daemon/` moves the
 model into one long-lived process per DB path, and every MCP session keeps
 its session-scoped state (store detection, branch scope, chat identity) and
 sends raw embed requests to it.
 
 - The MCP server's model is built by `resolveEmbeddingModel` (`src/embed-daemon/client.ts`), which returns a `RemoteEmbeddingModel` implementing the same `EmbeddingModel` interface; the opencode plugin path is untouched (`SharedModelPool` already shares one model there).
-- Resolution is lazy and memoized: at the first embed the wrapper probes the daemon socket (`cacheDir/embed.sock`, the same hash-named tmpdir family as the sideband socket); with no listener it spawns the daemon once (`ensureDaemonRunning`, `src/embed-daemon/supervisor.ts`); with a failed spawn or a model-name mismatch at hello it locks the local in-process model for the process lifetime. A healthy daemon means a session never imports the ONNX runtime at all.
+- Resolution is lazy and memoized: at the first embed the wrapper probes the daemon socket (`cacheDir/embed.sock`, the same hash-named tmpdir family as the sideband socket); with no listener it spawns the daemon once (`ensureDaemonRunning`, `src/embed-daemon/supervisor.ts`); with a failed spawn or a model-name mismatch at hello it enters the `local-locked` state (the in-process model, locked in for the process lifetime). A healthy daemon means a session never imports the ONNX runtime at all.
 - The wire contract (`src/embed-daemon/protocol.ts`) is newline-delimited JSON: connect, hello (answered with model, version, pid - before any model load, so cold starts never convert sessions to local-locked), at most one embed, close. Vector length is opaque; the DB discriminates spaces by dimension.
 - Fallback has two forms: at resolve time (only a FAILED spawn attempt locks local), and at request time (a dead daemon delegates that embed to the lazy local model and the next embed re-probes, so recovery is automatic; three consecutive timeouts prefer local for a 60 s cool-down so a wedged daemon costs at most three slow embeds per minute).
 - Lifecycle: the daemon's single-owner lock is SQLite's own - a `BEGIN EXCLUSIVE` transaction held for its lifetime on a dedicated `embed.lock.db` beside the socket (never on `thatch.db`, which would starve every writer). The kernel releases the lock when the holder dies, so there is no stale-lock path. A losing daemon exits 0 before touching the socket; the daemon idles out after `embedDaemon.idleExitMinutes` (default 30; `THATCH_EMBED_DAEMON_IDLE_MS` overrides) with no embed requests (hello never re-arms the timer), and disposes the model before every exit path (Bun #34664). Clients never unlink socket files; the next daemon unlinks a stale one under the lock.

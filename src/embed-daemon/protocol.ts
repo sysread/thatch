@@ -4,13 +4,14 @@
  * (daemon.ts), the client (client.ts), and the doctor's probe.
  *
  * The daemon serves RAW EMBEDS only - not the sideband's db-backed match
- * methods. Session state (store detection, branch scope, chat identity)
- * stays per session by construction, which is issue #26's open question
- * answered "embeddings only": the DB stays per-process access to the shared
- * file, and only the model moves into the daemon.
+ * methods. Issue #26's open question was what may move into a shared
+ * daemon; the answer here is "embeddings only". Session state (store
+ * detection, branch scope, chat identity) stays per session by
+ * construction: the DB stays per-process access to the shared file, and
+ * only the model moves into the daemon.
  *
  * Connection lifecycle, stated once and inherited everywhere: a connection
- * is connect, hello, ack, AT MOST ONE embed, close. Hello is the
+ * is connect, hello, its response, AT MOST ONE embed, close. Hello is the
  * per-connection preamble, not a request on equal footing with embed (the
  * doctor's probe is hello-close with no embed). The one-request shape
  * matches the sideband's framing (newline-delimited JSON, one logical

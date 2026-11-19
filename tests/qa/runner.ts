@@ -407,8 +407,9 @@ export async function createFixture(name: string): Promise<QaContext> {
       // so the dispatcher-level kill switch is the containment.
       // Forced (not defaulted) like THATCH_NO_NOTIFY above: every fixture
       // subprocess uses the LOCAL embedding model unless the use case
-      // explicitly opts in via set-and-restore on its own env copy, so no
-      // use case can leak a detached embed-daemon.
+      // opts in on its own env copy passed to subprocesses - the shared
+      // fixture env and the test process never change - so no use case
+      // can leak a detached embed daemon.
       THATCH_EMBED_DAEMON: "off",
       THATCH_NO_NOTIFY: "1",
       // Full plugin debug log into the fixture (debug.log beside the db):

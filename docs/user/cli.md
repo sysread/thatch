@@ -307,7 +307,9 @@ thatch setup --mcp-json                         # print the MCP server config as
 ## Infrastructure commands
 
 These commands are called by hooks installed by `thatch setup`. You
-should not need to run them by hand.
+should not need to run them by hand. The one exception is
+`thatch embed-daemon`, described below: running one by hand is a normal
+way to start it.
 
 ```bash
 thatch mcp                      # start the stdio MCP server
@@ -324,9 +326,9 @@ so N sessions share one model instead of loading N copies. MCP servers spawn
 it on demand (the first session to embed), and it exits by itself after 30
 idle minutes (config file `embedDaemon.idleExitMinutes`, overridden by
 `THATCH_EMBED_DAEMON_IDLE_MS`). A second daemon started while one is live
-loses a sqlite lock race and exits 0 quietly. You only need this subcommand
-to run one by hand; `THATCH_EMBED_DAEMON=off` makes every session embed
-in-process instead.
+loses the single-owner sqlite lock and exits 0 quietly. You only need this
+subcommand to run one by hand; `THATCH_EMBED_DAEMON=off` makes every session
+embed in-process instead.
 
 ## Environment variables
 
@@ -361,7 +363,9 @@ process; the registry itself is `src/env-knobs.ts`.
   on PATH. If none is found, it exits with an error.
 - Infrastructure commands (`mcp`, `buffer-batch`, `buffer-tool`,
   `flush-tools`, `flush-predictions`) are meant for hooks, not manual
-  use. Running them by hand can produce confusing output.
+  use. Running them by hand can produce confusing output. The one
+  exception is `thatch embed-daemon`, which is safe to run by hand (see
+  Infrastructure commands).
 - There is no web UI or dashboard. All inspection is through the CLI
   or the agent's tool calls.
 

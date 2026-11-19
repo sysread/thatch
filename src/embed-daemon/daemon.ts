@@ -19,8 +19,8 @@
  *   A losing daemon's BEGIN EXCLUSIVE fails immediately (SQLITE_BUSY) and
  *   it exits 0 quietly BEFORE touching the socket, so the winner's live
  *   socket is never unlinked. No unlink, no steal, no read-back: a dead
- *   holder's locks vanish with the process, so there is no recycled-pid
- *   residual.
+ *   holder's locks vanish with the process, so a new daemon never
+ *   mistakes a dead holder's pid for a live one.
  * - IDLE EXIT: the daemon exits after idleMs with no EMBED requests. Hello
  *   NEVER re-arms the timer - hellos are free to the daemon's lifetime, so
  *   a daemon whose model no session wants (the THATCH_MODEL-change case)
@@ -183,7 +183,7 @@ export class EmbedDaemon {
     // listen callback is a bug bun punishes hard: its listen callback can
     // fire arbitrarily late even while the socket already serves - observed
     // under bun test - so anything awaited on it stalls the resolver for
-    // whole test-sized ages.)
+    // seconds at a time.)
     const exitPromise = new Promise<DaemonExit>((resolve) => {
       this.#resolveExit = resolve;
     });
@@ -313,8 +313,8 @@ export class EmbedDaemon {
       return;
     }
     let buf = "";
-    // Per-connection lifecycle: hello, ack, AT MOST ONE embed, close
-    // (protocol.ts states it once; this is its enforcement).
+    // Per-connection lifecycle: hello, its response, AT MOST ONE embed,
+    // close (protocol.ts states it once; this is its enforcement).
     let sawHello = false;
     let embeds = 0;
     socket.on("data", (chunk: Buffer) => {

@@ -39,7 +39,7 @@ export const embedDaemon: Subcommand = {
     flags: [],
     notes: [
       "One daemon per database path holds the embedding model and serves embed requests to every MCP session over a Unix socket, so N sessions share one ~1.6 GB model instead of loading N copies (issue #26). MCP servers spawn it on demand; you only need this subcommand to run one by hand.",
-      "Formation is guarded by a sqlite file lock on a dedicated lock database beside the socket: a second daemon loses the lock race and exits 0 quietly, so the loser of a mass-start race never disturbs the winner. The daemon exits after 30 idle minutes (config file embedDaemon.idleExitMinutes, overridden by THATCH_EMBED_DAEMON_IDLE_MS).",
+      "Only one daemon runs at a time: a dedicated sqlite file lock beside the socket decides the winner, and a second daemon that starts while one is live exits 0 quietly. The daemon exits after 30 idle minutes (config file embedDaemon.idleExitMinutes, overridden by THATCH_EMBED_DAEMON_IDLE_MS).",
       "Set THATCH_EMBED_DAEMON=off to make every MCP server embed in-process and never spawn or contact the daemon.",
     ],
   }),
@@ -115,7 +115,8 @@ export const hygiene: Subcommand = {
   },
 };
 
-export const prime: Subcommand = {  name: "prime",
+export const prime: Subcommand = {
+  name: "prime",
   summary: "Prime project memory (runs the primer skill via opencode, cursor, or claude)",
   usage: () => ({ synopsis: "thatch prime", flags: [] }),
   async run() {

@@ -21,7 +21,7 @@
  * The client NEVER unlinks socket files. The sideband client's
  * unlink-on-ECONNREFUSED convention is deliberately not copied here: the
  * daemon owns the endpoint, and a client-side unlink can kill a live
- * winner's socket (a stale socket is unlinked by the next daemon, under
+ * daemon's socket (a stale socket is unlinked by the next daemon, under
  * the lock).
  */
 import { Socket } from "node:net";
@@ -46,9 +46,9 @@ import { dialSocket } from "./socket";
  * (tmpdir()/thatch-<sha256(dbPath)[:16]>) is re-derived inline rather than
  * exported from src/version-check.ts, matching the sideband's existing
  * precedent (src/sideband.ts duplicates the same hash derivation), so
- * version-check.ts stays untouched. The socket sits in the same hash-named,
- * thatch--prefixed tmpdir family as the sideband socket and the version
- * file; distinct filename, no collision.
+ * version-check.ts stays untouched. The socket sits in the same hash-named
+ * tmpdir family (dirs named thatch-<hash>) as the sideband socket and the
+ * version file; distinct filename, no collision.
  */
 export function embedCacheDir(dbPath: string): string {
   const hash = createHash("sha256").update(dbPath).digest("hex").slice(0, 16);

@@ -151,8 +151,8 @@ each individual tool call. Cursor uses `conversation_id` instead of
 Both MCP paths (standalone and bundled) share one embedding model per DB
 path through the daemon in `src/embed-daemon/` - the full architecture,
 resolver policy, fallback contract, and lifecycle live in
-[memory-store.md](memory-store.md#the-shared-embed-daemon-mcp-paths). The
-multi-host shape of it: the daemon is HOST-AGNOSTIC on purpose (one daemon
+[memory-store.md](memory-store.md#the-shared-embedding-daemon-mcp-paths). In
+multi-host terms: the daemon is HOST-AGNOSTIC on purpose (one daemon
 serves every stdio client on the machine - Claude Code bundled, Cursor
 standalone, manual runs - from one DB path), which is why its config
 section (`embedDaemon.idleExitMinutes`) is not scoped under a host key, and
@@ -273,6 +273,7 @@ works on Claude Code and Cursor).
 | `src/opencode/v2.ts` | the host adapter: promise-context domains (tools, commands, hooks, event pump), HostCapabilities implementation |
 | `src/runtime.ts` | shared plugin runtime: nudges, system prompt injection, session events |
 | `src/mcp.ts` | MCP server (standalone for the hooks regime and Cursor; bundled for the Claude Code plugin regime)---stdio JSON-RPC, tool dispatch |
+| `src/embed-daemon/` | The shared embedding daemon for the MCP paths: `protocol.ts` (wire contract), `client.ts` (resolver + `RemoteEmbeddingModel`), `supervisor.ts` (spawn-once), `daemon.ts` (process body). See [memory-store.md](memory-store.md#the-shared-embedding-daemon-mcp-paths) |
 | `src/claude-plugin/` | The Claude Code plugin regime's mod: `mod.ts` (the node-free decision logic: prompt.submit staging, registrations, the wake/watch poller) and `lifecycle.ts` (event classification: alerts, wrap-up arming/greenlight, buffer push) |
 | `src/setup.ts` | Setup installer for Claude Code and Cursor---markers, hooks, skills |
 | `src/prompts.ts` | All three system prompt variants---`systemPrompt()`, `claudeInstructions()`, `cursorInstructions()` |

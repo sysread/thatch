@@ -687,9 +687,10 @@ instead of throwing "Cannot use a closed database". Two rules keep this intact:
 
 ## bun delivers server listen callbacks late and connect errors early
 
-- **Symptom**: a bun test driving a real `net.Server` over a Unix socket
-  hangs or fails with an unhandled `error` event, though the same code runs
-  fine as a standalone script. Two shapes: the `listen(path, cb)` callback
+- **Symptom**: in a bun test, a real `net.Server` over a Unix socket shows
+  two failure shapes a standalone script never does: the test hangs, or it
+  dies with an unhandled `error` event. Two shapes in the code: the
+  `listen(path, cb)` callback
   fires seconds late (after the whole test body - while the socket file
   already exists and ACCEPTS connections), and a connect to a nonexistent
   path emits `error` before a listener attached after `connect()` is
