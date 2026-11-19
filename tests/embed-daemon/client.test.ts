@@ -21,7 +21,8 @@ class FakeConnection implements DaemonConnection {
   }
   embed(kind: "query" | "passage", _text: string): Promise<DaemonResponse> {
     return this.daemon.handle(`embed:${kind}`);
-  }  close(): void {
+  }
+  close(): void {
     this.daemon.closed += 1;
   }
 }
@@ -35,6 +36,8 @@ class FakeDaemon {
   embedError: string | null = null;
   wedgeHello = false;
   wedgeEmbed = false;
+  // Mid-life death: the socket is GONE (connect fails, nothing answers).
+  dead = false;
   vector: number[] = [1, 2, 3];
   #seq = 0;
 
@@ -52,7 +55,10 @@ class FakeDaemon {
   }
 
   transport(): Transport {
-    return async () => new FakeConnection(this, this.#seq++);
+    return async () => {
+      if (this.dead) throw new Error("connect failed (ENOENT)");
+      return new FakeConnection(this, this.#seq++);
+    };
   }
 }
 
@@ -80,6 +86,7 @@ class LocalModel implements EmbeddingModel {
 interface BuildOpts {
   daemon?: FakeDaemon;
   local?: LocalModel;
+  transport?: Transport;
   ensureDaemonRunning?: () => Promise<"running" | "failed">;
   requestTimeoutMs?: number;
   cooldownMs?: number;
@@ -95,7 +102,7 @@ function build(opts: BuildOpts = {}) {
     dbPath: "/tmp/fake-thatch.db",
     modelName: "mock",
     mode: "standalone",
-    transport: daemon.transport(),
+    transport: opts.transport ?? daemon.transport(),
     ensureDaemonRunning: opts.ensureDaemonRunning ?? (async () => "failed" as const),
     localFactory: () => {
       factoryCalls += 1;
@@ -114,7 +121,7 @@ beforeEach(() => {
 });
 
 describe("RemoteEmbeddingModel", () => {
-  test("happy forward: resolve, hello, embed, and the vector comes back", async () => {
+  test("happy path: resolve, hello, embed, and the vector comes back", async () => {
     process.env.THATCH_EMBED_DAEMON = "on";
     const daemon = new FakeDaemon();
     const { model, local, factoryCalls } = build({ daemon });
@@ -243,5 +250,59 @@ describe("RemoteEmbeddingModel", () => {
     await model.queryEmbed("hello");
     await model.dispose();
     expect(local.disposed).toBe(1);
+  });
+
+  test("a throwing spawn locks local with the note; later embeds still work", async () => {
+    // No listener anywhere, and the spawn itself throws (EAGAIN/ENOMEM
+    // under resource pressure). The rejection must resolve local-locked
+    // with the note - NOT memoize into every later embed.
+    process.env.THATCH_EMBED_DAEMON = "on";
+    const failing: Transport = async () => {
+      throw new Error("connect failed (ENOENT)");
+    };
+    let spawnAttempts = 0;
+    const { model, local, factoryCalls } = build({
+      transport: failing,
+      ensureDaemonRunning: async () => {
+        spawnAttempts += 1;
+        throw new Error("spawn failed: EAGAIN");
+      },
+    });
+    expect([...await model.queryEmbed("a")]).toEqual([7, 7, 7]);
+    expect(model.state).toBe("local-locked");
+    expect(spawnAttempts).toBe(1);
+    expect(notes.join("\n")).toContain("could not be started");
+    expect(notes.join("\n")).toContain("EAGAIN");
+    // Later embeds are served locally forever (locked), not poisoned by
+    // the memoized rejection.
+    expect([...await model.passageEmbed("b")]).toEqual([8, 8, 8]);
+    expect(factoryCalls()).toBe(1);
+    void local;
+  });
+
+  test("a rejected resolve clears the memo so the next embed re-runs the policy", async () => {
+    // With spawn failures caught, the one rejection left is a throwing
+    // note sink. The memo must clear: the second embed re-runs the policy
+    // and succeeds instead of rethrowing the memoized rejection forever.
+    process.env.THATCH_EMBED_DAEMON = "on";
+    const failing: Transport = async () => {
+      throw new Error("connect failed (ENOENT)");
+    };
+    const model = new RemoteEmbeddingModel({
+      dbPath: "/tmp/fake-thatch.db",
+      modelName: "mock",
+      mode: "standalone",
+      transport: failing,
+      ensureDaemonRunning: async () => "failed" as const,
+      localFactory: () => new LocalModel(),
+      note: () => {
+        throw new Error("note sink blew up");
+      },
+      now: () => 1_000_000,
+    });
+    await expect(model.queryEmbed("a")).rejects.toThrow("note sink blew up");
+    // The memo cleared: the policy ran again (the note key is already
+    // recorded, so this resolve completes) and the embed lands locally.
+    expect([...await model.queryEmbed("b")]).toEqual([7, 7, 7]);
   });
 });

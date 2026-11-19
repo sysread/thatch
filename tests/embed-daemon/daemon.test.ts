@@ -117,6 +117,76 @@ function rawMessage(socketPath: string, msg: Record<string, unknown>, timeoutMs 
   });
 }
 
+/** A connection opened and helloed BEFORE some later event, with each
+ *  next message sent on demand. The mid-shutdown test uses it: the
+ *  connection must predate the shutdown to land in the gate window. */
+function openConnection(socketPath: string, timeoutMs = 2000): Promise<{
+  send: (msg: Record<string, unknown>) => Promise<DaemonResponse>;
+  destroy: () => void;
+}> {
+  return new Promise((resolveOpen, rejectOpen) => {
+    const socket = new Socket();
+    let buf = "";
+    // One response at a time: the hello ack settles the open, later
+    // responses settle the pending send().
+    let awaiting: ((res: DaemonResponse) => void) | null = null;
+    const timer = setTimeout(() => {
+      socket.destroy();
+      rejectOpen(new Error("openConnection timed out"));
+    }, timeoutMs);
+    socket.once("error", (err) => {
+      clearTimeout(timer);
+      socket.destroy();
+      rejectOpen(err);
+    });
+    socket.on("data", (chunk: Buffer) => {
+      buf += chunk.toString();
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        let res: DaemonResponse;
+        try {
+          res = decodeResponse(line);
+        } catch {
+          continue;
+        }
+        const settle = awaiting;
+        awaiting = null;
+        settle?.(res);
+      }
+    });
+    socket.once("connect", () => {
+      awaiting = (res) => {
+        clearTimeout(timer);
+        resolveOpen({
+          send: (msg) => new Promise<DaemonResponse>((resolve, reject) => {
+            const sendTimer = setTimeout(() => reject(new Error("send timed out")), 5000);
+            socket.once("error", (err) => {
+              clearTimeout(sendTimer);
+              reject(err);
+            });
+            awaiting = (res) => {
+              clearTimeout(sendTimer);
+              socket.off("error", onError);
+              resolve(res);
+            };
+            function onError(err: Error): void {
+              clearTimeout(sendTimer);
+              reject(err);
+            }
+            socket.write(Buffer.from(JSON.stringify(msg) + "\n"));
+          }),
+          destroy: () => socket.destroy(),
+        });
+      };
+      socket.write(Buffer.from(JSON.stringify({ method: "hello" }) + "\n"));
+    });
+    socket.connect(socketPath);
+  });
+}
+
 const dirs: string[] = [];
 function tempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "thatch-embed-daemon-"));
@@ -322,6 +392,52 @@ describe("EmbedDaemon", () => {
     await exchange(daemon.socketPath, { method: "embed", kind: "query", text: "warm" });
     await daemon.shutdown("signal");
     expect(model.disposes).toBe(1);
+  });
+
+  test("an embed arriving during shutdown is refused; the model never resurrects", async () => {
+    const { daemon, model, factoryCalls } = makeDaemon({ modelDelayMs: 250 });
+    await waitReady(daemon);
+
+    // An established connection that predates the shutdown - it lands in
+    // the shutdown gate's window.
+    const conn = await openConnection(daemon.socketPath);
+
+    // An embed in flight (the shutdown's await must cover it).
+    const inFlight = exchange(daemon.socketPath, { method: "embed", kind: "query", text: "slow" }, 5000);
+    await new Promise((r) => setTimeout(r, 50));
+    const shutdown = daemon.shutdown("signal");
+
+    // The established connection's embed arrives mid-shutdown: refused
+    // cleanly, never served by the model being torn down.
+    const late = await conn.send({ method: "embed", kind: "query", text: "late" });
+    expect(late).toEqual({ ok: false, error: "the embed daemon is shutting down" });
+    conn.destroy();
+
+    // The in-flight embed completed before the dispose.
+    const served = await inFlight;
+    expect(served.ok).toBe(true);
+    const exit = await shutdown;
+    expect(exit.reason).toBe("signal");
+    // Exactly one model, constructed once and disposed once.
+    expect(factoryCalls()).toBe(1);
+    expect(model.loads).toBe(1);
+    expect(model.disposes).toBe(1);
+  });
+
+  test("shutdown's dispose waits for an in-flight embed", async () => {
+    const { daemon, model, exit } = makeDaemon({ modelDelayMs: 250 });
+    await waitReady(daemon);
+    const embed = exchange(daemon.socketPath, { method: "embed", kind: "passage", text: "slow" }, 5000);
+    await new Promise((r) => setTimeout(r, 50));
+    const shutdown = daemon.shutdown("idle");
+    // Dispose has not run while the embed is in flight...
+    expect(model.disposes).toBe(0);
+    // ...and the embed still completes successfully.
+    const served = await embed;
+    expect(served.ok).toBe(true);
+    await shutdown;
+    expect(model.disposes).toBe(1);
+    expect(await exit).toEqual({ code: 0, reason: "idle" });
   });
 });
 

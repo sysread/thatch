@@ -266,9 +266,16 @@ export class RemoteEmbeddingModel implements EmbeddingModel {
 
   /** The memoized resolve-time policy. See the module doc for the branches. */
   async #ensureResolved(): Promise<void> {
-    if (this.#state !== "unresolved") return;
     this.#resolving ??= this.#resolve();
-    await this.#resolving;
+    try {
+      await this.#resolving;
+    } catch (err) {
+      // A rejected resolve must not poison every later embed: clear the
+      // memo so the next embed re-runs the policy (the same memo-clearing
+      // BgeEmbeddingModel.load does for a failed model load).
+      this.#resolving = null;
+      throw err;
+    }
   }
 
   async #resolve(): Promise<void> {
@@ -281,8 +288,17 @@ export class RemoteEmbeddingModel implements EmbeddingModel {
       this.#accept(probed.hello);
       return;
     }
-    // No listener: the designed first-session case. One spawn attempt.
-    const spawned = await this.#ensureDaemonRunning();
+    // No listener: the designed first-session case. One spawn attempt. A
+    // THROWING spawn (EAGAIN/ENOMEM under resource pressure) locks local
+    // exactly like a spawned daemon that never comes up - the rejection
+    // must never escape into the resolver memo (see #ensureResolved).
+    let spawned: "running" | "failed";
+    try {
+      spawned = await this.#ensureDaemonRunning();
+    } catch (err) {
+      this.#lockLocal(`the embed daemon could not be started (${err instanceof Error ? err.message : err})`);
+      return;
+    }
     if (spawned === "running") {
       probed = await this.#probe();
       if (probed.ok) {

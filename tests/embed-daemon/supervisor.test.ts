@@ -11,7 +11,7 @@ function fakeDeps(over: Partial<Parameters<typeof ensureDaemonRunning>[0]> = {})
   return {
     deps: {
       socketPath: "/tmp/fake-embed.sock",
-      probe: async (): Promise<ProbeResult> => probes.length > 0 ? probes.pop()! : { ok: false, reason: "connect failed (ENOENT)" },
+      probe: async (): Promise<ProbeResult> => probes.length > 0 ? probes.shift()! : { ok: false, reason: "connect failed (ENOENT)" },
       spawn: (cmd: string[]) => {
         spawnCalls.push(cmd);
       },
@@ -20,8 +20,8 @@ function fakeDeps(over: Partial<Parameters<typeof ensureDaemonRunning>[0]> = {})
       pollIntervalMs: 10,
       ...over,
     },
-    // queueProbe lets a test script what subsequent probes return: the
-    // probe function pops from the FRONT by re-reading via closure below.
+    // setProbes scripts the subsequent probes: the probe function consumes
+    // the list front-first (the initial probe, then one per poll).
     setProbes: (results: ProbeResult[]) => {
       probes.length = 0;
       probes.push(...results);
@@ -53,23 +53,15 @@ describe("ensureDaemonRunning", () => {
   });
 
   test("spawns when the first probe misses, then runs at socket speed", async () => {
-    // The daemon comes up after two poll misses: the probe list is
-    // consumed front-first (miss, miss from the initial probe plus the
-    // first poll, then a hit).
-    let probesLeft: ProbeResult[] = [
+    // The daemon comes up after three poll misses: the initial probe and
+    // the first two polls miss, the third poll hits.
+    const { deps, setProbes } = fakeDeps();
+    setProbes([
       { ok: false, reason: "connect failed (ENOENT)" },
       { ok: false, reason: "connect failed (ENOENT)" },
       { ok: false, reason: "connect failed (ENOENT)" },
       { ok: true, hello: { ok: true, model: "mock", version: "0.4.3", pid: 2 } },
-    ];
-    const deps = {
-      socketPath: "/tmp/fake-embed.sock",
-      probe: async (): Promise<ProbeResult> => probesLeft.shift() ?? { ok: false, reason: "connect failed (ENOENT)" },
-      spawn: (cmd: string[]) => spawnCalls.push(cmd),
-      spawnCommand: () => ["fake-bin", "embed-daemon"],
-      waitTimeoutMs: 2000,
-      pollIntervalMs: 10,
-    };
+    ]);
     const outcome = await ensureDaemonRunning(deps);
     expect(outcome).toBe("running");
     expect(spawnCalls).toHaveLength(1);
@@ -81,5 +73,28 @@ describe("ensureDaemonRunning", () => {
     const outcome = await ensureDaemonRunning(deps);
     expect(outcome).toBe("failed");
     expect(spawnCalls).toHaveLength(1);
+  });
+
+  test("a throwing spawn rejects once and clears the memo for a later retry", async () => {
+    // Bun.spawn can throw synchronously (EAGAIN/ENOMEM). The rejection
+    // reaches the caller once; the memo must clear so a later caller
+    // retries instead of rethrowing the poisoned promise forever.
+    let spawnAttempts = 0;
+    const { deps, setProbes } = fakeDeps({
+      spawn: () => {
+        spawnAttempts += 1;
+        if (spawnAttempts === 1) throw new Error("spawn failed: EAGAIN");
+      },
+    });
+    setProbes([
+      { ok: false, reason: "connect failed (ENOENT)" },
+      { ok: true, hello: { ok: true, model: "mock", version: "0.4.3", pid: 3 } },
+    ]);
+    await expect(ensureDaemonRunning(deps)).rejects.toThrow("EAGAIN");
+    expect(spawnAttempts).toBe(1);
+    // The memo cleared: the next caller runs the policy again (its probe
+    // hits, so no second spawn).
+    await expect(ensureDaemonRunning(deps)).resolves.toBe("running");
+    expect(spawnAttempts).toBe(1);
   });
 });

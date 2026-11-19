@@ -113,6 +113,7 @@ export class EmbedDaemon {
   #model: EmbeddingModel | null = null;
   #idleTimer: ReturnType<typeof setTimeout> | null = null;
   #inFlight = 0;
+  #shuttingDown = false;
   #shutdownPromise: Promise<DaemonExit> | null = null;
   #resolveExit: ((exit: DaemonExit) => void) | null = null;
 
@@ -225,17 +226,27 @@ export class EmbedDaemon {
   async shutdown(reason: DaemonExitReason): Promise<DaemonExit> {
     if (this.#shutdownPromise) return this.#shutdownPromise;
     this.#shutdownPromise = (async () => {
+      // The gate goes up FIRST: every embed arriving after this point is
+      // refused at the socket. Serving one mid-shutdown would construct or
+      // use a model that is being (or has been) disposed - a lazy
+      // re-load nothing will ever release, or live ONNX sessions carried
+      // into process.exit (Bun #34664).
+      this.#shuttingDown = true;
       this.#clearIdle();
-      // An in-flight embed finishes before the model releases.
+      // Stop listening before waiting on in-flight requests: no new
+      // connection can start an embed past the close. Established
+      // connections keep serving until their request finishes.
+      if (this.#server) {
+        await new Promise<void>((resolve) => this.#server!.close(() => resolve()));
+        this.#server = null;
+      }
+      // An in-flight embed finishes before the model releases; re-checked
+      // after the close, since a request could still have been arriving.
       while (this.#inFlight > 0) {
         await new Promise((r) => setTimeout(r, 10));
       }
       await this.#model?.dispose();
       this.#model = null;
-      if (this.#server) {
-        await new Promise<void>((resolve) => this.#server!.close(() => resolve()));
-        this.#server = null;
-      }
       if (this.#lockDb) {
         this.#lockDb.close();
         this.#lockDb = null;
@@ -296,12 +307,26 @@ export class EmbedDaemon {
   }
 
   #handleConnection(socket: Socket): void {
+    // A connection arriving during shutdown is destroyed immediately:
+    // serving it would touch the model being torn down.
+    if (this.#shuttingDown) {
+      socket.destroy();
+      return;
+    }
     let buf = "";
     // Per-connection lifecycle: hello, ack, AT MOST ONE embed, close
     // (protocol.ts states it once; this is its enforcement).
     let sawHello = false;
     let embeds = 0;
     socket.on("data", (chunk: Buffer) => {
+      // An ESTABLISHED connection sending an embed mid-shutdown gets a
+      // clean refusal, so the client falls back to its local model
+      // instead of waiting on a teardown.
+      if (this.#shuttingDown) {
+        this.#respond(socket, { ok: false, error: "the embed daemon is shutting down" });
+        socket.destroy();
+        return;
+      }
       buf += chunk.toString();
       let nl: number;
       while ((nl = buf.indexOf("\n")) >= 0) {

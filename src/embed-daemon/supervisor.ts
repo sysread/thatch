@@ -119,7 +119,13 @@ async function runOnce(deps: SupervisorDeps): Promise<SupervisorOutcome> {
 let active: Promise<SupervisorOutcome> | null = null;
 
 export function ensureDaemonRunning(deps: SupervisorDeps): Promise<SupervisorOutcome> {
-  active ??= runOnce(deps);
+  active ??= runOnce(deps).catch((err) => {
+    // A rejected attempt clears the memo so a later caller can retry (the
+    // same memo-clearing BgeEmbeddingModel.load does) - a memoized
+    // rejection would poison every embed for the process lifetime.
+    active = null;
+    throw err;
+  });
   return active;
 }
 
