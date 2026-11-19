@@ -142,6 +142,27 @@ are rejected when the file is read, and the config is ignored with a warning
 if it cannot be parsed -- a broken hand edit never crashes the agent, it just
 falls back to defaults.
 
+### The embedDaemon section
+
+One daemon per database path holds the embedding model and serves every MCP
+session's embed requests (see [cli.md](cli.md#infrastructure-commands) for
+`thatch embed-daemon`). The section has one field:
+
+| Field | Values | Default | Applies to |
+|-------|--------|---------|------------|
+| `idleExitMinutes` | any positive number | `30` | How long the shared embedding daemon waits with no embed request before exiting. The `THATCH_EMBED_DAEMON_IDLE_MS` environment variable overrides this per process. |
+
+```json
+{
+  "embedDaemon": {
+    "idleExitMinutes": 60
+  }
+}
+```
+
+Precedence: built-in default (30 minutes), then this section, then the
+environment variable.
+
 The agent can manage the whole file for you through `config_get` /
 `config_set`; edits merge at the field level, so the agent changing your
 voice cannot wipe your mode.

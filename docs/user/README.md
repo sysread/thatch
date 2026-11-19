@@ -520,10 +520,11 @@ Most configuration needs none. Two layers exist:
 
 - **Preferences the agent manages** live in
   `~/.config/thatch/config.json` (beside the database): notification mode,
-  voice, sound, and the automatic LLM alerts (pause / done / error, each
-  independently set to banner, voice, both, or none). Ask your agent ("set
-  notifications to banner only", "silence the done alert") or
-  edit the file by hand. See [notifications.md](notifications.md).
+  voice, sound, the automatic LLM alerts (pause / done / error, each
+  independently set to banner, voice, both, or none), and the shared
+  embedding daemon's idle exit (`embedDaemon.idleExitMinutes`, default 30).
+  Ask your agent ("set notifications to banner only", "silence the done
+  alert") or edit the file by hand. See [notifications.md](notifications.md).
 - **Environment variables** for infrastructure:
 
 Only a subset of the knobs is listed here. `config_get`'s `environment`

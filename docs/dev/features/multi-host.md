@@ -146,6 +146,19 @@ each individual tool call. Cursor uses `conversation_id` instead of
 **Setup**: `thatch setup --cursor` writes `.cursor/mcp.json`, `AGENTS.md`,
 `.cursor/hooks.json`, and installs skills.
 
+## The shared embedding daemon
+
+Both MCP paths (standalone and bundled) share one embedding model per DB
+path through the daemon in `src/embed-daemon/` - the full architecture,
+resolver policy, fallback contract, and lifecycle live in
+[memory-store.md](memory-store.md#the-shared-embed-daemon-mcp-paths). The
+multi-host shape of it: the daemon is HOST-AGNOSTIC on purpose (one daemon
+serves every stdio client on the machine - Claude Code bundled, Cursor
+standalone, manual runs - from one DB path), which is why its config
+section (`embedDaemon.idleExitMinutes`) is not scoped under a host key, and
+why `THATCH_EMBED_DAEMON=off` (every session embeds in-process) is the
+harness-forced default in tests and QA runs.
+
 ## System prompt delivery
 
 Three mechanisms, one per host. The prompt functions all live in

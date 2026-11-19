@@ -90,6 +90,15 @@ Key decisions:
   belong in the file the LLM manages. The one exception is the
   `THATCH_NO_NOTIFY` kill switch, which is infrastructure: it silences
   dispatch entirely (see below) rather than tuning a preference.
+- **The `embedDaemon` section** (`idleExitMinutes`, the shared embedding
+  daemon's idle exit) joins the sections with the same rules: strict
+  schema, field-level merge, null unsets. Its precedence has THREE layers -
+  built-in default (30 minutes) < `embedDaemon.idleExitMinutes` <
+  `THATCH_EMBED_DAEMON_IDLE_MS` - the one section where an env knob
+  intentionally overrides the file, because the daemon is infrastructure
+  (a process lifetime) rather than a delivery preference. The section is
+  host-agnostic on purpose: one daemon serves every stdio client from one
+  DB path (see `docs/dev/features/memory-store.md`).
 
 ### The environment section
 

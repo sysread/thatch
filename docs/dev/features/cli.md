@@ -15,6 +15,7 @@ The thatch CLI entry is `bin/thatch`, a thin dispatcher: it resolves argv agains
 | `tombstones [store]` | optional store | none | none | List deleted-memory guards (label, forgotten date, hash prefix) |
 | `tombstones --clear <label> [store]` | label (after `--clear`), optional store | `--clear` | none | Remove the guard for a label (all its content generations; entries untouched); prints `[tombstone-cleared]`, exit 1 on a missing label without `--clear` usage errors |
 | `mcp` | none | none | none | Start the stdio MCP server (for Claude Code, Cursor) |
+| `embed-daemon` | none | none | none | Run the shared embedding daemon: one per DB path, formed under a sqlite lock (`embed.lock.db` in the daemon's cache dir), exits 0 quietly when it loses the lock race or the socket is already bound, idles out after `embedDaemon.idleExitMinutes` (default 30; `THATCH_EMBED_DAEMON_IDLE_MS` overrides) with no embed requests, disposes the model before every exit (Bun #34664). Spawned detached by MCP servers via the supervisor; manual runs are for hand-starting one |
 | `reminder [--json]` | none | `--json` | none | Print session-start reminder + hygiene report |
 | `hygiene` | none | none | none | Print the hygiene report standalone |
 | `prime` | none | none | none | Run thatch-project-primer skill via opencode/agent/claude CLI |

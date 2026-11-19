@@ -311,11 +311,22 @@ should not need to run them by hand.
 
 ```bash
 thatch mcp                      # start the stdio MCP server
+thatch embed-daemon             # run the shared embedding daemon (normally spawned automatically)
 thatch buffer-batch             # append tool batch to queue (Claude Code hook)
 thatch buffer-tool              # append single tool to queue (Cursor hook)
 thatch flush-tools [--json]     # peek queue + print nudges (hook)
 thatch flush-predictions [--json]  # prediction-only nudge (hook)
 ```
+
+`thatch embed-daemon` runs the shared embedding daemon: one daemon per
+database path holds the model and serves every MCP session's embed requests,
+so N sessions share one model instead of loading N copies. MCP servers spawn
+it on demand (the first session to embed), and it exits by itself after 30
+idle minutes (config file `embedDaemon.idleExitMinutes`, overridden by
+`THATCH_EMBED_DAEMON_IDLE_MS`). A second daemon started while one is live
+loses a sqlite lock race and exits 0 quietly. You only need this subcommand
+to run one by hand; `THATCH_EMBED_DAEMON=off` makes every session embed
+in-process instead.
 
 ## Environment variables
 
@@ -327,6 +338,8 @@ process; the registry itself is `src/env-knobs.ts`.
 |----------|---------|-----------------|
 | `THATCH_DB_PATH` | `~/.config/thatch/thatch.db` | SQLite database path |
 | `THATCH_MODEL` | `Xenova/bge-small-en-v1.5` | Embedding model name |
+| `THATCH_EMBED_DAEMON` | on | Set to `off` to make every MCP session embed in-process and never spawn or contact the shared daemon (also forced by the test and QA harnesses) |
+| `THATCH_EMBED_DAEMON_IDLE_MS` | `1800000` (30 minutes) | Idle milliseconds before the shared embedding daemon exits; overrides the config file's `embedDaemon.idleExitMinutes` |
 | `THATCH_RECALL_THRESHOLD` | `0.55` | Cosine threshold for recall nudge |
 | `THATCH_PREDICTION_THRESHOLD` | `0.60` | Cosine threshold for prediction auto-fire |
 | `THATCH_BEHAVIOR_THRESHOLD` | `0.60` | Cosine threshold for behavior auto-fire |

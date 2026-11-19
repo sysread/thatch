@@ -55,6 +55,7 @@ and version verdicts stay deterministic under test.
 |---------|-------|--------------|
 | common | database | a query through the dispatcher's open `ThatchDB` |
 | common | update | `npmCachePath`'s cache (written by any host's hourly npm poll) vs `pkg.version` |
+| common | embed daemon | a hello handshake against `embedSocketPath` (read-only - no unlink, unlike the sideband client) plus `embedLockHeld` on the lock db; serving is a pass with model/version/pid, not-running is the designed steady state (info), a held lock with no answering socket is a warn; never a fail |
 | opencode | binary | `Bun.which("opencode")` + `--version`, compared against the 2.1 plugin floor |
 | opencode | install | substring scan of opencode configs (JSONC-safe), `.opencode/plugins/` dirs, the plugins dir shim |
 | opencode | shim | the shim files themselves: coexistence (duplicate plugin id), `index.ts`/`tui.ts` presence, the named `server` export (pre-2.x), the re-export target (extensionless, like bun resolves it), the target checkout's `package.json` version |
