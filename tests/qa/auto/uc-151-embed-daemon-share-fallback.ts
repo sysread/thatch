@@ -1,10 +1,12 @@
-import { join } from "node:path";
-import { createHash } from "node:crypto";
+import { join, basename } from "node:path";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
+import { bootStdioJsonRpcClient, type StdioJsonRpcClient } from "../../helpers/stdio-client";
+import { embedCacheDir } from "../../../src/embed-daemon/client";
 import { mockEmbeddingVector, QUERY_PREFIX } from "../../../src/embeddings";
+import type { HelloResponse } from "../../../src/embed-daemon/protocol";
 
 /**
  * UC-151: the shared embed daemon - one daemon per DB path, every MCP
@@ -12,9 +14,8 @@ import { mockEmbeddingVector, QUERY_PREFIX } from "../../../src/embeddings";
  *
  * Automatable and hermetic: THATCH_MODEL=mock gives every tier
  * deterministic vectors offline. The harness forces THATCH_EMBED_DAEMON=off
- * in the fixture env; this use case opts in on its own env copy
- * (set-and-restore on the object it passes to subprocesses - the test
- * process itself never changes).
+ * in the fixture env; this use case opts in on its own env copy passed to
+ * subprocesses - the shared fixture env and the test process never change.
  */
 
 const useCase: UseCase = {
@@ -49,54 +50,26 @@ const useCase: UseCase = {
     const env = { ...ctx.env, THATCH_EMBED_DAEMON: "on", THATCH_MODEL: "mock" };
     const dbPath = ctx.env.THATCH_DB_PATH;
     const failures: string[] = [];
-
-    /** A JSON-RPC client over one spawned server (one shared stdout reader). */
-    const client = (proc: { stdin: { write(b: Uint8Array): unknown; flush(): void }; stdout: ReadableStream<Uint8Array> }) => {
-      const reader = proc.stdout.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      let idSeq = 1;
-      return {
-        request(method: string, params: Record<string, unknown>, timeoutMs = 20000): Promise<Record<string, any>> {
-          const id = idSeq++;
-          proc.stdin.write(new TextEncoder().encode(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n"));
-          proc.stdin.flush();
-          const deadline = Date.now() + timeoutMs;
-          const poll = async (): Promise<Record<string, any>> => {
-            if (Date.now() > deadline) { reader.cancel().catch(() => {}); failures.push(`timeout waiting for ${method} (id ${id})`); return {}; }
-            const { value, done } = await reader.read();
-            if (done) { failures.push(`server closed before answering ${method} (id ${id})`); return {}; }
-            buf += dec.decode(value);
-            let nl: number;
-            while ((nl = buf.indexOf("\n")) >= 0) {
-              const line = buf.slice(0, nl).trim();
-              buf = buf.slice(nl + 1);
-              if (!line) continue;
-              try {
-                const msg = JSON.parse(line);
-                if (msg.id === id) return msg;
-              } catch { /* not JSON - skip */ }
-            }
-            return poll();
-          };
-          return poll();
-        },
-        close() {
-          reader.cancel().catch(() => {});
-        },
-      };
+    // Every spawned server is reaped in the finally (a mid-test throw - a
+    // waitForDaemon timeout included - must not orphan one), along with
+    // every daemon pid seen and the daemon's cache dir.
+    const servers: StdioJsonRpcClient[] = [];
+    const pids = new Set<number>();
+    const killDaemon = (pid: number) => {
+      try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
+      pids.delete(pid);
     };
+    const cacheDirs = [...new Set([tmpdir(), "/tmp"].map((base) => join(base, basename(embedCacheDir(dbPath)))))];
 
     /** Hello handshake against the daemon socket, on every tmpdir base
      *  (the spawned server's env drops TMPDIR - see uc-142's note). The
      *  found socket path is remembered for the embed-level probe. */
     let socketPath: string | null = null;
-    const helloAny = async (timeoutMs = 300): Promise<{ ok: true; model: string; version: string; pid: number } | null> => {
-      const hash = createHash("sha256").update(dbPath).digest("hex").slice(0, 16);
+    const helloAny = async (timeoutMs = 300): Promise<HelloResponse | null> => {
       for (const base of [...new Set([tmpdir(), "/tmp"])]) {
-        const sockPath = join(base, `thatch-${hash}`, "embed.sock");
+        const sockPath = join(base, basename(embedCacheDir(dbPath)), "embed.sock");
         if (!existsSync(sockPath)) continue;
-        const res = await new Promise<{ ok: true; model: string; version: string; pid: number } | null>((resolve) => {
+        const res = await new Promise<HelloResponse | null>((resolve) => {
           const socket = new Socket();
           let buf = "";
           const timer = setTimeout(() => { socket.destroy(); resolve(null); }, timeoutMs);
@@ -126,15 +99,19 @@ const useCase: UseCase = {
       return null;
     };
 
-    /** One embed over a fresh daemon connection: hello, ack, embed. */
-    const daemonEmbed = (path: string | null, kind: "query" | "passage", text: string): Promise<number[] | null> => {
-      if (!path) return Promise.resolve(null);
+    /** One embed over a fresh daemon connection: hello, ack, embed. Every
+     *  failure carries its reason - a timeout, a connect miss, a malformed
+     *  line, and a daemon-answered error are different symptoms, and the
+     *  failure message must say which happened. */
+    type DaemonEmbedResult = { ok: true; vector: number[] } | { ok: false; reason: string };
+    const daemonEmbed = (path: string | null, kind: "query" | "passage", text: string): Promise<DaemonEmbedResult> => {
+      if (!path) return Promise.resolve({ ok: false, reason: "no daemon socket was found" });
       return new Promise((resolve) => {
         const socket = new Socket();
         let buf = "";
         let sawHello = false;
-        const timer = setTimeout(() => { socket.destroy(); resolve(null); }, 2000);
-        socket.once("error", () => { clearTimeout(timer); resolve(null); });
+        const timer = setTimeout(() => { socket.destroy(); resolve({ ok: false, reason: "timed out" }); }, 2000);
+        socket.once("error", (err) => { clearTimeout(timer); resolve({ ok: false, reason: `connect failed: ${err.message}` }); });
         socket.on("data", (chunk: Buffer) => {
           buf += chunk.toString();
           let nl: number;
@@ -150,9 +127,9 @@ const useCase: UseCase = {
             clearTimeout(timer);
             try {
               const parsed = JSON.parse(line);
-              resolve(parsed.ok ? parsed.vector : null);
+              resolve(parsed.ok ? { ok: true, vector: parsed.vector } : { ok: false, reason: `the daemon answered with an error: ${parsed.error}` });
             } catch {
-              resolve(null);
+              resolve({ ok: false, reason: "malformed embed response" });
             } finally {
               socket.destroy();
             }
@@ -164,7 +141,7 @@ const useCase: UseCase = {
       });
     };
 
-    const waitForDaemon = async (timeoutMs = 20000) => {
+    const waitForDaemon = async (timeoutMs = 20000): Promise<HelloResponse> => {
       const deadline = Date.now() + timeoutMs;
       for (;;) {
         const res = await helloAny(300);
@@ -174,29 +151,23 @@ const useCase: UseCase = {
       }
     };
 
-    const pids = new Set<number>();
-    const killDaemon = (pid: number) => {
-      try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
-      pids.delete(pid);
-    };
-
     try {
       // Step 1: server A's startup seed spawns the daemon.
-      const serverA = Bun.spawn([bin, "mcp"], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-      const clientA = client(serverA);
-      await clientA.request("initialize", {});
+      const serverA = bootStdioJsonRpcClient([bin, "mcp"], env, { report: (m) => failures.push(m) });
+      servers.push(serverA);
+      await serverA.request("initialize", {});
       const helloA = await waitForDaemon();
       if (helloA.model !== "mock") failures.push(`the daemon serves "${helloA.model}", expected "mock"`);
       pids.add(helloA.pid);
 
       // Step 2: server B shares the SAME daemon; its remember rides the
       // daemon's vectors.
-      const serverB = Bun.spawn([bin, "mcp"], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-      const clientB = client(serverB);
-      await clientB.request("initialize", {});
-      const remember = await clientB.request("tools/call", {
+      const serverB = bootStdioJsonRpcClient([bin, "mcp"], env, { report: (m) => failures.push(m) });
+      servers.push(serverB);
+      await serverB.request("initialize", {});
+      const remember = await serverB.request("tools/call", {
         name: "memory_remember",
-        arguments: { content: "Represent this sentence for searching relevant passages: the daemon shares its vectors", label: "shared-daemon-memory" },
+        arguments: { content: QUERY_PREFIX + "the daemon shares its vectors", label: "shared-daemon-memory" },
       });
       const rememberText = remember.result?.content?.[0]?.text ?? "";
       if (remember.result?.isError || !rememberText.includes("[saved]")) {
@@ -211,12 +182,12 @@ const useCase: UseCase = {
       // text (query prefix included) - the hermetic vector contract itself.
       const daemonVector = await daemonEmbed(socketPath, "query", "the daemon shares its vectors");
       const expected = mockEmbeddingVector(QUERY_PREFIX + "the daemon shares its vectors");
-      if (!daemonVector || [...daemonVector].join() !== [...expected].join()) {
-        failures.push("the daemon's embed vector does not match the mock's deterministic derivation");
+      if (!daemonVector.ok || [...daemonVector.vector].join() !== [...expected].join()) {
+        failures.push(`the daemon's embed probe failed (${daemonVector.ok ? "vector mismatch" : daemonVector.reason})`);
       }
       // Recall keeps working end to end: server A's recall surfaces what
       // server B stored through the same daemon.
-      const recall = await clientA.request("tools/call", {
+      const recall = await serverA.request("tools/call", {
         name: "memory_recall",
         arguments: { query: "the daemon shares its vectors" },
       });
@@ -234,9 +205,9 @@ const useCase: UseCase = {
         if (Date.now() > deadDeadline) { failures.push("the daemon socket never stopped answering"); break; }
         await new Promise((r) => setTimeout(r, 100));
       }
-      const fallbackRemember = await clientB.request("tools/call", {
+      const fallbackRemember = await serverB.request("tools/call", {
         name: "memory_remember",
-        arguments: { content: "Represent this sentence for searching relevant passages: the fallback keeps sessions alive", label: "fallback-memory" },
+        arguments: { content: QUERY_PREFIX + "the fallback keeps sessions alive", label: "fallback-memory" },
       });
       const fallbackText = fallbackRemember.result?.content?.[0]?.text ?? "";
       if (fallbackRemember.result?.isError || !fallbackText.includes("[saved]")) {
@@ -244,22 +215,21 @@ const useCase: UseCase = {
       }
 
       // Step 4: a fresh session respawns a NEW daemon.
-      const serverC = Bun.spawn([bin, "mcp"], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-      const clientC = client(serverC);
-      await clientC.request("initialize", {});
+      const serverC = bootStdioJsonRpcClient([bin, "mcp"], env, { report: (m) => failures.push(m) });
+      servers.push(serverC);
+      await serverC.request("initialize", {});
       const helloC = await waitForDaemon(20000);
       if (helloC.pid === helloA.pid) failures.push("the respawned daemon has the dead daemon's pid");
       pids.add(helloC.pid);
-
-      clientA.close();
-      clientB.close();
-      clientC.close();
-      serverA.kill();
-      serverB.kill();
-      serverC.kill();
     } finally {
+      for (const s of servers.splice(0)) await s.close().catch(() => {});
       // No orphaned daemon leaves this use case.
       for (const pid of pids) killDaemon(pid);
+      // The daemon's cache dir sits outside the runner's stale-root GC
+      // families; this is its cleanup.
+      for (const dir of cacheDirs) {
+        try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+      }
     }
 
     if (failures.length > 0) {

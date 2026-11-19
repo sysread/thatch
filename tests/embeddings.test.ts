@@ -185,22 +185,9 @@ describe("BgeEmbeddingModel", () => {
     const factory: PipelineFactory = async (_modelName) => {
       calls++;
       const pipe = async (text: string, _opts: any) => {
-        // Produce a deterministic vector from text hash (like MockEmbeddingModel)
-        let h = 0;
-        for (let i = 0; i < text.length; i++) {
-          h = ((h << 5) - h) + text.charCodeAt(i);
-          h |= 0;
-        }
-        h ^= 0x9e3779b9;
-        const vec = new Float32Array(dims);
-        for (let i = 0; i < dims; i++) {
-          h ^= h << 13;
-          h ^= h >>> 17;
-          h ^= h << 5;
-          h |= 0;
-          vec[i] = h / 0x80000000;
-        }
-        return { data: vec };
+        // The extracted helper: the vector algorithm must not drift
+        // between this factory and MockEmbeddingModel.
+        return { data: mockEmbeddingVector(text, dims) };
       };
       pipe.dispose = async () => {
         disposals++;

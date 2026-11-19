@@ -1,11 +1,12 @@
-import { describe, test, expect, beforeEach } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import { RemoteEmbeddingModel, type DaemonConnection, type Transport } from "../../src/embed-daemon/client";
 import type { DaemonResponse, HelloResponse } from "../../src/embed-daemon/protocol";
 import type { EmbeddingModel } from "../../src/embeddings";
 
-// The client unit tier: an in-memory transport, every dependency injected.
-// The policy branches tested here mirror docs/plans/embedding-daemon.md's
-// client state matrix.
+// The client unit tier: an in-memory transport, every dependency injected
+// - including the daemon knob's read (no process.env mutation anywhere in
+// this file). The policy branches tested here mirror
+// docs/plans/embedding-daemon.md's client state matrix.
 
 let notes: string[];
 const VERSION = "0.4.3";
@@ -90,6 +91,7 @@ interface BuildOpts {
   ensureDaemonRunning?: () => Promise<"running" | "failed">;
   requestTimeoutMs?: number;
   cooldownMs?: number;
+  daemonEnabled?: () => boolean;
 }
 
 function build(opts: BuildOpts = {}) {
@@ -110,19 +112,20 @@ function build(opts: BuildOpts = {}) {
     },
     requestTimeoutMs: opts.requestTimeoutMs,
     cooldownMs: opts.cooldownMs,
+    daemonEnabled: opts.daemonEnabled ?? (() => true),
     note: (msg) => notes.push(msg),
     now: () => now.value,
   });
   return { model, daemon, local, now, notes, factoryCalls: () => factoryCalls };
 }
 
-beforeEach(() => {
-  process.env.THATCH_EMBED_DAEMON = "off";
-});
+// No env mutation in this file: the daemon knob is read through the
+// injected daemonEnabled seam (build defaults it to on; the knob-off test
+// passes () => false), so bun's shared test process never sees a mutated
+// THATCH_EMBED_DAEMON.
 
 describe("RemoteEmbeddingModel", () => {
   test("happy path: resolve, hello, embed, and the vector comes back", async () => {
-    process.env.THATCH_EMBED_DAEMON = "on";
     const daemon = new FakeDaemon();
     const { model, local, factoryCalls } = build({ daemon });
     const vec = await model.queryEmbed("hello");
@@ -135,9 +138,8 @@ describe("RemoteEmbeddingModel", () => {
   });
 
   test("knob off locks local without touching the socket", async () => {
-    process.env.THATCH_EMBED_DAEMON = "off";
     const daemon = new FakeDaemon();
-    const { model, factoryCalls } = build({ daemon });
+    const { model, factoryCalls } = build({ daemon, daemonEnabled: () => false });
     const vec = await model.passageEmbed("hello");
     expect([...vec]).toEqual([8, 8, 8]);
     expect(model.state).toBe("local-locked");
@@ -147,7 +149,6 @@ describe("RemoteEmbeddingModel", () => {
   });
 
   test("model mismatch at hello locks local WITHOUT spawning", async () => {
-    process.env.THATCH_EMBED_DAEMON = "on";
     const daemon = new FakeDaemon();
     daemon.helloModel = "other-model";
     let spawns = 0;
@@ -167,7 +168,6 @@ describe("RemoteEmbeddingModel", () => {
   });
 
   test("spawn failure locks local with a one-time note", async () => {
-    process.env.THATCH_EMBED_DAEMON = "on";
     const daemon = new FakeDaemon();
     daemon.helloError = null;
     // No listener ever: the transport itself fails to connect.
@@ -193,7 +193,6 @@ describe("RemoteEmbeddingModel", () => {
   });
 
   test("per-embed fallback on daemon death, then self-healing when it returns", async () => {
-    process.env.THATCH_EMBED_DAEMON = "on";
     const daemon = new FakeDaemon();
     const { model, daemon: d, factoryCalls } = build({ daemon });
     expect([...await model.queryEmbed("a")]).toEqual([1, 2, 3]);
@@ -217,7 +216,6 @@ describe("RemoteEmbeddingModel", () => {
     // The stale-socket death shape: the daemon is GONE, the connect
     // itself fails. One request delegates; the state must NOT change -
     // the next embed re-probes, so a returning daemon is used again.
-    process.env.THATCH_EMBED_DAEMON = "on";
     const daemon = new FakeDaemon();
     const { model } = build({ daemon });
     expect([...await model.queryEmbed("a")]).toEqual([1, 2, 3]);
@@ -231,7 +229,6 @@ describe("RemoteEmbeddingModel", () => {
     // The daemon restarted serving a different model. The lock note and
     // the generic fallback note would contradict each other ("this
     // session's lifetime" vs "will re-probe") - only the lock note flies.
-    process.env.THATCH_EMBED_DAEMON = "on";
     const daemon = new FakeDaemon();
     const { model } = build({ daemon });
     expect([...await model.queryEmbed("a")]).toEqual([1, 2, 3]);
@@ -247,10 +244,14 @@ describe("RemoteEmbeddingModel", () => {
     // The transport resolves AFTER the connect timeout fired. The late
     // connection must be destroyed on arrival - one leaked fd per
     // connect timeout, repeating, is exactly the leak this pins shut.
-    process.env.THATCH_EMBED_DAEMON = "on";
+    // The fake's close is idempotent, mirroring the real contract
+    // ("close() must be safe to call twice" - both lose-races fire it).
     const late = new FakeConnection(new FakeDaemon(), 0);
     let lateCloses = 0;
+    let lateClosed = false;
     late.close = () => {
+      if (lateClosed) return;
+      lateClosed = true;
       lateCloses += 1;
     };
     const slowTransport: Transport = () =>
@@ -264,7 +265,6 @@ describe("RemoteEmbeddingModel", () => {
   });
 
   test("a wedged-but-live daemon times out, delegates to local, and never hangs", async () => {
-    process.env.THATCH_EMBED_DAEMON = "on";
     const daemon = new FakeDaemon();
     daemon.wedgeEmbed = true;
     const { model, factoryCalls } = build({ daemon, requestTimeoutMs: 20 });
@@ -276,7 +276,6 @@ describe("RemoteEmbeddingModel", () => {
   });
 
   test("three consecutive timeouts trip a 60s cool-down; embeds stay local until it expires", async () => {
-    process.env.THATCH_EMBED_DAEMON = "on";
     const daemon = new FakeDaemon();
     daemon.wedgeEmbed = true;
     const { model, daemon: d, now } = build({ daemon, requestTimeoutMs: 10, cooldownMs: 60_000 });
@@ -295,8 +294,7 @@ describe("RemoteEmbeddingModel", () => {
   });
 
   test("dispose releases the local model when one was built", async () => {
-    process.env.THATCH_EMBED_DAEMON = "off";
-    const { model, local } = build();
+    const { model, local } = build({ daemonEnabled: () => false });
     await model.queryEmbed("hello");
     await model.dispose();
     expect(local.disposed).toBe(1);
@@ -306,7 +304,6 @@ describe("RemoteEmbeddingModel", () => {
     // No listener anywhere, and the spawn itself throws (EAGAIN/ENOMEM
     // under resource pressure). The rejection must resolve local-locked
     // with the note - NOT memoize into every later embed.
-    process.env.THATCH_EMBED_DAEMON = "on";
     const failing: Transport = async () => {
       throw new Error("connect failed (ENOENT)");
     };
@@ -334,7 +331,6 @@ describe("RemoteEmbeddingModel", () => {
     // With spawn failures caught, the one rejection left is a throwing
     // note sink. The memo must clear: the second embed re-runs the policy
     // and succeeds instead of rethrowing the memoized rejection forever.
-    process.env.THATCH_EMBED_DAEMON = "on";
     const failing: Transport = async () => {
       throw new Error("connect failed (ENOENT)");
     };
@@ -344,6 +340,7 @@ describe("RemoteEmbeddingModel", () => {
       mode: "standalone",
       transport: failing,
       ensureDaemonRunning: async () => "failed" as const,
+      daemonEnabled: () => true,
       localFactory: () => new LocalModel(),
       note: () => {
         throw new Error("note sink blew up");

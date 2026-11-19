@@ -22,7 +22,7 @@ import pkg from "../package.json";
 // XDG_CONFIG_HOME, CLAUDE_CONFIG_DIR, and CURSOR_CONFIG_DIR through the
 // same resolvers setup uses, and a leaked real-machine value (Jeff's
 // machine sets a custom claude config dir) would read REAL install state.
-const SAVED_ENV_KEYS = ["HOME", "XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "CURSOR_CONFIG_DIR", "THATCH_DB_PATH"] as const;
+const SAVED_ENV_KEYS = ["HOME", "XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "CURSOR_CONFIG_DIR", "THATCH_DB_PATH", "THATCH_EMBED_DAEMON"] as const;
 const saved: Record<string, string | undefined> = {};
 
 let base: string;
@@ -108,9 +108,9 @@ describe("common findings", () => {
   });
 
   test("the embed daemon check: serving, not-running, blocked, corrupt, disabled", async () => {
-    // The preload forces the knob off (the harness default); the check runs
-    // in the enabled state first, then the disabled branch. Restored after.
-    const savedKnob = process.env.THATCH_EMBED_DAEMON;
+    // The preload forces the knob off (the harness default) and
+    // SAVED_ENV_KEYS restores whatever this test sets; the enabled-state
+    // cases below opt in, the disabled case sets the knob back.
     process.env.THATCH_EMBED_DAEMON = "on";
     const hello = { ok: true as const, model: "mock", version: pkg.version, pid: 4242 };
 
@@ -138,14 +138,9 @@ describe("common findings", () => {
 
     // Disabled by the knob: info, and no probe was attempted.
     process.env.THATCH_EMBED_DAEMON = "off";
-    try {
-      const disabled = byCheck(await commonFindings(deps({ embedDaemonProbe: async () => { throw new Error("must not probe"); } })), "embed daemon");
-      expect(disabled[0]!.verdict).toBe("info");
-      expect(disabled[0]!.detail).toContain("THATCH_EMBED_DAEMON=off");
-    } finally {
-      if (savedKnob === undefined) delete process.env.THATCH_EMBED_DAEMON;
-      else process.env.THATCH_EMBED_DAEMON = savedKnob;
-    }
+    const disabled = byCheck(await commonFindings(deps({ embedDaemonProbe: async () => { throw new Error("must not probe"); } })), "embed daemon");
+    expect(disabled[0]!.verdict).toBe("info");
+    expect(disabled[0]!.detail).toContain("THATCH_EMBED_DAEMON=off");
   });
 
   test("a newer cached version warns with the update fix", async () => {

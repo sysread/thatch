@@ -1,11 +1,12 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createHash } from "node:crypto";
+import { join, basename } from "node:path";
 import { Socket } from "node:net";
 import { decodeResponse, type DaemonResponse } from "../../src/embed-daemon/protocol";
+import { embedCacheDir } from "../../src/embed-daemon/client";
 import { QUERY_PREFIX } from "../../src/embeddings";
+import { bootStdioJsonRpcClient, type StdioJsonRpcClient } from "../helpers/stdio-client";
 
 // The integration tier: REAL server and daemon processes over real stdio
 // and sockets, on a temp DB, hermetic via THATCH_MODEL=mock (the
@@ -18,47 +19,8 @@ import { QUERY_PREFIX } from "../../src/embeddings";
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const BIN = join(REPO_ROOT, "bin", "thatch");
 
-interface SpawnedServer {
-  proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
-  request: (method: string, params?: Record<string, unknown>) => Promise<Record<string, any>>;
-  close: () => Promise<void>;
-}
-
-function bootServer(env: Record<string, string>, args: string[] = []): SpawnedServer {
-  const proc = Bun.spawn([BIN, "mcp", ...args], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-  const reader = proc.stdout.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  let idSeq = 1;
-  const request = (method: string, params: Record<string, unknown> = {}): Promise<Record<string, any>> => {
-    const id = idSeq++;
-    proc.stdin.write(new TextEncoder().encode(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n"));
-    proc.stdin.flush();
-    const poll = async (): Promise<Record<string, any>> => {
-      const { value, done } = await reader.read();
-      if (done) throw new Error(`server closed before answering ${method} (id ${id})`);
-      buf += dec.decode(value);
-      let nl: number;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (!line) continue;
-        const msg = JSON.parse(line);
-        if (msg.id === id) return msg;
-      }
-      return poll();
-    };
-    return poll();
-  };
-  return {
-    proc,
-    request,
-    close: async () => {
-      reader.cancel().catch(() => {});
-      proc.kill();
-      await proc.exited;
-    },
-  };
+function bootServer(env: Record<string, string>, args: string[] = []): StdioJsonRpcClient {
+  return bootStdioJsonRpcClient([BIN, "mcp", ...args], env);
 }
 
 /** One hello probe against the daemon socket. */
@@ -94,12 +56,12 @@ function helloProbe(socketPath: string, timeoutMs = 500): Promise<DaemonResponse
  * The daemon socket path, computed for BOTH tmpdir bases: the spawned
  * server's env drops TMPDIR while this test process resolves /var/folders,
  * so the daemon's cache-dir derivation can land on either base (the same
- * subprocess-boundary trap uc-142 documents for the liveness stamp).
+ * subprocess-boundary trap uc-142 documents for the liveness stamp). The
+ * hash-named dir comes from embedCacheDir - no local re-derivation.
  */
 function daemonSocketCandidates(dbPath: string): string[] {
-  // Inline the hash derivation (client.ts's own shape).
-  const hash = createHash("sha256").update(dbPath).digest("hex").slice(0, 16);
-  return [...new Set([tmpdir(), "/tmp"].map((base) => join(base, `thatch-${hash}`, "embed.sock"))) ];
+  const dirName = basename(embedCacheDir(dbPath));
+  return [...new Set([tmpdir(), "/tmp"].map((base) => join(base, dirName, "embed.sock")))];
 }
 
 async function probeAnySocket(dbPath: string, timeoutMs = 500): Promise<DaemonResponse | null> {
@@ -113,14 +75,10 @@ async function probeAnySocket(dbPath: string, timeoutMs = 500): Promise<DaemonRe
   return null;
 }
 
-const spawned: SpawnedServer[] = [];
-const daemons: Bun.Subprocess<"ignore", "ignore", "ignore">[] = [];
+const spawned: StdioJsonRpcClient[] = [];
 
 afterEach(async () => {
   for (const s of spawned.splice(0)) await s.close().catch(() => {});
-  for (const d of daemons.splice(0)) {
-    try { d.kill(); } catch { /* already dead */ }
-  }
   for (const dir of dirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }

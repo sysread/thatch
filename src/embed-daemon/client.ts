@@ -177,6 +177,9 @@ export interface RemoteEmbeddingModelOptions {
   requestTimeoutMs?: number;
   timeoutThreshold?: number;
   cooldownMs?: number;
+  /** The daemon knob's read (default: the THATCH_EMBED_DAEMON env read).
+   *  The one knob input with a seam, so tests never mutate process.env. */
+  daemonEnabled?: () => boolean;
   /** One-time stderr notes (fallbacks, locks, skew). */
   note?: (msg: string) => void;
   now?: () => number;
@@ -197,6 +200,7 @@ export class RemoteEmbeddingModel implements EmbeddingModel {
   #requestTimeoutMs: number;
   #timeoutThreshold: number;
   #cooldownMs: number;
+  #daemonEnabled: () => boolean;
   #note: (msg: string) => void;
   #now: () => number;
 
@@ -217,6 +221,7 @@ export class RemoteEmbeddingModel implements EmbeddingModel {
     this.#requestTimeoutMs = opts.requestTimeoutMs ?? 2000;
     this.#timeoutThreshold = opts.timeoutThreshold ?? 3;
     this.#cooldownMs = opts.cooldownMs ?? 60_000;
+    this.#daemonEnabled = opts.daemonEnabled ?? daemonEnabled;
     this.#note = opts.note ?? ((msg) => console.error(`[thatch] ${msg}`));
     this.#now = opts.now ?? Date.now;
   }
@@ -310,7 +315,7 @@ export class RemoteEmbeddingModel implements EmbeddingModel {
   }
 
   async #resolve(): Promise<void> {
-    if (!daemonEnabled()) {
+    if (!this.#daemonEnabled()) {
       this.#lockLocal("the embed daemon is disabled (THATCH_EMBED_DAEMON=off)");
       return;
     }

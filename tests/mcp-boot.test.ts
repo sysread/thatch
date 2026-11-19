@@ -2,64 +2,22 @@ import { describe, test, expect } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { bootStdioJsonRpcClient } from "./helpers/stdio-client";
 // Characterization test for the MCP server boot path. No test booted
 // runMcpServer as a real subprocess before this one (unit coverage stopped
 // at compileTools/compilePrompts/teardown), so this pins the boot and
 // dispatch contract - initialize, tools/list, a tool round trip, clean
-// exit on stdin close - BEFORE the embedding-model construction site
-// becomes the daemon resolver (docs/plans/embedding-daemon.md,
-// "Precondition: characterization test before the swap").
+// exit on stdin close - that the daemon resolver swap
+// (docs/plans/embedding-daemon.md, "Precondition: characterization test
+// before the swap") had to keep working.
 //
 // THATCH_EMBED_DAEMON=off pins the LOCAL model path: the resolver must
 // never probe, spawn, or connect when the knob is off.
 
 const REPO_ROOT = join(import.meta.dir, "..");
 
-interface SpawnedServer {
-  proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
-  request: (method: string, params?: Record<string, unknown>) => Promise<Record<string, any>>;
-  close: () => void;
-}
-
-function bootServer(args: string[], env: Record<string, string>): SpawnedServer {
-  const proc = Bun.spawn([join(REPO_ROOT, "bin", "thatch"), "mcp", ...args], {
-    env,
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const reader = proc.stdout.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  let idSeq = 1;
-  const request = (method: string, params: Record<string, unknown> = {}): Promise<Record<string, any>> => {
-    const id = idSeq++;
-    proc.stdin.write(new TextEncoder().encode(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n"));
-    proc.stdin.flush();
-    const poll = async (): Promise<Record<string, any>> => {
-      const { value, done } = await reader.read();
-      if (done) throw new Error(`server closed before answering ${method} (id ${id})`);
-      buf += dec.decode(value);
-      let nl: number;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (!line) continue;
-        const msg = JSON.parse(line);
-        if (msg.id === id) return msg;
-      }
-      return poll();
-    };
-    return poll();
-  };
-  return {
-    proc,
-    request,
-    close: () => {
-      reader.cancel().catch(() => {});
-      proc.kill();
-    },
-  };
+function bootServer(args: string[], env: Record<string, string>) {
+  return bootStdioJsonRpcClient([join(REPO_ROOT, "bin", "thatch"), "mcp", ...args], env);
 }
 
 function sandboxEnv(sandbox: string): Record<string, string> {
@@ -98,9 +56,13 @@ describe("MCP server boot (characterization)", () => {
       const call = await server.request("tools/call", { name: "memory_list", arguments: {} });
       expect(call.result?.isError).toBe(false);
       expect(typeof call.result?.content?.[0]?.text).toBe("string");
+
+      // The pinned "clean exit on stdin close": end the server's stdin and
+      // await a zero exit code.
+      server.proc.stdin.end();
+      expect(await server.proc.exited).toBe(0);
     } finally {
-      server.close();
-      await server.proc.exited;
+      await server.close();
       rmSync(sandbox, { recursive: true, force: true });
     }
   }, 60000);
@@ -128,8 +90,7 @@ describe("MCP server boot (characterization)", () => {
       expect(list.result?.isError).toBe(false);
       expect(listText).toContain("loader-anchors-parser");
     } finally {
-      server.close();
-      await server.proc.exited;
+      await server.close();
       rmSync(sandbox, { recursive: true, force: true });
     }
   }, 60000);
