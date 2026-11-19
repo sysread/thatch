@@ -26,6 +26,7 @@
  */
 import { Socket } from "node:net";
 import { createHash } from "node:crypto";
+import { accessSync, constants } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pkg from "../../package.json";
@@ -42,17 +43,47 @@ import {
 import { dialSocket } from "./socket";
 
 /**
+ * The cache-dir base: /tmp/thatch-<uid> on unix (created 0700 by the
+ * daemon before it binds), tmpdir() everywhere the anchor is unusable
+ * (Windows, no uid, /tmp missing or unwritable).
+ *
+ * The base must NOT derive from tmpdir(): a direnv'd nix develop shell
+ * gives every shell its own TMPDIR, and tmpdir() follows it. In
+ * jowi-dev's field report (issue #26, 2026-11-19) that produced 18
+ * daemons for one DB path, each holding its own lock - the single-owner
+ * sqlite lock is only single-owner within one TMPDIR base. A
+ * cross-process singleton anchors on something no shell can vary: /tmp
+ * is shared by every shell, including the nix ones that override TMPDIR
+ * but not /tmp, and <uid> scopes the dir per user on shared machines.
+ *
+ * Deliberate deviation: the sideband socket and the version file keep
+ * tmpdir() because they are same-env by construction (hooks inherit
+ * their server's env); the daemon is the only cross-session actor.
+ */
+function embedCacheBase(): string {
+  const uid = process.platform === "win32" ? undefined : process.getuid?.();
+  if (uid === undefined) return tmpdir();
+  try {
+    accessSync("/tmp", constants.W_OK);
+  } catch {
+    return tmpdir();
+  }
+  return `/tmp/thatch-${uid}`;
+}
+
+/**
  * The daemon socket path, from the DB path. The cache-dir derivation
- * (tmpdir()/thatch-<sha256(dbPath)[:16]>) is re-derived inline rather than
- * exported from src/version-check.ts, matching the sideband's existing
- * precedent (src/sideband.ts duplicates the same hash derivation), so
- * version-check.ts stays untouched. The socket sits in the same hash-named
- * tmpdir family (dirs named thatch-<hash>) as the sideband socket and the
- * version file; distinct filename, no collision.
+ * (embedCacheBase()/thatch-<sha256(dbPath)[:16]>) is re-derived inline
+ * rather than exported from src/version-check.ts, matching the sideband's
+ * existing precedent (src/sideband.ts duplicates the same hash
+ * derivation), so version-check.ts stays untouched. The socket sits in a
+ * dir named thatch-<hash> like the sideband socket and the version file,
+ * but under a TMPDIR-independent base (see embedCacheBase); distinct
+ * filename, no collision.
  */
 export function embedCacheDir(dbPath: string): string {
   const hash = createHash("sha256").update(dbPath).digest("hex").slice(0, 16);
-  return join(tmpdir(), `thatch-${hash}`);
+  return join(embedCacheBase(), `thatch-${hash}`);
 }
 
 export function embedSocketPath(dbPath: string): string {

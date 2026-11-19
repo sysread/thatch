@@ -138,7 +138,11 @@ export class EmbedDaemon {
    * with the exit code; the CLI subcommand maps it to process.exit.
    */
   async serve(): Promise<DaemonExit> {
-    mkdirSync(dirname(this.#socketPath), { recursive: true });
+    // 0700: the base may be the uid-scoped /tmp/thatch-<uid> anchor
+    // (see embedCacheBase), which must stay private to the user on
+    // shared machines. recursive mkdir applies the mode to every dir it
+    // creates; an already-existing dir keeps its mode.
+    mkdirSync(dirname(this.#socketPath), { recursive: true, mode: 0o700 });
 
     // Formation, step 1: the lock. A second daemon loses here and exits
     // BEFORE touching the socket - see the module doc for why the lock is

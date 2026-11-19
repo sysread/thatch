@@ -157,7 +157,10 @@ serves every stdio client on the machine - Claude Code bundled, Cursor
 standalone, manual runs - from one DB path), which is why its config
 section (`embedDaemon.idleExitMinutes`) is not scoped under a host key, and
 why `THATCH_EMBED_DAEMON=off` (every session embeds in-process) is the
-harness-forced default in tests and QA runs.
+harness-forced default in tests and QA runs. Its socket and lock paths
+anchor on `/tmp/thatch-<uid>` rather than `tmpdir()` for the same reason:
+shells that override TMPDIR (direnv, nix develop) must still find the one
+daemon per DB path.
 
 ## System prompt delivery
 

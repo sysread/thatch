@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { RemoteEmbeddingModel, type DaemonConnection, type Transport } from "../../src/embed-daemon/client";
+import { join } from "node:path";
+import { RemoteEmbeddingModel, embedLockPath, embedSocketPath, type DaemonConnection, type Transport } from "../../src/embed-daemon/client";
 import type { DaemonResponse, HelloResponse } from "../../src/embed-daemon/protocol";
 import type { EmbeddingModel } from "../../src/embeddings";
 
@@ -351,5 +352,42 @@ describe("RemoteEmbeddingModel", () => {
     // The memo cleared: the policy ran again (the note key is already
     // recorded, so this resolve completes) and the embed lands locally.
     expect([...await model.queryEmbed("b")]).toEqual([7, 7, 7]);
+  });
+});
+
+describe("embedCacheDir path policy", () => {
+  test("two different TMPDIR values resolve the SAME socket and lock paths", () => {
+    // Regression for issue #26 (jowi-dev's field report): the old
+    // tmpdir()-based derivation followed each shell's TMPDIR, so
+    // direnv'd nix develop shells each spawned their own daemon (18 on
+    // one DB, each holding its own lock). The base is now the
+    // TMPDIR-independent /tmp/thatch-<uid>, so processes that disagree
+    // on TMPDIR must agree on the socket and lock paths. Each
+    // resolution runs in a fresh subprocess with its own env copy -
+    // process.env itself is never mutated (the file's house rule).
+    const dbPath = "/tmp/embed-daemon-tmpdir-regression.db";
+    const modulePath = join(import.meta.dir, "..", "..", "src", "embed-daemon", "client.ts");
+    const script = `import { embedSocketPath, embedLockPath } from ${JSON.stringify(modulePath)};
+const db = ${JSON.stringify(dbPath)};
+console.log(embedSocketPath(db));
+console.log(embedLockPath(db));`;
+    const resolveUnder = (tmpDirValue: string): string[] =>
+      Bun.spawnSync([process.execPath, "-e", script], {
+        env: { ...process.env, TMPDIR: tmpDirValue } as Record<string, string>,
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+        .stdout.toString()
+        .trim()
+        .split("\n");
+
+    const viaA = resolveUnder("/tmp/regression-tmpdir-a");
+    const viaB = resolveUnder("/tmp/regression-tmpdir-b");
+    // Both envs land on the same paths, and on THIS process's resolution
+    // too: every process agrees on one socket per DB path.
+    expect(viaA).toEqual([embedSocketPath(dbPath), embedLockPath(dbPath)]);
+    expect(viaB).toEqual(viaA);
+    // The anchor itself: /tmp/thatch-<uid>, not any TMPDIR-derived base.
+    expect(viaA[0]).toMatch(/^\/tmp\/thatch-\d+\//);
   });
 });

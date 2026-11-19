@@ -1,10 +1,10 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, basename } from "node:path";
+import { join } from "node:path";
 import { Socket } from "node:net";
 import { decodeResponse, type DaemonResponse } from "../../src/embed-daemon/protocol";
-import { embedCacheDir } from "../../src/embed-daemon/client";
+import { embedSocketPath } from "../../src/embed-daemon/client";
 import { QUERY_PREFIX } from "../../src/embeddings";
 import { bootStdioJsonRpcClient, type StdioJsonRpcClient } from "../helpers/stdio-client";
 
@@ -53,15 +53,15 @@ function helloProbe(socketPath: string, timeoutMs = 500): Promise<DaemonResponse
 }
 
 /**
- * The daemon socket path, computed for BOTH tmpdir bases: the spawned
- * server's env drops TMPDIR while this test process resolves /var/folders,
- * so the daemon's cache-dir derivation can land on either base (the same
- * subprocess-boundary trap uc-142 documents for the liveness stamp). The
- * hash-named dir comes from embedCacheDir - no local re-derivation.
+ * The daemon socket path, from the DB path. Every process - this test
+ * and the spawned servers, whatever each inherits for TMPDIR - resolves
+ * the same TMPDIR-independent base (embedCacheBase), so there is exactly
+ * one candidate path; the old both-bases probe machinery existed because
+ * the tmpdir()-based derivation could land on either side of the
+ * subprocess boundary.
  */
 function daemonSocketCandidates(dbPath: string): string[] {
-  const dirName = basename(embedCacheDir(dbPath));
-  return [...new Set([tmpdir(), "/tmp"].map((base) => join(base, dirName, "embed.sock")))];
+  return [embedSocketPath(dbPath)];
 }
 
 async function probeAnySocket(dbPath: string, timeoutMs = 500): Promise<DaemonResponse | null> {

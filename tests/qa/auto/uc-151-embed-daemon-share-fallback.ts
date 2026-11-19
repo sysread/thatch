@@ -1,10 +1,8 @@
-import { join, basename } from "node:path";
 import { Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { existsSync, rmSync } from "node:fs";
 import { registerUseCase, type UseCase, type QaContext } from "../runner";
 import { bootStdioJsonRpcClient, type StdioJsonRpcClient } from "../../helpers/stdio-client";
-import { embedCacheDir } from "../../../src/embed-daemon/client";
+import { embedCacheDir, embedSocketPath } from "../../../src/embed-daemon/client";
 import { mockEmbeddingVector, QUERY_PREFIX } from "../../../src/embeddings";
 import type { HelloResponse } from "../../../src/embed-daemon/protocol";
 
@@ -59,44 +57,41 @@ const useCase: UseCase = {
       try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
       pids.delete(pid);
     };
-    const cacheDirs = [...new Set([tmpdir(), "/tmp"].map((base) => join(base, basename(embedCacheDir(dbPath)))))];
+    // The daemon's cache dir resolves identically in every process (the
+    // TMPDIR-independent embedCacheBase), so one path - and its cleanup
+    // sits outside the runner's stale-root GC families.
+    const cacheDirs = [embedCacheDir(dbPath)];
 
-    /** Hello handshake against the daemon socket, on every tmpdir base
-     *  (the spawned server's env drops TMPDIR - see uc-142's note). The
-     *  found socket path is remembered for the embed-level probe. */
+    /** Hello handshake against the daemon socket. The found socket path
+     *  is remembered for the embed-level probe. */
     let socketPath: string | null = null;
     const helloAny = async (timeoutMs = 300): Promise<HelloResponse | null> => {
-      for (const base of [...new Set([tmpdir(), "/tmp"])]) {
-        const sockPath = join(base, basename(embedCacheDir(dbPath)), "embed.sock");
-        if (!existsSync(sockPath)) continue;
-        const res = await new Promise<HelloResponse | null>((resolve) => {
-          const socket = new Socket();
-          let buf = "";
-          const timer = setTimeout(() => { socket.destroy(); resolve(null); }, timeoutMs);
-          socket.once("error", () => { clearTimeout(timer); resolve(null); });
-          socket.on("data", (chunk: Buffer) => {
-            buf += chunk.toString();
-            const nl = buf.indexOf("\n");
-            if (nl < 0) return;
-            clearTimeout(timer);
-            try {
-              const parsed = JSON.parse(buf.slice(0, nl));
-              resolve(parsed.ok ? parsed : null);
-            } catch {
-              resolve(null);
-            } finally {
-              socket.destroy();
-            }
-          });
-          socket.once("connect", () => socket.write(Buffer.from(JSON.stringify({ method: "hello" }) + "\n")));
-          socket.connect(sockPath);
+      const sockPath = embedSocketPath(dbPath);
+      if (!existsSync(sockPath)) return null;
+      const res = await new Promise<HelloResponse | null>((resolve) => {
+        const socket = new Socket();
+        let buf = "";
+        const timer = setTimeout(() => { socket.destroy(); resolve(null); }, timeoutMs);
+        socket.once("error", () => { clearTimeout(timer); resolve(null); });
+        socket.on("data", (chunk: Buffer) => {
+          buf += chunk.toString();
+          const nl = buf.indexOf("\n");
+          if (nl < 0) return;
+          clearTimeout(timer);
+          try {
+            const parsed = JSON.parse(buf.slice(0, nl));
+            resolve(parsed.ok ? parsed : null);
+          } catch {
+            resolve(null);
+          } finally {
+            socket.destroy();
+          }
         });
-        if (res) {
-          socketPath = sockPath;
-          return res;
-        }
-      }
-      return null;
+        socket.once("connect", () => socket.write(Buffer.from(JSON.stringify({ method: "hello" }) + "\n")));
+        socket.connect(sockPath);
+      });
+      if (res) socketPath = sockPath;
+      return res;
     };
 
     /** One embed over a fresh daemon connection: hello, ack, embed. Every
