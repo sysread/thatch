@@ -4,8 +4,11 @@ import { join } from "node:path";
 import { MockEmbeddingModel } from "./mocks/embeddings";
 import {
   BgeEmbeddingModel,
+  QUERY_PREFIX,
   backendMode,
   configureBackend,
+  createEmbeddingModel,
+  mockEmbeddingVector,
   modelCacheDir,
   resetBackendForTests,
   type PipelineFactory,
@@ -543,5 +546,35 @@ describe("embedding backend", () => {
         globals[Symbol.for("onnxruntime")] = savedOrt;
       }
     }
+  });
+});
+
+describe("createEmbeddingModel", () => {
+  test("the mock name yields the hermetic model: deterministic vectors, query prefix applied", async () => {
+    const model = createEmbeddingModel("mock");
+    expect(model.name).toBe("mock");
+    expect(model.loaded).toBe(true);
+    await model.load(); // no-op - no download, no ONNX
+
+    const query = await model.queryEmbed("hello");
+    const again = await model.queryEmbed("hello");
+    expect(query.length).toBe(384);
+    // Deterministic on the exact input text, prefix included.
+    expect([...query]).toEqual([...again]);
+    expect([...query]).toEqual([...mockEmbeddingVector(QUERY_PREFIX + "hello")]);
+
+    const passage = await model.passageEmbed("hello");
+    // The passage path hashes the raw text - the prefix is the query path's
+    // asymmetry, mirroring the real pipeline's contract.
+    expect([...passage]).toEqual([...mockEmbeddingVector("hello")]);
+    expect([...passage]).not.toEqual([...query]);
+
+    await model.dispose(); // nothing loaded - must not throw
+  });
+
+  test("any other name yields the BGE model", () => {
+    const model = createEmbeddingModel("Xenova/bge-small-en-v1.5");
+    expect(model.name).toBe("Xenova/bge-small-en-v1.5");
+    expect(model.constructor).toBe(BgeEmbeddingModel);
   });
 });

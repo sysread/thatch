@@ -3,8 +3,9 @@ import { join } from "node:path";
 
 // BGE-small-en-v1.5 requires a query prefix for asymmetric search.
 // Passage (memory content) gets no prefix - the model was trained
-// to encode passages without instruction.
-const QUERY_PREFIX =
+// to encode passages without instruction. Exported so the mock model's
+// query derivation can apply the same prefix the real pipeline sees.
+export const QUERY_PREFIX =
   "Represent this sentence for searching relevant passages: ";
 
 /**
@@ -340,4 +341,73 @@ export class BgeEmbeddingModel implements EmbeddingModel {
       this.#idleTimer = null;
     }
   }
+}
+
+/**
+ * Derives one deterministic embedding vector from the exact input text
+ * (xorshift over the character codes). Shared by the mock model class here
+ * and the in-process test mock in tests/mocks/embeddings.ts, so the vector
+ * algorithm cannot drift between the in-process and subprocess tiers.
+ */
+export function mockEmbeddingVector(text: string, dims = 384): Float32Array {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) {
+    h = ((h << 5) - h) + text.charCodeAt(i);
+    h |= 0;
+  }
+  h ^= 0x9e3779b9; // avoid the degenerate all-zero state for empty input
+
+  const vec = new Float32Array(dims);
+  for (let i = 0; i < dims; i++) {
+    h ^= h << 13;
+    h ^= h >>> 17;
+    h ^= h << 5;
+    h |= 0;
+    vec[i] = h / 0x80000000;
+  }
+  return vec;
+}
+
+/** The model name the embedding factory maps to MockEmbeddingModel. */
+export const MOCK_MODEL_NAME = "mock";
+
+/**
+ * The hermetic model behind THATCH_MODEL=mock. Deterministic vectors from
+ * the exact input text - the query path applies the same QUERY_PREFIX the
+ * real pipeline applies - with no network, no download, and no ONNX
+ * runtime. Supported in production source on purpose: the spawned tiers
+ * (MCP server, embed daemon, hook one-shots) need embeds that succeed and
+ * reproduce bit-for-bit across processes, which is what makes the
+ * integration tests and the QA use cases hermetic. Without this branch the
+ * QA suites' THATCH_MODEL=mock values were aspirational - embeds failed.
+ */
+export class MockEmbeddingModel implements EmbeddingModel {
+  readonly loaded = true;
+  readonly name = MOCK_MODEL_NAME;
+
+  async load(): Promise<void> {}
+
+  // Nothing was loaded, so there is nothing to release; the await keeps the
+  // dispose-before-exit contract callers rely on (Bun #34664).
+  async dispose(): Promise<void> {}
+
+  async queryEmbed(text: string): Promise<Float32Array> {
+    return mockEmbeddingVector(QUERY_PREFIX + text);
+  }
+
+  async passageEmbed(text: string): Promise<Float32Array> {
+    return mockEmbeddingVector(text);
+  }
+}
+
+/**
+ * The embedding factory: one name, one model implementation. Every
+ * construction site that honors THATCH_MODEL builds through this, so the
+ * mock branch is reachable from every tier at once. The CLI one-shots keep
+ * constructing the default model directly (a recorded non-goal in
+ * docs/plans/embedding-daemon.md).
+ */
+export function createEmbeddingModel(modelName: string): EmbeddingModel {
+  if (modelName === MOCK_MODEL_NAME) return new MockEmbeddingModel();
+  return new BgeEmbeddingModel(modelName);
 }

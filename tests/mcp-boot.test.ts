@@ -2,7 +2,6 @@ import { describe, test, expect } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
 // Characterization test for the MCP server boot path. No test booted
 // runMcpServer as a real subprocess before this one (unit coverage stopped
 // at compileTools/compilePrompts/teardown), so this pins the boot and
@@ -99,6 +98,35 @@ describe("MCP server boot (characterization)", () => {
       const call = await server.request("tools/call", { name: "memory_list", arguments: {} });
       expect(call.result?.isError).toBe(false);
       expect(typeof call.result?.content?.[0]?.text).toBe("string");
+    } finally {
+      server.close();
+      await server.proc.exited;
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  }, 60000);
+
+  test("standalone boot embeds locally with the mock model (daemon knob off)", async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "thatch-mcp-boot-"));
+    // Standalone mode: startup behavior seeding runs, so the boot itself
+    // embeds - with the knob off and THATCH_MODEL=mock every embed takes the
+    // local mock path, no download, no daemon. The round trip below proves
+    // the local embed path end to end through the real server process.
+    const server = bootServer([], sandboxEnv(sandbox));
+    try {
+      await server.request("initialize", {});
+
+      const remember = await server.request("tools/call", {
+        name: "memory_remember",
+        arguments: { content: "the loader anchors the parser cache", label: "loader-anchors-parser" },
+      });
+      const rememberText = remember.result?.content?.[0]?.text ?? "";
+      expect(remember.result?.isError).toBe(false);
+      expect(rememberText).toContain("[saved]");
+
+      const list = await server.request("tools/call", { name: "memory_list", arguments: {} });
+      const listText = list.result?.content?.[0]?.text ?? "";
+      expect(list.result?.isError).toBe(false);
+      expect(listText).toContain("loader-anchors-parser");
     } finally {
       server.close();
       await server.proc.exited;
