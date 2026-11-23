@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer, connect, type Server, type Socket } from "node:net";
+import { createServer, Socket, type Server } from "node:net";
 import type { ThatchDB, PredictionNudgeItem, BehaviorNudgeItem } from "./db";
 import type { ScoredNudge } from "./scoring-engine";
 import type { EmbeddingModel } from "./embeddings";
@@ -262,7 +262,12 @@ function sidebandRequest(
       resolve(val);
     };
 
-    const socket = connect(socketPath);
+    // Socket-instance + listener-before-connect: bun's connect() factory
+    // under parallel test files loses the connect error (it surfaces as
+    // an unhandled error between tests instead of the socket's error
+    // event). Attaching the handler BEFORE socket.connect() keeps the
+    // "resolve null on any failure" contract intact everywhere.
+    const socket = new Socket();
     const req = JSON.stringify({ method, text, stores, threshold, limit }) + "\n";
     let buf = "";
 
@@ -300,5 +305,7 @@ function sidebandRequest(
       }
       socket.destroy();
     });
+
+    socket.connect(socketPath);
   });
 }
