@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { Database } from "./sqlite-compat";
 import { blobToVector, cosineSimilarity } from "./vector-math";
 
 /**
@@ -290,8 +290,8 @@ export class ScoringEngine {
     const now = new Date().toISOString();
     const { edgesTable, itemForeignKey, matchersTable } = this.#cfg;
     // Insert and bump run atomically: an edge that landed without its
-    // updated_at bump would read as older than it is. bun:sqlite nests
-    // transaction functions via savepoints, so this composes with a
+    // updated_at bump would read as older than it is. The sqlite layer
+    // nests transaction functions via savepoints, so this composes with a
     // caller's outer transaction (prediction_update's, for one).
     // Bump only when the insert landed - a re-link to an existing edge
     // changes nothing.
@@ -370,7 +370,7 @@ export class ScoringEngine {
     // item (edge rows have ON DELETE CASCADE, so the DELETE below removes
     // them implicitly). Same updated_at meaning as createEdge: last change
     // to the matcher row or its edge set. Bump and delete run atomically
-    // (bun:sqlite nests via savepoints): a bump whose delete then failed
+    // (the sqlite layer nests via savepoints): a bump whose delete then failed
     // would record graph activity that never happened.
     return this.#db.transaction(() => {
       const now = new Date().toISOString();

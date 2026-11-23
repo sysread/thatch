@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "./sqlite-compat";
 import { ScoringEngine } from "./scoring-engine";
 
 export interface BehaviorRow {

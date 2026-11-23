@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
+import { Database as CompatDatabase } from "../src/sqlite-compat";
 import { ThatchDB } from "../src/db";
 import { ChatStore, ChatPoller, isStale, nowIso, CHAT_STALE_MS, CHAT_POLL_INTERVAL_MS, CHAT_AUTO_TTL_DAYS, isoMinutesAgo as cutoffAgo, renderChatParticipant, chatLiveness, splitChatRoster, sortChatRoster, createWakeGate, continuedInTarget, scanPredecessorTranscript, resolveRegisteredPredecessor, type ChatSessionRow } from "../src/chat";
 import { DeliverySkippedError } from "../src/capabilities";
@@ -1274,7 +1275,9 @@ describe("chat name reclaim after reap", () => {
     // ThatchDB owns the schema; the store shares the file (WAL, like prod).
     const schemaDb = new ThatchDB(join(dir, "test.db"));
     schemaDb.close();
-    const raw = new Database(join(dir, "test.db"));
+    // The store's handle is the compat layer's connection (what ChatStore
+    // receives in production); raw bun:sqlite stays for seeding elsewhere.
+    const raw = new CompatDatabase(join(dir, "test.db"));
     const store = new ChatStore(raw);
     // Backdate the row so the 7-day auto TTL sees it as prunable - the
     // register path stamps last_seen with now. One extra day keeps the

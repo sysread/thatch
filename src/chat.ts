@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Database } from "./sqlite-compat";
 import { spawnSync } from "node:child_process";
 import { openSync, readSync, closeSync, readdirSync, statSync, mkdtempSync, writeFileSync, readFileSync, accessSync, constants } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1547,7 +1547,7 @@ export class ChatStore {
   #isRecentDuplicate(fromSession: string, toSession: string, bodies: string[], viaBroadcast: 0 | 1): boolean {
     const cutoff = new Date(Date.now() - CHAT_DEDUPE_WINDOW_MS).toISOString().replace(/\.\d{3}Z$/, "Z");
     const marks = bodies.map(() => "?").join(",");
-    // bun:sqlite's .get() returns null (not undefined) when no row matches -
+    // The sqlite layer's .get() returns null (not undefined) when no row matches -
     // a truthiness check, not an identity check, or every send dedupes.
     return (
       this.#db
