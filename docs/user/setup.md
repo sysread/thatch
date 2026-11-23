@@ -85,6 +85,20 @@ gets the instructions without a setup run. Requires Claude Code 2.1.287
 or newer (the mods floor), enterprise policy permitting mods, and bun
 on PATH.
 
+On npm 12, the install fails with
+`Could not download @jeffober/thatch@<version> ... code EALLOWREMOTE`:
+npm 12 stopped fetching packages given as tarball URLs, and Claude
+Code's installer packs the resolved tarball URL rather than the
+registry spec. Allow the fetch for the one install:
+
+```text
+npm_config_allow_remote=all claude plugin install thatch
+```
+
+Your npm config is unchanged. Upstream: the installer should pack the
+registry spec and verify its integrity instead of the URL
+(anthropics/claude-code#98362).
+
 Thatch also installs as a Claude Code plugin via setup (see "The plugin
 regime" below). `--hooks` installs the classic integration instead - a
 standalone MCP server plus settings hooks:
