@@ -144,8 +144,12 @@ tarball-URL pack (`code EALLOWREMOTE`, anthropics/claude-code#98362) and
 its `npm_config_allow_remote` workaround. The publish workflow's
 `plugin-branch` job regenerates the branch at every tag: it runs
 `scripts/prepack.ts` and commits the generated tree (`.claude-plugin/
-plugin.json`, `hooks/`, slimmed `package.json` + `bun.lock`) with a
-force-push - CI is the branch's only writer. The entry declares no
+plugin.json`, `hooks/`, slimmed `package.json` + `npm-shrinkwrap.json`,
+with the repo's `bun.lock` removed) with a force-push - CI is the
+branch's only writer. The branch carries no bun.lock on purpose: the
+dependency-install picker prefers bun.lock and would demand bun on the
+user's machine; with only the shrinkwrap present the install runs
+`npm ci` and needs nothing but npm. The entry declares no
 version and no component fields, so the branch's generated
 `.claude-plugin/plugin.json` is the manifest and its `version` decides
 what `claude plugin update` displays; the update re-clones the branch

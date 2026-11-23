@@ -107,7 +107,9 @@ jobs:
           version=$(bun -p "require('./package.json').version")
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .claude-plugin/plugin.json hooks package.json bun.lock
+          rm -f bun.lock
+          git add .claude-plugin/plugin.json hooks package.json
+          git add -f npm-shrinkwrap.json
           git commit -m "plugin tree for v${version}"
       - name: Push the plugin-release branch
         run: git push --force origin HEAD:refs/heads/plugin-release
