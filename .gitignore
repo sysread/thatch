@@ -30,3 +30,4 @@ scratchpad/
 # Nix
 result
 result-*
+.playwright-mcp/

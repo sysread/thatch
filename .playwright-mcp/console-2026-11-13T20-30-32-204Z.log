@@ -1,2 +1,0 @@
-[    1313ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ https://static.hotjar.com/c/hotjar-6382967.js?sv=6:1
-[    1743ms] [LOG] readme {name: README.md, path: README.md, sha: 76a0b2eac17abd06e5dbfe640b55a0e9cd411f9a, size: 7252, url: https://api.github.com/repos/sysread/thatch/contents/README.md?ref=main} @ https://deepwiki.com/_next/static/chunks/3861-fb1cdc2a13831f2b.js:1
