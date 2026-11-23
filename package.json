@@ -62,5 +62,9 @@
     "embeddings",
     "sqlite"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13.0",
+    "bun": ">=1.4.2"
+  }
 }
