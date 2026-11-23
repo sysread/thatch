@@ -41,17 +41,19 @@ The "global" store always exists — it is inserted at schema init (`INSERT OR I
 - Output is a `Float32Array`.
 - `THATCH_MODEL=mock` selects `MockEmbeddingModel`: deterministic vectors derived from the exact input text (query path includes the prefix), no download and no ONNX. Supported in production source so the spawned tiers (MCP server, embedding daemon, hook one-shots) can assert real vectors hermetically; the in-process test mock in `tests/mocks/embeddings.ts` shares the same derivation.
 - The model can be overridden via the `THATCH_MODEL` environment variable.
-- Backend: runs on onnxruntime-web's pure-JS/wasm runtime by default. Before
-  transformers initializes, `configureBackend()` pins
-  `globalThis[Symbol.for("onnxruntime")]` to onnxruntime-web, so no
-  onnxruntime-node NAPI wrap finalizers exist to panic Bun at process
-  teardown (oven-sh/bun#34664). `THATCH_EMBEDDING_BACKEND=native` opts back
-  into onnxruntime-node. Wasm runs single-threaded and uses
-  `device: "auto"` with an explicit `wasm` execution provider (the override
-  branch leaves transformers' device allowlist empty, so named devices throw).
+- Backend: runs on onnxruntime-web's pure-JS/wasm runtime, the only
+  backend (the onnxruntime-node native mode was removed after the Claude
+  distribution review). Before transformers initializes,
+  `configureBackend()` pins
+  `globalThis[Symbol.for("onnxruntime")]` to onnxruntime-web, so sessions
+  never run on the onnxruntime-node NAPI addon (the NAPI wrap finalizers
+  that panicked Bun at process teardown, oven-sh/bun#34664, belonged to
+  that removed backend). Wasm runs single-threaded and uses
+  `device: "auto"` with an explicit `wasm` execution provider (the pin
+  leaves transformers' device allowlist empty, so named devices throw).
 - Native-memory hygiene: each embed copies the vector out of the output
   tensor, then disposes the tensor; after 10 idle minutes the pipeline's
-  native sessions are released (an embed lazily re-loads). The plugin's
+  ONNX sessions are released (an embed lazily re-loads). The plugin's
   `dispose` hook releases them at shutdown. All release paths are
   best-effort and never throw.
 
@@ -71,7 +73,7 @@ sends raw embed requests to it.
 - The cache dir is `/tmp/thatch-<uid>/thatch-<sha256(dbPath)[:16]>` on unix (created 0700 by the daemon; `tmpdir()` where /tmp is missing or unwritable, and on Windows). The base deliberately does NOT use `tmpdir()`: a direnv'd nix develop shell gives every shell its own TMPDIR, and that once produced 18 daemons for one DB path, each holding its own lock - the single-owner lock is only single-owner within one TMPDIR base, so the daemon anchors on `/tmp`, which no shell can vary (`<uid>` scopes the dir per user on shared machines). The sideband socket and version file keep `tmpdir()` because they are same-env by construction (hooks inherit their server's env); the daemon is the only cross-session actor.
 - The wire contract (`src/embed-daemon/protocol.ts`) is newline-delimited JSON: connect, hello (answered with model, version, pid - before any model load, so cold starts never convert sessions to local-locked), at most one embed, close. Vector length is opaque; the DB discriminates spaces by dimension.
 - Fallback has two forms: at resolve time (only a FAILED spawn attempt locks local), and at request time (a dead daemon delegates that embed to the lazy local model and the next embed re-probes, so recovery is automatic; three consecutive timeouts prefer local for a 60 s cool-down so a wedged daemon costs at most three slow embeds per minute).
-- Lifecycle: the daemon's single-owner lock is SQLite's own - a `BEGIN EXCLUSIVE` transaction held for its lifetime on a dedicated `embed.lock.db` beside the socket (never on `thatch.db`, which would starve every writer). The kernel releases the lock when the holder dies, so there is no stale-lock path. A losing daemon exits 0 before touching the socket; the daemon idles out after `embedDaemon.idleExitMinutes` (default 30; `THATCH_EMBED_DAEMON_IDLE_MS` overrides) with no embed requests (hello never re-arms the timer), and disposes the model before every exit path (Bun #34664). Clients never unlink socket files; the next daemon unlinks a stale one under the lock.
+- Lifecycle: the daemon's single-owner lock is SQLite's own - a `BEGIN EXCLUSIVE` transaction held for its lifetime on a dedicated `embed.lock.db` beside the socket (never on `thatch.db`, which would starve every writer). The kernel releases the lock when the holder dies, so there is no stale-lock path. A losing daemon exits 0 before touching the socket; the daemon idles out after `embedDaemon.idleExitMinutes` (default 30; `THATCH_EMBED_DAEMON_IDLE_MS` overrides) with no embed requests (hello never re-arms the timer), and disposes the model before every exit path (the dispose-before-exit contract; the Bun #34664 NAPI-finalizer panic that motivated it applied to the removed native backend). Clients never unlink socket files; the next daemon unlinks a stale one under the lock.
 - Bundled (plugin-regime) sessions participate fully - they probe, connect, and spawn like standalone sessions. The bundled mode's founding rule (skip machine-shared state) applies to state with COLLIDING multi-writer semantics (sideband socket, version file); the daemon has single-owner semantics (the sqlite lock), so the exclusion does not apply.
 
 ### Write path (memory_remember)

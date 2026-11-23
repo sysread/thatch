@@ -65,41 +65,26 @@ export interface EmbeddingModel {
  */
 export type PipelineFactory = (modelName: string) => Promise<any>;
 
-/**
- * Embedding backend mode. "wasm" runs the ONNX model on onnxruntime-web's
- * pure-JS/wasm runtime; "native" runs it on onnxruntime-node's NAPI addon.
- */
-export type EmbeddingBackendMode = "wasm" | "native";
-
-/**
- * Reads the backend override. Only "native" opts out; any other value,
- * including unset, selects the wasm default. Exported for tests.
- */
-export function backendMode(): EmbeddingBackendMode {
-  return process.env.THATCH_EMBEDDING_BACKEND === "native" ? "native" : "wasm";
-}
-
 const ORT_SYMBOL = Symbol.for("onnxruntime");
 
-let backendConfigured: Promise<EmbeddingBackendMode> | null = null;
+let backendConfigured: Promise<void> | null = null;
 
 /**
- * Chooses the ONNX backend before transformers initializes. Memoized: the
+ * Pins the ONNX runtime before transformers initializes. Memoized: the
  * choice is made once at transformers' module init and cannot be changed
  * afterwards. Exported for tests.
  *
- * "wasm" mode pins globalThis[Symbol.for("onnxruntime")] to onnxruntime-web
- * so transformers' node build creates sessions on its pure-JS/wasm runtime
- * instead of the onnxruntime-node NAPI addon. The NAPI addon leaves wrap
- * finalizers that panic Bun at process teardown (oven-sh/bun#34664); the wasm
- * runtime creates none. A backend already chosen by the host (symbol present)
- * is respected, never clobbered. A failed onnxruntime-web import falls back
- * to native rather than blocking embedding.
+ * Pins globalThis[Symbol.for("onnxruntime")] to onnxruntime-web so
+ * transformers' node build creates sessions on its pure-JS/wasm runtime
+ * instead of the onnxruntime-node NAPI addon (transformers imports that
+ * addon unconditionally, but the pin makes it unreachable). A runtime
+ * already chosen by the host (symbol present) is respected, never
+ * clobbered. A failed onnxruntime-web import leaves the runtime choice to
+ * transformers rather than blocking embedding.
  */
-export async function configureBackend(): Promise<EmbeddingBackendMode> {
+export async function configureBackend(): Promise<void> {
   backendConfigured ??= (async () => {
-    const mode = backendMode();
-    if (mode === "native" || ORT_SYMBOL in globalThis) return mode;
+    if (ORT_SYMBOL in globalThis) return;
     try {
       const ort = await import("onnxruntime-web");
       (globalThis as Record<symbol, unknown>)[ORT_SYMBOL] = ort;
@@ -108,9 +93,8 @@ export async function configureBackend(): Promise<EmbeddingBackendMode> {
       // for background embedding.
       ort.env.wasm.numThreads = 1;
     } catch {
-      // onnxruntime-web unavailable - native sessions still work.
+      // onnxruntime-web unavailable - transformers selects the runtime itself.
     }
-    return mode;
   })();
   return backendConfigured;
 }
@@ -129,13 +113,10 @@ export function resetBackendForTests(): void {
 }
 
 const defaultPipelineFactory: PipelineFactory = async (modelName) => {
-  const mode = await configureBackend();
+  await configureBackend();
   const { pipeline, env } = await import("@huggingface/transformers");
   // Redirect the model cache out of the (possibly read-only) package tree.
   env.cacheDir = modelCacheDir();
-  if (mode === "native") {
-    return pipeline("feature-extraction", modelName);
-  }
   // The ORT_SYMBOL override branch leaves transformers' device allowlist
   // empty, so any named device throws; "auto" bypasses the check and the
   // explicit execution provider does the real work.
@@ -146,7 +127,7 @@ const defaultPipelineFactory: PipelineFactory = async (modelName) => {
 };
 
 /**
- * How long a loaded pipeline may sit unused before its native ONNX sessions
+ * How long a loaded pipeline may sit unused before its ONNX sessions
  * are released while the runtime is still healthy. Long enough to span the
  * gap between extraction bursts, short enough to matter before process exit.
  */
@@ -154,7 +135,7 @@ const DEFAULT_IDLE_TTL_MS = 10 * 60 * 1000;
 
 export interface BgeEmbeddingModelOptions {
   /**
-   * Idle milliseconds before the pipeline's native sessions are released.
+   * Idle milliseconds before the pipeline's sessions are released.
    * A later embed lazily re-loads. 0 disables idle release.
    */
   idleTtlMs?: number;
@@ -165,8 +146,9 @@ export interface BgeEmbeddingModelOptions {
  * instance per location and each would otherwise keep its own ONNX model
  * resident; the pool refcounts so N instances share one model and it is
  * disposed only when the last holder releases (the model's ONNX sessions
- * must be explicitly closed before process exit - Bun's NAPI finalizers
- * panic otherwise, see BgeEmbeddingModel.dispose).
+ * must be explicitly closed before process exit - the dispose-before-exit
+ * contract; the NAPI-finalizer panic that motivated it applied to the
+ * retired native backend, see BgeEmbeddingModel.dispose).
  */
 export class SharedModelPool {
   #entries = new Map<string, { model: BgeEmbeddingModel; refs: number }>();
@@ -185,7 +167,7 @@ export class SharedModelPool {
   /**
    * Release one reference. Resolves when the model's ONNX sessions are
    * released (at zero refs) - the caller MUST await it before its process
-   * can exit, or Bun's NAPI finalizers panic on teardown.
+   * can exit (the dispose-before-exit contract; see BgeEmbeddingModel.dispose).
    */
   async release(dbPath: string): Promise<void> {
     const entry = this.#entries.get(dbPath);
@@ -292,10 +274,12 @@ export class BgeEmbeddingModel implements EmbeddingModel {
   }
 
   /**
-   * Releases the pipeline's native ONNX sessions. The host calls this during
-   * graceful shutdown so onnxruntime's NAPI wrap finalizers are freed while
-   * the runtime is still alive. If instead they survive to Bun's worker
-   * teardown, Bun panics creating their errors (oven-sh/bun#34664).
+   * Releases the pipeline's ONNX sessions. The host calls this during
+   * graceful shutdown. The NAPI wrap finalizers whose survival panicked
+   * Bun at teardown (oven-sh/bun#34664) belonged to the removed native
+   * backend; the dispose call stays as interface contract - every
+   * EmbeddingModel is await-disposed before its process exits - and as
+   * native-memory hygiene for the wasm runtime.
    *
    * The idle timer releases on the same principle during normal operation:
    * the plugin's dispose hook is best-effort because opencode can exit
@@ -397,7 +381,7 @@ export class MockEmbeddingModel implements EmbeddingModel {
   async load(): Promise<void> {}
 
   // Nothing was loaded, so there is nothing to release; the await keeps the
-  // dispose-before-exit contract callers rely on (Bun #34664).
+  // dispose-before-exit contract callers rely on.
   async dispose(): Promise<void> {}
 
   async queryEmbed(text: string): Promise<Float32Array> {

@@ -599,7 +599,7 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
  * Builds the idempotent MCP-server teardown. Injected deps so tests can
  * spy on the close order without spawning anything: sideband first
  * (nothing may reach the model after disposal), version checker + file
- * next, the model's native ONNX sessions in a catch (a disposal failure
+ * next, the model's ONNX sessions in a catch (a disposal failure
  * must not skip the db close), and the db in a finally.
  */
 export function createMcpTeardown(deps: {

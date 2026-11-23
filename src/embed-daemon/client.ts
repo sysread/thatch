@@ -283,7 +283,7 @@ export class RemoteEmbeddingModel implements EmbeddingModel {
 
   async dispose(): Promise<void> {
     // Only the local model holds ONNX sessions; the daemon releases its
-    // own. Awaiting keeps the dispose-before-exit contract (Bun #34664).
+    // own. Awaiting keeps the dispose-before-exit contract.
     await this.#local?.dispose();
   }
 

@@ -27,8 +27,10 @@
  *   idles out even under heavy session churn. An in-flight request is
  *   never interrupted (the shutdown awaits the in-flight embeds).
  * - DISPOSE BEFORE EVERY EXIT PATH: ONNX sessions must be explicitly
- *   released before process exit or Bun's NAPI finalizers panic
- *   (oven-sh/bun#34664; the same contract the MCP teardown enforces).
+ *   released before process exit - the dispose-before-exit contract
+ *   (the NAPI-finalizer panic that motivated it, oven-sh/bun#34664,
+ *   applied to the retired native backend; the same contract the MCP
+ *   teardown enforces).
  */
 import { Database } from "bun:sqlite";
 import { createServer, Socket, type Server } from "node:net";
@@ -228,7 +230,8 @@ export class EmbedDaemon {
 
   /**
    * The shutdown path: idempotent, awaits in-flight embeds, and releases
-   * the model's ONNX sessions BEFORE the process can exit (Bun #34664).
+   * the model's ONNX sessions BEFORE the process can exit (the
+   * dispose-before-exit contract).
    * The socket file is left in place - the idle-exit leftover is by
    * design; the next daemon unlinks it under the lock.
    */
@@ -239,7 +242,7 @@ export class EmbedDaemon {
       // refused at the socket. Serving one mid-shutdown would construct or
       // use a model that is being (or has been) disposed - a lazy
       // re-load nothing will ever release, or live ONNX sessions carried
-      // into process.exit (Bun #34664).
+      // into process.exit.
       this.#shuttingDown = true;
       this.#clearIdle();
       // Stop listening before waiting on in-flight requests: no new

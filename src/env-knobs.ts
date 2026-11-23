@@ -51,11 +51,6 @@ export const ENV_KNOBS: EnvKnob[] = [
     default: "<platform cache dir>/thatch/models",
   },
   {
-    name: "THATCH_EMBEDDING_BACKEND",
-    description: "Embedding runtime: native or wasm.",
-    default: "wasm",
-  },
-  {
     name: "THATCH_EMBED_DAEMON",
     description:
       "Embed-daemon policy for the MCP paths: off forces every embedding model in-process (tests); otherwise each MCP server shares one daemon per database path.",

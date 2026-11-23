@@ -252,7 +252,6 @@ process; the registry itself is `src/env-knobs.ts`.
 |----------|---------|-----------------|
 | `THATCH_DB_PATH` | `~/.config/thatch/thatch.db` | SQLite database path |
 | `THATCH_MODEL` | `Xenova/bge-small-en-v1.5` | Hugging Face model name for embeddings |
-| `THATCH_EMBEDDING_BACKEND` | `wasm` | Set to `native` to run embeddings on onnxruntime-node (NAPI) instead of the wasm runtime |
 | `THATCH_MODEL_CACHE` | platform per-user cache dir | Where downloaded model files are stored |
 | `THATCH_RECALL_THRESHOLD` | `0.55` | Cosine threshold for recall nudge |
 | `THATCH_PREDICTION_THRESHOLD` | `0.60` | Cosine threshold for prediction auto-fire |

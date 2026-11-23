@@ -5,7 +5,6 @@ import { MockEmbeddingModel } from "./mocks/embeddings";
 import {
   BgeEmbeddingModel,
   QUERY_PREFIX,
-  backendMode,
   configureBackend,
   createEmbeddingModel,
   mockEmbeddingVector,
@@ -473,60 +472,43 @@ describe("BgeEmbeddingModel", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Embedding backend selection
+// Embedding backend selection (wasm-only)
 // ---------------------------------------------------------------------------
 
 describe("embedding backend", () => {
-  test("backendMode defaults to wasm", () => {
-    const saved = process.env.THATCH_EMBEDDING_BACKEND;
-    try {
-      delete process.env.THATCH_EMBEDDING_BACKEND;
-      expect(backendMode()).toBe("wasm");
-    } finally {
-      if (saved === undefined) delete process.env.THATCH_EMBEDDING_BACKEND;
-      else process.env.THATCH_EMBEDDING_BACKEND = saved;
-    }
-  });
-
-  test("backendMode opts out to native", () => {
-    const saved = process.env.THATCH_EMBEDDING_BACKEND;
-    try {
-      process.env.THATCH_EMBEDDING_BACKEND = "native";
-      expect(backendMode()).toBe("native");
-    } finally {
-      if (saved === undefined) delete process.env.THATCH_EMBEDDING_BACKEND;
-      else process.env.THATCH_EMBEDDING_BACKEND = saved;
-    }
-  });
-
-  test("backendMode treats unknown values as wasm", () => {
-    const saved = process.env.THATCH_EMBEDDING_BACKEND;
-    try {
-      process.env.THATCH_EMBEDDING_BACKEND = "garbage";
-      expect(backendMode()).toBe("wasm");
-    } finally {
-      if (saved === undefined) delete process.env.THATCH_EMBEDDING_BACKEND;
-      else process.env.THATCH_EMBEDDING_BACKEND = saved;
-    }
-  });
-
   test("configureBackend pins onnxruntime-web and single-threads wasm", async () => {
     // Other test files initialize the plugin server, whose behavior seeding
     // embeds and pins the backend symbol as a side effect. Reset that state
     // so this test exercises the pinning path itself, then restore whatever
     // was there for later files.
-    delete process.env.THATCH_EMBEDDING_BACKEND;
     const globals = globalThis as Record<symbol, any>;
     const savedOrt = globals[Symbol.for("onnxruntime")];
     resetBackendForTests();
 
     try {
-      const mode = await configureBackend();
+      await configureBackend();
 
-      expect(mode).toBe("wasm");
       const ort = globals[Symbol.for("onnxruntime")];
       expect(ort).toBeDefined();
       expect(ort.env.wasm.numThreads).toBe(1);
+    } finally {
+      resetBackendForTests();
+      if (savedOrt !== undefined) {
+        globals[Symbol.for("onnxruntime")] = savedOrt;
+      }
+    }
+  });
+
+  test("configureBackend respects a host-chosen onnxruntime global", async () => {
+    const globals = globalThis as Record<symbol, any>;
+    const savedOrt = globals[Symbol.for("onnxruntime")];
+    resetBackendForTests();
+    const host = { env: { wasm: {} } };
+    globals[Symbol.for("onnxruntime")] = host;
+
+    try {
+      await configureBackend();
+      expect(globals[Symbol.for("onnxruntime")]).toBe(host);
     } finally {
       resetBackendForTests();
       if (savedOrt !== undefined) {
