@@ -77,3 +77,63 @@ jobs:
               ].join('\n'),
               labels: ['publish-failure'],
             });
+
+  # The Claude Code marketplace's plugin branch (the marketplace entry on
+  # main points at {source: github, repo: sysread/thatch, ref:
+  # plugin-release}). The plugin tree is what prepack generates into the
+  # npm tarball - .claude-plugin/plugin.json, hooks/, the slimmed
+  # package.json + bun.lock - committed onto this branch at the tag so a
+  # plugin install is a git clone of that tree. Installs never touch npm
+  # (npm 12 refuses the installer's tarball-URL pack; see
+  # docs/user/setup.md), and the dependency install runs bun against the
+  # slim lockfile. CI is the branch's ONLY writer; --force is safe (one
+  # commit per release, no human work to lose). The top-level workflow
+  # permissions pin GITHUB_TOKEN to contents: read, which cannot push -
+  # this job needs the write grant below.
+  plugin-branch:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - run: bun install
+      - run: bun scripts/prepack.ts
+      - name: Commit the generated plugin tree
+        run: |
+          version=$(bun -p "require('./package.json').version")
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .claude-plugin/plugin.json hooks package.json bun.lock
+          git commit -m "plugin tree for v${version}"
+      - name: Push the plugin-release branch
+        run: git push --force origin HEAD:refs/heads/plugin-release
+
+      - name: Report failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = context.ref.replace('refs/tags/', '');
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              ...context.repo,
+              title: `Plugin branch refresh failed: ${tag}`,
+              body: [
+                `The plugin-release branch refresh for \`${tag}\` failed.`,
+                ``,
+                `[View the failed run](${runUrl})`,
+                ``,
+                `Marketplace installs keep working (they clone the previous`,
+                `release's branch head) until this is fixed.`,
+                ``,
+                `Common causes: branch protection or a ruleset blocking the`,
+                `force-push of plugin-release.`,
+                ``,
+                `Recovery: fix the workflow, delete and re-tag ${tag} at the fixed commit, push.`,
+              ].join('\n'),
+              labels: ['publish-failure'],
+            });

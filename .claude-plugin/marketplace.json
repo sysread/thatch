@@ -9,15 +9,21 @@
     {
       "name": "thatch",
       "description": "Thatch memory, extraction, and cross-session chat for Claude Code.",
+      "strict": true,
       "source": {
-        "source": "npm",
-        "package": "@jeffober/thatch"
+        "source": "github",
+        "repo": "sysread/thatch",
+        "ref": "plugin-release"
       },
       "mcpServers": {
         "thatch": {
           "type": "stdio",
           "command": "bun",
-          "args": ["${CLAUDE_PLUGIN_ROOT}/bin/thatch", "mcp", "--bundled"]
+          "args": [
+            "${CLAUDE_PLUGIN_ROOT}/bin/thatch",
+            "mcp",
+            "--bundled"
+          ]
         }
       }
     }

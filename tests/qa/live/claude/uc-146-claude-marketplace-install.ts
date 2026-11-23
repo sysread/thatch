@@ -28,12 +28,13 @@ import { registerUseCase, type UseCase } from "../../runner";
  *    marketplace installs it. The fixture's thatch entry is a `command`
  *    source printing the unpacked tarball root - the documented local
  *    form that exercises the same install/cache/dependency-install
- *    machinery as the npm source, minus the registry fetch itself (which
- *    only a release proves; the release checklist carries it).
+ *    machinery as the shipped github source (plugin-release branch),
+ *    minus the git fetch itself (which only a release proves; the
+ *    release checklist carries it).
  *
- * The dependency-install assertions are the packaging precondition: an
- * npm-sourced plugin whose package lacks a supported lockfile beside its
- * package.json lands NO node_modules, and the bundled server cannot
+ * The dependency-install assertions are the packaging precondition: a
+ * plugin tree whose package.json lacks a supported lockfile beside it
+ * lands NO node_modules, and the bundled server cannot
  * start. The shipped bun.lock must produce a runtime-only node_modules -
  * Claude Code installs every package the lockfile lists, so the full
  * lockfile would land ~1 GB of devDependency trees in every user's

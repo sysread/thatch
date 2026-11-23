@@ -97,4 +97,4 @@ git push origin "v$next"
 echo "  ✓ pushed"
 echo
 
-echo "done - CI will publish v$next to npm"
+echo "done - CI will publish v$next to npm and refresh the plugin-release branch"

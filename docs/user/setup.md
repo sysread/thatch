@@ -74,41 +74,38 @@ setup run and no global install; paste into a session:
 ```
 
 The marketplace lives in the thatch repository, and its plugin entry
-fetches the published npm package: the npm release IS the plugin
-release, with one version and one update path (`claude plugin update
-thatch`, or "Update now" in the `/plugin` panel). The installed plugin
-is the same shape the plugin regime below generates - the bundled MCP
-server, launched as `bun <install>/bin/thatch mcp --bundled` from the
-installed copy, plus the in-process mod - and the server writes the
-CLAUDE.md instructions block at its first startup, so even this path
-gets the instructions without a setup run. Requires Claude Code 2.1.287
-or newer (the mods floor), enterprise policy permitting mods, and bun
-on PATH.
+clones a git branch of the same repository (`plugin-release`) instead of
+fetching an npm package: CI regenerates that branch at every release tag
+with the built plugin tree, so the git tag is the plugin release, with
+one version and one update path (`claude plugin update thatch`, or
+"Update now" in the `/plugin` panel - it re-clones the branch head). The
+installed plugin is the same shape the plugin regime below generates -
+the bundled MCP server, launched as `bun <install>/bin/thatch mcp
+--bundled` from the installed copy, plus the in-process mod - and the
+server writes the CLAUDE.md instructions block at its first startup, so
+even this path gets the instructions without a setup run. Requires
+Claude Code 2.1.287 or newer (the mods floor), enterprise policy
+permitting mods, and git and bun on PATH.
 
-On npm 12, the install fails with
-`Could not download @jeffober/thatch@<version> ... code EALLOWREMOTE`:
-npm 12 stopped fetching packages given as tarball URLs, and Claude
-Code's installer packs the resolved tarball URL rather than the
-registry spec. Two prerequisites, in order:
+The install never runs npm. (Earlier releases installed from the npm
+package, which npm 12 broke with `code EALLOWREMOTE` - npm 12 stopped
+fetching tarball URLs, and the installer packs the resolved URL rather
+than the registry spec, anthropics/claude-code#98362. The git source
+bypasses npm entirely; no `npm_config_allow_remote` workaround.)
 
-1. bun on PATH - the plugin's server and dependency install both run
+Prerequisites, in order:
+
+1. git on PATH - the marketplace add and the plugin install both clone
+   (`git --version` to check).
+2. bun on PATH - the plugin's server and dependency install both run
    it (`bun --version` to check; without it, a mise shim's
    "mise use -g bun@..." hint means the shim exists but bun itself
    is not installed: `mise use -g bun@1.4.4` or
-   `brew install oven-sh/bun/bun`).
-2. Allow the fetch for the one install:
-
-```text
-npm_config_allow_remote=all claude plugin install thatch
-```
-
-Your npm config is unchanged. The same env var prefix applies to a
-later `claude plugin update thatch` if its dependency install needs
-re-running (the `/plugin` Errors tab says "The packages it lists are
-not installed" when the dependency install did not complete, and the
-server then fails to connect). Upstream: the installer should pack the
-registry spec and verify its integrity instead of the URL
-(anthropics/claude-code#98362).
+   `brew install oven-sh/bun/bun`). The dependency install is
+   `bun install --frozen-lockfile --ignore-scripts` on the lockfile
+   shipped with the plugin; if it did not complete, the `/plugin`
+   Errors tab says "The packages it lists are not installed" and the
+   server fails to connect - `claude plugin update thatch` re-runs it.
 
 Thatch also installs as a Claude Code plugin via setup (see "The plugin
 regime" below). `--hooks` installs the classic integration instead - a

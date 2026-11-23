@@ -5,10 +5,14 @@ import { join } from "node:path";
 /**
  * The committed Claude Code marketplace manifest. The repo IS the
  * marketplace (`claude plugin marketplace add sysread/thatch` fetches this
- * file), and its single plugin entry sources the npm package - the
- * one-release-train design: the npm release is the plugin release. These
- * tests guard the shape `claude plugin validate` enforces and the fields
- * the README's two-line install resolves against.
+ * file), and its single plugin entry sources a GIT branch of this repo -
+ * plugin-release, the CI-generated tree of the prepack output (the
+ * publish.yml plugin-branch job commits it at every tag). The entry is
+ * pinned to the branch, so installs clone the repo instead of running
+ * npm's tarball-URL pack (the npm 12 EALLOWREMOTE gate; see
+ * docs/user/setup.md). These tests guard the shape `claude plugin
+ * validate` enforces and the fields the README's two-line install
+ * resolves against.
  */
 const manifest = JSON.parse(
   readFileSync(join(import.meta.dir, "..", ".claude-plugin", "marketplace.json"), "utf8"),
@@ -27,18 +31,19 @@ describe("the committed Claude Code marketplace manifest", () => {
     expect(manifest.plugins).toHaveLength(1);
   });
 
-  test("the plugin entry resolves the npm package (one release train)", () => {
+  test("the plugin entry resolves the plugin-release branch (git source, no npm)", () => {
     const [entry] = manifest.plugins;
-    // `/plugin install thatch` resolves the ENTRY name; the npm source
-    // fetches the published @jeffober/thatch package.
+    // `/plugin install thatch` resolves the ENTRY name; the github source
+    // clones sysread/thatch at the plugin-release branch, which carries the
+    // prepack-generated plugin tree.
     expect(entry.name).toBe("thatch");
-    expect(entry.source).toEqual({ source: "npm", package: "@jeffober/thatch" });
+    expect(entry.source).toEqual({ source: "github", repo: "sysread/thatch", ref: "plugin-release" });
   });
 
-  test("declares no version (the package's manifest governs)", () => {
+  test("declares no version (the branch's plugin.json manifest governs)", () => {
     const [entry] = manifest.plugins;
-    // The fetched package's plugin.json sets the version (an entry version
-    // would only draw a validate warning).
+    // The generated plugin.json on the branch sets the version (an entry
+    // version would only draw a validate warning).
     expect(entry.version).toBeUndefined();
   });
 
@@ -46,9 +51,11 @@ describe("the committed Claude Code marketplace manifest", () => {
     const [entry] = manifest.plugins;
     // /plugin's Discover view renders a remote entry's own component
     // fields and shows "Component summary not available for remote plugin"
-    // when it declares none. An entry's mcpServers never applies when the
-    // package has its own plugin.json, so this mirror is display-only;
-    // scripts/prepack.ts verifies it against the generated manifest.
+    // when it declares none. On a git source the entry's components meet
+    // the branch manifest's own under the strict-conflict rule, so the
+    // mirror carries strict: true to stay legal; scripts/prepack.ts
+    // verifies it against the generated manifest.
+    expect(entry.strict).toBe(true);
     expect(entry.mcpServers).toEqual({
       thatch: {
         type: "stdio",

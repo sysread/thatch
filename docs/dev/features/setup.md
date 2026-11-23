@@ -132,26 +132,38 @@ The skills install is unchanged in this regime (Claude Code discovers the
 scope's skills dir the same way); skills are NOT bundled in the generated
 plugin directory.
 
-### The marketplace front door (the repo is the marketplace, the npm package is the plugin)
+### The marketplace front door (the repo is the marketplace AND the plugin source)
 
 The repo itself is a Claude Code plugin marketplace:
 `.claude-plugin/marketplace.json` lists one plugin, `thatch`, whose
-source is the npm package `@jeffober/thatch`. The npm release IS the
-plugin release - one version, one update path. The entry declares no
-version, so the package's own
-`.claude-plugin/plugin.json` (generated at pack time) is the manifest
-and its `version` decides updates. The entry does mirror the generated
-manifest's `mcpServers`: `/plugin`'s Discover view renders a remote
-entry's own component fields and shows "Component summary not available
-for remote plugin" when it declares none, and an entry's `mcpServers`
-never applies when the package has its own manifest, so the mirror is
-display-only. `scripts/prepack.ts` verifies the mirror against the
-generated manifest (and that no other component fields are declared),
-so drift fails the release build.
+source is a GIT branch of this repo - `plugin-release`, pinned by ref in
+the entry (`{source: "github", repo: "sysread/thatch", ref:
+"plugin-release"}`). An install clones that branch instead of fetching
+an npm package, which sidesteps npm 12's refusal of the installer's
+tarball-URL pack (`code EALLOWREMOTE`, anthropics/claude-code#98362) and
+its `npm_config_allow_remote` workaround. The publish workflow's
+`plugin-branch` job regenerates the branch at every tag: it runs
+`scripts/prepack.ts` and commits the generated tree (`.claude-plugin/
+plugin.json`, `hooks/`, slimmed `package.json` + `bun.lock`) with a
+force-push - CI is the branch's only writer. The entry declares no
+version, so the branch's generated `.claude-plugin/plugin.json` is the
+manifest and its `version` decides what `claude plugin update` displays;
+the update re-clones the branch head and records the commit. The entry
+mirrors the generated manifest's `mcpServers` with `strict: true`:
+`/plugin`'s Discover view renders an entry's own component fields and
+shows "Component summary not available for remote plugin" when it
+declares none, and on a git source an entry declaring components while
+the branch's manifest also declares them meets the strict-conflict rule,
+where `strict: true` is what makes the mirror-and-manifest pair legal
+(the live install check at each release verifies the pairing).
+`scripts/prepack.ts` verifies the mirror against the generated manifest
+(and that no other component fields are declared), so drift fails the
+release build.
 
 The package ships a loadable plugin, generated at pack time:
-`scripts/prepack.ts` (npm's prepack lifecycle - runs on `npm pack` and on
-the publish workflow's `npm publish`) calls the SAME generator as setup
+`scripts/prepack.ts` (npm's prepack lifecycle - runs on `npm pack`, on
+the publish workflow's `npm publish`, and in the plugin-branch job)
+calls the SAME generator as setup
 (`writePluginTree` in `src/setup.ts`) with a package-world server entry -
 `bun ${CLAUDE_PLUGIN_ROOT}/bin/thatch mcp --bundled`, the installed
 copy's bin under bun, never a PATH `thatch` or a pack-time project pin.
