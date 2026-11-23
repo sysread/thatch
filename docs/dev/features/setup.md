@@ -138,9 +138,16 @@ The repo itself is a Claude Code plugin marketplace:
 `.claude-plugin/marketplace.json` lists one plugin, `thatch`, whose
 source is the npm package `@jeffober/thatch`. The npm release IS the
 plugin release - one version, one update path. The entry declares no
-version and no components, so the package's own
+version, so the package's own
 `.claude-plugin/plugin.json` (generated at pack time) is the manifest
-and its `version` decides updates.
+and its `version` decides updates. The entry does mirror the generated
+manifest's `mcpServers`: `/plugin`'s Discover view renders a remote
+entry's own component fields and shows "Component summary not available
+for remote plugin" when it declares none, and an entry's `mcpServers`
+never applies when the package has its own manifest, so the mirror is
+display-only. `scripts/prepack.ts` verifies the mirror against the
+generated manifest (and that no other component fields are declared),
+so drift fails the release build.
 
 The package ships a loadable plugin, generated at pack time:
 `scripts/prepack.ts` (npm's prepack lifecycle - runs on `npm pack` and on

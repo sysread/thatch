@@ -12,6 +12,13 @@
       "source": {
         "source": "npm",
         "package": "@jeffober/thatch"
+      },
+      "mcpServers": {
+        "thatch": {
+          "type": "stdio",
+          "command": "bun",
+          "args": ["${CLAUDE_PLUGIN_ROOT}/bin/thatch", "mcp", "--bundled"]
+        }
       }
     }
   ]

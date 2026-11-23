@@ -35,15 +35,38 @@ describe("the committed Claude Code marketplace manifest", () => {
     expect(entry.source).toEqual({ source: "npm", package: "@jeffober/thatch" });
   });
 
-  test("declares no version and no components (the package's manifest governs)", () => {
+  test("declares no version (the package's manifest governs)", () => {
     const [entry] = manifest.plugins;
     // The fetched package's plugin.json sets the version (an entry version
-    // would only draw a validate warning), and component fields belong to
-    // the package's own manifest, not the marketplace entry.
+    // would only draw a validate warning).
     expect(entry.version).toBeUndefined();
-    expect(entry.mcpServers).toBeUndefined();
-    expect(entry.hooks).toBeUndefined();
+  });
+
+  test("mirrors the generated plugin.json's mcpServers (the Discover summary)", () => {
+    const [entry] = manifest.plugins;
+    // /plugin's Discover view renders a remote entry's own component
+    // fields and shows "Component summary not available for remote plugin"
+    // when it declares none. An entry's mcpServers never applies when the
+    // package has its own plugin.json, so this mirror is display-only;
+    // scripts/prepack.ts verifies it against the generated manifest.
+    expect(entry.mcpServers).toEqual({
+      thatch: {
+        type: "stdio",
+        command: "bun",
+        args: ["${CLAUDE_PLUGIN_ROOT}/bin/thatch", "mcp", "--bundled"],
+      },
+    });
+  });
+
+  test("declares no commands, agents, skills, or hooks (the plugin ships none as components)", () => {
+    const [entry] = manifest.plugins;
+    // The mod loads from the default hooks/hooks.json location and the
+    // shared skills install via `thatch setup`; entry component fields
+    // would merge into the package's plugin.json at install against
+    // trees the package does not ship. prepack guards this too.
     expect(entry.commands).toBeUndefined();
+    expect(entry.agents).toBeUndefined();
     expect(entry.skills).toBeUndefined();
+    expect(entry.hooks).toBeUndefined();
   });
 });

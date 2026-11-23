@@ -33,6 +33,45 @@ await writePluginTree(root, {
   args: ["${CLAUDE_PLUGIN_ROOT}/bin/thatch", "mcp", "--bundled"],
 });
 
+// The marketplace entry mirrors the generated plugin.json's mcpServers:
+// /plugin's Discover view renders a remote entry's own component fields
+// ("Component summary not available for remote plugin" when it declares
+// none), and an entry's mcpServers never applies when the package has its
+// own manifest - the mirror is display-only. Verify it here so drift fails
+// the release build instead of showing a stale server config in /plugin.
+// The other component fields (commands, agents, skills, hooks) must stay
+// undeclared: the plugin ships none as Claude Code components (the shared
+// skills install via `thatch setup`, the mod loads from the default
+// hooks/hooks.json location), and with the package's plugin.json present,
+// entry skills/commands/agents append to the manifest at install and entry
+// hooks replace per-event matchers - either would corrupt the install.
+const manifest = JSON.parse(
+  readFileSync(join(root, ".claude-plugin", "plugin.json"), "utf8"),
+);
+const marketplace = JSON.parse(
+  readFileSync(join(root, ".claude-plugin", "marketplace.json"), "utf8"),
+);
+const entry = marketplace.plugins.find((p: { name: string }) => p.name === "thatch");
+if (!entry) {
+  throw new Error("marketplace.json lists no thatch entry");
+}
+if (JSON.stringify(entry.mcpServers) !== JSON.stringify(manifest.mcpServers)) {
+  throw new Error(
+    "marketplace.json's thatch entry mcpServers must mirror the generated " +
+      "plugin.json's mcpServers (the /plugin Discover view renders the entry " +
+      `for remote sources). Expected:\n${JSON.stringify(manifest.mcpServers, null, 2)}`,
+  );
+}
+for (const field of ["commands", "agents", "skills", "hooks"] as const) {
+  if (entry[field] !== undefined) {
+    throw new Error(
+      `marketplace.json's thatch entry declares "${field}": the plugin ships ` +
+        `no ${field} as Claude Code components, and an entry's component ` +
+        "fields merge into the package's own plugin.json at install",
+    );
+  }
+}
+
 const origDir = join(root, ".pack-orig");
 // Self-heal: an interrupted pack leaves .pack-orig beside slimmed copies,
 // so restore before saving - a re-run must snapshot the REAL originals,
