@@ -66,3 +66,30 @@ describe("v1 SDK drift gate", () => {
     expect("clean file text, no SDK scope here".includes(V1_SDK_MARKER)).toBe(false);
   });
 });
+
+// The bun:sqlite drift gate (the node-sqlite plan, D16): after the
+// node:sqlite re-point, no src/ or bin/ file may import bun:sqlite again -
+// a stray import would crash at runtime on node (and on bun < 1.4.2, which
+// has no node:sqlite to fall back to through the other side). The marker
+// matches the IMPORT shape, not the bare substring: the literal
+// "bun:sqlite" legitimately appears in src/ comments that document the
+// migration. tests/ and qa/ keep raw bun:sqlite on purpose - fixture
+// seeding uses raw handles - so the scan roots are src/ and bin/ only.
+const BUN_SQLITE_IMPORT = /from ["']bun:sqlite["']/;
+
+describe("bun:sqlite drift gate", () => {
+  test("no src or bin file imports bun:sqlite", () => {
+    const offenders: string[] = [];
+    for (const root of ["src", "bin"]) {
+      for (const file of scanFiles(join(REPO_ROOT, root))) {
+        if (BUN_SQLITE_IMPORT.test(readFileSync(file, "utf8"))) offenders.push(file);
+      }
+    }
+    expect(offenders, `files still importing bun:sqlite: ${offenders.join(", ")}`).toEqual([]);
+  });
+
+  test("the import-shape matcher flags an import and passes a comment mention (self-check)", () => {
+    expect(BUN_SQLITE_IMPORT.test('import { Database } from "bun:sqlite";')).toBe(true);
+    expect(BUN_SQLITE_IMPORT.test("// bun:sqlite's .get() returns null for a missing row")).toBe(false);
+  });
+});
