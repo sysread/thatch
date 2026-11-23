@@ -126,7 +126,7 @@ jobs:
           version=$(bun -p "require('./package.json').version")
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          rm -f bun.lock
+          git rm -q --cached bun.lock
           git add -f .claude-plugin/plugin.json hooks package.json
           git add -f npm-shrinkwrap.json
           git commit -m "plugin tree for v${version}"
