@@ -89,13 +89,24 @@ On npm 12, the install fails with
 `Could not download @jeffober/thatch@<version> ... code EALLOWREMOTE`:
 npm 12 stopped fetching packages given as tarball URLs, and Claude
 Code's installer packs the resolved tarball URL rather than the
-registry spec. Allow the fetch for the one install:
+registry spec. Two prerequisites, in order:
+
+1. bun on PATH - the plugin's server and dependency install both run
+   it (`bun --version` to check; without it, a mise shim's
+   "mise use -g bun@..." hint means the shim exists but bun itself
+   is not installed: `mise use -g bun@1.4.4` or
+   `brew install oven-sh/bun/bun`).
+2. Allow the fetch for the one install:
 
 ```text
 npm_config_allow_remote=all claude plugin install thatch
 ```
 
-Your npm config is unchanged. Upstream: the installer should pack the
+Your npm config is unchanged. The same env var prefix applies to a
+later `claude plugin update thatch` if its dependency install needs
+re-running (the `/plugin` Errors tab says "The packages it lists are
+not installed" when the dependency install did not complete, and the
+server then fails to connect). Upstream: the installer should pack the
 registry spec and verify its integrity instead of the URL
 (anthropics/claude-code#98362).
 
