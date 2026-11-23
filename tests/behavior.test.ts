@@ -252,7 +252,7 @@ describe("listBehaviors", () => {
 });
 
 describe("scoreBehaviorNudge", () => {
-  test("returns BehaviorNudgeItem array with threshold filtering", () => {
+  test("returns ScoredNudge with threshold filtering", () => {
     const matcherEmbed = makeEmbed(1);
     const behaviorEmbed = makeEmbed(2);
     const matcherId = db.createBehaviorMatcher(store, "editing a large function", matcherEmbed, "m");
@@ -260,9 +260,9 @@ describe("scoreBehaviorNudge", () => {
     db.createBehaviorEdge(matcherId, behaviorId, 1.0);
 
     const highThreshold = db.scoreBehaviorNudge([store], matcherEmbed, 1.01);
-    expect(highThreshold).toEqual([]);
+    expect(highThreshold.items).toEqual([]);
 
-    const items = db.scoreBehaviorNudge([store], matcherEmbed, 0.0, 5);
+    const { items } = db.scoreBehaviorNudge([store], matcherEmbed, 0.0, 5);
     expect(items.length).toBe(1);
     expect(items[0].statement).toBe("read the whole function first");
     expect(items[0].confidence).toBeCloseTo(0.5, 2);
@@ -276,7 +276,7 @@ describe("scoreBehaviorNudge", () => {
     db.createBehaviorEdge(m1, behaviorId, 1.0);
     db.createBehaviorEdge(m2, behaviorId, 1.0);
 
-    const items = db.scoreBehaviorNudge([store], makeEmbed(1), 0.0, 5);
+    const { items } = db.scoreBehaviorNudge([store], makeEmbed(1), 0.0, 5);
     expect(items.length).toBe(1);
   });
 });

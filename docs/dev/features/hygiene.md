@@ -7,26 +7,50 @@ memories itself — it surfaces problems and lets the agent tend the store.
 
 ## What it does
 
-- Three signals: duplicate candidates, stale entries, orphaned branch memories
+- Four signals per store: duplicate candidates, prediction duplicate pairs,
+  stale entries, orphaned branch memories
+- Covers both stores a session scans: the project store AND global
 - Runs at session start on all three hosts
 - Only non-zero signals are reported (healthy stores stay silent)
+- Per-store failure isolation: a store whose scan throws logs
+  `[thatch] hygiene report for <store> failed` to stderr and drops only
+  its own line; the other store still renders
 - Standalone `thatch hygiene` CLI command for manual inspection
 
 ## How it works
 
-### Three signals
+### Store coverage
 
-1. **Duplicate candidates** — `db.findDuplicates(repo)`: near-duplicate memory
-   pairs via cosine >= 0.85 pending review. These are the same pairs that
-   `find_duplicates` surfaces, but the hygiene report is a count-only summary,
+Every project session scans `[repo, "global"]` for nudges, so the hygiene
+report covers both stores. Each store's signals print under their own
+`Store "<name>":` sentence. The orphaned-branch check runs only for the
+project store (the global store has no branch scoping).
+
+### Four signals
+
+1. **Duplicate candidates** — `db.findDuplicates(store)`: near-duplicate memory
+   pairs via cosine >= 0.83 (`DEDUP_PAIR_THRESHOLD`, shared with the
+   `find_duplicates` tool) pending review. The hygiene report is a count-only
+   summary,
    not the full pair list.
 
-2. **Stale entries** — `db.staleEntryCount(repo, cutoff)`: memories neither
-   updated nor recalled in 90+ days (`STALE_DAYS = 90`). Uses `recall_count`
+2. **Prediction duplicate pairs** — `db.findPredictionDuplicates(store)`:
+   prediction-store near-duplicates pending review. When there are at
+   most 5 pairs (`PREDICTION_PAIR_IDS_CAP`), the report line names each
+   pair's two prediction ids, so `prediction_mark_checked` can settle
+   them without a listing call.
+
+3. **Stale entries** — `db.staleEntryCount(store, cutoff)`: memories neither
+   updated nor recalled in 60+ days (`STALE_DAYS = 60`). The window is
+   short because the recall nudge renders at most 5 memories: a stale
+   corpus crowds fresh matches out of that list, so staleness is the
+   cheapest consolidation lever. Uses
+   `recall_count`
    and `last_recalled_at` columns. Archived memories are excluded
    (`WHERE archived = 0`).
 
-3. **Orphaned branch memories** — `db.branchesInStore(repo)` cross-references
+4. **Orphaned branch memories** (project store only) —
+   `db.branchesInStore(store)` cross-references
    against `git.listBranches(worktree)`. Memories scoped to branches that no
    longer exist. `listBranches` reads `refs/heads` AND `refs/remotes`
    (remote name stripped), so a branch pushed with an open PR but no local
@@ -76,7 +100,7 @@ instructions for the agent to tend the store when convenient.
 ## Source files
 
 - `src/hygiene.ts` — `hygieneReport` function
-- `src/db.ts` — `findDuplicates`, `staleEntryCount`, `branchesInStore`
+- `src/db.ts` — `findDuplicates`, `findPredictionDuplicates`, `staleEntryCount`, `branchesInStore`
 - `src/git.ts` — `listBranches`
 - `bin/thatch` — `hygiene` and `reminder` subcommands
 
@@ -89,5 +113,7 @@ instructions for the agent to tend the store when convenient.
 - A branch that exists only as a remote-tracking ref (pushed, PR open, no
   local checkout) is not orphaned; a stale tracking ref only delays the
   nudge until prune.
-- Archived memories are excluded from all three checks: duplicates,
-  staleness, and the orphaned-branch list.
+- Archived memories are excluded from the three entry-table checks:
+  duplicates, staleness, and the orphaned-branch list. The
+  prediction-duplicate scan reads the predictions table, which has no
+  archived concept.

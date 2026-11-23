@@ -47,7 +47,7 @@ execution directly via bun assertions. These are fast and run in parallel.
 |----|------|---------------|
 | UC-004 | cli-inspection | `stores`, `list`, `show`, `forget`, `search` subcommands |
 | UC-005 | setup-install | setup installs correct files for Claude Code and Cursor |
-| UC-008 | hygiene-heartbeat | hygiene report at session start (duplicates, stale, orphaned) |
+| UC-008 | hygiene-heartbeat | hygiene report at session start (memory dupes, prediction dupes, stale, orphaned) |
 | UC-009 | flush-tools-tiers | three priority tiers: extraction, recall, write nudge |
 | UC-011 | write-time-similarity-warning | `memory_remember` warns about near-duplicates |
 | UC-012 | model-migration | switching `THATCH_MODEL` makes old entries invisible |
@@ -113,6 +113,7 @@ them locally with `mise run qa-live`.
 | UC-119 | session-tab-spawn | the session_tab spawn flow end to end |
 | UC-122 | review-mode-commands | /thatch/self-review and /thatch/peer-review overlay efficacy (seeded fixture) |
 | UC-125 | session-tab-switched-window | coordinator-anchored tab routing: a spawn from a window viewing a different-directory tab still opens the strip tab (manualOnly - the strip is TUI-local) |
+| UC-152 | nudge-truncation-disclosure | filter-then-cap nudge ordering: the threshold scores all matchers, the top-5 cap discloses what it cut ("Top N of M") in prediction, behavior, and recall nudges |
 
 ### mise tasks
 

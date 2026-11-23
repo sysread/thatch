@@ -162,11 +162,9 @@ export async function computePluginStage(
         const parts: string[] = [];
         try {
           const threshold = parseFloat(process.env.THATCH_RECALL_THRESHOLD ?? "0.55");
-          const matches = deps.db
-            .search(stores, embedding, { limit: 5 })
-            .filter((r) => r._score >= threshold)
-            .map((r) => ({ label: r.label, score: Math.round(r._score * 1000) / 1000, store: r.store }));
-          if (matches.length > 0) parts.push(claudeRecallNudge(matches));
+          const { rows, totalAbove } = deps.db.searchWithTotal(stores, embedding, { limit: 5, minScore: threshold });
+          const matches = rows.map((r) => ({ label: r.label, score: Math.round(r._score * 1000) / 1000, store: r.store }));
+          if (matches.length > 0) parts.push(claudeRecallNudge(matches, totalAbove));
         } catch (err) {
         // Failure lines are never swallowed (the house hook rule): the
         // server's stderr is the plugin debug log's other half.
@@ -174,15 +172,15 @@ export async function computePluginStage(
       }
         try {
           const threshold = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.60");
-          const predictions = deps.db.scorePredictionNudge(stores, embedding, threshold, 5);
-          if (predictions.length > 0) parts.push(predictionNudge(predictions, deps.toolNamer ?? mcpToolName));
+          const { items: predictions, matchersFired, itemsTotal } = deps.db.scorePredictionNudge(stores, embedding, threshold, 5);
+          if (predictions.length > 0) parts.push(predictionNudge(predictions, deps.toolNamer ?? mcpToolName, { matchersFired, itemsTotal }));
         } catch (err) {
         console.error(`[thatch] prediction tier failed: ${err}`);
       }
         try {
           const threshold = parseFloat(process.env.THATCH_BEHAVIOR_THRESHOLD ?? "0.60");
-          const behaviors = deps.db.scoreBehaviorNudge(stores, embedding, threshold, 5);
-          if (behaviors.length > 0) parts.push(behaviorNudge(behaviors, deps.toolNamer ?? mcpToolName));
+          const { items: behaviors, matchersFired, itemsTotal } = deps.db.scoreBehaviorNudge(stores, embedding, threshold, 5);
+          if (behaviors.length > 0) parts.push(behaviorNudge(behaviors, deps.toolNamer ?? mcpToolName, { matchersFired, itemsTotal }));
         } catch (err) {
         console.error(`[thatch] behavior tier failed: ${err}`);
       }

@@ -24,7 +24,7 @@ const useCase: UseCase = {
     "4. Verify the recall nudge fires for the matching prompt.",
   ].join("\n"),
   expected: [
-    "- Step 1–2: the prompt passes the MIN_PROMPT_LEN gate. The embedding is computed. db.search returns results, but all _score values are below RECALL_THRESHOLD (0.55). No recall nudge fires.",
+    "- Step 1–2: the prompt passes the MIN_PROMPT_LEN gate. The embedding is computed. db.searchWithTotal returns results, but all _score values are below RECALL_THRESHOLD (0.55). No recall nudge fires.",
     "- Step 3–4: the matching prompt produces at least one result with _score >= 0.55. The recall nudge fires with labels and scores.",
   ].join("\n"),
 

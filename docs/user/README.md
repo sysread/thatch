@@ -237,7 +237,7 @@ Beyond the tools, thatch hooks into opencode itself:
   to recall user preferences and project context before its first response.
 - **Hygiene heartbeat.** The session-start reminder also reports store
   maintenance signals when there are any: duplicate candidates pending review,
-  memories neither updated nor recalled in 90+ days, and memories scoped to
+  memories neither updated nor recalled in 60+ days, and memories scoped to
   git branches that no longer exist. The agent is asked to tend the store when
   convenient. Thatch never deletes memories on its own.
 - **Write-time similarity warning.** Saving a memory that closely resembles an
@@ -248,7 +248,7 @@ Beyond the tools, thatch hooks into opencode itself:
   child session and prompts it to run the fact-extractor skill directly. No
   nudge text in your conversation. The child writes memories via
   `thatch_memory_remember` and is cleaned up when it finishes. A toast
-  notification shows the results (`[thatch] new: 2, updated: 1`). If the
+  notification shows the results (`💭 new: 2, updated: 1`). If the
   direct path fails, a nudge is injected into the next message as a
   fallback. On Claude Code and Cursor, the nudge-and-acknowledge path is
   the only mechanism (no SDK client to create child sessions). The agent
@@ -256,9 +256,9 @@ Beyond the tools, thatch hooks into opencode itself:
 - **Recall, prediction, and behavior toasts.** When your prompt matches stored
   memories, learned decision patterns, or codified behaviors, thatch injects a
   synthetic nudge (invisible to you, visible to the agent) and fires a toast
-  notification (`[thatch] recalled 3 memories`, `[thatch] 2 predictions
-  surfaced`, or `[thatch] 1 behavior surfaced`). The toast is ephemeral. It
-  fades after a few seconds.
+  notification (`💭 matched 3 of 12 memories`, `💭 2 of 5
+  predictions surfaced`, or `💭 2 behaviors surfaced`). The toast is
+  ephemeral. It fades after a few seconds.
 - **Wrap-up commands.** `/thatch/compact` and `/thatch/exit` (opencode and
   the Claude Code plugin regime)
   run a pre-flight checklist before you compact or close a session: the agent

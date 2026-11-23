@@ -34,6 +34,20 @@ export interface NudgeItem {
 }
 
 /**
+ * Result of a nudge scan. matchersFired counts every matcher that cleared
+ * the relevance threshold, and itemsTotal every scored item after dedup -
+ * both BEFORE the output cap. Renderers turn the gap between itemsTotal
+ * and items.length into the "Top N of M" disclosure line and point the
+ * model at the live tool for more; the followUp must not promise more
+ * than that tool can deliver.
+ */
+export interface ScoredNudge<T = NudgeItem> {
+  items: T[];
+  matchersFired: number;
+  itemsTotal: number;
+}
+
+/**
  * Raw row from the items table (predictions or behaviors). Returned by
  * findNearestItem and getItem. The wrapper engines cast this to their
  * own PredictionRow / BehaviorRow types, which have the same shape.
@@ -81,10 +95,15 @@ export class ScoringEngine {
   findMatchers(
     stores: string[],
     queryEmbedding: Float32Array,
-    opts?: { limit?: number },
+    opts?: { limit?: number; threshold?: number },
   ): { id: string; description: string; score: number }[] {
     if (stores.length === 0) return [];
-    const limit = opts?.limit ?? 5;
+    // Default is every matcher at or above the threshold: relevance is
+    // decided by the threshold, the caller's limit only caps output size.
+    // Slicing before filtering silently dropped relevant matchers whenever
+    // a dense store put more than `limit` of them above the threshold.
+    const limit = opts?.limit ?? Number.MAX_SAFE_INTEGER;
+    const threshold = opts?.threshold;
     const placeholders = stores.map(() => "?").join(", ");
     const rows = this.#db
       .query(
@@ -99,8 +118,8 @@ export class ScoringEngine {
       if (emb.length !== queryEmbedding.length) continue;
       const score = cosineSimilarity(queryEmbedding, emb);
       // Noise floor: filter near-zero and negative cosine scores.
-      // Callers apply the actual relevance threshold (e.g., 0.60).
-      if (score >= 0.01) {
+      // Callers may pass their actual relevance threshold (e.g., 0.60).
+      if (score >= 0.01 && (threshold === undefined || score >= threshold)) {
         scored.push({ id: r.id, description: r.description, score: Math.round(score * 1000) / 1000 });
       }
     }
@@ -183,18 +202,26 @@ export class ScoringEngine {
     embedding: Float32Array,
     threshold: number,
     limit = 5,
-  ): NudgeItem[] {
-    const matchers = this.findMatchers(stores, embedding, { limit })
-      .filter((m) => m.score >= threshold);
-    if (matchers.length === 0) return [];
-    return this.scoreItems(matchers)
-      .slice(0, limit)
-      .map((s) => ({
+  ): ScoredNudge {
+    // The threshold decides relevance across ALL matchers; the limit only
+    // caps how many items the nudge renders. Filtering before capping keeps
+    // the surfaced set the true top-N of everything relevant. The scan is
+    // intentionally unbounded because the disclosure contract needs the
+    // uncapped counts. Known cost: the engine scores every
+    // threshold-clearing matcher's items and the semantic dedup compares
+    // embedded items pairwise - milliseconds today.
+    const matchers = this.findMatchers(stores, embedding, { threshold });
+    const items = this.scoreItems(matchers);
+    return {
+      items: items.slice(0, limit).map((s) => ({
         confidence: s.confidence,
         evidence_count: s.evidence_count,
         matcher_description: s.matcher_description,
         statement: s.statement,
-      }));
+      })),
+      matchersFired: matchers.length,
+      itemsTotal: items.length,
+    };
   }
 
   findNearestMatcher(

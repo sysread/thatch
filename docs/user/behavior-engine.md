@@ -24,11 +24,16 @@ the agent's context. The block looks like:
 - [0.58 conf, 1 tests] When about to commit changes to the repo:
   do Run mise run check (tsc + bun test + markdownlint) before
   committing. Never commit code that fails the quality gate.
+Top 5 of 9 matching behaviors shown (4 matchers fired); use
+thatch_behavior_list for the full inventory.
 Snapshot: these labels reflect the behavior store as of this message's
 submission. Behaviors updated after submission (including during this
 turn) do not refresh it; re-check with thatch_behavior_list before
 relying on them.
 ```
+
+The "Top 5 of 9" line only appears when more behaviors matched than the
+block shows.
 
 The agent evaluates each surfaced rule against the current situation.
 If relevant (ham), it follows the rule and calls `behavior_feedback`

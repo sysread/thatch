@@ -52,7 +52,7 @@ const useCase: UseCase = {
       // Step 2: call sidebandMatch — should get ECONNREFUSED and return null.
       const matches = await sidebandMatch(sockPath, "test", ["s"], 0.0, 5);
       if (matches !== null) {
-        console.log(`  FAIL: sidebandMatch should return null on stale socket, got ${matches?.length} matches`);
+        console.log(`  FAIL: sidebandMatch should return null on stale socket, got non-null result`);
         return "FAIL";
       }
 

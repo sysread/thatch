@@ -56,7 +56,8 @@ export const COMMANDS_ARTIFACTS_DIR = join(import.meta.dir, "..", "artifacts", "
  * so the two commands cannot drift apart.
  */
 const sharedChecklist = `1. Flush pending persistence. Call thatch_get_extraction_payload; if it returns buffered tool interactions, process them now (write any memories worth keeping), then call thatch_extraction_done to mark them complete. Complete any memory writes you promised earlier but have not made.
-2. Check for loose ends. Review the conversation for todos, follow-ups, or open questions raised earlier that were never addressed, and surface anything the user should address before the wrap-up completes.`;
+2. Settle deferred thatch nudges. Scan the conversation for thatch nudges you acknowledged but did not act on: recall prompts ("N memories relate to this prompt" or "Top N of M memories relate to this prompt"), prediction and behavior nudges, hygiene findings. Run the recall calls, evaluate the predictions and behaviors, and tend the hygiene findings now. Anything you cannot finish goes in the blockers list.
+3. Check for loose ends. Review the conversation for todos, follow-ups, or open questions raised earlier that were never addressed, and surface anything the user should address before the wrap-up completes.`;
 
 /**
  * How the review-mode commands (peer-review, self-review) run the code

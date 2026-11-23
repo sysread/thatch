@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, connect, type Server, type Socket } from "node:net";
 import type { ThatchDB, PredictionNudgeItem, BehaviorNudgeItem } from "./db";
+import type { ScoredNudge } from "./scoring-engine";
 import type { EmbeddingModel } from "./embeddings";
 
 /**
@@ -36,6 +37,13 @@ interface MatchResponse {
   matches?: SidebandMatch[];
   predictions?: PredictionNudgeItem[];
   behaviors?: BehaviorNudgeItem[];
+  // Truncation stats: totals across all matchers/items, comparable against
+  // the arrays' own (capped) lengths. Old servers (version skew) omit
+  // them; the client then substitutes the shown length, which suppresses
+  // the renderer's disclosure line.
+  matchersFired?: number;
+  itemsTotal?: number;
+  totalAbove?: number;
   error?: string;
 }
 
@@ -50,8 +58,9 @@ interface MatchResponse {
  * behaviors","text":"...","stores":[...],"threshold":N,"limit":N}`.
  * The `match` method searches memories; `predictions` and `behaviors`
  * score prediction/behavior nudges. Responses are `{"ok":true,
- * "matches":[...]}` (or `"predictions":[...]"` / `"behaviors":[...]`)
- * or `{"ok":false,"error":"..."}`.
+ * "matches":[...],"totalAbove":N}` (or `"predictions":[...],
+ * "matchersFired":N,"itemsTotal":N"` / the behaviors equivalent) or
+ * `{"ok":false,"error":"..."}`.
  */
 export class SidebandServer {
   #server: Server | null = null;
@@ -129,30 +138,31 @@ export class SidebandServer {
       const embedding = await this.#model.queryEmbed(req.text);
 
       if (req.method === "predictions") {
-        const predictions = this.#db.scorePredictionNudge(
+        const { items: predictions, matchersFired, itemsTotal } = this.#db.scorePredictionNudge(
           req.stores, embedding, req.threshold, req.limit,
         );
-        this.#respond(socket, { ok: true, predictions });
+        this.#respond(socket, { ok: true, predictions, matchersFired, itemsTotal });
         return;
       }
 
       if (req.method === "behaviors") {
-        const behaviors = this.#db.scoreBehaviorNudge(
+        const { items: behaviors, matchersFired, itemsTotal } = this.#db.scoreBehaviorNudge(
           req.stores, embedding, req.threshold, req.limit,
         );
-        this.#respond(socket, { ok: true, behaviors });
+        this.#respond(socket, { ok: true, behaviors, matchersFired, itemsTotal });
         return;
       }
 
-      const results = this.#db.search(req.stores, embedding, { limit: req.limit });
-      const matches: SidebandMatch[] = results
-        .filter((r) => r._score >= req.threshold)
-        .map((r) => ({
-          label: r.label,
-          score: Math.round(r._score * 1000) / 1000,
-          store: r.store,
-        }));
-      this.#respond(socket, { ok: true, matches });
+      const { rows, totalAbove } = this.#db.searchWithTotal(req.stores, embedding, {
+        limit: req.limit,
+        minScore: req.threshold,
+      });
+      const matches: SidebandMatch[] = rows.map((r) => ({
+        label: r.label,
+        score: Math.round(r._score * 1000) / 1000,
+        store: r.store,
+      }));
+      this.#respond(socket, { ok: true, matches, totalAbove });
     } catch (err: any) {
       this.#respond(socket, { ok: false, error: String(err?.message ?? err) });
     }
@@ -177,9 +187,30 @@ export function sidebandMatch(
   threshold: number,
   limit: number,
   timeoutMs = 2000,
-): Promise<SidebandMatch[] | null> {
+): Promise<{ matches: SidebandMatch[]; totalAbove: number } | null> {
   return sidebandRequest("match", socketPath, text, stores, threshold, limit, timeoutMs)
-    .then((res) => res?.matches ?? null);
+    .then((res) => res?.matches
+      ? { matches: res.matches, totalAbove: res.totalAbove ?? res.matches.length }
+      : null);
+}
+
+/**
+ * Unwraps a predictions/behaviors response into a ScoredNudge. This is the
+ * single home of the version-skew fallback (stats absent -> shown length)
+ * for both nudge kinds, so the contract cannot drift between them.
+ */
+function unwrapNudge<T>(
+  res: MatchResponse | null,
+  key: "predictions" | "behaviors",
+): ScoredNudge<T> | null {
+  if (!res) return null;
+  const items = res[key] as T[] | undefined;
+  if (!items) return null;
+  return {
+    items,
+    matchersFired: res.matchersFired ?? items.length,
+    itemsTotal: res.itemsTotal ?? items.length,
+  };
 }
 
 /**
@@ -193,9 +224,9 @@ export function sidebandPredictions(
   threshold: number,
   limit: number,
   timeoutMs = 2000,
-): Promise<PredictionNudgeItem[] | null> {
+): Promise<ScoredNudge<PredictionNudgeItem> | null> {
   return sidebandRequest("predictions", socketPath, text, stores, threshold, limit, timeoutMs)
-    .then((res) => res?.predictions ?? null);
+    .then((res) => unwrapNudge<PredictionNudgeItem>(res, "predictions"));
 }
 
 /**
@@ -209,9 +240,9 @@ export function sidebandBehaviors(
   threshold: number,
   limit: number,
   timeoutMs = 2000,
-): Promise<BehaviorNudgeItem[] | null> {
+): Promise<ScoredNudge<BehaviorNudgeItem> | null> {
   return sidebandRequest("behaviors", socketPath, text, stores, threshold, limit, timeoutMs)
-    .then((res) => res?.behaviors ?? null);
+    .then((res) => unwrapNudge<BehaviorNudgeItem>(res, "behaviors"));
 }
 
 function sidebandRequest(

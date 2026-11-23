@@ -17,7 +17,7 @@ const useCase: UseCase = {
   preconditions: [
     "- A store with a few fresh, non-stale, non-duplicate memories",
     "- No memories scoped to deleted branches",
-    "- All memories updated or recalled within the last 90 days",
+    "- All memories updated or recalled within the last 60 days",
   ].join("\n"),
   steps: [
     "1. Run thatch hygiene from the repo.",
@@ -26,7 +26,7 @@ const useCase: UseCase = {
   ].join("\n"),
   expected: [
     '- thatch hygiene prints "Store is healthy."',
-    "- hygieneReport() returns null — no parts were added to the report because all three signal counts were zero.",
+    "- hygieneReport() returns null — no parts were added to the report because all four signal counts were zero.",
     "- thatch reminder omits the hygiene block from the session-start text. The reminder still includes other sections but no hygiene line.",
   ].join("\n"),
 
@@ -46,7 +46,7 @@ const useCase: UseCase = {
       const emb2 = await model.passageEmbed("user authentication flow with OAuth2");
       db.remember(store, "auth-flow", "user authentication flow with OAuth2", emb2, "mock");
 
-      // hygieneReport should return null (all three signals are zero).
+      // hygieneReport should return null (all four signals are zero).
       const report = await hygieneReport(db, store, ctx.dir);
       if (report !== null) {
         console.log(`  FAIL: healthy store should return null, got: ${report}`);

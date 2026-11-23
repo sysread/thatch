@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { ScoringEngine } from "./scoring-engine";
+import { ScoringEngine, type ScoredNudge } from "./scoring-engine";
 
 export interface BehaviorRow {
   id: string;
@@ -53,7 +53,7 @@ export class BehaviorEngine {
     this.#engine = new ScoringEngine(db, config);
   }
 
-  findBehaviorMatchers(stores: string[], queryEmbedding: Float32Array, opts?: { limit?: number }) {
+  findBehaviorMatchers(stores: string[], queryEmbedding: Float32Array, opts?: { limit?: number; threshold?: number }) {
     return this.#engine.findMatchers(stores, queryEmbedding, opts);
   }
 
@@ -70,7 +70,7 @@ export class BehaviorEngine {
     }));
   }
 
-  scoreBehaviorNudge(stores: string[], embedding: Float32Array, threshold: number, limit = 5): BehaviorNudgeItem[] {
+  scoreBehaviorNudge(stores: string[], embedding: Float32Array, threshold: number, limit = 5): ScoredNudge {
     return this.#engine.scoreNudge(stores, embedding, threshold, limit);
   }
 

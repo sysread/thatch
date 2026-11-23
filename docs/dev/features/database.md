@@ -61,7 +61,7 @@ entries(
 - `branch`: git branch scope. Null = project-wide. Empty string is not a valid scope: `remember` coerces `branch: ""` to null, and an init migration normalizes legacy rows (git refnames are never empty).
 - `confidence`: 1-10 scale. Null = unset.
 - `archived`: 0 = live, 1 = archived. Search, dedup, and all hygiene queries exclude archived by default.
-- `recall_count` / `last_recalled_at`: usage telemetry, stamped by `db.recall()` (not `db.search()`).
+- `recall_count` / `last_recalled_at`: usage telemetry, stamped by `db.recall()` / `db.recallWithTotal()` (not the nudge's `db.searchWithTotal()`).
 
 ### dedup_pairs
 

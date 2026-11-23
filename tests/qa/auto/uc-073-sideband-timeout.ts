@@ -57,7 +57,7 @@ const useCase: UseCase = {
       // Step 2: call sidebandMatch with 100ms timeout.
       const matches = await sidebandMatch(sockPath, "test", ["s"], 0.0, 5, 100);
       if (matches !== null) {
-        console.log(`  FAIL: sidebandMatch should return null on timeout, got ${matches?.length} matches`);
+        console.log(`  FAIL: sidebandMatch should return null on timeout, got non-null result`);
         return "FAIL";
       }
 

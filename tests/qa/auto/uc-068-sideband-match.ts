@@ -24,11 +24,11 @@ const useCase: UseCase = {
   steps: [
     "1. Start the SidebandServer on a deterministic socket path.",
     "2. From a hook process, call sidebandMatch(socketPath, text, stores, threshold, limit).",
-    "3. The server embeds the text, calls db.search, and filters by threshold.",
+    "3. The server embeds the text, calls searchWithTotal (threshold filters before the limit slice), and returns matches plus totalAbove.",
     "4. The server responds with matches.",
   ].join("\n"),
   expected: [
-    "- The client receives SidebandMatch[] with labels, cosine scores (rounded to 3 decimal places), and store names.",
+    "- The client receives a { matches, totalAbove } result: SidebandMatch entries with labels, cosine scores (rounded to 3 decimal places), and store names, plus totalAbove counting everything above threshold before the limit slice.",
     "- Matches below the threshold are filtered out server-side.",
     "- The limit controls the maximum number of results returned.",
   ].join("\n"),
@@ -48,11 +48,12 @@ const useCase: UseCase = {
       db.remember("s", "cooking", "content about cooking", await model.passageEmbed("cooking"), "mock");
 
       // Match: same text as a stored memory → high cosine.
-      const matches = await sidebandMatch(sockPath, "architecture", ["s", "global"], 0.0, 5);
-      if (matches === null) {
+      const res = await sidebandMatch(sockPath, "architecture", ["s", "global"], 0.0, 5);
+      if (res === null) {
         console.log("  FAIL: sidebandMatch returned null");
         return "FAIL";
       }
+      const matches = res.matches;
       if (matches.length === 0) {
         console.log("  FAIL: expected at least 1 match");
         return "FAIL";
@@ -69,6 +70,10 @@ const useCase: UseCase = {
         console.log("  FAIL: match should have a store name");
         return "FAIL";
       }
+      if (res.totalAbove < matches.length) {
+        console.log(`  FAIL: totalAbove (${res.totalAbove}) must be >= shown (${matches.length})`);
+        return "FAIL";
+      }
 
       // Threshold filtering: 0.99 threshold → only exact-match text scores ~1.0.
       const filtered = await sidebandMatch(sockPath, "architecture", ["s"], 0.99, 5);
@@ -76,8 +81,8 @@ const useCase: UseCase = {
         console.log("  FAIL: filtered sidebandMatch returned null");
         return "FAIL";
       }
-      if (filtered.length !== 1 || filtered[0].label !== "architecture") {
-        console.log(`  FAIL: threshold filter should leave only "architecture", got ${filtered.length} matches`);
+      if (filtered.matches.length !== 1 || filtered.matches[0].label !== "architecture") {
+        console.log(`  FAIL: threshold filter should leave only "architecture", got ${filtered.matches.length} matches`);
         return "FAIL";
       }
 
@@ -90,8 +95,8 @@ const useCase: UseCase = {
         console.log("  FAIL: limited sidebandMatch returned null");
         return "FAIL";
       }
-      if (limited.length > 3) {
-        console.log(`  FAIL: limit should cap at 3, got ${limited.length}`);
+      if (limited.matches.length > 3) {
+        console.log(`  FAIL: limit should cap at 3, got ${limited.matches.length}`);
         return "FAIL";
       }
 
@@ -102,7 +107,7 @@ const useCase: UseCase = {
         console.log("  FAIL: cross-store sidebandMatch returned null");
         return "FAIL";
       }
-      if (!crossStore.some((m) => m.label === "global-mem" && m.store === "global")) {
+      if (!crossStore.matches.some((m) => m.label === "global-mem" && m.store === "global")) {
         console.log("  FAIL: cross-store search should find global-mem in global store");
         return "FAIL";
       }

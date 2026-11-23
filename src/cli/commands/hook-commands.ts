@@ -218,14 +218,14 @@ export const flushTools: Subcommand = {
         ]);
 
         const parts: string[] = [];
-        if (matches && matches.length > 0) {
-          parts.push(claudeRecallNudge(matches));
+        if (matches && matches.matches.length > 0) {
+          parts.push(claudeRecallNudge(matches.matches, matches.totalAbove));
         }
-        if (predictions && predictions.length > 0) {
-          parts.push(predictionNudge(predictions, mcpToolName));
+        if (predictions && predictions.items.length > 0) {
+          parts.push(predictionNudge(predictions.items, mcpToolName, predictions));
         }
-        if (behaviors && behaviors.length > 0) {
-          parts.push(behaviorNudge(behaviors, mcpToolName));
+        if (behaviors && behaviors.items.length > 0) {
+          parts.push(behaviorNudge(behaviors.items, mcpToolName, behaviors));
         }
 
         if (parts.length > 0) {
@@ -397,8 +397,8 @@ export const flushPredictions: Subcommand = {
       const threshold = parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.60");
       const predictions = await sidebandPredictions(sockPath, promptText, [repo, "global"], threshold, 5);
 
-      if (predictions && predictions.length > 0) {
-        const output = predictionNudge(predictions, mcpToolName);
+      if (predictions && predictions.items.length > 0) {
+        const output = predictionNudge(predictions.items, mcpToolName, predictions);
         if (isJson) console.log(JSON.stringify({ additional_context: output }));
         else console.log(output);
       } else {

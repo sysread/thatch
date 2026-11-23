@@ -21,7 +21,7 @@ here first. These are the things that have already cost time.
 ## Search vs recall
 
 - **`search` scores; `recall` scores _and_ stamps telemetry.** `search` records
-  no usage. The prompt-aware recall nudge deliberately uses `db.search()` (not
+  no usage. The prompt-aware recall nudge deliberately uses `db.searchWithTotal()` (not
   `recall`) so nudges don't inflate the "used recently" signal. Only explicit
   `thatch_memory_recall` / CLI `search` stamp `recall_count`/`last_recalled_at`.
 - **`findSimilar` excludes the slug being written** (self-exclusion on

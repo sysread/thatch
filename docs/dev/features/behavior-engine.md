@@ -107,17 +107,20 @@ Parameters: `behavior` (statement, semantic match at cosine >= 0.85),
   embedding serves recall (tier 2), prediction (tier 3), and behavior (tier
   4). One embed, three lookups.
 - Calls `db.scoreBehaviorNudge([repo, "global"], embedding,
-  BEHAVIOR_THRESHOLD)`.
+  BEHAVIOR_THRESHOLD)`. All matchers above the threshold are scored; the
+  rendered block caps at the top 5 behaviors and appends a "Top 5 of N
+  matching behaviors shown" line (pointing at `behavior_list`) when the cap
+  truncated the set.
 - Threshold: 0.60 (env: `THATCH_BEHAVIOR_THRESHOLD`). Same as prediction —
   surfacing a discipline rule is as disruptive as surfacing a preference.
-- Injects `behaviorNudge(items)` as a separate synthetic text part with a
-  `[thatch] Situational behaviors` header.
+- Injects `behaviorNudge(items, tool, truncation)` as a separate synthetic
+  text part with a `[thatch] Situational behaviors` header.
 - 0-evidence behaviors use "consider"; behaviors with evidence use "do".
 - The block ends with a snapshot footer (same as the prediction nudge): the
   labels are a submission-time snapshot, not a live view.
 - Independent try/catch — a behavior failure does not block recall or
   prediction.
-- Toast: `[thatch] N behaviors surfaced`.
+- Toast: `💭 N of M behaviors surfaced` (the fraction only when the cap cut the set; a plain count otherwise).
 
 ### Auto-fire (MCP: sideband)
 

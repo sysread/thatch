@@ -46,11 +46,17 @@ like:
   flag tech debt before reviewing the diff
 - [0.61 conf, 2 tests] When choosing test scope: you may prefer
   integration tests over unit tests
+Top 5 of 31 matching predictions shown (12 matchers fired); use
+thatch_prediction_query to see more.
 Snapshot: these labels reflect the prediction store as of this message's
 submission. Predictions updated after submission (including during this
 turn) do not refresh it; re-check with thatch_prediction_query before
 relying on them.
 ```
+
+The "Top 5 of 31" line only appears when more predictions matched than the
+block shows; with a small store you get just the prediction lines and the
+snapshot footer.
 
 The agent reads this and decides whether to follow the prediction,
 surface it to you, or ignore it. You never see the nudge directly. The
@@ -96,7 +102,8 @@ where your rationale would change the model.
 ## Configuration
 
 - `THATCH_PREDICTION_THRESHOLD`: cosine score threshold for prediction
-  auto-fire. Defaults to 0.60. Lower surfaces more predictions
+  auto-fire; also the matcher floor of the `prediction_query` tool.
+  Defaults to 0.60. Lower surfaces more predictions
   (noisier); higher surfaces fewer (stricter).
 
 ## Limitations

@@ -48,19 +48,19 @@ const useCase: UseCase = {
       // Step 2: call all three client functions with no server running.
       const matches = await sidebandMatch(sockPath, "test-memory", ["s", "global"], 0.0, 5);
       if (matches !== null) {
-        console.log(`  FAIL: sidebandMatch should return null with no server, got ${matches.length} matches`);
+        console.log(`  FAIL: sidebandMatch should return null with no server, got non-null result`);
         return "FAIL";
       }
 
       const predictions = await sidebandPredictions(sockPath, "test-memory", ["s", "global"], 0.0, 5);
       if (predictions !== null) {
-        console.log(`  FAIL: sidebandPredictions should return null with no server, got ${predictions?.length} items`);
+        console.log(`  FAIL: sidebandPredictions should return null with no server, got non-null result`);
         return "FAIL";
       }
 
       const behaviors = await sidebandBehaviors(sockPath, "test-memory", ["s", "global"], 0.0, 5);
       if (behaviors !== null) {
-        console.log(`  FAIL: sidebandBehaviors should return null with no server, got ${behaviors?.length} items`);
+        console.log(`  FAIL: sidebandBehaviors should return null with no server, got non-null result`);
         return "FAIL";
       }
 

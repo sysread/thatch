@@ -6,13 +6,15 @@ convenient. Thatch never deletes memories on its own.
 
 ## How it works
 
-At session start, thatch runs three checks against the current project
-store. Only non-zero signals are reported. A healthy store stays
-silent.
+At session start, thatch runs the checks below against the current project
+store and the global store (every session scans both for nudges, so both
+stores' debt is reported; the orphaned-branch check applies to the project
+store only, since the global store has no branches). Only non-zero signals
+are reported. A healthy store stays silent.
 
 ### Duplicate candidates
 
-Memories whose content is very similar (cosine similarity >= 0.85).
+Memories whose content is very similar (cosine similarity >= 0.83).
 These are the same pairs that `thatch_find_duplicates` surfaces. The
 hygiene report shows the count, not the full list. To see the actual
 pairs, the agent calls `thatch_find_duplicates`.
@@ -21,7 +23,7 @@ See [deduplication.md](deduplication.md) for the full dedup workflow.
 
 ### Stale entries
 
-Memories that have not been updated or recalled in 90+ days. The check
+Memories that have not been updated or recalled in 60+ days. The check
 uses `recall_count` and `last_recalled_at` columns, which are stamped
 by `thatch_memory_recall` and CLI `thatch search`. Archived memories
 are excluded.
@@ -69,12 +71,13 @@ hook and fed into the session as context.
 
 - The plugin never deletes memories. It surfaces problems; the agent
   decides what to do.
-- Stale entries use a 90-day window (hardcoded `STALE_DAYS = 90`).
+- Stale entries use a 60-day window (hardcoded `STALE_DAYS = 60`).
   There is no configuration for this.
-- The duplicate threshold (0.85) is higher than the recall nudge
+- The duplicate threshold (0.83) is higher than the recall nudge
   threshold (0.55) because "duplicate" is a stronger claim than
   "relates to."
-- Orphaned branch check is skipped outside a git repo.
+- Orphaned branch check is skipped outside a git repo (and for the
+  global store, which has no branch scoping).
 
 See [memory.md](memory.md) for the memory system and
 [deduplication.md](deduplication.md) for the dedup workflow.

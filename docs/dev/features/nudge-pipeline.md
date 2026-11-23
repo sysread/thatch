@@ -85,14 +85,19 @@ is now plugin-driven end-to-end (`triggerExtraction` at session idle); see
   is shorter than `MIN_PROMPT_LEN` (10 characters, hardcoded). Trivially short
   prompts like "yes" or "ok" match too broadly to be useful.
 - Embeds the prompt with the warm in-process model: `model.queryEmbed(text)`.
-- Searches memories via `db.search([repo, "global"], embedding, { limit: 5 })`.
-  This uses `db.search`, not `db.recall`, to avoid inflating recall telemetry.
+- Searches memories via `db.searchWithTotal([repo, "global"], embedding, { limit: 5, minScore: RECALL_THRESHOLD })`.
+  `minScore` filters before the slice, so the limit only caps output size;
+  `totalAbove` counts everything above threshold, un-capped. This uses
+  `searchWithTotal`, not `db.recall`, to avoid inflating recall telemetry.
   The agent has not actually read the memories yet---the nudge only checks
   whether they relate to the prompt.
-- Filters results to `_score >= RECALL_THRESHOLD` (0.55, env:
-  `THATCH_RECALL_THRESHOLD`).
-- If matches survive: injects `recallNudge(matches)` as a synthetic text part
-  and fires a toast notification via the session-tab bridge's toast event.
+- Threshold: 0.55 (env: `THATCH_RECALL_THRESHOLD`).
+- If matches survive: injects `recallNudge(matches, totalAbove)` as a
+  synthetic text part and fires a toast notification via the session-tab
+  bridge's toast event. When `totalAbove` exceeds the shown count, the
+  nudge says "Top 5 of 43 memories relate to this prompt" instead of a
+  bare count. A bare "5 memories relate" reads to the model as "nothing
+  else matches", so the model defers the recall call.
 - Wrapped in its own try/catch. A recall failure does not block prediction or
   behavior tiers.
 
@@ -101,13 +106,22 @@ is now plugin-driven end-to-end (`triggerExtraction` at session idle); see
 - Reuses the same embedding from tier 2. No extra model call.
 - Scores prediction matchers via
   `db.scorePredictionNudge([repo, "global"], embedding, PREDICTION_THRESHOLD)`.
-  This is a mechanical query: cosine-match against matchers, then score linked
-  predictions by Bayesian confidence.
+  This is a mechanical query: the threshold filters across ALL matchers
+  first (relevance is the threshold's job), then linked predictions are
+  scored by Bayesian confidence, and only then is the result capped at the
+  top 5 items. The old cap-then-filter ordering (top-5 matchers sliced
+  before the threshold applied) silently dropped most of the firing set on
+  dense stores. On thog, 152 of 397 matchers fired for a review prompt;
+  the old slice dropped 147 of them before the threshold was consulted.
 - Threshold: 0.60 (env: `THATCH_PREDICTION_THRESHOLD`). Higher than recall
   because surfacing a preference nudge is more disruptive---the agent may act
   on it or surface it to the user.
-- If matches: injects `predictionNudge(items)` as a synthetic text part and
-  fires a toast.
+- If matches: injects `predictionNudge(items, tool, { matchersFired,
+  itemsTotal })` as a synthetic text part and fires a toast. When the cap
+  truncated the set (`itemsTotal > items.length`), the nudge appends a
+  "Top 5 of 89 matching predictions shown" line pointing at
+  `prediction_query`---the model is supposed to read competing predictions
+  for itself, and it can only do that if it knows the shown list is partial.
 - Independent try/catch.
 
 See [prediction-engine.md](prediction-engine.md) for the confidence model,
@@ -119,9 +133,11 @@ matcher/prediction/edge data model, and the ambiguity-surfacing behavior.
   `behavior_matchers`.
 - Scores via
   `db.scoreBehaviorNudge([repo, "global"], embedding, BEHAVIOR_THRESHOLD)`.
+  Same filter-then-cap ordering and `ScoredNudge` stats as tier 3.
 - Threshold: 0.60 (env: `THATCH_BEHAVIOR_THRESHOLD`).
-- If matches: injects `behaviorNudge(items)` as a synthetic text part and
-  fires a toast.
+- If matches: injects `behaviorNudge(items, tool, truncation)` as a synthetic
+  text part and fires a toast. Truncation is disclosed the same way,
+  pointing at `behavior_list`.
 - Independent try/catch.
 
 See [behavior-engine.md](behavior-engine.md) for the ham/spam feedback loop
@@ -188,7 +204,11 @@ See [extraction.md](extraction.md) for the file-backed queue and the
 
 - Extracts prompt text. Skips if shorter than 10 characters.
 - Connects to the sideband socket and fetches all three in parallel:
-  `sidebandMatch`, `sidebandPredictions`, `sidebandBehaviors`.
+  `sidebandMatch`, `sidebandPredictions`, `sidebandBehaviors`. The response
+  payloads carry the truncation stats (`totalAbove` for matches,
+  `matchersFired`/`itemsTotal` for nudges); clients fall back to the shown
+  list's length when an old server omits them (version skew), which renders
+  as "no truncation known".
 - Same thresholds as opencode: 0.55 recall, 0.60 prediction, 0.60 behavior.
 - Concatenates any non-empty results: `claudeRecallNudge`,
   `predictionNudge`, `behaviorNudge`.
@@ -234,11 +254,25 @@ All thresholds are env-overridable.
 | Behavior auto-fire | 0.60 | `THATCH_BEHAVIOR_THRESHOLD` |
 | Min prompt length | 10 chars | hardcoded (`MIN_PROMPT_LEN`) |
 
-The recall threshold (0.55) is lower than `findDuplicates`'s 0.85 because
-"relates to" is a weaker signal than "duplicate." The prediction and behavior
+The recall threshold (0.55) is lower than `findDuplicates`'s 0.83
+(`DEDUP_PAIR_THRESHOLD`) because "relates to" is a weaker signal than
+"duplicate." The prediction and behavior
 thresholds (0.60) are higher than recall because surfacing a preference or
 self-discipline rule is more disruptive than surfacing a memory---the agent
 may act on it or interrupt the user.
+
+## Cap discipline
+
+Every nudge list is capped at the top 5 to bound token cost per message.
+Every cap is disclosed. Relevance is decided by the threshold, applied to
+all matchers and rows first; the limit only trims the rendered output. The
+stats survive the cap (`totalAbove`, `matchersFired`, `itemsTotal`) and the
+renderers turn a gap between shown and total into an explicit "Top N of M"
+line naming the tool that shows more; the followUp never promises more
+than that tool delivers. A silent cap is the failure
+mode this replaces: on a 1,700-memory store the old top-5-then-threshold
+ordering surfaced an arbitrary 5 of the 150+ memories that scored above
+the threshold, and told the model nothing was missing.
 
 ## Toast notifications (opencode only)
 
@@ -248,9 +282,9 @@ the user only, not into the conversation history.
 
 | Trigger | Message | Variant | Duration |
 |---------|---------|---------|----------|
-| Recall matches | recalled N memories | info | 3s |
-| Prediction matches | N predictions surfaced | info | 3s |
-| Behavior matches | N behaviors surfaced | info | 3s |
+| Recall matches | matched N of M memories (plain N when the cap didn't bite) | info | 3s |
+| Prediction matches | N of M predictions surfaced (plain N when the cap didn't bite) | info | 3s |
+| Behavior matches | N of M behaviors surfaced (plain N when the cap didn't bite) | info | 3s |
 | Extraction child goes idle | new: N, updated: M, deleted: K | success | 4s |
 
 The extraction metrics toast fires only when memories were actually written.
@@ -282,8 +316,8 @@ TUI display. The opencode framework's history serializer filters on
   nudge - extraction is plugin-driven at session idle, so the prompt hook
   runs the recall/prediction/behavior tiers only.
 - **Memory store** ([memory-store.md](memory-store.md)): tier 2 searches
-  stored memories via `db.search()`. This path records no telemetry---the
-  agent has not read the memories yet.
+  stored memories via `db.searchWithTotal()`. This path records no
+  telemetry---the agent has not read the memories yet.
 - **Prediction engine** ([prediction-engine.md](prediction-engine.md)): tier
   3 scores prediction matchers by cosine, then scores linked predictions by
   Bayesian confidence.
@@ -314,7 +348,8 @@ TUI display. The opencode framework's history serializer filters on
 - Tier 1 (extraction, MCP only) returns early. Tiers 2-4 are skipped when tier 1 fires.
 - Tiers 2-4 share one embedding computation. One embed, three cosine scans against different tables.
 - Each tier is wrapped in its own try/catch. A failure in one tier does not block the others.
-- The recall nudge uses `db.search()`, not `db.recall()`, to avoid inflating telemetry. The agent has not read the memories yet.
+- Filter-then-cap: the threshold decides relevance across the full matcher/row set; the limit only caps output. Capped output always discloses the gap ("Top N of M").
+- The recall nudge uses `searchWithTotal()`, not `db.recall()`, to avoid inflating telemetry. The agent has not read the memories yet.
 - The recall threshold (0.55) is lower than prediction/behavior (0.60) because "relates to" is weaker than "should surface to user."
 - Nudges are suppressed during compaction. Tools are blocked during summary generation, so a nudge saying "call `memory_recall`" would trigger a blocked-tool error.
 - `synthetic` means TUI-invisible, not model-invisible. The model sees the nudge text; the user does not. Do not confuse with `ignored`, which drops the part from the LLM-bound message.

@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 import { $ } from "bun";
 import { ThatchDB } from "../src/db";
 import { hygieneReport } from "../src/index";
+import { captureConsoleError } from "./mocks/console-error";
 import { sessionStartReminder } from "../src/prompts";
 
 let dir: string;
@@ -95,7 +96,66 @@ describe("hygieneReport", () => {
     raw.close();
 
     const report = await hygieneReport(db, repo, dir);
-    expect(report).toContain("1 memory neither updated nor recalled in 90+ days");
+    expect(report).toContain("1 memory neither updated nor recalled in 60+ days");
+  });
+
+  test("covers the global store alongside the project store", async () => {
+    // Sessions scan [repo, "global"] for nudges, so global-store debt must
+    // surface here too; the project-store check alone would never see it.
+    db.remember("global", "stale global memory", "content", emb, "m");
+    const raw = new Database(dbPath);
+    raw.run("UPDATE entries SET updated_at = '2000-01-01T00:00:00Z' WHERE store = 'global'");
+    raw.close();
+
+    const report = await hygieneReport(db, repo, dir);
+    expect(report).toContain('Store "global": 1 memory neither updated nor recalled in 60+ days');
+    // Only non-zero signals print: the healthy project store gets no line.
+    expect(report).not.toContain(`Store "${repo}"`);
+  });
+
+  test("a repo that falls back to global is reported once, not twice", async () => {
+    db.remember("global", "stale global memory", "content", emb, "m");
+    const raw = new Database(dbPath);
+    raw.run("UPDATE entries SET updated_at = '2000-01-01T00:00:00Z' WHERE store = 'global'");
+    raw.close();
+
+    const report = await hygieneReport(db, "global", dir);
+    expect(report?.match(/Store "global":/g)?.length).toBe(1);
+  });
+
+  test("a failed store report logs its failure and drops only its own line", async () => {
+    // Per-store isolation with the failure line: a rejected report must
+    // hit stderr (silence reads as a clean scan) while the surviving
+    // store's report still renders.
+    db.remember("global", "stale global memory", "content", emb, "m");
+    const raw = new Database(dbPath);
+    raw.run("UPDATE entries SET updated_at = '2000-01-01T00:00:00Z' WHERE store = 'global'");
+    raw.close();
+
+    const boom = new Proxy(db, {
+      get(target, prop) {
+        const value = (target as any)[prop];
+        if (prop === "findDuplicates") {
+          // Fail only the project store's scan; the global store's scan
+          // passes through so its report still renders.
+          return (store: string) => {
+            if (store === repo) throw new Error("locked");
+            return value.call(target, store);
+          };
+        }
+        // Methods must stay bound: the raw functions use `this.#db`
+        // private fields and die unbound.
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+
+    await captureConsoleError(async () => {
+      const report = await hygieneReport(boom as ThatchDB, repo, dir);
+      expect(report ?? "").toContain('Store "global": 1 memory neither updated nor recalled in 60+ days');
+      expect(report ?? "").not.toContain(`Store "${repo}"`);
+    }).then(({ lines }) => {
+      expect(lines.join("\n")).toContain(`hygiene report for ${repo} failed`);
+    });
   });
 
   test("counts memories scoped to deleted branches", async () => {

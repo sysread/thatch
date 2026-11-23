@@ -43,15 +43,15 @@ Request:
 Response (success):
 
 ```json
-{"ok":true,"matches":[...]}
+{"ok":true,"matches":[...],"totalAbove":43}
 ```
 
 ```json
-{"ok":true,"predictions":[...]}
+{"ok":true,"predictions":[...],"matchersFired":12,"itemsTotal":31}
 ```
 
 ```json
-{"ok":true,"behaviors":[...]}
+{"ok":true,"behaviors":[...],"matchersFired":4,"itemsTotal":9}
 ```
 
 Response (failure):
@@ -62,17 +62,23 @@ Response (failure):
 
 ### Three methods
 
-1. **match** -- embeds text, runs `db.search` across stores, returns matches with score >= threshold as `{label, score, store}`
-2. **predictions** -- embeds text, calls `db.scorePredictionNudge`, returns scored prediction nudge items
-3. **behaviors** -- embeds text, calls `db.scoreBehaviorNudge`, returns scored behavior nudge items
+1. **match** -- embeds text, runs `searchWithTotal` across stores (threshold
+   filters before the limit slice), returns matches with score >= threshold
+   as `{label, score, store}` plus `totalAbove` (count above threshold,
+   un-capped)
+2. **predictions** -- embeds text, calls `db.scorePredictionNudge`, returns
+   scored prediction nudge items plus `matchersFired`/`itemsTotal` (the
+   uncapped counts behind the top-N list)
+3. **behaviors** -- embeds text, calls `db.scoreBehaviorNudge`, returns
+   scored behavior nudge items plus the same truncation stats
 
 ### Client helpers
 
-- `sidebandMatch(text, stores, threshold, limit)` -- returns matches or null on failure
-- `sidebandPredictions(text, stores, threshold, limit)` -- returns predictions or null
-- `sidebandBehaviors(text, stores, threshold, limit)` -- returns behaviors or null
+- `sidebandMatch(socketPath, text, stores, threshold, limit, timeoutMs?)` -- returns `{matches, totalAbove}` or null on failure
+- `sidebandPredictions(socketPath, text, stores, threshold, limit, timeoutMs?)` -- returns `{items, matchersFired, itemsTotal}` or null
+- `sidebandBehaviors(socketPath, text, stores, threshold, limit, timeoutMs?)` -- returns `{items, matchersFired, itemsTotal}` or null
 
-All three return null on any failure (server not running, stale socket, timeout, parse error). Callers must treat null as "skip the nudge, fall back gracefully."
+All three return null on any failure (server not running, stale socket, timeout, parse error). Callers must treat null as "skip the nudge, fall back gracefully." Servers from before the stats fields existed (version skew) omit them; the client substitutes the shown list's length, and the renderer then skips the disclosure line.
 
 ### Graceful degradation
 
@@ -89,7 +95,7 @@ If the socket isn't available (MCP server not running, old version, stale socket
 - Multi-host ([multi-host.md](multi-host.md)): only MCP hosts (Claude Code, Cursor) use the sideband; opencode has the model in-process
 - Prediction engine ([prediction-engine.md](prediction-engine.md)): predictions method
 - Behavior engine ([behavior-engine.md](behavior-engine.md)): behaviors method
-- Memory store ([memory-store.md](memory-store.md)): match method uses `db.search`
+- Memory store ([memory-store.md](memory-store.md)): match method uses `db.searchWithTotal`
 
 ## Source files
 

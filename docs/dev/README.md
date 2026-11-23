@@ -124,7 +124,7 @@ bin/thatch             → CLI: stores|list|show|forget|search|tombstones|rememb
 | `runtime.ts` | Shared plugin runtime: wires DB, model, extraction; the nudge tiers, system prompt injection, session event handling, child-session bookkeeping, wrap-up resolution. Host-agnostic: consumed by the adapter. |
 | `os-args.ts` | Pure argv / OS-command-line helpers for startup session resolution (`-s`/`-c`). SDK-free. |
 | `setup.ts` | `thatch setup --claude` / `--cursor` installer. For Claude Code the default is the plugin regime: generates the plugin directory (manifest + bundled-server entry + mod) and deactivates the fallback's delivery writers; `--hooks` installs the classic regime instead (MCP config `.mcp.json`, CLAUDE.md instructions, settings hooks). Cursor always gets the classic regime (`.cursor/mcp.json`, AGENTS.md, hooks.json). All paths install skills. |
-| `hygiene.ts` | Hygiene report: pending dedup pairs, stale count, orphaned branch memories. Shared by the plugin's session-start hook and the CLI's `thatch reminder` command. |
+| `hygiene.ts` | Hygiene report: pending dedup pairs, prediction duplicate pairs, stale count, orphaned branch memories. Shared by the plugin's session-start hook and the CLI's `thatch reminder` command. |
 | `git.ts` | Parse `owner/repo` from git remote. Worktree-safe fallback chain, plus recovery from the `repo_paths` cache when the directory is deleted, and the spawn-cwd fallback. See [features/repo-identity.md](features/repo-identity.md). |
 | `db.ts` | SQLite schema, CRUD for entries/stores, brute-force cosine search (`search` = pure scoring, `recall` = search + telemetry stamping), dedup-pair verdict tracking. Prediction tables: matchers, predictions, edges, provenance. `scorePredictionNudge` is the shared auto-fire entry point for both host paths. Behavior tables: same four-table shape (matchers, behaviors, edges, provenance) with `scoreBehaviorNudge` as the shared entry point. |
 | `embeddings.ts` | Lazy-load the embedding model. Expose `queryEmbed`/`passageEmbed` and the model `name` (stored as an informational tag). `MockEmbeddingModel` for tests. |
@@ -165,8 +165,8 @@ points; every one of them routes into a shared runtime method:
 | `session.hook("compaction")` | Marks the session as compacting and appends re-familiarization context so a compacted session still knows thatch exists. |
 | `command.transform` (CommandEditor) | Registers the wrap-up commands in code. `/thatch/compact` and `/thatch/exit` arm the greenlight check: the model greenlights by calling the kind's zero-arg tool (`thatch_compact` / `thatch_exit`, which flips and journals the arm's `greenlit` flag); idles before that call leave the arm alone, and the next idle after greenlit deletes the arm and runs the host action (compact: `session.compact` on the promise domain; exit: record the session's watcher deaths, unregister it from chat, then emit the exit-tab-closed rpc event closing the session's own tab). See [features/session-lifecycle.md](features/session-lifecycle.md). |
 | `tool.hook("execute.after")` | Buffers every non-`thatch_*` tool call into the session's extraction buffer, except harness meta-tools (skill/task/agent/subagent are excluded — buffering them creates a feedback loop where the nudge triggers a dispatch, which gets buffered, which triggers another nudge). Memory writes (`thatch_memory_remember`) and `thatch_extraction_done` drain the buffer and reset the missed-nudge counter. For child sessions (`childToParent.has(sessionID)`), also tracks metrics: `remember` with `overwrite:false` → new++, `overwrite:true` → updated++, `forget` → deleted++. For `thatch_chat_*` tool calls, builds the transcript echo (`chatEchoText`) and posts it as a visible non-synthetic noReply delivery. This is a plugin hook, NOT a bus event — do not move it into the `event` handler; the event bus has no such event and it will silently never fire. |
-| `session.hook("prompt")` | Recall nudge: embeds the user's prompt text with the in-process warm model, searches `db.search()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55). The same embedding also feeds the prediction auto-fire (`db.scorePredictionNudge`, injects `[thatch] User decision model`) and the behavior auto-fire (`db.scoreBehaviorNudge`, injects `[thatch] Situational behaviors`). All three nudges fire independently in separate try/catch blocks with separate synthetic parts. There is deliberately NO extraction nudge here - extraction is plugin-driven at session idle (see the extraction feature doc); the old model-driven handshake raced its own state machine and was removed. Skipped entirely while the session is compacting (tool calls are blocked during summary generation), and for task-dispatched sub-agent sessions (`childToParent` without `extractionChildren`) - their tool lists may exclude the thatch tools and their work is driven by the dispatch prompt. |
-| `event.subscribe` (bus pump) | Subscribes to all session bus events, filtered client-side by directory. `session.created`: records `childToParent` + `parentSnapshots` (shallow copy of the parent's buffer for snapshot-aware drain), then sends the session-start reminder via `promptSession` (a resume:false synthetic) carrying the hygiene heartbeat (pending dedup pairs, stale count, orphaned branch memories) when any signal is non-zero. `session.execution.*` (translated to the runtime's busy/idle taxonomy): records the session's live status for the watcher and chat delivery gates; on idle, if the session is a child, drains its snapshot, fires a toast with `childMetrics`, and deletes the child session; if the session is a parent with pending tool interactions and not already extracting, calls `triggerExtraction` to create a direct-extraction child, then flushes pending watcher events and pending chat mail (the session just became deliverable). `session.error` (from `session.execution.failed`): requeues the parent's buffer (child died without draining). `session.deleted`: cleans up `childToParent`, `parentSnapshots`, `childMetrics`, and `extracting`, cancels the session's watchers, and unregisters it from the chat directory (the crash path — a dead process fires no event — is covered by heartbeat staleness). `session.compaction.ended`: clears the compacting flag so prompt-hook nudges resume. |
+| `session.hook("prompt")` | Recall nudge: embeds the user's prompt text with the in-process warm model, searches `db.searchWithTotal()` across repo + global, and pushes a recall nudge if matches exceed the threshold (default 0.55); the nudge states "Top N of M" when more matched than the 5 shown. The same embedding also feeds the prediction auto-fire (`db.scorePredictionNudge`, injects `[thatch] User decision model`) and the behavior auto-fire (`db.scoreBehaviorNudge`, injects `[thatch] Situational behaviors`). All three nudges fire independently in separate try/catch blocks with separate synthetic parts. There is deliberately NO extraction nudge here - extraction is plugin-driven at session idle (see the extraction feature doc); a nudge here would race its own state machine. Skipped entirely while the session is compacting (tool calls are blocked during summary generation), and for task-dispatched sub-agent sessions (`childToParent` without `extractionChildren`) - their tool lists may exclude the thatch tools and their work is driven by the dispatch prompt. |
+| `event.subscribe` (bus pump) | Subscribes to all session bus events, filtered client-side by directory. `session.created`: records `childToParent` + `parentSnapshots` (shallow copy of the parent's buffer for snapshot-aware drain), then sends the session-start reminder via `promptSession` (a resume:false synthetic) carrying the hygiene heartbeat (pending dedup pairs, prediction duplicate pairs, stale count, orphaned branch memories) when any signal is non-zero. `session.execution.*` (translated to the runtime's busy/idle taxonomy): records the session's live status for the watcher and chat delivery gates; on idle, if the session is a child, drains its snapshot, fires a toast with `childMetrics`, and deletes the child session; if the session is a parent with pending tool interactions and not already extracting, calls `triggerExtraction` to create a direct-extraction child, then flushes pending watcher events and pending chat mail (the session just became deliverable). `session.error` (from `session.execution.failed`): requeues the parent's buffer (child died without draining). `session.deleted`: cleans up `childToParent`, `parentSnapshots`, `childMetrics`, and `extracting`, cancels the session's watchers, and unregisters it from the chat directory (the crash path — a dead process fires no event — is covered by heartbeat staleness). `session.compaction.ended`: clears the compacting flag so prompt-hook nudges resume. |
 | cleanup (returned from `setup`) | Stops the version checker, the watcher poller, and the chat poller, closes the DB. Idempotent - the host auto-reloads plugins on file change. |
 
 Hook failures are logged with a `[thatch]` prefix — never swallowed silently.
@@ -262,7 +262,7 @@ thatch_memory_remember(label?, content)
 
 thatch_memory_recall(query)
   → model.queryEmbed(query) → Float32Array
-  → db.recall([repo, "global"], queryEmbedding, {branch?, limit})
+  → db.recallWithTotal([repo, "global"], queryEmbedding, {branch?, limit})
       skips entries with mismatched embedding dimension
       cosine similarity, sort desc, top-N
       stamps recall_count/last_recalled_at on returned rows (usage telemetry)
@@ -307,20 +307,23 @@ toast notifications (opencode-only, TUI-rendered; the bridge's toast
     connected (headless mode); model-invisible (goes to the user only,
     not the conversation history — the inverse of synthetic nudge parts,
     which are model-visible but TUI-hidden)
-  → extraction metrics: `[thatch] new: N, updated: M, deleted: K` (success
+  → extraction metrics: `💭 new: N, updated: M, deleted: K` (success
     variant, 4s) — fires when an extraction child goes idle, but ONLY when
     memories were actually written; no-save runs show nothing (no
     notification fatigue)
-  → recall matches: `[thatch] recalled N memories` (info variant, 3s) —
+  → recall matches: `💭 matched N of M memories` (info variant, 3s; the
+    fraction only when the cap cut the set) —
     fires when chat.message matches stored memories
-  → prediction matches: `[thatch] N predictions surfaced` (info variant,
-     3s) — fires when chat.message matches decision-model patterns
-  → behavior matches: `[thatch] N behaviors surfaced` (info variant,
-     3s) — fires when chat.message matches codified behavior matchers
+  → prediction matches: `💭 N of M predictions surfaced` (info variant,
+     3s; the fraction only when the cap cut the set) — fires when
+     chat.message matches decision-model patterns
+  → behavior matches: `💭 N of M behaviors surfaced` (info variant,
+     3s; the fraction only when the cap cut the set) — fires when
+     chat.message matches codified behavior matchers
 
 prompt-aware recall nudge (every path)
   → opencode: chat.message hook embeds prompt text with warm in-process model,
-    searches db.search([repo, global]), pushes nudge part if matches ≥ threshold
+    searches db.searchWithTotal([repo, global]), pushes nudge part if matches ≥ threshold
   → plugin regime: prompt.submit calls the bundled server's plugin_stage
     in-process (same tiers, no socket)
   → hooks-regime Claude Code / Cursor: flush-tools connects to the standalone
@@ -328,12 +331,12 @@ prompt-aware recall nudge (every path)
     warm server embeds + searches, returns labels; hook prints nudge or falls
     back to write nudge if socket unavailable or no matches
   → threshold: THATCH_RECALL_THRESHOLD env (default 0.55) — lower than
-    findDuplicates' 0.85 because "relates to" is a weaker signal than "duplicate"
-  → no telemetry stamped: uses db.search(), not db.recall()
+    findDuplicates' 0.83 because "relates to" is a weaker signal than "duplicate"
+  → no telemetry stamped: uses db.searchWithTotal(), not db.recall()
 
 hygiene heartbeat (session start)
   → hygieneReport(db, repo, worktree): pending dedup pairs; entries neither
-    updated nor recalled in 90+ days; memories scoped to branches that no
+    updated nor recalled in 60+ days; memories scoped to branches that no
     longer exist (skipped when worktree isn't a git repo)
   → non-zero signals appended to the session-start reminder; the agent tends
     the store when convenient — the plugin never deletes memories itself

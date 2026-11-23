@@ -125,3 +125,4 @@ import "./uc-148-prediction-find-duplicates";
 import "./uc-149-memory-tombstone-scope";
 import "./uc-150-watcher-persistence-matrix";
 import "./uc-151-embed-daemon-share-fallback";
+import "./uc-152-nudge-truncation-disclosure";

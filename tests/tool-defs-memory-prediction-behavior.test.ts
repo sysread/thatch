@@ -201,6 +201,35 @@ describe("tool-defs execute functions", () => {
     expect(result).toContain("This memory was last updated");
   });
 
+  test("memory_recall discloses a truncated scan and stays silent on a complete set", async () => {
+    // The default limit is 10: past it, the tool says "top N of M scored
+    // memories" (honest, since the path has no relevance floor); when the
+    // caller's limit outruns the corpus, no line - a complete result set
+    // must not advise narrowing.
+    const remember = TOOL_DEFS.find((t) => t.name === "memory_remember")!;
+    const recall = TOOL_DEFS.find((t) => t.name === "memory_recall")!;
+    for (let i = 0; i < 12; i++) {
+      await remember.execute({ label: `Bulk memory ${i}`, content: `Bulk content ${i}` }, ctx);
+    }
+    const truncated = await recall.execute({ query: "Bulk memory" }, ctx);
+    expect(truncated).toContain("Showing the top 10 of 12 scored memories");
+    expect(truncated).toContain("refine the query for sharper ranking");
+    expect(truncated).toContain("pass a higher limit to see more");
+
+    // A complete set (limit outruns the corpus) renders no line.
+    const complete = await recall.execute({ query: "Bulk memory", limit: 20 }, ctx);
+    expect(complete).not.toContain("scored memories");
+
+    // At the schema cap the higher-limit lever is gone from the advice.
+    for (let i = 12; i < 22; i++) {
+      await remember.execute({ label: `Bulk memory ${i}`, content: `Bulk content ${i}` }, ctx);
+    }
+    const atCap = await recall.execute({ query: "Bulk memory", limit: 20 }, ctx);
+    expect(atCap).toContain("Showing the top 20 of 22 scored memories");
+    expect(atCap).toContain("refine the query for sharper ranking");
+    expect(atCap).not.toContain("higher limit");
+  });
+
   test("age prose keys on updated_at, not last_recalled_at", async () => {
     // Regression guard for the branch's core read-side claim: a memory
     // recalled moments ago but last written 47 days ago must render the

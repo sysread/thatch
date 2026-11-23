@@ -18,7 +18,7 @@ surfaces candidates; the agent decides what to do.
 ### find_duplicates (tool)
 
 - Parameters: `store` (optional, default project store), `threshold`
-  (optional, default 0.85)
+  (optional, default 0.83, `DEDUP_PAIR_THRESHOLD` in `src/db.ts`)
 - Finds memory pairs whose embeddings exceed the cosine similarity threshold
 - Groups related pairs into connected-component clusters: a cluster of 3+
   labels usually means one topic fragmented across entries that should be
@@ -106,7 +106,11 @@ forget, so no guard exists when it lands); only later re-drift is held.
 - Verdicts are automatically cleared when either memory is overwritten or
   forgotten. This is intended — a merge can create a new similarity that
   should re-flag.
-- The threshold (0.85) is higher than the recall nudge threshold (0.55) because
-  "duplicate" is a stronger claim than "relates to".
+- The threshold (0.83) is higher than the recall nudge threshold (0.55) because
+  "duplicate" is a stronger claim than "relates to". It sits low enough that
+  drifted-wording duplicates get flagged (0.85 missed most of them; measured
+  on thog, dropping to 0.83 grew the candidate pool from 58 to 188 pairs)
+  but above the 0.80-0.83 "related but distinct" band that would flood the
+  review queue.
 - Slugs in `dedup_pairs` are stored sorted (`a < b`) for canonical matching
   regardless of argument order.

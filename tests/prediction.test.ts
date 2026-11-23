@@ -334,7 +334,7 @@ describe("adjustConfidence signal edge cases", () => {
 });
 
 describe("scorePredictionNudge", () => {
-  test("returns PredictionNudgeItem array with threshold filtering", () => {
+  test("returns ScoredNudge with threshold filtering", () => {
     const matcherEmbed = makeEmbed(1);
     const predEmbed = makeEmbed(2);
     const matcherId = db.createMatcher(store, "PR review", matcherEmbed, "m");
@@ -343,10 +343,10 @@ describe("scorePredictionNudge", () => {
 
     // Threshold above 1.0 filters out everything
     const highThreshold = db.scorePredictionNudge([store], matcherEmbed, 1.01);
-    expect(highThreshold).toEqual([]);
+    expect(highThreshold.items).toEqual([]);
 
     // Low threshold (0.0) returns the prediction
-    const items = db.scorePredictionNudge([store], matcherEmbed, 0.0, 5);
+    const { items } = db.scorePredictionNudge([store], matcherEmbed, 0.0, 5);
     expect(items.length).toBe(1);
     expect(items[0].statement).toBe("skip tech debt");
     expect(items[0].confidence).toBeCloseTo(0.5, 2);
@@ -361,7 +361,7 @@ describe("scorePredictionNudge", () => {
     db.createEdge(m2, predId, 1.0);
 
     // Use a query embedding that matches m1 above 0.0 threshold
-    const items = db.scorePredictionNudge([store], makeEmbed(1), 0.0, 5);
+    const { items } = db.scorePredictionNudge([store], makeEmbed(1), 0.0, 5);
     expect(items.length).toBe(1);
   });
 
@@ -376,7 +376,7 @@ describe("scorePredictionNudge", () => {
     const p2 = db.createPrediction("global", "skip tech debt", "reason", makeEmbed(3), "m");
     db.createEdge(m2, p2, 1.0);
 
-    const items = db.scorePredictionNudge([store, "global"], makeEmbed(1), 0.0, 5);
+    const { items } = db.scorePredictionNudge([store, "global"], makeEmbed(1), 0.0, 5);
     expect(items.length).toBe(1);
   });
 
@@ -390,7 +390,7 @@ describe("scorePredictionNudge", () => {
     const p2 = db.createPrediction("global", "you tend to prefer toast notifications over chat noise", "reason", makeEmbed(3), "m");
     db.createEdge(m2, p2, 1.0);
 
-    const items = db.scorePredictionNudge([store, "global"], makeEmbed(1), 0.0, 5);
+    const { items } = db.scorePredictionNudge([store, "global"], makeEmbed(1), 0.0, 5);
     expect(items.length).toBe(1);
   });
 
@@ -403,8 +403,27 @@ describe("scorePredictionNudge", () => {
     const p2 = db.createPrediction("global", "write tests first", "reason", makeEmbed(4), "m");
     db.createEdge(m2, p2, 1.0);
 
-    const items = db.scorePredictionNudge([store, "global"], makeEmbed(1), 0.0, 5);
+    const { items } = db.scorePredictionNudge([store, "global"], makeEmbed(1), 0.0, 5);
     expect(items.length).toBe(2);
+  });
+
+  test("threshold filters ALL matchers before the top-5 cap (filter-then-cap)", () => {
+    // The 2026-11 regression: the cap sliced the top-5 matchers BEFORE the
+    // threshold applied, so a dense store dropped relevant matchers the
+    // threshold would have kept. Here 7 matchers clear the threshold; the
+    // scan must report all 7 as fired and cap only the rendered items.
+    const queryEmbed = makeEmbed(1);
+    for (let i = 0; i < 7; i++) {
+      const matcherId = db.createMatcher(store, `PR review ${i}`, queryEmbed, "m");
+      const predEmbed = makeEmbed(100 + i);
+      const predId = db.createPrediction(store, `preference ${i}`, "reason", predEmbed, "m");
+      db.createEdge(matcherId, predId, 1.0);
+    }
+
+    const scan = db.scorePredictionNudge([store], queryEmbed, 0.0, 5);
+    expect(scan.matchersFired).toBe(7);
+    expect(scan.itemsTotal).toBe(7);
+    expect(scan.items.length).toBe(5);
   });
 });
 

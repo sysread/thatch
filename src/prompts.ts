@@ -531,7 +531,7 @@ Use thatch_store_list then thatch_memory_list to see what's available, then that
   return `${base}
 
 [thatch hygiene] ${hygiene}
-When convenient this session (not before addressing the user's request), tend the store: run thatch_find_duplicates and consolidate clusters, review stale memories with thatch_memory_show and update or forget them, and for memories scoped to deleted branches, consolidate them into an archived historical record before forgetting the originals.`;
+When convenient this session (not before addressing the user's request), tend the store: run thatch_find_duplicates and consolidate clusters, review stale memories with thatch_memory_show and update or forget them, and for memories scoped to deleted branches, consolidate them into an archived historical record before forgetting the originals. Do not defer this to the end of the session. If the user signals the session is wrapping up, tend these findings before closing.`;
 }
 
 /**
@@ -908,7 +908,7 @@ Use store_list then memory_list to see what's available, then memory_recall as n
   return `${base}
 
 [thatch hygiene] ${hygiene}
-When convenient this session (not before addressing the user's request), tend the store: run find_duplicates and consolidate clusters, review stale memories with memory_show and update or forget them, and for memories scoped to deleted branches, consolidate them into an archived historical record before forgetting the originals.`;
+When convenient this session (not before addressing the user's request), tend the store: run find_duplicates and consolidate clusters, review stale memories with memory_show and update or forget them, and for memories scoped to deleted branches, consolidate them into an archived historical record before forgetting the originals. Do not defer this to the end of the session. If the user signals the session is wrapping up, tend these findings before closing.`;
 }
 
 /**
@@ -1228,8 +1228,8 @@ export interface NudgeMatch {
  * The recall nudge for the opencode plugin path. Uses the thatch_ tool prefix
  * since opencode discovers tools directly from the plugin registration.
  */
-export function recallNudge(matches: NudgeMatch[]): string {
-  return formatRecallNudge(matches, "thatch_memory_recall");
+export function recallNudge(matches: NudgeMatch[], total?: number): string {
+  return formatRecallNudge(matches, "thatch_memory_recall", total);
 }
 
 /**
@@ -1237,18 +1237,25 @@ export function recallNudge(matches: NudgeMatch[]): string {
  * name (memory_recall) since the mcp__thatch__ prefix is verbose and the
  * CLAUDE.md / AGENTS.md instructions already establish the bare-name convention.
  */
-export function claudeRecallNudge(matches: NudgeMatch[]): string {
-  return formatRecallNudge(matches, "memory_recall");
+export function claudeRecallNudge(matches: NudgeMatch[], total?: number): string {
+  return formatRecallNudge(matches, "memory_recall", total);
 }
 
-function formatRecallNudge(matches: NudgeMatch[], toolName: string): string {
+function formatRecallNudge(matches: NudgeMatch[], toolName: string, total?: number): string {
   const n = matches.length;
-  const word = n === 1 ? "memory" : "memories";
-  const verb = n === 1 ? "relates" : "relate";
+  // The scanned list is always the top-N of everything above the recall
+  // threshold. Omitting the total reads as "nothing else matches", which
+  // models act on by deferring the recall call - so a truncation is always
+  // stated as "top N of M", never as a bare count. Both branches keep the
+  // same sentence shape (verb + object; the verb agrees with the count) so
+  // the two forms read alike.
+  const count = total !== undefined && total > n
+    ? `Top ${n} of ${total} memories relate${n === 1 ? "s" : ""} to this prompt`
+    : `${n} ${n === 1 ? "memory" : "memories"} ${n === 1 ? "relates" : "relate"} to this prompt`;
   const labels = matches.slice(0, 2).map((m) => `"${m.label}"`).join(", ");
   const etc = n > 2 ? ", etc." : "";
   return (
-    `[thatch] ${n} ${word} ${verb} to this prompt (${labels}${etc}). ` +
+    `[thatch] ${count} (${labels}${etc}). ` +
     `Use ${toolName}({ query: "..." }) before responding - the argument is ` +
     `a single object with a "query" key, never a bare positional string.`
   );
@@ -1274,11 +1281,48 @@ function snapshotFooter(store: string, recheckTool: string): string {
   );
 }
 
-export function predictionNudge(items: PredictionNudgeItem[], tool: ToolNamer = opencodeToolName): string {
+/** Renderer-facing copy of the ScoredNudge stats, kept structural so
+ * prompts stay decoupled from the scoring engine. When the stats are
+ * undefined (old sideband server, version skew), no truncation is known
+ * and the line is skipped. */
+export interface NudgeTruncation {
+  matchersFired: number;
+  itemsTotal: number;
+}
+
+/**
+ * The shared "Top N of M" truncation disclosure. One template so the
+ * prediction and behavior renderings cannot drift apart. Returns null
+ * when nothing was cut (itemsTotal <= shown) or no stats are known -
+ * both mean "no disclosure line". The followUp phrase names the escape
+ * hatch; it must not promise completeness the escape cannot deliver
+ * (prediction_query caps at 20, so it "shows more", never "the full set").
+ */
+export function disclosureLine(
+  kind: "predictions" | "behaviors",
+  shown: number,
+  truncation: NudgeTruncation | undefined,
+  followUp: string,
+): string | null {
+  if (!truncation || truncation.itemsTotal <= shown) return null;
+  return (
+    `Top ${shown} of ${truncation.itemsTotal} matching ${kind} shown ` +
+    `(${truncation.matchersFired} matchers fired); ${followUp}`
+  );
+}
+
+export function predictionNudge(items: PredictionNudgeItem[], tool: ToolNamer = opencodeToolName, truncation?: NudgeTruncation): string {
   const lines = items.map((p) => {
     const verb = predictionVerb(p.evidence_count);
     return `- ${formatWhenLine(p.confidence, p.evidence_count, p.matcher_description, p.statement, verb)}`;
   });
+  // The rendered list is capped at 5 items (the limit the callers pass);
+  // the scan itself is unbounded and its totals feed the disclosure. When
+  // more matched, say so - silently dropping the rest hides conflicts the
+  // model is supposed to read for itself (the capped-list-reads-as-complete
+  // failure).
+  const disclosure = disclosureLine("predictions", items.length, truncation, `use ${tool("prediction_query")} to see more`);
+  if (disclosure) lines.push(disclosure);
   // Snapshot basis (the Oct 2026 staleness report): the block is computed
   // once when the message is submitted and stays attached to it for the
   // whole turn. Predictions mutated after submission (by this turn's own
@@ -1295,11 +1339,17 @@ export function predictionNudge(items: PredictionNudgeItem[], tool: ToolNamer = 
 // how to act (follow relevant rules, ham/spam each match via behavior_feedback).
 // ---------------------------------------------------------------------------
 
-export function behaviorNudge(items: BehaviorNudgeItem[], tool: ToolNamer = opencodeToolName): string {
+export function behaviorNudge(items: BehaviorNudgeItem[], tool: ToolNamer = opencodeToolName, truncation?: NudgeTruncation): string {
   const lines = items.map((b) => {
     const verb = b.evidence_count === 0 ? "consider" : "do";
     return `- ${formatWhenLine(b.confidence, b.evidence_count, b.matcher_description, b.statement, verb)}`;
   });
+  // Same truncation disclosure as the prediction nudge (shared template):
+  // the limit caps the rendered list (the scan is unbounded), and the model
+  // needs to know when the cap bit. behavior_list is uncapped, so "full
+  // inventory" is accurate.
+  const disclosure = disclosureLine("behaviors", items.length, truncation, `use ${tool("behavior_list")} for the full inventory`);
+  if (disclosure) lines.push(disclosure);
   // Same snapshot basis as the prediction nudge: computed at submission,
   // not refreshed by mid-turn behavior feedback.
   const footer = snapshotFooter("behavior", tool("behavior_list"));

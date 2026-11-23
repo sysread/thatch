@@ -152,11 +152,17 @@ export const search: Subcommand = {
     // non-goal in docs/plans/embedding-daemon.md) - they embed in-process.
     const model = createEmbeddingModel(process.env.THATCH_MODEL ?? DEFAULT_EMBEDDING_MODEL);
     const queryEmb = await model.queryEmbed(query);
-    const results = ctx.db.recall(storesToSearch, queryEmb, { limit: 10 });
+    const { rows: results, totalAbove } = ctx.db.recallWithTotal(storesToSearch, queryEmb, { limit: 10 });
 
     if (results.length === 0) {
       console.log(`No matches for "${query}" in [${storesToSearch.join(", ")}].`);
     } else {
+      // Same cap discipline as the memory_recall tool: say when the top-10
+      // slice cut the corpus. No relevance floor on this path (unlike the
+      // nudge), so the total counts every scored row - hence "scored".
+      if (totalAbove > results.length) {
+        console.error(`Showing the top ${results.length} of ${totalAbove} scored memories.`);
+      }
       for (const r of results) {
         const score = r._score.toFixed(3);
         const branch = r.branch != null ? ` branch:${r.branch}` : "";
