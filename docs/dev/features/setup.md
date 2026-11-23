@@ -165,22 +165,30 @@ The package ships a loadable plugin, generated at pack time:
 the publish workflow's `npm publish`, and in the plugin-branch job)
 calls the SAME generator as setup
 (`writePluginTree` in `src/setup.ts`) with a package-world server entry -
-`bun ${CLAUDE_PLUGIN_ROOT}/bin/thatch mcp --bundled`, the installed
-copy's bin under bun, never a PATH `thatch` or a pack-time project pin.
-`scripts/postpack.ts` removes the generated files from the checkout
-after the tarball is built; the committed `marketplace.json` survives
-every pack.
+`${CLAUDE_PLUGIN_ROOT}/bin/mcp mcp --bundled`, the installed copy's
+launcher script (it prefers the bun runtime the plugin's dependencies
+install and falls back to a bun on PATH), never a PATH `thatch` or a
+pack-time project pin. `scripts/postpack.ts` removes the generated
+files from the checkout after the tarball is built; the committed
+`marketplace.json` survives every pack.
 
 The package also ships a slimmed dependency view (src/packaging.ts):
 Claude Code installs EVERY package a shipped lockfile lists, so the full
 bun.lock would land ~1 GB of node_modules (devDependency trees included)
 in the plugin cache and push the install past its 60-second budget on
 ordinary connections. Prepack rewrites package.json (no devDependencies,
-no scripts) and bun.lock (the runtime closure of package.json's
-dependencies, ~385 MB), saving the originals to `.pack-orig/` for
-postpack to restore. The slimmed artifacts agree with each other, which
-keeps Claude Code from skipping the install as a package/lockfile
-mismatch.
+no scripts; dependencies pinned to the exact versions bun.lock resolves;
+the bun runtime added as an optional dependency - the launcher's
+preferred runtime, ~90 MB for the one platform binary npm installs) and
+generates npm-shrinkwrap.json from that manifest with `npm install
+--package-lock-only`, saving the original to `.pack-orig/` for postpack
+to restore. The npm shrinkwrap ships instead of bun.lock because Claude
+Code's installer prefers bun.lock and refuses the dependency install
+when bun is not on the user's machine (its bun.lock command is `bun
+install --frozen-lockfile --ignore-scripts`) - with the shrinkwrap the
+install is `npm ci --ignore-scripts`, which needs only npm. Manifest and
+lockfile agree by construction, which keeps Claude Code from skipping
+the install as a package/lockfile mismatch.
 
 ### Cursor setup (`setupCursor` in `src/setup.ts`)
 

@@ -17,10 +17,11 @@ CLAUDE.md
 # The prepack-generated plugin tree (scripts/prepack.ts writes it before
 # npm pack; scripts/postpack.ts removes it after). The COMMITTED
 # .claude-plugin/marketplace.json is not ignored - the repo is the
-# marketplace.
+# marketplace. The generated npm shrinkwrap follows the same life cycle.
 .claude-plugin/plugin.json
 hooks/
 .pack-orig/
+npm-shrinkwrap.json
 scratch/
 scratchpad/
 /thatch

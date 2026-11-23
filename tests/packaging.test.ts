@@ -1,21 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
+  BUN_RUNTIME_VERSION,
   parseBunLockfile,
-  runtimeClosure,
-  slimLockfile,
+  shippedDependencyView,
   slimPackageJson,
   type BunLockfile,
 } from "../src/packaging";
 
 /**
- * The published package's dependency view (src/packaging.ts). Claude Code
- * installs every package a shipped lockfile lists, so the tarball must
- * carry the runtime closure only - these tests pin the closure rules
- * (optional edges in, dev trees and the host-provided peer out), the
- * package.json slimming, and the tolerance bun.lock's trailing commas
- * need.
+ * The published package's dependency view (src/packaging.ts). The tarball
+ * ships a slimmed package.json and an npm-shrinkwrap.json generated from
+ * it at prepack (Claude Code's installer picks the npm shrinkwrap over
+ * bun.lock and installs with npm ci --ignore-scripts, so a user needs no
+ * bun on PATH). These tests pin the view's rules: dependencies resolved
+ * to the exact versions the repo's bun.lock carries, the bun runtime
+ * injected as an optional dependency, the package.json slimming, and the
+ * tolerance bun.lock's trailing commas need.
  */
 const fixture: BunLockfile = {
   lockfileVersion: 1,
@@ -23,79 +25,70 @@ const fixture: BunLockfile = {
   workspaces: {
     "": {
       name: "testpkg",
-      dependencies: { runtime: "^1.0.0", other: "^2.0.0", dup: "^1.0.0" },
+      dependencies: { runtime: "^1.0.0", other: "^2.0.0" },
       devDependencies: { "dev-tool": "^1.0.0" },
       peerDependencies: { "host-peer": "^1.0.0" },
       optionalPeers: ["host-peer"],
     },
   },
   packages: {
-    runtime: ["runtime@1.0.0", "", { dependencies: { shared: "^1.0.0", opt: "^1.0.0" } }, "sha512-a"],
+    runtime: ["runtime@1.0.0", "", { dependencies: { shared: "^1.0.0" } }, "sha512-a"],
     other: ["other@2.0.0", "", {}, "sha512-b"],
-    dup: ["dup@1.0.0", "", {}, "sha512-c"],
-    shared: ["shared@1.0.0", "", {}, "sha512-d"],
-    opt: ["opt@1.0.0", "", { optionalDependencies: { "opt-bin": "1.0.0" } }, "sha512-e"],
-    "opt-bin": ["opt-bin@1.0.0", "", {}, "sha512-f"],
-    "dev-tool": ["dev-tool@1.0.0", "", { dependencies: { "dev-only-transitive": "^1.0.0" } }, "sha512-g"],
-    "dev-only-transitive": ["dev-only-transitive@1.0.0", "", {}, "sha512-h"],
+    "dev-tool": ["dev-tool@1.0.0", "", {}, "sha512-g"],
     "host-peer": ["host-peer@1.0.0", "", {}, "sha512-i"],
-    isolated: ["isolated@3.0.0", "", {}, "sha512-j"],
   },
 };
 
-describe("runtimeClosure", () => {
-  test("walks dependencies and optional edges from the root's dependencies only", () => {
-    const closure = runtimeClosure(fixture);
-    for (const name of ["runtime", "other", "dup", "shared", "opt", "opt-bin"]) {
-      expect(closure.has(name)).toBe(true);
-    }
-    for (const name of ["dev-tool", "dev-only-transitive", "host-peer", "isolated"]) {
-      expect(closure.has(name)).toBe(false);
-    }
+describe("shippedDependencyView", () => {
+  test("pins the root's dependencies to the lockfile's resolved versions", () => {
+    const view = shippedDependencyView(fixture);
+    expect(view.dependencies).toEqual({ runtime: "1.0.0", other: "2.0.0" });
+  });
+
+  test("injects the bun runtime as the one optional dependency, pinned exact", () => {
+    const view = shippedDependencyView(fixture);
+    expect(Object.keys(view.optionalDependencies)).toEqual(["bun"]);
+    expect(view.optionalDependencies.bun).toBe(BUN_RUNTIME_VERSION);
+    expect(view.optionalDependencies.bun).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   test("resolves versioned packages-map keys (name@version)", () => {
+    const { runtime: _bare, ...rest } = fixture.packages;
     const lock: BunLockfile = {
       ...fixture,
-      packages: {
-        "runtime@1.2.3": ["runtime@1.2.3", "", {}, "sha512-a"],
-        other: ["other@2.0.0", "", {}, "sha512-b"],
-        dup: ["dup@1.0.0", "", {}, "sha512-c"],
-      },
+      packages: { ...rest, "runtime@1.2.3": ["runtime@1.2.3", "", {}, "sha512-a"] },
     };
-    expect(runtimeClosure(lock).has("runtime")).toBe(true);
+    expect(shippedDependencyView(lock).dependencies.runtime).toBe("1.2.3");
   });
 
   test("throws on a dependency the lockfile does not resolve", () => {
     const lock: BunLockfile = {
       ...fixture,
-      packages: { ...fixture.packages, runtime: ["runtime@1.0.0", "", { dependencies: { ghost: "^1.0.0" } }, "sha512-a"] },
+      packages: { ...fixture.packages, runtime: ["runtime@1.0.0", "", {}, "sha512-a"] },
+      workspaces: {
+        "": { ...fixture.workspaces[""]!, dependencies: { runtime: "^1.0.0", ghost: "^1.0.0" } },
+      },
     };
-    expect(() => runtimeClosure(lock)).toThrow(/no entry for ghost/);
+    expect(() => shippedDependencyView(lock)).toThrow(/no entry for ghost/);
   });
 
   test("throws on an ambiguous resolution (bare and versioned keys)", () => {
     const lock: BunLockfile = {
       ...fixture,
-      packages: { ...fixture.packages, "dup@9.9.9": ["dup@9.9.9", "", {}, "sha512-k"] },
+      packages: { ...fixture.packages, "runtime@9.9.9": ["runtime@9.9.9", "", {}, "sha512-k"] },
     };
-    expect(() => runtimeClosure(lock)).toThrow(/ambiguously/);
+    expect(() => shippedDependencyView(lock)).toThrow(/ambiguously/);
   });
-});
 
-describe("slimLockfile", () => {
-  test("keeps the runtime closure and the root's dependency/peer declarations", () => {
-    const slim = slimLockfile(fixture);
-    expect(slim.lockfileVersion).toBe(1);
-    expect(slim.configVersion).toBe(1);
-    const root = slim.workspaces[""]!;
-    expect(root.dependencies).toEqual({ runtime: "^1.0.0", other: "^2.0.0", dup: "^1.0.0" });
-    expect(root.devDependencies).toBeUndefined();
-    expect(root.peerDependencies).toEqual({ "host-peer": "^1.0.0" });
-    expect(root.optionalPeers).toEqual(["host-peer"]);
-    expect(Object.keys(slim.packages).sort()).toEqual(["dup", "opt", "opt-bin", "other", "runtime", "shared"]);
-    // Entry contents untouched - the integrity hashes must survive.
-    expect(slim.packages.runtime![3]).toBe("sha512-a");
+  test("the repo's real bun.lock resolves every runtime dependency", () => {
+    const lock = parseBunLockfile(readFileSync(join(import.meta.dir, "..", "bun.lock"), "utf8"));
+    const view = shippedDependencyView(lock);
+    for (const name of ["@huggingface/transformers", "onnxruntime-web", "zod"]) {
+      expect(view.dependencies[name]).toMatch(/^\d/);
+    }
+    for (const dev of ["@opencode/client", "@opencode/plugin", "typescript", "markdownlint-cli2"]) {
+      expect(view.dependencies[dev]).toBeUndefined();
+    }
   });
 });
 
@@ -135,18 +128,16 @@ describe("parseBunLockfile", () => {
     "a": ["a@1.0.0", "", {}, "sha512-a"],
   },
 }`);
-    expect(runtimeClosure(lock).has("a")).toBe(true);
+    expect(shippedDependencyView(lock).dependencies.a).toBe("1.0.0");
   });
+});
 
-  test("the repo's real bun.lock parses and its closure excludes the dev trees", () => {
-    const lock = parseBunLockfile(readFileSync(join(import.meta.dir, "..", "bun.lock"), "utf8"));
-    const closure = runtimeClosure(lock);
-    expect(closure.size).toBeGreaterThan(0);
-    for (const dev of ["@opencode/client", "@opencode/plugin", "typescript", "markdownlint-cli2", "yaml", "@types/bun"]) {
-      expect(closure.has(dev)).toBe(false);
-    }
-    for (const runtime of ["@huggingface/transformers", "onnxruntime-web", "zod", "onnxruntime-node", "sharp"]) {
-      expect(closure.has(runtime)).toBe(true);
-    }
+describe("the launcher script (bin/mcp)", () => {
+  const launcher = join(import.meta.dir, "..", "bin", "mcp");
+
+  test("ships executable with a POSIX sh shebang", () => {
+    const mode = statSync(launcher).mode;
+    expect(mode & 0o111).toBe(0o111);
+    expect(readFileSync(launcher, "utf8").startsWith("#!/bin/sh")).toBe(true);
   });
 });

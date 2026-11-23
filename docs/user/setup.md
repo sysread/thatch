@@ -80,12 +80,11 @@ with the built plugin tree, so the git tag is the plugin release, with
 one version and one update path (`claude plugin update thatch`, or
 "Update now" in the `/plugin` panel - it re-clones the branch head). The
 installed plugin is the same shape the plugin regime below generates -
-the bundled MCP server, launched as `bun <install>/bin/thatch mcp
---bundled` from the installed copy, plus the in-process mod - and the
-server writes the CLAUDE.md instructions block at its first startup, so
-even this path gets the instructions without a setup run. Requires
-Claude Code 2.1.287 or newer (the mods floor), enterprise policy
-permitting mods, and git and bun on PATH.
+the bundled MCP server, launched by the installed copy's `bin/mcp`
+launcher script, plus the in-process mod - and the server writes the
+CLAUDE.md instructions block at its first startup, so even this path
+gets the instructions without a setup run. Requires Claude Code 2.1.287
+or newer (the mods floor) and enterprise policy permitting mods.
 
 The install never runs npm. (Earlier releases installed from the npm
 package, which npm 12 broke with `code EALLOWREMOTE` - npm 12 stopped
@@ -93,19 +92,18 @@ fetching tarball URLs, and the installer packs the resolved URL rather
 than the registry spec, anthropics/claude-code#98362. The git source
 bypasses npm entirely; no `npm_config_allow_remote` workaround.)
 
-Prerequisites, in order:
+Prerequisites:
 
 1. git on PATH - the marketplace add and the plugin install both clone
    (`git --version` to check).
-2. bun on PATH - the plugin's server and dependency install both run
-   it (`bun --version` to check; without it, a mise shim's
-   "mise use -g bun@..." hint means the shim exists but bun itself
-   is not installed: `mise use -g bun@1.4.4` or
-   `brew install oven-sh/bun/bun`). The dependency install is
-   `bun install --frozen-lockfile --ignore-scripts` on the lockfile
-   shipped with the plugin; if it did not complete, the `/plugin`
-   Errors tab says "The packages it lists are not installed" and the
-   server fails to connect - `claude plugin update thatch` re-runs it.
+2. npm on PATH - the dependency install runs `npm ci` on the lockfile
+   shipped with the plugin (`npm --version` to check). bun is NOT
+   required: the plugin ships its own bun runtime (the launcher prefers
+   the installed copy and falls back to a bun on PATH).
+
+If the dependency install did not complete, the `/plugin` Errors tab
+says "The packages it lists are not installed" and the server fails to
+connect - `claude plugin update thatch` re-runs it.
 
 Thatch also installs as a Claude Code plugin via setup (see "The plugin
 regime" below). `--hooks` installs the classic integration instead - a
@@ -276,9 +274,11 @@ instructions are deployed without requiring you to manually re-run
 
 ## Limitations
 
-- For non-Nix installs, `bun` must be installed and on PATH. Thatch does
-  not bundle its own runtime (the Nix package bundles it; see the
-  README's Nix section).
+- For non-Nix installs, `bun` must be available: on PATH for the setup
+  regimes and the `thatch` CLI, or installed as the Claude Code
+  marketplace plugin's own dependency (that install needs node/npm on
+  PATH instead). Thatch does not bundle a runtime in the repo itself
+  (the Nix package bundles it; see the README's Nix section).
 - The embedding model (~34 MB) is downloaded once on first use and
   cached in the platform's per-user cache dir
   (`~/Library/Caches/thatch/models` on macOS (or

@@ -1,20 +1,41 @@
 /**
  * The published package's dependency view. Claude Code installs an
  * npm-sourced plugin's Node.js dependencies from the lockfile beside the
- * package's package.json, with no dev/production split - it installs
- * every package the lockfile lists (verified live: the full bun.lock
- * landed ~1 GB of node_modules in the plugin cache, devDependency trees
- * included). The published package therefore ships a slimmed dependency
- * view: package.json without devDependencies or scripts, and bun.lock
- * reduced to the runtime closure of package.json's dependencies
- * (~385 MB). The repo's own files stay untouched - prepack saves the
- * originals and postpack restores them.
+ * package's package.json: it prefers bun.lock (`bun install
+ * --frozen-lockfile --ignore-scripts`), then the npm lockfiles
+ * (`npm ci --ignore-scripts`). A bun.lock install requires bun on the
+ * user's machine - the installer refuses the dependency install
+ * otherwise - so the package ships an npm shrinkwrap (generated at
+ * prepack from the shipped manifest) and no bun.lock: the dependency
+ * install never needs a bun on the user's PATH.
  *
- * Both artifacts must agree or Claude Code skips the dependency install
+ * The shipped manifest is slimmed from the repo's: devDependencies and
+ * scripts stripped (npm ci installs devDependencies too, and the full
+ * bun.lock once landed ~1 GB of node_modules in the plugin cache - the
+ * runtime closure only is ~385 MB), dependencies pinned to the exact
+ * versions the repo's bun.lock resolves (the shipped install must match
+ * the versions development tested, not npm's next range match), plus the
+ * bun runtime itself as an optional dependency (the bundled server's
+ * launcher prefers the @oven binary it installs; optional keeps a failed
+ * ~90 MB binary download from failing the whole install - the launcher
+ * falls back to a bun on PATH). The repo's own files stay untouched -
+ * prepack saves the original package.json and postpack restores it.
+ *
+ * The shipped lockfile is an npm-shrinkwrap.json (npm packs a shrinkwrap,
+ * never a package-lock.json) generated from the shipped manifest. Claude
+ * Code's installer prefers bun.lock and refuses the dependency install
+ * when bun is not on the user's machine, so the npm shrinkwrap is what
+ * makes the install bun-free: its command is `npm ci --ignore-scripts`.
+ * The manifest and the lockfile must agree or the install is skipped
  * entirely ("package.json and the lockfile don't list the same
- * dependencies"), leaving the bundled server without node_modules - the
- * slimming strips the same key set from both sides.
+ * dependencies") - the lockfile is generated FROM the manifest, so they
+ * agree by construction.
  */
+
+/** The bun runtime version the shipped package installs. Pinned exact:
+ * the runtime version IS the npm package version. Matches the version
+ * docs/user/setup.md recommends for a PATH install. */
+export const BUN_RUNTIME_VERSION = "1.4.4";
 
 export interface BunLockfilePackageMeta {
   dependencies?: Record<string, string>;
@@ -48,93 +69,59 @@ export function parseBunLockfile(text: string): BunLockfile {
   return JSON.parse(text.replace(/,(\s*[}\]])/g, "$1")) as BunLockfile;
 }
 
-/** The package name a bun.lock packages-map key denotes: bare names are
- *  used as-is; `name@version` keys (and scoped `@scope/name@version`)
- *  strip at the last `@`. */
-function keyToName(key: string): string {
-  const at = key.lastIndexOf("@");
-  return at > 0 ? key.slice(0, at) : key;
+/**
+ * The exact version a bun.lock entry resolves to for a dependency name.
+ * Throws on a dependency the lockfile does not resolve or that resolves
+ * to more than one entry - both mean the shipped manifest would not
+ * describe a real resolution, which must fail at pack time, not on a
+ * user's machine at plugin-install time.
+ */
+function resolvedVersion(lock: BunLockfile, name: string): string {
+  const packages = lock.packages ?? {};
+  const versioned = `${name}@`;
+  const matches = Object.keys(packages).filter((k) => k === name || k.startsWith(versioned));
+  if (matches.length === 0) throw new Error(`bun.lock has no entry for ${name}`);
+  if (matches.length > 1) throw new Error(`bun.lock resolves ${name} ambiguously: ${matches.join(", ")}`);
+  const key = matches[0];
+  if (key !== name) return key.slice(versioned.length);
+  const resolution = packages[key]?.[0] ?? "";
+  if (!resolution.startsWith(versioned)) {
+    throw new Error(`bun.lock entry for ${name} does not resolve to a version: ${resolution}`);
+  }
+  return resolution.slice(versioned.length);
 }
 
 /**
- * The runtime dependency closure of a bun.lock: every package reachable
- * from the root workspace's `dependencies` through `dependencies` and
- * `optionalDependencies` edges (optional edges keep the platform-specific
- * binaries - sharp's @img packages - that the wasm embedding backend
- * never invokes but the dependency declarations require). Dev-only trees
- * and the optional peer (@opencode/plugin, provided by the opencode host)
- * stay out.
- *
- * Throws on a dependency the lockfile does not resolve or that resolves
- * to more than one entry - both mean the slimmed lockfile would not
- * satisfy a frozen install, which must fail here at pack time, not on a
- * user's machine at plugin-install time.
+ * The shipped manifest's dependency block: the root's dependencies
+ * pinned to the exact versions the repo's bun.lock resolves, plus the
+ * bun runtime as an optional dependency. npm generates the shipped
+ * npm-shrinkwrap.json from this block, so the shipped install and the
+ * development-tested versions cannot drift apart.
  */
-export function runtimeClosure(lock: BunLockfile): Set<string> {
+export function shippedDependencyView(lock: BunLockfile): {
+  dependencies: Record<string, string>;
+  optionalDependencies: Record<string, string>;
+} {
   const root = lock.workspaces[""];
   if (!root) throw new Error("bun.lock has no root workspace entry");
-  const packages = lock.packages ?? {};
-
-  const entryFor = (name: string): [string, string?, BunLockfilePackageMeta?, string?] => {
-    const matches = Object.keys(packages).filter((k) => k === name || k.startsWith(`${name}@`));
-    if (matches.length === 0) throw new Error(`bun.lock has no entry for ${name}`);
-    if (matches.length > 1) throw new Error(`bun.lock resolves ${name} ambiguously: ${matches.join(", ")}`);
-    return packages[matches[0]];
-  };
-
-  const closure = new Set<string>();
-  const queue = Object.keys(root.dependencies ?? {});
-  while (queue.length > 0) {
-    const name = queue.shift()!;
-    if (closure.has(name)) continue;
-    closure.add(name);
-    const meta = entryFor(name)[2] ?? {};
-    for (const bucket of ["dependencies", "optionalDependencies"] as const) {
-      for (const dep of Object.keys(meta[bucket] ?? {})) {
-        if (!closure.has(dep)) queue.push(dep);
-      }
-    }
+  const dependencies: Record<string, string> = {};
+  for (const name of Object.keys(root.dependencies ?? {})) {
+    dependencies[name] = resolvedVersion(lock, name);
   }
-  return closure;
+  return { dependencies, optionalDependencies: { bun: BUN_RUNTIME_VERSION } };
 }
 
 /**
  * The published package.json: devDependencies and scripts stripped. The
- * dependency install never needs them (npm never installs devDependencies
- * for consumers, and the shipped scripts reference files the package does
- * not carry), and their absence keeps the package.json consistent with
- * the slimmed bun.lock so the dependency install is not skipped.
+ * dependency install never needs them (npm ci would install
+ * devDependencies too, and the shipped scripts reference files the
+ * package does not carry), and their absence keeps the package.json
+ * consistent with the generated npm-shrinkwrap.json so the dependency
+ * install is not skipped.
  */
 export function slimPackageJson(pkg: Record<string, unknown>): Record<string, unknown> {
   const slim = { ...pkg };
   delete slim.devDependencies;
   delete slim.scripts;
   return slim;
-}
-
-/**
- * The published bun.lock: the packages map reduced to the runtime
- * closure, and the root workspace entry reduced to match (name,
- * dependencies, peer declarations). Entry contents are untouched - they
- * carry the integrity hashes the frozen install verifies against.
- */
-export function slimLockfile(lock: BunLockfile): BunLockfile {
-  const root = lock.workspaces[""];
-  if (!root) throw new Error("bun.lock has no root workspace entry");
-  const closure = runtimeClosure(lock);
-  return {
-    lockfileVersion: lock.lockfileVersion,
-    ...(lock.configVersion !== undefined ? { configVersion: lock.configVersion } : {}),
-    workspaces: {
-      "": {
-        ...(root.name !== undefined ? { name: root.name } : {}),
-        ...(root.dependencies ? { dependencies: root.dependencies } : {}),
-        ...(root.peerDependencies ? { peerDependencies: root.peerDependencies } : {}),
-        ...(root.optionalPeers ? { optionalPeers: root.optionalPeers } : {}),
-      },
-    },
-    packages: Object.fromEntries(
-      Object.entries(lock.packages ?? {}).filter(([key]) => closure.has(keyToName(key))),
-    ),
-  };
 }

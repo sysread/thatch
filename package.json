@@ -23,7 +23,7 @@
     "artifacts",
     "hooks",
     ".claude-plugin/plugin.json",
-    "bun.lock"
+    "npm-shrinkwrap.json"
   ],
   "scripts": {
     "test": "bun test",

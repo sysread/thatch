@@ -505,22 +505,22 @@ describe("setupClaudePluginRegime (plugin regime, QA-only)", () => {
 
   test("writePluginTree generates the package variant (the npm-sourced plugin)", async () => {
     // The prepack world: the server entry must resolve inside the
-    // INSTALLED copy - ${CLAUDE_PLUGIN_ROOT} substitution plus bun, never
+    // INSTALLED copy - the ${CLAUDE_PLUGIN_ROOT} launcher script, never
     // a PATH `thatch` or a pack-time project pin.
     const { writePluginTree } = await import("../src/setup");
     const pkg = (await import("../package.json")).default;
     const pkgDir = join(base, "package");
     await writePluginTree(pkgDir, {
-      command: "bun",
-      args: ["${CLAUDE_PLUGIN_ROOT}/bin/thatch", "mcp", "--bundled"],
+      command: "${CLAUDE_PLUGIN_ROOT}/bin/mcp",
+      args: ["mcp", "--bundled"],
     });
     const manifest = JSON.parse(readFileSync(join(pkgDir, ".claude-plugin", "plugin.json"), "utf8"));
     expect(manifest.name).toBe("thatch");
     expect(manifest.version).toBe(pkg.version);
     expect(manifest.mcpServers.thatch).toEqual({
       type: "stdio",
-      command: "bun",
-      args: ["${CLAUDE_PLUGIN_ROOT}/bin/thatch", "mcp", "--bundled"],
+      command: "${CLAUDE_PLUGIN_ROOT}/bin/mcp",
+      args: ["mcp", "--bundled"],
     });
     const hooksJson = JSON.parse(readFileSync(join(pkgDir, "hooks", "hooks.json"), "utf8"));
     expect(hooksJson.modules).toEqual(["./register.js"]);

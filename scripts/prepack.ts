@@ -1,5 +1,5 @@
 // npm lifecycle script: runs before `npm pack` and `npm publish` build the
-// tarball. Two jobs:
+// tarball. Three jobs:
 //
 // 1. Generates the Claude Code plugin tree into the package root so the
 //    tarball carries a loadable plugin: .claude-plugin/plugin.json (the
@@ -8,29 +8,37 @@
 //    instructions). The same generator writes the setup-generated plugin
 //    in ~/.claude/thatch-plugin, so the two trees cannot drift.
 //
-// 2. Slims the dependency view the tarball ships (see src/packaging.ts):
-//    package.json without devDependencies or scripts, bun.lock reduced to
-//    the runtime closure. Without this, Claude Code's dependency install
-//    lands ~1 GB of node_modules (it installs every package the lockfile
-//    lists, dev trees included); slimmed, it is ~385 MB. The originals
-//    are saved to .pack-orig/ and restored by scripts/postpack.ts after
-//    the tarball is built.
+// 2. Writes the shipped dependency view (see src/packaging.ts):
+//    package.json without devDependencies or scripts, dependencies pinned
+//    to the exact versions the repo's bun.lock resolves, plus the bun
+//    runtime itself as an optional dependency - the bundled server's
+//    launcher (bin/mcp) prefers the @oven binary it installs. An npm
+//    lockfile is then generated from that manifest with
+//    `npm install --package-lock-only` and shipped as
+//    npm-shrinkwrap.json - npm publishes a shrinkwrap but never a
+//    package-lock.json, and Claude Code's plugin installer picks the
+//    shrinkwrap over bun.lock and installs with `npm ci --ignore-scripts`,
+//    so a user needs no bun on PATH at all. The lockfile is generated,
+//    not committed - postpack removes it.
 //
 // The server entry differs from the setup-generated one by necessity: the
 // package must not assume `thatch` is on PATH or carry a THATCH_PROJECT_DIR
 // pinned at pack time. Claude Code substitutes ${CLAUDE_PLUGIN_ROOT} with
-// the installed plugin's cache directory, and bun (a stated prerequisite)
-// runs the shipped bin directly.
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// the installed plugin's cache directory, and the launcher script finds
+// the plugin's own bun runtime.
+//
+// The originals are saved to .pack-orig/ and restored by
+// scripts/postpack.ts after the tarball is built.
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { writePluginTree } from "../src/setup";
-import { parseBunLockfile, slimLockfile, slimPackageJson } from "../src/packaging";
+import { parseBunLockfile, shippedDependencyView, slimPackageJson } from "../src/packaging";
 
 const root = join(import.meta.dir, "..");
 
 await writePluginTree(root, {
-  command: "bun",
-  args: ["${CLAUDE_PLUGIN_ROOT}/bin/thatch", "mcp", "--bundled"],
+  command: "${CLAUDE_PLUGIN_ROOT}/bin/mcp",
+  args: ["mcp", "--bundled"],
 });
 
 // The marketplace entry mirrors the generated plugin.json's mcpServers:
@@ -73,18 +81,31 @@ for (const field of ["commands", "agents", "skills", "hooks"] as const) {
 }
 
 const origDir = join(root, ".pack-orig");
-// Self-heal: an interrupted pack leaves .pack-orig beside slimmed copies,
-// so restore before saving - a re-run must snapshot the REAL originals,
-// never a previous run's output.
+// Self-heal: an interrupted pack leaves .pack-orig beside the slimmed
+// copy, so restore before saving - a re-run must snapshot the REAL
+// original, never a previous run's output.
 if (existsSync(origDir)) {
   copyFileSync(join(origDir, "package.json"), join(root, "package.json"));
-  copyFileSync(join(origDir, "bun.lock"), join(root, "bun.lock"));
 }
 mkdirSync(origDir, { recursive: true });
 copyFileSync(join(root, "package.json"), join(origDir, "package.json"));
-copyFileSync(join(root, "bun.lock"), join(origDir, "bun.lock"));
 
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-writeFileSync(join(root, "package.json"), JSON.stringify(slimPackageJson(pkg), null, 2) + "\n");
 const lock = parseBunLockfile(readFileSync(join(root, "bun.lock"), "utf8"));
-writeFileSync(join(root, "bun.lock"), JSON.stringify(slimLockfile(lock), null, 2) + "\n");
+const shipped = { ...slimPackageJson(pkg), ...shippedDependencyView(lock) };
+writeFileSync(join(root, "package.json"), JSON.stringify(shipped, null, 2) + "\n");
+
+// The manifest and the lockfile must agree or Claude Code skips the
+// dependency install entirely; generating the lockfile from the shipped
+// manifest keeps them in sync by construction. Shipped as
+// npm-shrinkwrap.json - npm packs a shrinkwrap, never a package-lock.json.
+rmSync(join(root, "package-lock.json"), { force: true });
+rmSync(join(root, "npm-shrinkwrap.json"), { force: true });
+const npmInstall = Bun.spawnSync(
+  ["npm", "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
+  { cwd: root, stdout: "inherit", stderr: "inherit" },
+);
+if (npmInstall.exitCode !== 0) {
+  throw new Error(`npm install --package-lock-only failed (exit ${npmInstall.exitCode})`);
+}
+renameSync(join(root, "package-lock.json"), join(root, "npm-shrinkwrap.json"));
