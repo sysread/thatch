@@ -9,7 +9,7 @@ them as distinct. Thatch never merges or deletes memories on its own.
 The dedup cycle is agent-driven:
 
 1. **Find pairs.** `thatch_find_duplicates` searches for memory pairs
-   whose cosine similarity exceeds the threshold (default 0.85). Pairs
+   whose cosine similarity exceeds the threshold (default 0.83). Pairs
    already reviewed via `thatch_dedup_mark_checked` are skipped. Related
    pairs are grouped into clusters: a cluster of 3+ labels usually
    means one topic fragmented across entries that should be consolidated.
@@ -65,7 +65,7 @@ The dedup cycle is not automatic. It fires when:
 - Similarity is cosine only. Two memories can say the same thing in
   different words and not be flagged. Two memories with similar wording
   but different meaning can false-flag.
-- The 0.85 threshold is hardcoded. There is no configuration for it.
+- The 0.83 threshold is hardcoded. There is no configuration for it.
 - The agent drives the cycle. Thatch never merges or deletes memories
   on its own. If the agent does not call `thatch_find_duplicates`,
   duplicates accumulate.

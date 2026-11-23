@@ -56,11 +56,12 @@ describe("SidebandServer + sidebandMatch", () => {
 
     // MockEmbeddingModel is deterministic — same text produces same vector.
     // Use the same text as the stored memory to guarantee a high score.
-    const matches = await sidebandMatch(sockPath, "architecture", ["s", "global"], 0.0, 5);
-    expect(matches).not.toBeNull();
-    expect(matches!.length).toBeGreaterThanOrEqual(1);
-    expect(matches![0].label).toBe("architecture");
-    expect(matches![0].score).toBeGreaterThan(0);
+    const res = await sidebandMatch(sockPath, "architecture", ["s", "global"], 0.0, 5);
+    expect(res).not.toBeNull();
+    expect(res!.matches.length).toBeGreaterThanOrEqual(1);
+    expect(res!.matches[0].label).toBe("architecture");
+    expect(res!.matches[0].score).toBeGreaterThan(0);
+    expect(res!.totalAbove).toBeGreaterThanOrEqual(1);
   });
 
   test("filters out matches below threshold", async () => {
@@ -69,32 +70,35 @@ describe("SidebandServer + sidebandMatch", () => {
 
     // Threshold 0.99 — MockEmbeddingModel produces near-orthogonal vectors
     // for different texts, so only exact-match text scores ~1.0.
-    const matches = await sidebandMatch(sockPath, "architecture", ["s"], 0.99, 5);
-    expect(matches).not.toBeNull();
-    expect(matches!.length).toBe(1);
-    expect(matches![0].label).toBe("architecture");
+    const res = await sidebandMatch(sockPath, "architecture", ["s"], 0.99, 5);
+    expect(res).not.toBeNull();
+    expect(res!.matches.length).toBe(1);
+    expect(res!.matches[0].label).toBe("architecture");
   });
 
   test("returns empty array when no memories exist", async () => {
-    const matches = await sidebandMatch(sockPath, "anything", ["s"], 0.0, 5);
-    expect(matches).not.toBeNull();
-    expect(matches).toEqual([]);
+    const res = await sidebandMatch(sockPath, "anything", ["s"], 0.0, 5);
+    expect(res).not.toBeNull();
+    expect(res!.matches).toEqual([]);
+    expect(res!.totalAbove).toBe(0);
   });
 
   test("respects limit", async () => {
     for (let i = 0; i < 10; i++) {
       db.remember("s", `entry-${i}`, `content-${i}`, await model.passageEmbed(`entry-${i}`), "mock");
     }
-    const matches = await sidebandMatch(sockPath, "entry-0", ["s"], 0.0, 3);
-    expect(matches!.length).toBeLessThanOrEqual(3);
+    const res = await sidebandMatch(sockPath, "entry-0", ["s"], 0.0, 3);
+    expect(res!.matches.length).toBeLessThanOrEqual(3);
+    // totalAbove counts everything above threshold, un-capped by limit.
+    expect(res!.totalAbove).toBeGreaterThanOrEqual(3);
   });
 
   test("searches across multiple stores", async () => {
     db.remember("s", "project-mem", "content", await model.passageEmbed("project-mem"), "mock");
     db.remember("global", "global-mem", "content", await model.passageEmbed("global-mem"), "mock");
 
-    const matches = await sidebandMatch(sockPath, "global-mem", ["s", "global"], 0.99, 5);
-    expect(matches!.some((m) => m.label === "global-mem" && m.store === "global")).toBe(true);
+    const res = await sidebandMatch(sockPath, "global-mem", ["s", "global"], 0.99, 5);
+    expect(res!.matches.some((m) => m.label === "global-mem" && m.store === "global")).toBe(true);
   });
 });
 
@@ -108,15 +112,46 @@ describe("SidebandServer + sidebandPredictions", () => {
 
     const predictions = await sidebandPredictions(sockPath, "deciding on test coverage", ["s", "global"], 0.0, 5);
     expect(predictions).not.toBeNull();
-    expect(predictions!.length).toBeGreaterThanOrEqual(1);
-    expect(predictions![0].statement).toBe("aim for 90 percent coverage");
-    expect(predictions![0].matcher_description).toBe("deciding on test coverage");
+    expect(predictions!.items.length).toBeGreaterThanOrEqual(1);
+    expect(predictions!.items[0].statement).toBe("aim for 90 percent coverage");
+    expect(predictions!.items[0].matcher_description).toBe("deciding on test coverage");
+    expect(predictions!.itemsTotal).toBeGreaterThanOrEqual(1);
+    expect(predictions!.matchersFired).toBeGreaterThanOrEqual(1);
   });
 
   test("returns empty array when no matchers match", async () => {
     const predictions = await sidebandPredictions(sockPath, "unrelated context", ["s"], 0.0, 5);
     expect(predictions).not.toBeNull();
-    expect(predictions).toEqual([]);
+    expect(predictions!.items).toEqual([]);
+  });
+
+  test("old-shape server (no stats fields) substitutes shown length, suppressing disclosure", async () => {
+    // Version skew: an old server (from before the stats fields) answers
+    // ok:true with the items only. The client substitutes the shown length
+    // for each missing stat, so the renderer's itemsTotal > items.length
+    // check comes out false and no disclosure line is fabricated.
+    server.stop();
+    const { createServer } = await import("node:net");
+    const oldShape = JSON.stringify({
+      ok: true,
+      predictions: [{ confidence: 0.5, evidence_count: 0, matcher_description: "m", statement: "s" }],
+    });
+    const oldServer = createServer((socket) => {
+      socket.on("data", () => socket.write(oldShape + "\n"));
+    });
+    oldServer.listen(sockPath);
+
+    try {
+      const predictions = await sidebandPredictions(sockPath, "anything", ["s"], 0.0, 5);
+      expect(predictions).not.toBeNull();
+      expect(predictions!.items.length).toBe(1);
+      expect(predictions!.matchersFired).toBe(1);
+      expect(predictions!.itemsTotal).toBe(1);
+    } finally {
+      oldServer.close();
+    }
+    // Restore the real server for the remaining tests.
+    server.start();
   });
 
   test("returns null when server is not running", async () => {
@@ -136,15 +171,17 @@ describe("SidebandServer + sidebandBehaviors", () => {
 
     const behaviors = await sidebandBehaviors(sockPath, "about to commit changes", ["s", "global"], 0.0, 5);
     expect(behaviors).not.toBeNull();
-    expect(behaviors!.length).toBeGreaterThanOrEqual(1);
-    expect(behaviors![0].statement).toBe("run mise run check before committing");
-    expect(behaviors![0].matcher_description).toBe("about to commit changes");
+    expect(behaviors!.items.length).toBeGreaterThanOrEqual(1);
+    expect(behaviors!.items[0].statement).toBe("run mise run check before committing");
+    expect(behaviors!.items[0].matcher_description).toBe("about to commit changes");
+    expect(behaviors!.itemsTotal).toBeGreaterThanOrEqual(1);
+    expect(behaviors!.matchersFired).toBeGreaterThanOrEqual(1);
   });
 
   test("returns empty array when no matchers match", async () => {
     const behaviors = await sidebandBehaviors(sockPath, "unrelated context", ["s"], 0.0, 5);
     expect(behaviors).not.toBeNull();
-    expect(behaviors).toEqual([]);
+    expect(behaviors!.items).toEqual([]);
   });
 
   test("returns null when server is not running", async () => {

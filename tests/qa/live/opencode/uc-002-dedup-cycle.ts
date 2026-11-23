@@ -15,7 +15,7 @@ const useCase: UseCase = {
   steps: [
     "1. Ask the agent to check for duplicate memories.",
     "2. Agent calls `thatch_find_duplicates`; the similar pair is reported with a",
-    "   score above the 0.85 default threshold.",
+    "   score above the 0.83 default threshold.",
     "3. Agent loads the `thatch-dedup-classifier` skill and classifies the pair.",
     "4. For a true duplicate: agent merges content via",
     "   `thatch_memory_remember(overwrite: true)` on the better label and deletes",

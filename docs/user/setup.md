@@ -249,7 +249,7 @@ process; the registry itself is `src/env-knobs.ts`.
 | `THATCH_MODEL` | `Xenova/bge-small-en-v1.5` | Hugging Face model name for embeddings |
 | `THATCH_MODEL_CACHE` | platform per-user cache dir | Where downloaded model files are stored |
 | `THATCH_RECALL_THRESHOLD` | `0.55` | Cosine threshold for recall nudge |
-| `THATCH_PREDICTION_THRESHOLD` | `0.60` | Cosine threshold for prediction auto-fire |
+| `THATCH_PREDICTION_THRESHOLD` | `0.60` | Cosine threshold for prediction auto-fire and the prediction_query tool floor |
 | `THATCH_BEHAVIOR_THRESHOLD` | `0.60` | Cosine threshold for behavior auto-fire |
 | `THATCH_NO_NOTIFY` | off | Set to `1` to silence all thatch desktop notifications (banners and voice), regardless of the config file |
 | `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS` | (unset) | Enables async extraction (opencode only) |

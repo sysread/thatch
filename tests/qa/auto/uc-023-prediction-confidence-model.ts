@@ -121,7 +121,7 @@ const useCase: UseCase = {
 
       // Step 6: scorePredictionNudge returns the prediction with current confidence.
       const queryEmbed = await model.queryEmbed(matcherText);
-      const items = db.scorePredictionNudge([store], queryEmbed, 0.0, 5);
+      const { items } = db.scorePredictionNudge([store], queryEmbed, 0.0, 5);
       if (items.length === 0) {
         console.log("  FAIL: scorePredictionNudge returned no items");
         return "FAIL";

@@ -43,7 +43,7 @@ const useCase: UseCase = {
 
       // Query with completely unrelated text at the 0.60 auto-fire threshold.
       const unrelatedEmbed = await model.queryEmbed("what is the weather like today");
-      const items = db.scoreBehaviorNudge([store], unrelatedEmbed, 0.60, 5);
+      const { items } = db.scoreBehaviorNudge([store], unrelatedEmbed, 0.60, 5);
       if (items.length > 0) {
         console.log(`  FAIL: unrelated context should not trigger behavior nudge, got ${items.length} items`);
         return "FAIL";

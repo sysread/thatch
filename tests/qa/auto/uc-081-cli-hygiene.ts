@@ -22,9 +22,9 @@ const useCase: UseCase = {
     "- A DB with known state: one run with non-zero signals, one run with all-zero signals",
   ].join("\n"),
   steps: [
-    "1. Seed a DB with duplicate candidates (two memories with cosine >= 0.85).",
+    "1. Seed a DB with duplicate candidates (two memories with cosine above the 0.83 duplicate threshold).",
     "2. Run `thatch hygiene` and verify the duplicate count appears.",
-    "3. Seed a DB with stale entries (memories not updated or recalled in 90+ days).",
+    "3. Seed a DB with stale entries (memories not updated or recalled in 60+ days).",
     "4. Run `thatch hygiene` and verify the stale count appears.",
     "5. Seed a DB with orphaned branch memories (memories scoped to branches that no longer exist).",
     "6. Run `thatch hygiene` from a git repo and verify the orphan count appears.",

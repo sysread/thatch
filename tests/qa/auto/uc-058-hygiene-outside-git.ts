@@ -19,7 +19,7 @@ import { hygieneReport } from "../../../src/hygiene";
 const useCase: UseCase = {
   name: "UC-058-hygiene-outside-git",
   preconditions: [
-    "- A store with: two near-duplicate memories, one stale memory (not updated or recalled in 90+ days), and one memory scoped to a branch",
+    "- A store with: two near-duplicate memories, one stale memory (not updated or recalled in 60+ days), and one memory scoped to a branch",
     "- The working directory is not a git repo (no .git directory)",
   ].join("\n"),
   steps: [

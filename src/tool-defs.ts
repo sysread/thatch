@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ThatchDB, DedupCandidate, MemoryRow, PredictionDedupCandidate } from "./db";
+import { DEDUP_PAIR_THRESHOLD } from "./db";
 import type { EmbeddingModel } from "./embeddings";
 import { MEMORY_DISPLAY_STAMP } from "./extraction";
 import {
@@ -27,7 +28,7 @@ import {
 } from "./config";
 import { renderEnvKnobs } from "./env-knobs";
 import { sendNotification, defaultSpawner, DEFAULT_VOICE, SPOKEN_LINE_MAX, TONE_PREFIXES, type NotifyChannel, type NotifyJournalEntry, type NotifyJournalWriter, type NotifyTone, type Spawner } from "./notify";
-import { predictionVerb, formatWhenLine, chatInboxFrame } from "./prompts";
+import { predictionVerb, formatWhenLine, disclosureLine, chatInboxFrame } from "./prompts";
 import { resolveOpencodeDbPath, SessionDB, partToTimelineEntry, partToFullJson, messageToFullJson } from "./session-db";
 import { PR_EVENT_TYPES, BRANCH_EVENT_TYPES, DEFAULT_COMMAND_EXIT_CODES, commandTargetLabel, describeBaselineCheckRuns, type WatcherRegistry, type Watcher, type PrWatcherEventType, type BranchWatcherEventType } from "./watchers";
 import { CHAT_STALE_MS, CHAT_SPLIT_PART_LEN, CHAT_MAX_BODY_CHARS, CHAT_MAX_NUDGES_PER_HOUR, chatLiveness, humanAge, renderChatParticipant, sortChatRoster, splitChatRoster, chatReadClip, chatReadPage, type ChatHostKind, isoMinutesAgo } from "./chat";
@@ -36,7 +37,10 @@ import { didYouMean, didYouMeanLine, nearMissParam, withDidYouMean } from "./fuz
 import { isSameMainCheckout, validateLocationArgs, validateTitle } from "./session-tab-shared";
 
 // Near-duplicate thresholds for matcher/prediction/behavior dedup at
-// creation time. Matches the thatch_find_duplicates threshold (0.85).
+// creation time. Intentionally stricter than the find_duplicates
+// candidate floor (DEDUP_PAIR_THRESHOLD, 0.83): a creation-time warning
+// should fire only on near-certain dupes, while the review queue can
+// absorb weaker candidates.
 const MATCHER_DEDUP_COSINE = 0.85;
 const PREDICTION_DEDUP_COSINE = 0.85;
 const BEHAVIOR_DEDUP_COSINE = 0.85;
@@ -102,11 +106,20 @@ async function resolveBehaviorForFeedback(
   return null;
 }
 
-// Minimum matcher cosine to consider a prediction relevant. Matches the
-// auto-fire threshold in runtime.ts (PREDICTION_THRESHOLD). The query tool
+// Minimum matcher cosine to consider a prediction relevant. Reads the SAME
+// env knob as the auto-fire threshold (runtime.ts PREDICTION_THRESHOLD):
+// the nudge's "use prediction_query to see more" only keeps its promise if
+// the query draws from the same above-threshold set, so the two must agree
+// at any env setting. The query tool
 // should not return predictions from near-zero-similarity matchers that
 // would never fire in the auto-fire.
-const PREDICTION_QUERY_THRESHOLD = 0.60;
+const predictionQueryThreshold = () =>
+  parseFloat(process.env.THATCH_PREDICTION_THRESHOLD ?? "0.60");
+// Response-size cap for the prediction_query tool: how many scored
+// predictions it renders before the truncation disclosure. Wider than the
+// nudge's 5 (the caller asked a direct question) but bounded (a dense
+// store can score hundreds; a 200-line tool response helps no one).
+const PREDICTION_QUERY_ITEM_CAP = 20;
 
 /**
  * Shared context passed to every tool's execute function. Framework-agnostic -
@@ -392,8 +405,8 @@ export interface ToolDef {
  * claim was recorded. Freshness-of-use is not freshness-of-claim.
  *
  * Bucket boundaries are a formatting choice, independent of hygiene's
- * 90-day staleness window (db.ts STALE_DAYS) - the two 90s are a
- * coincidence, do not couple them. Compact sibling: humanAge() in
+ * staleness window (src/hygiene.ts STALE_DAYS) - do not couple them.
+ * Compact sibling: humanAge() in
  * chat.ts renders roster-style "5m ago" for chat surfaces; keep the two
  * apart when changing either.
  */
@@ -717,6 +730,9 @@ const rememberDef: ToolDef = {
   },
 };
 
+// Response bound for the memory_recall tool: the schema max below and the
+// point where "pass a higher limit" stops being usable advice.
+const RECALL_LIMIT_MAX = 20;
 const recallDef: ToolDef = {
   name: "memory_recall",
   description:
@@ -731,7 +747,7 @@ const recallDef: ToolDef = {
     branch: z.string().optional().describe(
       "Filter to memories scoped to this branch plus project-wide (unscoped) memories.",
     ),
-    limit: z.number().int().min(1).max(20).optional().describe(
+    limit: z.number().int().min(1).max(RECALL_LIMIT_MAX).optional().describe(
       "Maximum number of results. Default 10.",
     ),
     includeArchived: z.boolean().optional().describe(
@@ -745,7 +761,12 @@ const recallDef: ToolDef = {
     const limit = (args.limit as number) ?? 10;
 
     const queryEmbedding = await ctx.model.queryEmbed(args.query as string);
-    const results = ctx.db.recall(stores, queryEmbedding, {
+    // No relevance floor by design (weak matches still rank), so the total
+    // is every scored row - "scored memories", not "matches". The line
+    // fires only when the corpus outruns the limit; on a small store it
+    // stays silent because nothing was cut. recallWithTotal stamps the
+    // same telemetry as recall - retrieval is the "used recently" signal.
+    const { rows: results, totalAbove } = ctx.db.recallWithTotal(stores, queryEmbedding, {
       branch: args.branch as string | undefined,
       limit,
       includeArchived: args.includeArchived as boolean | undefined,
@@ -753,7 +774,19 @@ const recallDef: ToolDef = {
 
     if (results.length === 0) return "No matching memories found.";
 
-    return withMemoryCaveat(results.map(formatRecallResult).join("\n\n-----\n\n"));
+    const body = results.map(formatRecallResult).join("\n\n-----\n\n");
+    if (totalAbove > results.length) {
+      // "Higher limit" is only usable advice below the schema cap - at the
+      // cap there is no higher limit, so the line names the lever that
+      // still works (sharper ranking).
+      const advice = limit < RECALL_LIMIT_MAX
+        ? "refine the query for sharper ranking or pass a higher limit to see more"
+        : "refine the query for sharper ranking";
+      return withMemoryCaveat(
+        `Showing the top ${results.length} of ${totalAbove} scored memories; ${advice}.\n\n${body}`,
+      );
+    }
+    return withMemoryCaveat(body);
   },
 };
 
@@ -910,12 +943,12 @@ const findDuplicatesDef: ToolDef = {
       "Which store to check. Defaults to the project store.",
     ),
     threshold: z.number().min(0).max(1).optional().describe(
-      "Similarity threshold (0-1). Default 0.85.",
+      "Similarity threshold (0-1). Default 0.83.",
     ),
   },
   async execute(args, ctx) {
     const store = resolveStore(args, ctx);
-    const threshold = (args.threshold as number) ?? 0.85;
+    const threshold = (args.threshold as number) ?? DEDUP_PAIR_THRESHOLD;
     const candidates = ctx.db.findDuplicates(store, threshold);
 
     if (candidates.length === 0) return `No duplicate candidates found in "${store}" above threshold ${threshold}.`;
@@ -1156,15 +1189,29 @@ const predictionQueryDef: ToolDef = {
       ? [args.store as string]
       : [ctx.defaultStore, "global"];
     const embedding = await ctx.model.queryEmbed(context);
-    const matchers = ctx.db.findMatchers(stores, embedding, { limit: 5 })
-      .filter((m) => m.score >= PREDICTION_QUERY_THRESHOLD);
+    // Threshold decides relevance across ALL matchers; a cap-then-filter
+    // order hides most of them on dense stores. The item cap below only
+    // bounds the response size.
+    const matchers = ctx.db.findMatchers(stores, embedding, { threshold: predictionQueryThreshold() });
     if (matchers.length === 0) return "No matching predictions found.";
     const scored = ctx.db.scorePredictions(matchers);
     if (scored.length === 0) return "No matching predictions found.";
-    return scored.map((s) => {
+    // Response-size cap: a dense store can put hundreds of items above the
+    // matcher threshold (152 matchers on thog's store). The truncation is
+    // disclosed so the model knows the list is a top-N.
+    const shown = scored.slice(0, PREDICTION_QUERY_ITEM_CAP);
+    const lines = shown.map((s) => {
       const verb = predictionVerb(s.evidence_count);
       return formatWhenLine(s.confidence, s.evidence_count, s.matcher_description, s.statement, verb);
-    }).join("\n");
+    });
+    const disclosure = disclosureLine(
+      "predictions",
+      shown.length,
+      { matchersFired: matchers.length, itemsTotal: scored.length },
+      "rephrase the context more narrowly for a tighter set",
+    );
+    if (disclosure) lines.push(disclosure);
+    return lines.join("\n");
   },
 };
 

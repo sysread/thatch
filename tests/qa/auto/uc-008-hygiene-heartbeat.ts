@@ -12,7 +12,7 @@ import { hygieneReport } from "../../../src/hygiene";
  * UC-008: Hygiene heartbeat.
  *
  * Automatable: `thatch hygiene` calls hygieneReport(), a pure function over
- * the DB and git state. Seeds all three signal types (dedup pairs, stale
+ * the DB and git state. Seeds all three signal types it controls (dedup pairs, stale
  * memories, orphaned branches), then verifies the report both via direct
  * calls and the CLI. The non-git-directory case verifies the branch check
  * is skipped (listBranches returns [] outside a repo).
@@ -21,7 +21,7 @@ import { hygieneReport } from "../../../src/hygiene";
 const useCase: UseCase = {
   name: "UC-008-hygiene-heartbeat",
   preconditions: [
-    "- A store with: one memory not updated or recalled in 90+ days; one memory scoped to a git branch that no longer exists; two near-duplicate memories (similarity > 0.85)",
+    "- A store with: one memory not updated or recalled in 60+ days; one memory scoped to a git branch that no longer exists; two near-duplicate memories (similarity above the duplicate threshold)",
     "- One memory scoped to a deleted branch whose entries are all archived (must NOT be named in the orphaned signal)",
     "- One memory scoped to a branch that exists only as a remote-tracking ref (must NOT be flagged orphaned)",
     "- A second, clean store for the negative case",
@@ -33,7 +33,7 @@ const useCase: UseCase = {
     "4. Run the same commands from a directory that is **not** a git repo",
   ].join("\n"),
   expected: [
-    '- The report names three signals — pending duplicate pairs, stale-memory count, orphaned-branch memory count — and **only the non-zero ones**. A fully healthy store prints "Store is healthy." (or `null`) and the reminder omits the hygiene block entirely.',
+    '- The report names three signals — pending duplicate pairs, stale-memory count, orphaned-branch memory count — (the fourth, prediction duplicate pairs, is covered by the prediction-dedup UCs) — and **only the non-zero ones**. A fully healthy store prints "Store is healthy." (or `null`) and the reminder omits the hygiene block entirely.',
     "- Both `reminder` shapes fold the hygiene block into the session-start text only when it is non-null.",
     "- Outside a git repo, the orphaned-branch check is **skipped** — a missing branch list would otherwise make everything look orphaned; stale and dup signals still report.",
     "- A fully-archived branch (every entry archived) is **not** named in the orphaned signal: the branch enumeration excludes archived entries, matching the count, which also excludes them.",
@@ -48,12 +48,12 @@ const useCase: UseCase = {
     const store = "test-hygiene";
     const model = new MockEmbeddingModel();
 
-    // --- Seed the DB with all three signal types ---
+    // --- Seed the DB with all three signal types it controls ---
 
     const db = new ThatchDB(dbPath);
 
     // Two identical memories: same text → same embedding → cosine 1.0,
-    // which is above the 0.85 dedup threshold.
+    // which is above the 0.83 dedup threshold.
     const dupEmb = await model.passageEmbed("the API rate limit is 100 requests per minute");
     db.remember(store, "api-rate-limit", "the API rate limit is 100 req/min", dupEmb, "mock");
     db.remember(store, "api-rate-limit-v2", "the API rate limit is 100 req/min", dupEmb, "mock");
@@ -82,7 +82,7 @@ const useCase: UseCase = {
     // Backdate the stale memory's timestamps to 100 days ago. ThatchDB.remember
     // always stamps updated_at = now(), so we update it post-save via a raw
     // SQLite connection. staleEntryCount checks max(updated_at,
-    // COALESCE(last_recalled_at, updated_at)) < cutoff (90 days ago).
+    // COALESCE(last_recalled_at, updated_at)) < cutoff (60 days ago).
     const oldDate = new Date(Date.now() - 100 * 86_400_000).toISOString();
     const rawDb = new Database(dbPath);
     rawDb.run(
@@ -91,7 +91,7 @@ const useCase: UseCase = {
     );
     rawDb.close();
 
-    // --- Test 1: All three signals fire from a real git repo ---
+    // --- Test 1: All three seeded signals fire from a real git repo ---
     // Create a temp git repo with a known branch so the orphaned-branch
     // check has live branches to compare against. In CI, the checked-out
     // repo has a detached HEAD with no local branches, so listBranches
@@ -114,7 +114,7 @@ const useCase: UseCase = {
     db1.close();
 
     if (!report1) {
-      console.log("  FAIL: hygieneReport from git repo returned null (expected all three signals)");
+      console.log("  FAIL: hygieneReport from git repo returned null (expected all three seeded signals)");
       return "FAIL";
     }
     if (!report1.includes("duplicate-candidate")) {

@@ -1,6 +1,6 @@
 import { Database } from "./sqlite-compat";
 import { blobToVector, cosineSimilarity } from "./vector-math";
-import { ScoringEngine, type NudgeItem, PREDICTION_K, PREDICTION_P0, PREDICTION_W_SOFT } from "./scoring-engine";
+import { ScoringEngine, type NudgeItem, type ScoredNudge, PREDICTION_K, PREDICTION_P0, PREDICTION_W_SOFT } from "./scoring-engine";
 
 export { PREDICTION_K, PREDICTION_P0, PREDICTION_W_SOFT };
 
@@ -77,7 +77,7 @@ export class PredictionEngine {
     this.#engine = new ScoringEngine(db, config);
   }
 
-  findMatchers(stores: string[], queryEmbedding: Float32Array, opts?: { limit?: number }) {
+  findMatchers(stores: string[], queryEmbedding: Float32Array, opts?: { limit?: number; threshold?: number }) {
     return this.#engine.findMatchers(stores, queryEmbedding, opts);
   }
 
@@ -94,7 +94,7 @@ export class PredictionEngine {
     }));
   }
 
-  scorePredictionNudge(stores: string[], embedding: Float32Array, threshold: number, limit = 5): PredictionNudgeItem[] {
+  scorePredictionNudge(stores: string[], embedding: Float32Array, threshold: number, limit = 5): ScoredNudge {
     return this.#engine.scoreNudge(stores, embedding, threshold, limit);
   }
 

@@ -343,7 +343,7 @@ process; the registry itself is `src/env-knobs.ts`.
 | `THATCH_EMBED_DAEMON` | on | Set to `off` to make every MCP session embed in-process and never spawn or contact the shared daemon (also forced by the test and QA harnesses) |
 | `THATCH_EMBED_DAEMON_IDLE_MS` | `1800000` (30 minutes) | Idle milliseconds before the shared embedding daemon exits; overrides the config file's `embedDaemon.idleExitMinutes` |
 | `THATCH_RECALL_THRESHOLD` | `0.55` | Cosine threshold for recall nudge |
-| `THATCH_PREDICTION_THRESHOLD` | `0.60` | Cosine threshold for prediction auto-fire |
+| `THATCH_PREDICTION_THRESHOLD` | `0.60` | Cosine threshold for prediction auto-fire and the prediction_query tool floor |
 | `THATCH_BEHAVIOR_THRESHOLD` | `0.60` | Cosine threshold for behavior auto-fire |
 | `THATCH_CHAT_WAKE_SPREAD_MS` | `5000` | Window over which one cycle's chat wake prompts spread out (0 = all at once) |
 | `CLAUDE_PROJECT_DIR` | `process.cwd()` | Claude Code project directory |

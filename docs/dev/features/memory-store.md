@@ -217,15 +217,15 @@ suggestion line is appended, and a far-off label never gets a fallback guess.
 ```text
 agent calls memory_recall(query, opts)
   → model.queryEmbed(query)  →  Float32Array
-  → db.recall([repo, "global"], queryEmbedding, { branch?, limit })
-      → db.search()  →  cosine scoring, sort desc, top-N
+  → db.recallWithTotal([repo, "global"], queryEmbedding, { branch?, limit })
+      → db.searchWithTotal()  →  cosine scoring, sort desc, top-N (totalAbove = every scored row)
       → stamp recall_count + last_recalled_at on returned rows
-  → return formatted results with scores
+  → return formatted results with scores (+ "top N of M scored memories" when the corpus outran the limit)
 ```
 
 The tool layer hardcodes `[repo, "global"]` as the default search scope. Omitting the `store` parameter searches both. Passing a specific store searches only that store.
 
-Entries with a mismatched embedding dimension are skipped during search — the `emb.length !== queryEmbedding.length` guard in `db.search()`. This handles the case where a different embedding model was used for older entries.
+Entries with a mismatched embedding dimension are skipped during search — the `emb.length !== queryEmbedding.length` guard in `db.searchWithTotal()`. This handles the case where a different embedding model was used for older entries.
 
 ### Search vs. recall
 
@@ -233,8 +233,8 @@ Two methods, one scoring engine, different telemetry policy:
 
 | Method | Telemetry | Used by |
 |--------|-----------|---------|
-| `db.search()` | None | Prompt-aware recall nudge (see [nudge-pipeline.md](nudge-pipeline.md)) |
-| `db.recall()` | Stamps `recall_count` / `last_recalled_at` | `thatch_memory_recall` tool, CLI `thatch search` |
+| `db.search()` / `db.searchWithTotal()` | None | Prompt-aware recall nudge (see [nudge-pipeline.md](nudge-pipeline.md)) |
+| `db.recall()` / `db.recallWithTotal()` | Stamps `recall_count` / `last_recalled_at` | `thatch_memory_recall` tool, CLI `thatch search` |
 
 The distinction is deliberate. The recall nudge checks whether memories relate to a prompt — the plugin is looking, not the agent. Stamping telemetry on a nudge would inflate the "used recently" signal that hygiene reporting depends on. Only explicit agent-initiated recall stamps telemetry.
 
@@ -277,7 +277,7 @@ agents use (see [cli.md](cli.md)):
 - **Extraction pipeline** ([extraction.md](extraction.md)): the extraction sub-agent writes memories via `memory_remember`. The extraction buffer drains on any `memory_remember` call.
 - **Deduplication** ([deduplication.md](deduplication.md)): `find_duplicates` scans stored memories for cosine-similar pairs. `dedup_mark_checked` records verdicts in the `dedup_pairs` table. Overwriting or forgetting a memory clears its dedup verdicts.
 - **Hygiene** ([hygiene.md](hygiene.md)): staleness checks use `recall_count` and `last_recalled_at` to find memories nobody has read recently. Duplicate checks use cosine search. Orphaned-branch detection finds branch-scoped memories whose branch no longer exists.
-- **Nudge pipeline** ([nudge-pipeline.md](nudge-pipeline.md)): the recall nudge uses `db.search()` — not `db.recall()` — to avoid inflating telemetry. The nudge fires when search results exceed the similarity threshold (default 0.55).
+- **Nudge pipeline** ([nudge-pipeline.md](nudge-pipeline.md)): the recall nudge uses `db.searchWithTotal()` — not `db.recall()` — to avoid inflating telemetry. The nudge fires when search results exceed the similarity threshold (default 0.55); when more than the top-5 shown list matched, the nudge says "Top 5 of M" instead of a bare count.
 - **Prediction engine** ([prediction-engine.md](prediction-engine.md)) and **behavior engine** ([behavior-engine.md](behavior-engine.md)): these share the same embedding model but store vectors in separate tables (`prediction_matchers`, `prediction_predictions`, `behavior_matchers`, `behavior_behaviors`). They do not read from or write to the `entries` table.
 
 ## Source files

@@ -27,7 +27,7 @@ const useCase: UseCase = {
     "3. The server embeds the text, calls db.scorePredictionNudge, and responds.",
   ].join("\n"),
   expected: [
-    "- The client receives PredictionNudgeItem[] with matcher context, confidence, and evidence count.",
+    "- The client receives a ScoredNudge-shaped result (items with matcher context, confidence, and evidence count, plus matchersFired and itemsTotal stats).",
     "- Predictions below the threshold are filtered out server-side by scorePredictionNudge.",
   ].join("\n"),
 
@@ -61,21 +61,22 @@ const useCase: UseCase = {
         console.log("  FAIL: sidebandPredictions returned null");
         return "FAIL";
       }
-      if (predictions.length === 0) {
+      const items = predictions.items;
+      if (items.length === 0) {
         console.log("  FAIL: expected at least 1 prediction");
         return "FAIL";
       }
-      if (predictions[0].statement !== predText) {
-        console.log(`  FAIL: wrong prediction statement, expected "${predText}", got "${predictions[0].statement}"`);
+      if (items[0].statement !== predText) {
+        console.log(`  FAIL: wrong prediction statement, expected "${predText}", got "${items[0].statement}"`);
         return "FAIL";
       }
-      if (predictions[0].matcher_description !== matcherText) {
-        console.log(`  FAIL: wrong matcher description, expected "${matcherText}", got "${predictions[0].matcher_description}"`);
+      if (items[0].matcher_description !== matcherText) {
+        console.log(`  FAIL: wrong matcher description, expected "${matcherText}", got "${items[0].matcher_description}"`);
         return "FAIL";
       }
       // New prediction seeds at P0 (0.5) with 0 evidence.
-      if (Math.abs(predictions[0].confidence - 0.5) > 0.01) {
-        console.log(`  FAIL: confidence should be ~0.5, got ${predictions[0].confidence}`);
+      if (Math.abs(items[0].confidence - 0.5) > 0.01) {
+        console.log(`  FAIL: confidence should be ~0.5, got ${items[0].confidence}`);
         return "FAIL";
       }
 
@@ -85,8 +86,8 @@ const useCase: UseCase = {
         console.log("  FAIL: unrelated sidebandPredictions returned null");
         return "FAIL";
       }
-      if (unrelated.length > 0) {
-        console.log(`  FAIL: unrelated context should return 0 predictions, got ${unrelated.length}`);
+      if (unrelated.items.length > 0) {
+        console.log(`  FAIL: unrelated context should return 0 predictions, got ${unrelated.items.length}`);
         return "FAIL";
       }
 

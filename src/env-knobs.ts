@@ -74,7 +74,7 @@ export const ENV_KNOBS: EnvKnob[] = [
   },
   {
     name: "THATCH_PREDICTION_THRESHOLD",
-    description: "Cosine similarity above which a prediction auto-fires.",
+    description: "Cosine similarity above which a prediction auto-fires; also the matcher floor of the prediction_query tool, so the two always agree.",
     default: "0.60",
   },
   {

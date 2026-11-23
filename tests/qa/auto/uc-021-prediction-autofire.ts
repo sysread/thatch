@@ -49,7 +49,7 @@ const useCase: UseCase = {
 
       // Matching context (same text as matcher -> cosine ~1.0, above 0.45).
       const queryEmbed = await model.queryEmbed(matcherText);
-      const items = db.scorePredictionNudge([store], queryEmbed, 0.45, 5);
+      const { items } = db.scorePredictionNudge([store], queryEmbed, 0.45, 5);
       if (items.length === 0) {
         console.log("  FAIL: scorePredictionNudge returned no items for matching context");
         return "FAIL";
@@ -76,7 +76,7 @@ const useCase: UseCase = {
 
       // Unrelated context (different text -> cosine ~0, below 0.45).
       const unrelatedEmbed = await model.queryEmbed("what is the weather like today");
-      const unrelatedItems = db.scorePredictionNudge([store], unrelatedEmbed, 0.45, 5);
+      const { items: unrelatedItems } = db.scorePredictionNudge([store], unrelatedEmbed, 0.45, 5);
       if (unrelatedItems.length > 0) {
         console.log("  FAIL: unrelated context should not trigger prediction nudge");
         return "FAIL";

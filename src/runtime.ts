@@ -14,6 +14,7 @@ import {
   extractionDirectPrompt,
   predictionNudge,
   behaviorNudge,
+  opencodeToolName,
   versionWarningNudge,
   skewWarningText,
   type NudgeMatch,
@@ -49,7 +50,7 @@ import pkg from "../package.json";
 // ---------------------------------------------------------------------------
 
 // Minimum cosine score for the prompt-aware recall nudge. Lower than
-// findDuplicates' 0.85 (near-dupes) because "relates to" is a weaker signal
+// findDuplicates' 0.83 (near-dupes) because "relates to" is a weaker signal
 // than "duplicate." Tunable via THATCH_RECALL_THRESHOLD.
 const RECALL_THRESHOLD = parseFloat(process.env.THATCH_RECALL_THRESHOLD ?? "0.55");
 
@@ -2526,9 +2527,11 @@ export async function createRuntime(input: {
         // Recall nudge: separate try/catch so a memory-search failure
         // does not block the prediction fire (they share only the embedding).
         try {
-          const results = db.search([repo, "global"], embedding, { limit: 5 });
-          const matches: NudgeMatch[] = results
-            .filter((r) => r._score >= RECALL_THRESHOLD)
+          const { rows, totalAbove } = db.searchWithTotal([repo, "global"], embedding, {
+            limit: 5,
+            minScore: RECALL_THRESHOLD,
+          });
+          const matches: NudgeMatch[] = rows
             .map((r) => ({ label: r.label, score: Math.round(r._score * 1000) / 1000 }));
 
           if (matches.length > 0) {
@@ -2537,12 +2540,16 @@ export async function createRuntime(input: {
               sessionID: input.sessionID,
               messageID: input.messageID ?? output.message.id,
               type: "text",
-              text: recallNudge(matches),
+              text: recallNudge(matches, totalAbove),
               synthetic: true,
             });
             try {
               await caps.showToast({
-                message: `💭 recalled ${matches.length} memor${matches.length === 1 ? "y" : "ies"}`,
+                // "N of M" only when the cap bit; a plain count otherwise -
+                // "matched 3 of 3" would read as if 0 were dropped.
+                message: totalAbove > matches.length
+                  ? `💭 matched ${matches.length} of ${totalAbove} memories`
+                  : `💭 matched ${matches.length} ${matches.length === 1 ? "memory" : "memories"}`,
                 variant: "info",
                 duration: 3000,
               });
@@ -2557,19 +2564,21 @@ export async function createRuntime(input: {
         // Prediction fire: independent of recall; a failure here does
         // not affect the recall nudge that may have already been pushed.
         try {
-          const predItems = db.scorePredictionNudge([repo, "global"], embedding, PREDICTION_THRESHOLD);
+          const { items: predItems, matchersFired, itemsTotal } = db.scorePredictionNudge([repo, "global"], embedding, PREDICTION_THRESHOLD);
           if (predItems.length > 0) {
             output.parts.push({
               id: `prt_thatch_${Math.random().toString(36).slice(2)}`,
               sessionID: input.sessionID,
               messageID: input.messageID ?? output.message.id,
               type: "text",
-              text: predictionNudge(predItems),
+              text: predictionNudge(predItems, opencodeToolName, { matchersFired, itemsTotal }),
               synthetic: true,
             });
             try {
               await caps.showToast({
-                message: `💭 ${predItems.length} prediction${predItems.length === 1 ? "" : "s"} surfaced`,
+                message: itemsTotal > predItems.length
+                  ? `💭 ${predItems.length} of ${itemsTotal} predictions surfaced`
+                  : `💭 ${predItems.length} ${predItems.length === 1 ? "prediction" : "predictions"} surfaced`,
                 variant: "info",
                 duration: 3000,
               });
@@ -2584,19 +2593,21 @@ export async function createRuntime(input: {
         // Behavior fire: independent of recall and prediction. Same
         // embedding, one more cosine scan against behavior_matchers.
         try {
-          const behaviorItems = db.scoreBehaviorNudge([repo, "global"], embedding, BEHAVIOR_THRESHOLD);
+          const { items: behaviorItems, matchersFired, itemsTotal } = db.scoreBehaviorNudge([repo, "global"], embedding, BEHAVIOR_THRESHOLD);
           if (behaviorItems.length > 0) {
             output.parts.push({
               id: `prt_thatch_${Math.random().toString(36).slice(2)}`,
               sessionID: input.sessionID,
               messageID: input.messageID ?? output.message.id,
               type: "text",
-              text: behaviorNudge(behaviorItems),
+              text: behaviorNudge(behaviorItems, opencodeToolName, { matchersFired, itemsTotal }),
               synthetic: true,
             });
             try {
               await caps.showToast({
-                message: `💭 ${behaviorItems.length} behavior${behaviorItems.length === 1 ? "" : "s"} surfaced`,
+                message: itemsTotal > behaviorItems.length
+                  ? `💭 ${behaviorItems.length} of ${itemsTotal} behaviors surfaced`
+                  : `💭 ${behaviorItems.length} ${behaviorItems.length === 1 ? "behavior" : "behaviors"} surfaced`,
                 variant: "info",
                 duration: 3000,
               });

@@ -60,18 +60,26 @@ confidence = (confirm_count + K * P0) / (confirm_count + disconfirm_count + K)
 score = cosine(user_text, matcher.embedding) × edge.weight × prediction.effective_confidence
 ```
 
-Returns all predictions from matching matchers so the LLM can read conflicts.
+Returns all predictions from matchers above the auto-fire threshold, so
+the LLM can read conflicts. The top-5 cap in the nudge renderer is
+output-size only, and a truncated list discloses the gap. A wider view is
+one `prediction_query` call away; that tool caps at 20 and discloses its
+own truncation.
 The LLM is the conflict detector. Prompt instruction: "if competing
 predictions offer conflicting guidance, surface to the user."
 
 ### Query (`prediction_query` tool)
 
 - Embeds the context string.
-- Finds the top 5 matchers by cosine.
-- Filters to cosine >= 0.60 (`PREDICTION_QUERY_THRESHOLD`, matching the
-  auto-fire threshold).
+- Filters matchers by cosine >= the auto-fire threshold
+  (`THATCH_PREDICTION_THRESHOLD`, default 0.60, via
+  `predictionQueryThreshold()` - the same knob the nudge reads, so the
+  two always agree).
 - Follows edges to predictions, scores them.
-- Returns one line per prediction: `[conf, N tests] When {matcher}: {verb}
+- Returns the top 20 scored predictions (`PREDICTION_QUERY_ITEM_CAP`) with a
+  truncation disclosure when more matched: "Top 20 of N matching predictions
+  shown (M matchers fired)".
+- One line per prediction: `[conf, N tests] When {matcher}: {verb}
   {statement}`.
 - Verb reflects evidence count: "you may prefer" (0 evidence) vs "you tend to"
   (has evidence).
@@ -185,7 +193,8 @@ later — land below that floor and accumulate. The dedup pass finds them:
   labels are a submission-time snapshot, not a live view.
 - Independent try/catch — a prediction failure does not block recall or
   behavior.
-- Toast: `[thatch] N predictions surfaced`.
+- Toast: `💭 N of M predictions surfaced` (the fraction only when the
+  cap cut the set; a plain count otherwise).
 
 ### Auto-fire (MCP: sideband)
 

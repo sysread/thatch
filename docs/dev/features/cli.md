@@ -227,7 +227,7 @@ process; the registry itself is `src/env-knobs.ts`.
 
 | `THATCH_MODEL` | Embedding model override | `Xenova/bge-small-en-v1.5` |
 | `THATCH_RECALL_THRESHOLD` | Cosine cutoff for recall nudge | `0.55` |
-| `THATCH_PREDICTION_THRESHOLD` | Cutoff for prediction auto-fire | `0.60` |
+| `THATCH_PREDICTION_THRESHOLD` | Cutoff for prediction auto-fire; also the matcher floor of the prediction_query tool | `0.60` |
 | `THATCH_BEHAVIOR_THRESHOLD` | Cutoff for behavior auto-fire | `0.60` |
 | `THATCH_CHILD_RECONCILE_MS` | Reload window before a restored extraction child is judged finished (test knob) | `10000` |
 | `THATCH_CHAT_WAKE_SPREAD_MS` | Window over which one poll cycle's wake prompts to multiple chat recipients spread (0 = back to back) | `5000` |

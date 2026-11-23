@@ -64,6 +64,17 @@ describe("recallNudge (opencode)", () => {
     expect(nudge).toContain("etc.");
     expect(nudge).not.toContain('"Conventions"');
   });
+
+  test("a total larger than the shown list reads as Top N of M, not a bare count", () => {
+    const matches: NudgeMatch[] = [
+      { label: "Architecture", score: 0.8 },
+      { label: "Module map", score: 0.7 },
+    ];
+    const nudge = recallNudge(matches, 43);
+    expect(nudge).toContain("Top 2 of 43 memories relate to this prompt");
+    // The truncated list must still name the way to see the rest.
+    expect(nudge).toContain("thatch_memory_recall");
+  });
 });
 
 describe("formatWhenLine prefix deduplication", () => {

@@ -35,13 +35,21 @@ export type { ChatSessionRow, ChatInboxItem, ChatNotificationRow, ChatWorktreeKi
 export const MEMORY_HELD_MARKER = "[held]";
 
 /**
- * The cosine bar for the tombstone similarity path. Higher than the 0.85
- * live-duplicate warning because a hold is heavier than a warning; the
+ * The cosine bar for the tombstone similarity path. Higher than the
+ * write-time similar-entry warning (findSimilar, 0.85) because a hold is
+ * heavier than a warning; the
  * asymmetry that justifies biasing toward matching: a false hold is
  * visible and one-step recoverable (the message names the un-guard),
  * while a false miss silently undoes a deliberate forget.
  */
 export const MEMORY_TOMBSTONE_THRESHOLD = 0.9;
+// Duplicate-candidate floor shared by findDuplicates (this file), the
+// find_duplicates tool, and the hygiene heartbeat. 0.85 (the pre-2026-11
+// default) let most drifted-wording duplicates through unflagged; 0.83
+// roughly triples the candidate pool (measured on thog: 58 -> 188 pairs)
+// without dragging in the 0.80-0.83 "related but distinct" band that would
+// flood the review queue.
+export const DEDUP_PAIR_THRESHOLD = 0.83;
 
 /** SHA-256 hex of stored-form content - the tombstone's exact-match key. */
 function contentHash(content: string): string {
@@ -1028,19 +1036,37 @@ export class ThatchDB {
   /**
    * Brute-force cosine similarity search across the given stores.
    * When branch is specified, includes project-wide (branch IS NULL) plus
-   * branch-specific entries. Does NOT stamp recall telemetry - the prompt-aware
-   * nudge uses this to check whether memories relate to a prompt without
-   * polluting recall_count/last_recalled_at (the agent hasn't actually read
-   * them yet, only the plugin has checked for relevance).
+   * branch-specific entries. Does NOT stamp recall telemetry - telemetry
+   * is stamped by recall()/recallWithTotal (the agent hasn't actually read
+   * the memories yet when a nudge scan checks for relevance; the scan
+   * itself uses searchWithTotal, which this method delegates to).
    */
   search(
     stores: string[],
     queryEmbedding: Float32Array,
     opts?: { branch?: string; limit?: number; includeArchived?: boolean },
   ): (MemoryRow & { _score: number })[] {
-    if (stores.length === 0) return [];
+    return this.searchWithTotal(stores, queryEmbedding, opts).rows;
+  }
+
+  /**
+   * Like search, but also counts every scored row at or above opts.minScore
+   * BEFORE the limit slice. The recall nudge uses that count to say "top N
+   * of M" instead of implying the capped list is the whole match set.
+   * minScore additionally filters the returned rows before the slice, so
+   * the limit caps output only - relevance stays the threshold's job.
+   * Passing no minScore makes totalAbove count ALL scored rows (every row
+   * is "above" nothing), so callers wanting a meaningful total pass one.
+   */
+  searchWithTotal(
+    stores: string[],
+    queryEmbedding: Float32Array,
+    opts?: { branch?: string; limit?: number; minScore?: number; includeArchived?: boolean },
+  ): { rows: (MemoryRow & { _score: number })[]; totalAbove: number } {
+    if (stores.length === 0) return { rows: [], totalAbove: 0 };
 
     const limit = opts?.limit ?? 10;
+    const minScore = opts?.minScore;
     const branch = opts?.branch;
     const includeArchived = opts?.includeArchived ?? false;
 
@@ -1068,7 +1094,7 @@ export class ThatchDB {
 
     const rows = this.#db.query(sql).all(...(params as [any, ...any[]])) as unknown as MemoryRow[];
 
-    if (rows.length === 0) return [];
+    if (rows.length === 0) return { rows: [], totalAbove: 0 };
 
     // Entries embedded by a different model live in a different vector space;
     // comparing them would produce NaN or nonsense scores, so they're skipped
@@ -1082,12 +1108,14 @@ export class ThatchDB {
     });
 
     scored.sort((a, b) => b._score - a._score);
-    return scored.slice(0, limit);
+    const relevant = minScore === undefined ? scored : scored.filter((r) => r._score >= minScore);
+    return { rows: relevant.slice(0, limit), totalAbove: relevant.length };
   }
 
   /**
-   * Semantic recall for agent-initiated searches. Delegates to search() for
-   * cosine scoring, then stamps recall telemetry - retrieval is the "used
+   * Semantic recall for agent-initiated searches. Delegates to
+   * recallWithTotal() (searchWithTotal for cosine scoring, then the
+   * telemetry stamp) - retrieval is the "used
    * recently" signal hygiene reporting keys on.
    */
   recall(
@@ -1095,7 +1123,23 @@ export class ThatchDB {
     queryEmbedding: Float32Array,
     opts?: { branch?: string; limit?: number; includeArchived?: boolean },
   ): (MemoryRow & { _score: number })[] {
-    const top = this.search(stores, queryEmbedding, opts);
+    return this.recallWithTotal(stores, queryEmbedding, opts).rows;
+  }
+
+  /**
+   * Like recall, but also returns the corpus-wide count behind the result.
+   * The memory_recall tool uses it to say "top N of M scored memories" -
+   * no relevance floor exists on this path, so M is every scored row, and
+   * the phrasing at the tool says "scored", not "matching". Stamps the
+   * same telemetry as recall(): retrieval is the "used recently" signal
+   * hygiene reporting keys on.
+   */
+  recallWithTotal(
+    stores: string[],
+    queryEmbedding: Float32Array,
+    opts?: { branch?: string; limit?: number; includeArchived?: boolean },
+  ): { rows: (MemoryRow & { _score: number })[]; totalAbove: number } {
+    const { rows: top, totalAbove } = this.searchWithTotal(stores, queryEmbedding, opts);
 
     if (top.length > 0) {
       const now = new Date().toISOString();
@@ -1107,7 +1151,7 @@ export class ThatchDB {
       );
     }
 
-    return top;
+    return { rows: top, totalAbove };
   }
 
   /**
@@ -1330,7 +1374,7 @@ export class ThatchDB {
   // ---------------------------------------------------------------------------
 
   /** Finds pairs of entries with cosine similarity above the threshold. */
-  findDuplicates(store: string, threshold = 0.85): DedupCandidate[] {
+  findDuplicates(store: string, threshold = DEDUP_PAIR_THRESHOLD): DedupCandidate[] {
     const rows = this.#db
       .query(
         "SELECT slug, label, content, embedding FROM entries WHERE store = ? AND archived = 0 AND embedding IS NOT NULL ORDER BY slug",
@@ -1390,7 +1434,7 @@ export class ThatchDB {
   static readonly PREDICTION_P0 = PREDICTION_P0;
   static readonly PREDICTION_W_SOFT = PREDICTION_W_SOFT;
 
-  findMatchers(stores: string[], queryEmbedding: Float32Array, opts?: { limit?: number }) {
+  findMatchers(stores: string[], queryEmbedding: Float32Array, opts?: { limit?: number; threshold?: number }) {
     return this.#predictions.findMatchers(stores, queryEmbedding, opts);
   }
 
@@ -1458,7 +1502,7 @@ export class ThatchDB {
   // Behavior engine: delegates to BehaviorEngine
   // ---------------------------------------------------------------------------
 
-  findBehaviorMatchers(stores: string[], queryEmbedding: Float32Array, opts?: { limit?: number }) {
+  findBehaviorMatchers(stores: string[], queryEmbedding: Float32Array, opts?: { limit?: number; threshold?: number }) {
     return this.#behaviors.findBehaviorMatchers(stores, queryEmbedding, opts);
   }
 

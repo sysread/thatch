@@ -20,7 +20,7 @@ you.
    via `thatch_memory_remember`.
 
 3. **Cleanup**: When the child finishes, the parent's buffer is
-   drained and a toast notification shows the results (`[thatch] new: 2,
+   drained and a toast notification shows the results (`💭 new: 2,
    updated: 1`). The child session is deleted.
 
 ## Displays of stored memories are not re-extracted

@@ -27,7 +27,7 @@ const useCase: UseCase = {
     "3. The server embeds the text, calls db.scoreBehaviorNudge, and responds.",
   ].join("\n"),
   expected: [
-    "- The client receives BehaviorNudgeItem[] with matcher context, confidence, and evidence count.",
+    "- The client receives a ScoredNudge-shaped result (items with matcher context, confidence, and evidence count, plus matchersFired and itemsTotal stats).",
     "- Behaviors below the threshold are filtered out server-side by scoreBehaviorNudge.",
   ].join("\n"),
 
@@ -61,16 +61,17 @@ const useCase: UseCase = {
         console.log("  FAIL: sidebandBehaviors returned null");
         return "FAIL";
       }
-      if (behaviors.length === 0) {
+      const items = behaviors.items;
+      if (items.length === 0) {
         console.log("  FAIL: expected at least 1 behavior");
         return "FAIL";
       }
-      if (behaviors[0].statement !== behaviorText) {
-        console.log(`  FAIL: wrong behavior statement, expected "${behaviorText}", got "${behaviors[0].statement}"`);
+      if (items[0].statement !== behaviorText) {
+        console.log(`  FAIL: wrong behavior statement, expected "${behaviorText}", got "${items[0].statement}"`);
         return "FAIL";
       }
-      if (behaviors[0].matcher_description !== matcherText) {
-        console.log(`  FAIL: wrong matcher description, expected "${matcherText}", got "${behaviors[0].matcher_description}"`);
+      if (items[0].matcher_description !== matcherText) {
+        console.log(`  FAIL: wrong matcher description, expected "${matcherText}", got "${items[0].matcher_description}"`);
         return "FAIL";
       }
 
@@ -84,8 +85,8 @@ const useCase: UseCase = {
         console.log("  FAIL: unrelated sidebandBehaviors returned null");
         return "FAIL";
       }
-      if (unrelated.length > 0) {
-        console.log(`  FAIL: unrelated context should return 0 behaviors, got ${unrelated.length}`);
+      if (unrelated.items.length > 0) {
+        console.log(`  FAIL: unrelated context should return 0 behaviors, got ${unrelated.items.length}`);
         return "FAIL";
       }
 
