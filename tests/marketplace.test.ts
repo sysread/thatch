@@ -47,22 +47,15 @@ describe("the committed Claude Code marketplace manifest", () => {
     expect(entry.version).toBeUndefined();
   });
 
-  test("mirrors the generated plugin.json's mcpServers (the Discover summary)", () => {
+  test("declares no component fields at all (the Discover summary line is the honest cost)", () => {
     const [entry] = manifest.plugins;
-    // /plugin's Discover view renders a remote entry's own component
-    // fields and shows "Component summary not available for remote plugin"
-    // when it declares none. On a git source the entry's components meet
-    // the branch manifest's own under the strict-conflict rule, so the
-    // mirror carries strict: true to stay legal; scripts/prepack.ts
-    // verifies it against the generated manifest.
-    expect(entry.strict).toBe(true);
-    expect(entry.mcpServers).toEqual({
-      thatch: {
-        type: "stdio",
-        command: "bun",
-        args: ["${CLAUDE_PLUGIN_ROOT}/bin/thatch", "mcp", "--bundled"],
-      },
-    });
+    // /plugin's Discover view shows "Component summary not available for
+    // remote plugin" for an entry that declares none - accepted: declaring
+    // components would either lie (the plugin ships none as components) or
+    // trip the strict-conflict rule against the branch's own manifest. A
+    // minimal entry is the least-friction shape. prepack guards this too.
+    expect(entry.strict).toBeUndefined();
+    expect(entry.mcpServers).toBeUndefined();
   });
 
   test("declares no commands, agents, skills, or hooks (the plugin ships none as components)", () => {

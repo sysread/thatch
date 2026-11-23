@@ -41,21 +41,14 @@ await writePluginTree(root, {
   args: ["mcp", "--bundled"],
 });
 
-// The marketplace entry mirrors the generated plugin.json's mcpServers:
-// /plugin's Discover view renders a remote entry's own component fields
-// ("Component summary not available for remote plugin" when it declares
-// none), and an entry's mcpServers never applies when the package has its
-// own manifest - the mirror is display-only. Verify it here so drift fails
-// the release build instead of showing a stale server config in /plugin.
-// The other component fields (commands, agents, skills, hooks) must stay
-// undeclared: the plugin ships none as Claude Code components (the shared
-// skills install via `thatch setup`, the mod loads from the default
+// The marketplace entry declares NO component fields, and must stay that
+// way: the plugin ships none of these as Claude Code components (the
+// shared skills install via `thatch setup`, the mod loads from the default
 // hooks/hooks.json location), and with the package's plugin.json present,
 // entry skills/commands/agents append to the manifest at install and entry
-// hooks replace per-event matchers - either would corrupt the install.
-const manifest = JSON.parse(
-  readFileSync(join(root, ".claude-plugin", "plugin.json"), "utf8"),
-);
+// hooks replace per-event matchers - either would corrupt the install. A
+// "Component summary not available for remote plugin" line in /plugin's
+// Discover view is the honest cost of that restraint.
 const marketplace = JSON.parse(
   readFileSync(join(root, ".claude-plugin", "marketplace.json"), "utf8"),
 );
@@ -63,14 +56,7 @@ const entry = marketplace.plugins.find((p: { name: string }) => p.name === "that
 if (!entry) {
   throw new Error("marketplace.json lists no thatch entry");
 }
-if (JSON.stringify(entry.mcpServers) !== JSON.stringify(manifest.mcpServers)) {
-  throw new Error(
-    "marketplace.json's thatch entry mcpServers must mirror the generated " +
-      "plugin.json's mcpServers (the /plugin Discover view renders the entry " +
-      `for remote sources). Expected:\n${JSON.stringify(manifest.mcpServers, null, 2)}`,
-  );
-}
-for (const field of ["commands", "agents", "skills", "hooks"] as const) {
+for (const field of ["commands", "agents", "skills", "hooks", "mcpServers"] as const) {
   if (entry[field] !== undefined) {
     throw new Error(
       `marketplace.json's thatch entry declares "${field}": the plugin ships ` +

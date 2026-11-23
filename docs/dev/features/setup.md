@@ -146,19 +146,16 @@ its `npm_config_allow_remote` workaround. The publish workflow's
 `scripts/prepack.ts` and commits the generated tree (`.claude-plugin/
 plugin.json`, `hooks/`, slimmed `package.json` + `bun.lock`) with a
 force-push - CI is the branch's only writer. The entry declares no
-version, so the branch's generated `.claude-plugin/plugin.json` is the
-manifest and its `version` decides what `claude plugin update` displays;
-the update re-clones the branch head and records the commit. The entry
-mirrors the generated manifest's `mcpServers` with `strict: true`:
-`/plugin`'s Discover view renders an entry's own component fields and
-shows "Component summary not available for remote plugin" when it
-declares none, and on a git source an entry declaring components while
-the branch's manifest also declares them meets the strict-conflict rule,
-where `strict: true` is what makes the mirror-and-manifest pair legal
-(the live install check at each release verifies the pairing).
-`scripts/prepack.ts` verifies the mirror against the generated manifest
-(and that no other component fields are declared), so drift fails the
-release build.
+version and no component fields, so the branch's generated
+`.claude-plugin/plugin.json` is the manifest and its `version` decides
+what `claude plugin update` displays; the update re-clones the branch
+head and records the commit. The empty component surface is deliberate:
+an entry's component fields merge into the installed plugin.json at
+install (and on a git source an entry declaring components while the
+branch's manifest declares them trips the strict-conflict rule), so the
+Discover view's "Component summary not available for remote plugin" line
+is the honest cost of a minimal entry. `scripts/prepack.ts` fails the
+release build if the entry ever declares a component field.
 
 The package ships a loadable plugin, generated at pack time:
 `scripts/prepack.ts` (npm's prepack lifecycle - runs on `npm pack`, on
