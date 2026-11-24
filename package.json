@@ -26,24 +26,10 @@
     ".claude-plugin/plugin.json",
     "npm-shrinkwrap.json"
   ],
-  "scripts": {
-    "test": "bun test",
-    "test:watch": "bun test --watch",
-    "prepack": "bun scripts/prepack.ts",
-    "postpack": "bun scripts/postpack.ts"
-  },
   "dependencies": {
-    "@huggingface/transformers": "^4.0.0",
+    "@huggingface/transformers": "4.2.0",
     "onnxruntime-web": "1.26.0-dev.20260416-b7804b056c",
-    "zod": "^4.1.0"
-  },
-  "devDependencies": {
-    "@opencode/client": "2.2.5",
-    "@opencode/plugin": "2.2.5",
-    "@types/bun": "^1.4.2",
-    "markdownlint-cli2": "^0.23.0",
-    "typescript": "^5.7.0",
-    "yaml": "^2.7.0"
+    "zod": "4.1.8"
   },
   "peerDependencies": {
     "@opencode/plugin": "^2.1.1"

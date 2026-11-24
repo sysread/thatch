@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "thatch",
+  "version": "0.5.2",
+  "description": "Thatch memory, extraction, and cross-session chat for Claude Code.",
+  "author": {
+    "name": "Jeff Ober",
+    "url": "https://github.com/sysread/thatch"
+  },
+  "license": "MIT",
+  "mcpServers": {
+    "thatch": {
+      "type": "stdio",
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/mcp",
+      "args": [
+        "mcp",
+        "--bundled"
+      ]
+    }
+  }
+}
