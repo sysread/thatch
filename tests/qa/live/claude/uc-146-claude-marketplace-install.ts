@@ -5,8 +5,8 @@ import { registerUseCase, type UseCase } from "../../runner";
 /**
  * UC-146 (claude leg): the marketplace front door - validate, add, install.
  *
- * PREREQUISITES: the host's claude CLI (2.1.287+, the mods floor) and bun
- * on PATH. NO login and NO model session: every step is CLI-side, so this
+ * PREREQUISITES: the host's claude CLI (2.1.287+, the mods floor), and
+ * node >= 22.13 or bun >= 1.4.2 on PATH. NO login and NO model session: every step is CLI-side, so this
  * use case runs wherever the claude binary runs. The AUTHENTICATED
  * session-load surface (the mod's prompt.submit -> plugin_stage crossing,
  * uc-134's stamp) is NOT asserted here: a fixture CLAUDE_CONFIG_DIR cannot
@@ -35,10 +35,10 @@ import { registerUseCase, type UseCase } from "../../runner";
  * The dependency-install assertions are the packaging precondition: a
  * plugin tree whose package.json lacks a supported lockfile beside it
  * lands NO node_modules, and the bundled server cannot
- * start. The shipped bun.lock must produce a runtime-only node_modules -
- * Claude Code installs every package the lockfile lists, so the full
- * lockfile would land ~1 GB of devDependency trees in every user's
- * plugin cache.
+ * start. The shipped npm-shrinkwrap.json must produce a runtime-only
+ * node_modules - Claude Code installs every package the shrinkwrap
+ * lists (npm ci), so the full lockfile would land ~1 GB of
+ * devDependency trees in every user's plugin cache.
  */
 
 const useCase: UseCase = {
@@ -63,7 +63,7 @@ const useCase: UseCase = {
     "  marketplace in the fixture config's settings.",
     "- The install lands in installed_plugins.json (scope user) with the manifest's version.",
     "- The cached copy carries .claude-plugin/plugin.json and hooks/mod.js.",
-    "- node_modules exists in the cached copy (the bun.lock-driven install ran) with the",
+    "- node_modules exists in the cached copy (the shrinkwrap-driven npm ci ran) with the",
     "  runtime trees (@huggingface, onnxruntime-web, zod) and WITHOUT the dev trees",
     "  (@opencode, typescript, markdownlint-cli2).",
     "- claude plugin list shows the plugin enabled with no errors and no",
