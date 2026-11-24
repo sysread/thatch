@@ -278,10 +278,12 @@ function sidebandRequest(
 
     socket.on("error", (err: NodeJS.ErrnoException) => {
       clearTimeout(timer);
-      // Only remove the socket file if it's a stale-file situation
-      // (ECONNREFUSED). Other errors (timeout, server error) should
-      // not delete a live server's socket.
-      if (err.code === "ECONNREFUSED" || err.code === "ENOENT") {
+      // Remove the socket file only when nothing live is listening behind
+      // it: a dead socket (ECONNREFUSED on linux), a clobbered path
+      // (ENOTSOCK - macOS's errno when the path holds a regular file), or
+      // a path that vanished (ENOENT). Other errors (timeout, server
+      // error) should not delete a live server's socket.
+      if (err.code === "ECONNREFUSED" || err.code === "ENOENT" || err.code === "ENOTSOCK") {
         try { unlinkSync(socketPath); } catch { /* already gone */ }
       }
       done(null);
