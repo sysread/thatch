@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
-  BUN_RUNTIME_VERSION,
   parseBunLockfile,
   shippedDependencyView,
   slimPackageJson,
@@ -15,9 +14,10 @@ import {
  * it at prepack (Claude Code's installer picks the npm shrinkwrap over
  * bun.lock and installs with npm ci --ignore-scripts, so a user needs no
  * bun on PATH). These tests pin the view's rules: dependencies resolved
- * to the exact versions the repo's bun.lock carries, the bun runtime
- * injected as an optional dependency, the package.json slimming, and the
- * tolerance bun.lock's trailing commas need.
+ * to the exact versions the repo's bun.lock carries, no runtime shipped
+ * (the package carries no `bun` optional dependency - the launchers need
+ * node or bun on PATH), the package.json slimming, and the tolerance
+ * bun.lock's trailing commas need.
  */
 const fixture: BunLockfile = {
   lockfileVersion: 1,
@@ -45,11 +45,9 @@ describe("shippedDependencyView", () => {
     expect(view.dependencies).toEqual({ runtime: "1.0.0", other: "2.0.0" });
   });
 
-  test("injects the bun runtime as the one optional dependency, pinned exact", () => {
+  test("ships no runtime: no bun optional dependency", () => {
     const view = shippedDependencyView(fixture);
-    expect(Object.keys(view.optionalDependencies)).toEqual(["bun"]);
-    expect(view.optionalDependencies.bun).toBe(BUN_RUNTIME_VERSION);
-    expect(view.optionalDependencies.bun).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(view).toEqual({ dependencies: { runtime: "1.0.0", other: "2.0.0" } });
   });
 
   test("resolves versioned packages-map keys (name@version)", () => {

@@ -93,10 +93,10 @@ directly. Hook output is JSON-wrapped (`--json`) so Cursor injects it as
 
 ### Before running setup
 
-The `thatch` binary must resolve Node.js >= 22.13 or `bun` >= 1.4.2 on
+The `thatch` binary requires Node.js >= 22.13 or `bun` >= 1.4.2 on
 PATH (the launcher probes node for `node:sqlite`, then falls back to
-bun). Install from npm (`npm i -g @jeffober/thatch`) or run from a
-checkout (`bun bin/thatch.ts`).
+bun; the plugin ships no runtime of its own). Install from npm
+(`npm i -g @jeffober/thatch`) or run from a checkout (`bun bin/thatch.ts`).
 
 ## How it works
 
@@ -483,7 +483,8 @@ plugin initializes (this is how skill improvements ship with new versions).
 ## CLI
 
 Thatch ships with a command-line tool for reviewing and writing memories
-outside opencode. It requires Bun on your PATH:
+outside opencode. It requires Node.js >= 22.13 or Bun >= 1.4.2 on PATH
+(the launcher probes node, then bun):
 
 ```bash
 # After npm publish: available globally

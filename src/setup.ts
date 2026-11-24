@@ -603,9 +603,9 @@ export function ensurePluginInstructions(projectDir: string): void {
  * SHIPPED launcher script as `${CLAUDE_PLUGIN_ROOT}/bin/mcp`: the
  * installed copy has no `thatch` on PATH and no project dir to pin, and
  * Claude Code substitutes ${CLAUDE_PLUGIN_ROOT} with the installed
- * plugin's cache directory. The launcher runs bin/thatch under the bun
- * runtime installed with the plugin's dependencies (the `bun` optional
- * dependency's @oven platform binary), falling back to a bun on PATH.
+ * plugin's cache directory. The launcher script delegates to bin/thatch,
+ * which picks the runtime by probed capability: node >= 22.13 running
+ * the bundled dist, then a bun >= 1.4.2 on PATH.
  */
 export interface PluginServerEntry {
   command: string;

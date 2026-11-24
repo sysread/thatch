@@ -695,7 +695,7 @@ async function dispatch(
         if (!compiled) {
           return ok(id, {
             isError: true,
-            content: [{ type: "text", text: `Unknown tool: ${name}` }],
+            content: [{ type: "text", text: unknownToolText(name) }],
           });
         }
 
@@ -777,6 +777,16 @@ async function dispatch(
       error: { code: INTERNAL_ERROR, message: err?.message ?? "Internal error" },
     };
   }
+}
+
+/**
+ * The unknown-tool error text. Extracted so the version-skew tests pin
+ * the REAL response shape the model sees when it calls a tool an old
+ * server does not have (the hooks-side escalation story keys on it) -
+ * not a test-side reconstruction of it.
+ */
+export function unknownToolText(name: string): string {
+  return `Unknown tool: ${name}`;
 }
 
 function ok(id: number | string | null, result: any): JsonRpcResponse {

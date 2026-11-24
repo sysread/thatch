@@ -174,7 +174,15 @@ describe("watch_branch_create", () => {
         if (/\/pulls\/\d+\/comments/.test(joined)) return [];
         if (/\/check-runs/.test(joined)) return { check_runs: [] };
         if (/^graphql/.test(joined)) return { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } };
-        if (/\/actions\/runs\?/.test(joined)) {
+        // Pinned to the exact query the product sends today
+        // (fetchBranchState in src/watchers.ts): the UNFILTERED
+        // /actions/runs route with per_page=30 and no branch parameter.
+        // Branch and tag filtering happens client-side on head_branch and
+        // head_sha, because the API's branch filter hides tag-triggered
+        // runs from the route. The exact shape keeps any change to the
+        // fetch failing here instead of silently untracking branch
+        // filters.
+        if (/\/actions\/runs\?per_page=30$/.test(joined)) {
           return { workflow_runs: [{ id: 55, name: "CI", status: "in_progress", conclusion: null, html_url: "https://x/55", event: "push" }] };
         }
         if (/\/branches\/main$/.test(joined)) return { commit: { sha: "decafbad" } };

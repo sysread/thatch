@@ -23,6 +23,8 @@ import {
   rpcEmitted,
   SESSION_DIR,
   sessionCompactCalls,
+  sessionPromptCalls,
+  sessionSyntheticCalls,
   setupTestEnv,
   teardownTestEnv,
   waitFor,
@@ -133,16 +135,25 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
 
   test("thatch_exit without an armed exit refuses with no side effects", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const before = { pub: sessionPromptCalls.length, syn: sessionSyntheticCalls.length };
     const reply = await callExitTool("ses_wrapnoarm");
     expect(replyOf(reply)).toContain("No exit in progress");
+    // The refusal publishes nothing: no session prompt and no
+    // synthetic part injected into the model's request (the v2 shape of
+    // the old tui.publish counter) - and it takes no host action.
+    expect(sessionPromptCalls.length).toBe(before.pub);
+    expect(sessionSyntheticCalls.length).toBe(before.syn);
     expect(exitEvents().length).toBe(0);
     expect(sessionCompactCalls.length).toBe(0);
   });
 
   test("thatch_compact without an armed compact refuses with no side effects", async () => {
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
+    const before = { pub: sessionPromptCalls.length, syn: sessionSyntheticCalls.length };
     const reply = await callCompactTool("ses_wrapnoarmc");
     expect(replyOf(reply)).toContain("No compaction in progress");
+    expect(sessionPromptCalls.length).toBe(before.pub);
+    expect(sessionSyntheticCalls.length).toBe(before.syn);
     expect(exitEvents().length).toBe(0);
     expect(sessionCompactCalls.length).toBe(0);
   });
@@ -153,8 +164,13 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
     // greenlight - the callback owns the kind check.
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/exit", "ses_wrapxk");
+    // The counter starts AFTER the arm: the arm itself delivers the
+    // wrap-up body as the session prompt; only the refusal must be mute.
+    const before = { pub: sessionPromptCalls.length, syn: sessionSyntheticCalls.length };
     const reply = await callCompactTool("ses_wrapxk");
     expect(replyOf(reply)).toContain("No compaction in progress");
+    expect(sessionPromptCalls.length).toBe(before.pub);
+    expect(sessionSyntheticCalls.length).toBe(before.syn);
     expect(exitEvents().length).toBe(0);
     expect(sessionCompactCalls.length).toBe(0);
     // The exit arm still resolves as exit: the thatch_exit tool greenlights it.
@@ -168,8 +184,13 @@ describe("wrap-up commands (/thatch/compact, /thatch/exit)", () => {
     // thatch_exit is a "no exit in progress" refusal, never a greenlight.
     cleanup = (await setup(makeContext() as any)) as () => Promise<void>;
     await arm("thatch/compact", "ses_wrapck");
+    // The counter starts AFTER the arm: the arm itself delivers the
+    // wrap-up body as the session prompt; only the refusal must be mute.
+    const before = { pub: sessionPromptCalls.length, syn: sessionSyntheticCalls.length };
     const reply = await callExitTool("ses_wrapck");
     expect(replyOf(reply)).toContain("No exit in progress");
+    expect(sessionPromptCalls.length).toBe(before.pub);
+    expect(sessionSyntheticCalls.length).toBe(before.syn);
     expect(exitEvents().length).toBe(0);
     expect(sessionCompactCalls.length).toBe(0);
     // The compact arm still resolves as compact: the tool greenlights it.

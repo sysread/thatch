@@ -355,9 +355,10 @@ process; the registry itself is `src/env-knobs.ts`.
 
 ## Limitations
 
-- For non-Nix installs, `bun` must be installed and on PATH. Thatch does
-  not bundle its own runtime (the Nix package bundles it; see the
-  README's Nix section).
+- For non-Nix installs, Node.js >= 22.13 or bun >= 1.4.2 must be on
+  PATH (the launcher probes node, then bun; with neither, it fails
+  with the prerequisite list). Thatch does not bundle a runtime (the
+  Nix package bundles bun; see the README's Nix section).
 - `search` is limited to 10 results. There is no pagination.
 - `prime` requires an external CLI (`opencode`, `agent`, or `claude`)
   on PATH. If none is found, it exits with an error.

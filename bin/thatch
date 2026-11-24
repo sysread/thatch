@@ -6,7 +6,21 @@
 # the Nix package ships no dist/ (no bundle step in the derivation), so
 # a capable system node must fall through to the bun row instead of
 # exec'ing a nonexistent file.
-root=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
+#
+# The shim's own symlinks resolve BEFORE root is computed: npm's global
+# bin-link (and a hand-made ~/.local/bin symlink) exec a LINK whose
+# dirname is not the package root - root must come from the link's
+# target. The loop is portable readlink (one hop per pass); when the
+# path is not a link, target stays as-is.
+target=$0
+while [ -L "$target" ]; do
+    link=$(readlink "$target") || break
+    case $link in
+        /*) target=$link ;;
+        *) target=$(dirname "$target")/$link ;;
+    esac
+done
+root=$(CDPATH= cd "$(dirname "$target")/.." && pwd)
 
 # Row 1: a node on PATH whose node:sqlite actually resolves - the probe,
 # not the name: node 22.5-22.12 ships the module behind a flag and would
@@ -23,19 +37,9 @@ if command -v bun >/dev/null 2>&1; then
     exec bun "$root/bin/thatch.ts" "$@"
 fi
 
-# Row 3: the @oven binary the plugin's dependencies installed (the `bun`
-# npm package's platform binary; the .bin shims stay unwired because
-# plugin dependency installs run with --ignore-scripts). Last resort.
-for oven in "$root"/node_modules/@oven/bun-*/bin/bun; do
-    if [ -x "$oven" ]; then
-        exec "$oven" "$root/bin/thatch.ts" "$@"
-    fi
-done
-
-# Row 4: nothing usable - fail loudly with the missing prerequisites.
+# Row 3: nothing usable - fail loudly with the missing prerequisites.
 echo "thatch: no usable JavaScript runtime found" >&2
 echo "  one of these must hold:" >&2
 echo "  - node >= 22.13 on PATH (its node:sqlite is probed directly) with dist/thatch.js bundled" >&2
 echo "  - bun >= 1.4.2 on PATH" >&2
-echo "  - the @oven binary under $root/node_modules (installed with the plugin's dependencies)" >&2
 exit 1

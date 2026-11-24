@@ -1,6 +1,13 @@
 # CLI (bin/thatch)
 
-The thatch entry is two files: `bin/thatch` is a POSIX sh shim that picks the runtime (a probed node >= 22.13 running the prepack-bundled `dist/thatch.js`, then bun >= 1.4.2 running the TypeScript source, then the plugin's @oven binary), and `bin/thatch.ts` is the thin dispatcher it runs: it resolves argv against the subcommand registry in `src/cli/registry.ts`, handles the help and version forms, opens the database, and hands off. Every subcommand is a `Subcommand` object (`src/cli/types.ts`: name, one-line summary, `usage()` returning synopsis + flag triplets + notes, and `run(args, ctx)`); the commands live in `src/cli/commands/` grouped by cohesion, and the shared help renderer (`src/cli/help.ts`) turns the registry and each `SubUsage` into uniform, column-aligned pages. The CLI provides memory inspection and writing, MCP server startup, hook commands for MCP hosts, the setup installer, environment diagnostics, session archaeology over the opencode database, and a window on the cross-session chat directory (read-only except `chat broadcast`).
+The thatch entry is two files. `bin/thatch` is a POSIX sh shim that
+picks the runtime: a probed node >= 22.13 running the prepack-bundled
+`dist/thatch.js`, then bun >= 1.4.2 running the TypeScript source.
+`bin/thatch.ts` is the thin dispatcher the shim runs: it resolves argv
+against the subcommand registry in `src/cli/registry.ts`, handles the
+help and version forms, opens the database, and hands off.
+
+Every subcommand is a `Subcommand` object (`src/cli/types.ts`: name, one-line summary, `usage()` returning synopsis + flag triplets + notes, and `run(args, ctx)`); the commands live in `src/cli/commands/` grouped by cohesion, and the shared help renderer (`src/cli/help.ts`) turns the registry and each `SubUsage` into uniform, column-aligned pages. The CLI provides memory inspection and writing, MCP server startup, hook commands for MCP hosts, the setup installer, environment diagnostics, session archaeology over the opencode database, and a window on the cross-session chat directory (read-only except `chat broadcast`).
 
 ## Subcommands
 
@@ -245,7 +252,7 @@ process; the registry itself is `src/env-knobs.ts`.
 
 ## Source files
 
-- `bin/thatch` — the sh shim: picks the runtime (probed node over dist, then bun, then @oven)
+- `bin/thatch` — the sh shim: picks the runtime (probed node over dist, then bun)
 - `bin/thatch.ts` — the dispatcher: argv resolution, help and version forms, DB lifecycle
 - `src/cli/` — the registry, the `Subcommand`/`FlagSpec`/`SubUsage` types, the shared help renderer, arg helpers, and the per-group command modules under `src/cli/commands/`
 - `src/doctor.ts` — the doctor's check engine (see [doctor.md](doctor.md))

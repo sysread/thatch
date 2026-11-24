@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import { ensureDaemonRunning, _resetForTesting, type ProbeResult } from "../../src/embed-daemon/supervisor";
+import pkg from "../../package.json";
 
 // The spawn-once unit tier: injected probe/spawn, _resetForTesting between
 // cases (bun shares one process across all test files).
@@ -37,7 +38,9 @@ beforeEach(() => {
 describe("ensureDaemonRunning", () => {
   test("a probe hit skips the spawn", async () => {
     const { deps, setProbes } = fakeDeps();
-    setProbes([{ ok: true, hello: { ok: true, model: "mock", version: "0.4.3", pid: 1 } }]);
+    // The version value is inert here: ensureDaemonRunning's probe path
+    // never compares it (only the connected client's skew detector does).
+    setProbes([{ ok: true, hello: { ok: true, model: "mock", version: pkg.version, pid: 1 } }]);
     const outcome = await ensureDaemonRunning(deps);
     expect(outcome).toBe("running");
     expect(spawnCalls).toHaveLength(0);
@@ -45,7 +48,7 @@ describe("ensureDaemonRunning", () => {
 
   test("one spawn attempt per process, however many callers", async () => {
     const { deps, setProbes } = fakeDeps();
-    setProbes([{ ok: true, hello: { ok: true, model: "mock", version: "0.4.3", pid: 1 } }]);
+    setProbes([{ ok: true, hello: { ok: true, model: "mock", version: pkg.version, pid: 1 } }]);
     await expect(ensureDaemonRunning(deps)).resolves.toBe("running");
     await expect(ensureDaemonRunning(deps)).resolves.toBe("running");
     await expect(ensureDaemonRunning(deps)).resolves.toBe("running");
@@ -60,7 +63,7 @@ describe("ensureDaemonRunning", () => {
       { ok: false, reason: "connect failed (ENOENT)" },
       { ok: false, reason: "connect failed (ENOENT)" },
       { ok: false, reason: "connect failed (ENOENT)" },
-      { ok: true, hello: { ok: true, model: "mock", version: "0.4.3", pid: 2 } },
+      { ok: true, hello: { ok: true, model: "mock", version: pkg.version, pid: 2 } },
     ]);
     const outcome = await ensureDaemonRunning(deps);
     expect(outcome).toBe("running");
@@ -88,7 +91,7 @@ describe("ensureDaemonRunning", () => {
     });
     setProbes([
       { ok: false, reason: "connect failed (ENOENT)" },
-      { ok: true, hello: { ok: true, model: "mock", version: "0.4.3", pid: 3 } },
+      { ok: true, hello: { ok: true, model: "mock", version: pkg.version, pid: 3 } },
     ]);
     await expect(ensureDaemonRunning(deps)).rejects.toThrow("EAGAIN");
     expect(spawnAttempts).toBe(1);

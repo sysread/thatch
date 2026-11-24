@@ -21,8 +21,8 @@ node-runnable `dist/` over the CLI dispatcher (`src/packaging.ts`'s
 `bundleNodeDist`, node_modules externalized), and the `bin/thatch` sh
 shim picks the runtime at each invocation - a probed node (its
 `node -e 'require("node:sqlite")'` must succeed, and `dist/thatch.js`
-must exist), then bun on PATH, then the @oven binary. Bun's runtime
-globals were ported to node APIs in `src/runtime-ops.ts` (spawn,
+must exist), then bun on PATH. Bun's runtime globals were ported to
+node APIs in `src/runtime-ops.ts` (spawn,
 spawnSync, sha256, which, sleep, stdin); the only bun-specific step left
 is setup's mod bundling (`Bun.build`), which fails with a named error
 under node. `Bun.SHA256.hash` parity is load-bearing: chat identities

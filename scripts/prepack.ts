@@ -2,8 +2,9 @@
 // tarball. Four jobs:
 //
 // 1. Bundles the node-runnable dist/ (src/packaging.ts's bundleNodeDist):
-//    first-party code only, node_modules externalized. The launchers run
-//    it under a capable node before they fall back to bun or @oven.
+//    first-party code only, node_modules externalized, the output's
+//    hashbang rewritten to `#!/usr/bin/env node` (the launchers run it
+//    under a capable node before they fall back to a bun on PATH).
 //
 // 2. Generates the Claude Code plugin tree into the package root so the
 //    tarball carries a loadable plugin: .claude-plugin/plugin.json (the
@@ -12,12 +13,11 @@
 //    instructions). The same generator writes the setup-generated plugin
 //    in ~/.claude/thatch-plugin, so the two trees cannot drift.
 //
-// 2. Writes the shipped dependency view (see src/packaging.ts):
+// 3. Writes the shipped dependency view (see src/packaging.ts):
 //    package.json without devDependencies or scripts, dependencies pinned
-//    to the exact versions the repo's bun.lock resolves, plus the bun
-//    runtime itself as an optional dependency - the bundled server's
-//    launcher (bin/mcp) prefers the @oven binary it installs. An npm
-//    lockfile is then generated from that manifest with
+//    to the exact versions the repo's bun.lock resolves. The package
+//    ships no runtime: the launchers need node >= 22.13 or bun >= 1.4.2
+//    on PATH. An npm lockfile is then generated from that manifest with
 //    `npm install --package-lock-only` and shipped as
 //    npm-shrinkwrap.json - npm publishes a shrinkwrap but never a
 //    package-lock.json, and Claude Code's plugin installer picks the
@@ -28,11 +28,12 @@
 // The server entry differs from the setup-generated one by necessity: the
 // package must not assume `thatch` is on PATH or carry a THATCH_PROJECT_DIR
 // pinned at pack time. Claude Code substitutes ${CLAUDE_PLUGIN_ROOT} with
-// the installed plugin's cache directory, and the launcher script finds
-// the plugin's own bun runtime.
+// the installed plugin's cache directory, and the launcher script
+// delegates to bin/thatch, which picks the runtime by probed capability:
+// node >= 22.13 running the bundled dist, then a bun >= 1.4.2 on PATH.
 //
-// The originals are saved to .pack-orig/ and restored by
-// scripts/postpack.ts after the tarball is built.
+// 4. Saves the original package.json to .pack-orig/ for
+//    scripts/postpack.ts to restore after the tarball is built.
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { writePluginTree } from "../src/setup";

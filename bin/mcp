@@ -2,7 +2,16 @@
 # The shipped plugin's bundled MCP server launcher. Claude Code spawns
 # this file directly (no shell, shebang honored), so it must stay
 # executable. Runtime picking lives in bin/thatch (probed node with the
-# bundled dist, then a bun on PATH, then the @oven binary); this
-# launcher only delegates to it.
-root=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
+# bundled dist, then a bun on PATH); this launcher only delegates to it.
+# Like bin/thatch, the launcher's own symlinks resolve before root is
+# computed: a link's dirname is not the package root.
+target=$0
+while [ -L "$target" ]; do
+    link=$(readlink "$target") || break
+    case $link in
+        /*) target=$link ;;
+        *) target=$(dirname "$target")/$link ;;
+    esac
+done
+root=$(CDPATH= cd "$(dirname "$target")/.." && pwd)
 exec "$root/bin/thatch" "$@"

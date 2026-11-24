@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import assert from "node:assert/strict";
 import { Database } from "bun:sqlite";
 import { ThatchDB } from "../src/db";
 import { MockEmbeddingModel } from "./mocks/embeddings";
@@ -321,7 +322,10 @@ describe("chat read clip and paging", () => {
       const page = await call("chat_read", { message: id, offset: CHAT_READ_PAGE_LEN }, otherHost);
       expect(typeof page === "string" && page.includes(`[showing characters ${CHAT_READ_PAGE_LEN}-2047 of 2047 - final page]`)).toBe(true);
       const status = pageDb.chatMessageStatus("ses_other");
-      if (status.registered) expect(status.pending).toBe(0);
+      // Hard assert (not an if-guard): an unregistered second host must
+      // FAIL the test, not silently skip the pending check.
+      assert(status.registered);
+      expect(status.pending).toBe(0);
 
       // Deterministic errors: offset without a message, unknown id.
       expect(await call("chat_read", { offset: 5 }, otherHost)).toContain("requires a message id");
@@ -484,7 +488,8 @@ describe("chat transcript echo text", () => {
       expect(sent).toContain("SENT AS 2 PARTS");
       // The recipient's mailbox holds both parts.
       const status = splitDb.chatMessageStatus("ses_other");
-      if (status.registered) expect(status.total).toBe(2);
+      assert(status.registered);
+      expect(status.total).toBe(2);
 
       const broadcast = await call("chat_broadcast", {
         body: `${"A".repeat(1_900)}\n\n${"B".repeat(1_900)}`,

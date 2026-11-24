@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { RemoteEmbeddingModel, embedLockPath, embedSocketPath, type DaemonConnection, type Transport } from "../../src/embed-daemon/client";
 import type { DaemonResponse, HelloResponse } from "../../src/embed-daemon/protocol";
 import type { EmbeddingModel } from "../../src/embeddings";
+import pkg from "../../package.json";
 
 // The client unit tier: an in-memory transport, every dependency injected
 // - including the daemon knob's read (no process.env mutation anywhere in
@@ -10,7 +11,6 @@ import type { EmbeddingModel } from "../../src/embeddings";
 // docs/plans/embedding-daemon.md's client state matrix.
 
 let notes: string[];
-const VERSION = "0.4.3";
 
 /** A scripted in-memory connection: the test supplies the responses. */
 class FakeConnection implements DaemonConnection {
@@ -34,6 +34,12 @@ class FakeDaemon {
   connections = 0;
   closed = 0;
   helloModel = "mock";
+  // The daemon's reported version tracks package.json (the real daemon's
+  // hello response reports the version of the release that shipped it,
+  // and the client's skew detector compares it to pkg.version) - a
+  // hardcoded constant here would fire the upgrade note on every version
+  // bump.
+  helloVersion = pkg.version;
   helloError: string | null = null;
   embedError: string | null = null;
   wedgeHello = false;
@@ -48,12 +54,12 @@ class FakeDaemon {
     if (op === "hello") {
       if (this.wedgeHello) return new Promise(() => {});
       if (this.helloError) return Promise.resolve({ ok: false, error: this.helloError });
-      const res: HelloResponse = { ok: true, model: this.helloModel, version: VERSION, pid: 4242 };
+      const res: HelloResponse = { ok: true, model: this.helloModel, version: this.helloVersion, pid: 4242 };
       return Promise.resolve(res);
     }
     if (this.wedgeEmbed) return new Promise(() => {});
     if (this.embedError) return Promise.resolve({ ok: false, error: this.embedError });
-    return Promise.resolve({ ok: true, vector: this.vector, model: this.helloModel, version: VERSION, pid: 4242 });
+    return Promise.resolve({ ok: true, vector: this.vector, model: this.helloModel, version: this.helloVersion, pid: 4242 });
   }
 
   transport(): Transport {
@@ -239,6 +245,26 @@ describe("RemoteEmbeddingModel", () => {
     expect(notes).toHaveLength(1);
     expect(notes[0]).toContain("model mismatch");
     expect(notes.join("\n")).not.toContain("will re-probe");
+  });
+
+  test("a version-skewed daemon notes the upgrade once and stays remote", async () => {
+    // Raw embeds are version-agnostic: a daemon serving an older thatch
+    // version is still a working daemon. The skew is noted ONCE (the
+    // noteOnce key carries the skewed version), the state stays remote,
+    // and the note names both sides of the skew - the session's version
+    // and the daemon's.
+    const daemon = new FakeDaemon();
+    daemon.helloVersion = "0.0.1";
+    const { model, notes } = build({ daemon });
+    expect([...await model.queryEmbed("a")]).toEqual([1, 2, 3]);
+    expect(model.state).toBe("remote");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain(`thatch was upgraded to v${pkg.version}`);
+    expect(notes[0]).toContain("v0.0.1");
+    expect(notes[0]).toContain("it will be replaced once its traffic pauses");
+    // The note is once-per skewed version: a second embed adds nothing.
+    await model.queryEmbed("b");
+    expect(notes).toHaveLength(1);
   });
 
   test("a connect-stage timeout closes the connection when the dial completes late", async () => {

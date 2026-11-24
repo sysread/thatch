@@ -186,9 +186,18 @@ describe("WatcherRegistry journal + hydrate", () => {
     const registry = makeRegistry();
     const res = await registry.createPr("ses_w", "sysread/thatch", 16, ["pr_commit", "pr_ci"], {});
     const live = (res as any).watcher;
-    // A persisted copy of the same watcher (as a reload would read it) plus
-    // a stale one under a different id: the live one must win its id.
-    registry.hydrate([{ ...live, id: live.id }, { ...live, id: "watch_stale", createdAt: 1 }]);
+    // A stale journal copy of the LIVE watcher's id - written before the
+    // watcher re-registered and moved its state forward - plus a stale one
+    // under a different id. The hydrate guard (watchers.ts: do not clobber
+    // a watcher created after the journal was written) must keep the live
+    // state and still restore the foreign id.
+    registry.hydrate([
+      { ...live, state: { ...live.state, headSha: "journal-sha" } },
+      { ...live, id: "watch_stale", state: { ...live.state, headSha: "journal-sha" }, createdAt: 1 },
+    ]);
+    const restored = registry.listForSession("ses_w").find((w) => w.id === live.id);
+    expect((restored as any).state.headSha).toBe(live.state.headSha);
+    expect((restored as any).state.headSha).not.toBe("journal-sha");
     expect(registry.listForSession("ses_w").map((w) => w.id).sort()).toEqual([live.id, "watch_stale"].sort());
   });
 });
@@ -290,8 +299,16 @@ describe("runtime rehydration through setup()", () => {
       // Reload row rehydrated: the payload tool serves the buffered entry.
       const payloadTool = harness!.addedTools.find((t) => t.name === "thatch_get_extraction_payload")!;
       const payload = await payloadTool.execute({ limit: 20 }, { sessionID: "ses_reload", agent: "build" });
-      const text = typeof payload === "string" ? payload : JSON.stringify(payload);
-      expect(text).toContain("echo hi");
+      // The tool returns { content: <the payload JSON string> } - unwrap
+      // before the structural pin (buildExtractionPayload's shape:
+      // interactions[] + both store names), so structurally broken JSON
+      // cannot pass a substring assert.
+      const text = typeof payload === "string" ? payload : (payload as { content: string }).content;
+      const reloaded = JSON.parse(text);
+      expect(reloaded.interactions.length).toBeGreaterThan(0);
+      expect(reloaded.interactions[0].title).toContain("echo hi");
+      expect(reloaded.globalStore).toBe("global");
+      expect(typeof reloaded.projectStore).toBe("string");
 
       // Foreign-pid row pruned at setup.
       const check = new ThatchDB(dbPath);
@@ -1207,7 +1224,11 @@ describe("dormant watcher recovery through setup()", () => {
         { session_id: "ses_parent_t" },
         { sessionID: "ses_ext_t", agent: "general" },
       );
-      expect(typeof served === "string" ? served : JSON.stringify(served)).toContain("echo hi");
+      const servedText = typeof served === "string" ? served : (served as { content: string }).content;
+      const servedParsed = JSON.parse(servedText);
+      expect(servedParsed.interactions.length).toBeGreaterThan(0);
+      expect(servedParsed.interactions[0].title).toContain("echo hi");
+      expect(servedParsed.globalStore).toBe("global");
       // The task child's row survives - its idle event, not the reconciler,
       // owns its cleanup.
       const check = new ThatchDB(dbPath);

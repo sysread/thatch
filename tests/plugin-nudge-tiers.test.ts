@@ -184,7 +184,9 @@ describe("prediction auto-fire via the prompt hook", () => {
     await seedPrediction(matcher, "ask about prod scars and prior migrations before touching the schema");
 
     const injections = await runTurn("ses_pred_1", matcher);
-    expect(injections.length).toBeGreaterThanOrEqual(1);
+    // Exact count: one matcher, one injection - a double-fire (duplicate
+    // block on every matched turn) must fail here, not pass.
+    expect(injections.length).toBe(1);
     const predPart = injections.find((p) => p.text?.includes("User decision model"));
     expect(predPart).toBeDefined();
     expect(predPart!.text).toContain("[thatch]");
@@ -212,8 +214,9 @@ describe("prediction auto-fire via the prompt hook", () => {
 
     const injections = await runTurn("ses_pred_combined", text);
     // Both the recall nudge (memory match) and the prediction nudge
-    // (matcher match) fire as independent injected parts.
-    expect(injections.length).toBeGreaterThanOrEqual(2);
+    // (matcher match) fire as independent injected parts - exactly two,
+    // no double-fire.
+    expect(injections.length).toBe(2);
     expect(injections.find((p) => p.text?.includes("thatch_memory_recall"))).toBeDefined();
     expect(injections.find((p) => p.text?.includes("User decision model"))).toBeDefined();
   });
@@ -226,7 +229,8 @@ describe("behavior auto-fire via the prompt hook", () => {
     await seedBehavior(situation, "check the whole codebase for an existing import of that library first");
 
     const injections = await runTurn("ses_behavior_1", situation);
-    expect(injections.length).toBeGreaterThanOrEqual(1);
+    // Exact count: one matcher, one injection.
+    expect(injections.length).toBe(1);
     const behaviorPart = injections.find((p) => p.text?.includes("Situational behaviors"));
     expect(behaviorPart).toBeDefined();
     expect(behaviorPart!.text).toContain("[thatch]");

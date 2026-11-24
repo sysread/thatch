@@ -89,8 +89,11 @@ describe("SidebandServer + sidebandMatch", () => {
     }
     const res = await sidebandMatch(sockPath, "entry-0", ["s"], 0.0, 3);
     expect(res!.matches.length).toBeLessThanOrEqual(3);
-    // totalAbove counts everything above threshold, un-capped by limit.
-    expect(res!.totalAbove).toBeGreaterThanOrEqual(3);
+    // totalAbove counts everything above threshold, un-capped by limit
+    // (the capped implementation returns exactly the limit, 3; the mock's
+    // near-orthogonal vectors leave a few entries below the 0.0
+    // threshold, so the exact count is not 10).
+    expect(res!.totalAbove).toBeGreaterThan(3);
   });
 
   test("searches across multiple stores", async () => {
@@ -198,18 +201,29 @@ describe("sidebandMatch failure modes", () => {
     expect(matches).toBeNull();
   });
 
-  test("returns null on timeout", async () => {
+  test("returns null on timeout (the live server's socket file survives)", async () => {
     // Start a server that never responds — we'll create a raw listener that
     // accepts the connection but doesn't write back.
     server.stop();
     const { createServer } = await import("node:net");
+    const { existsSync } = await import("node:fs");
     const slowServer = createServer(() => {
       // Accept but don't respond — let the client time out.
     });
     slowServer.listen(sockPath);
 
+    // The INJECTED timeout bounds the call (the unbounded default is
+    // 2000ms; an ignored injection would run past this bound).
+    const start = Date.now();
     const matches = await sidebandMatch(sockPath, "test", ["s"], 0.0, 5, 100);
+    const elapsed = Date.now() - start;
     expect(matches).toBeNull();
+    expect(elapsed).toBeLessThan(1500);
+    // The errno allowlist's negative half (src/sideband.ts): a timeout is
+    // NOT a cleanup trigger - the live server's socket file must survive,
+    // or every one-shot hook loses sideband recall until the MCP server
+    // restarts.
+    expect(existsSync(sockPath)).toBe(true);
 
     slowServer.close();
   });

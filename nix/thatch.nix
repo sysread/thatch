@@ -124,11 +124,11 @@ stdenv.mkDerivation {
            "$dest"/node_modules/sharp/vendor 2>/dev/null || true
 
     # The wrapper execs the bin/thatch shim DIRECTLY (bun cannot exec a sh
-    # script) and prefixes PATH with bun's bin: the shim's runtime rows
-    # (probed node with dist/, then bun, then @oven) resolve on the
-    # prefixed PATH. The derivation ships no dist/ (no bundle step here),
-    # so the shim's node row falls through to the bun row - the package's
-    # guaranteed-runtime property holds even on a bare PATH.
+    # script) and prefixes PATH with bun's bin, so the shim's runtime rows
+    # (a probed node with dist/, then bun) resolve. The derivation ships
+    # no dist/ (no bundle step here), so the shim's node row falls through
+    # to the bun row: the package runs even on a machine with no node and
+    # no bun on PATH.
     makeBinaryWrapper "$dest/bin/thatch" $out/bin/thatch \
       --prefix PATH ${bun}/bin
 

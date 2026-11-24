@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bundleNodeDist } from "../src/packaging";
@@ -21,6 +21,10 @@ function makeFixture(): string {
   writeFileSync(
     join(bin, "cli.ts"),
     [
+      // The real dispatcher (bin/thatch.ts) opens with bun's hashbang;
+      // bun build copies it into the output, so the fixture carries one
+      // too - the rewrite is the thing under test.
+      "#!/usr/bin/env bun",
       "import pkg from \"../package.json\" with { type: \"json\" };",
       "import { dep } from \"fixture-dep\";",
       "console.log(`${pkg.version} ${dep()}`);",
@@ -43,6 +47,13 @@ describe("bundleNodeDist", () => {
       const out = result.outputs.find((p) => p.endsWith("cli.js"));
       expect(out).toBeDefined();
       const bundled = readFileSync(out!, "utf8");
+      // The hashbang: the entry's bun shebang must be rewritten to node -
+      // hooks record dist/thatch.js as the executed command, so a bun
+      // hashbang routes the kernel's exec through a bun the node-only
+      // machines do not have.
+      expect(bundled.split("\n")[0]).toBe("#!/usr/bin/env node");
+      // Executable: the recorded hook command is exec'd directly.
+      expect(statSync(out!).mode & 0o111).toBe(0o111);
       // Externalized: the dep import survives as an import specifier,
       // never inlined (dist is first-party code only).
       expect(bundled).toMatch(/import\s+.*fixture-dep/);

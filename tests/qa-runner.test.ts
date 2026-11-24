@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from "bun:test";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { journalGuarded, journalResult, parseQaVerdict, QA_ROOT, RESULT_JOURNAL } from "./qa/runner";
 
 // The QA verdict parser (tests/qa/runner.ts): the LAST "Result:" line
@@ -56,12 +56,14 @@ describe("result journal", () => {
   });
 
   test("a journal write failure never fails the use case", () => {
-    // RESULT_JOURNAL's dir is created by journalResult; point the env-free
-    // failure path at an impossible target by removing the dir mid-flight
-    // is racy - instead assert the CONTRACT: the function returns void and
-    // swallows, which the happy-path test above already exercises. This
-    // test pins that a nonexistent parent dir does not throw.
+    // A REAL write failure: QA_ROOT exists as a regular FILE, so the
+    // journal's mkdir of its own run root fails (EEXIST) before any
+    // append can happen - the swallow under test, not the happy path.
+    writeFileSync(QA_ROOT, "not a directory");
     expect(() => journalResult({ uc: "UC-X", leg: null, result: "PASS" })).not.toThrow();
+    // And nothing was written anywhere: the journal file cannot exist
+    // under a QA_ROOT that is a file.
+    expect(existsSync(RESULT_JOURNAL)).toBe(false);
   });
 
   test("a THROWN use case still journals its name (journalGuarded)", async () => {

@@ -97,11 +97,12 @@ Prerequisites:
 1. git on PATH - the marketplace add and the plugin install both clone
    (`git --version` to check).
 2. npm on PATH - the dependency install runs `npm ci` on the lockfile
-   shipped with the plugin (`npm --version` to check). No bun and no
-   node on PATH is required: the plugin bundles a node-runnable dist/
-   (the launcher probes a node >= 22.13 first, then falls back to bun
-   >= 1.4.2 on PATH, then to the bun runtime installed with the
-   plugin's own dependencies).
+   shipped with the plugin (`npm --version` to check).
+3. A runtime on PATH: node >= 22.13 or bun >= 1.4.2. The plugin ships
+   no runtime of its own - the launcher probes a node >= 22.13 first
+   (its `node:sqlite` is checked directly), then falls back to bun
+   >= 1.4.2 on PATH, and fails with the prerequisite list when neither
+   is found.
 
 If the dependency install did not complete, the `/plugin` Errors tab
 says "The packages it lists are not installed" and the server fails to
@@ -177,11 +178,10 @@ Setup runs under Node.js >= 22.13 or Bun >= 1.4.2 - the same runtime
 pick the launchers use. One exception: when setup generates the plugin
 regime's mod bundle it needs bun specifically (the bundling step has no
 node equivalent); under a node-only PATH that step fails with a named
-error saying so. Setup is
-idempotent. Re-running it updates drifted content without clobbering
-unrelated config, and reports what it did: the skills directory plus
-how many skills were added, updated (replaced with a newer version),
-removed (retired), or already current.
+error saying so. Setup is idempotent. Re-running it updates drifted
+content without clobbering unrelated config, and reports what it did:
+the skills directory plus how many skills were added, updated
+(replaced with a newer version), removed (retired), or already current.
 
 If thatch skills exist in the scope you did not install to (for
 example, `~/.claude/skills/` copies left over from before a repo moved
@@ -210,7 +210,7 @@ Cursor uses a flat hooks format (`{version, hooks:{event:[{command}]}}`)
 and `--json` output for hook commands. The recorded MCP command and hook
 commands all point at the installed `bin/thatch` launcher, which picks
 its runtime at each invocation: a probed node (>= 22.13, with the
-bundled dist present), then bun (>= 1.4.2), then the @oven binary.
+bundled dist present), then bun (>= 1.4.2).
 
 ## Other harnesses
 
@@ -283,14 +283,15 @@ instructions are deployed without requiring you to manually re-run
 
 ## Limitations
 
-- No runtime is required on PATH beyond what each install surface
-  names: the launchers pick Node.js >= 22.13 (probed for `node:sqlite`
-  directly, so the flagged 22.5-22.12 band is skipped), then bun
-  >= 1.4.2, then the @oven bun binary the Claude Code plugin's
-  dependencies install. The marketplace install needs node/npm on PATH
-  for the dependency install (`npm ci`). Thatch does not bundle a
-  runtime in the repo itself (the Nix package bundles bun; see the
-  README's Nix section).
+- No runtime ships with the package: the launchers need Node.js
+  >= 22.13 or bun >= 1.4.2 on PATH, and fail loudly with the
+  prerequisite list when neither exists. The node check runs the
+  module's own probe (`node -e 'require("node:sqlite")'`), so node
+  22.5-22.12 - where the module exists but only behind an opt-in flag -
+  is treated as absent rather than crashing the server. The marketplace
+  install needs node/npm on PATH for the dependency install (`npm ci`).
+  Thatch does not bundle a runtime in the repo itself (the Nix package
+  bundles bun; see the README's Nix section).
 - The embedding model (~34 MB) is downloaded once on first use and
   cached in the platform's per-user cache dir
   (`~/Library/Caches/thatch/models` on macOS (or

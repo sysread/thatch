@@ -110,7 +110,7 @@ describe("hook/server version skew (issue #6)", () => {
     }
   });
 
-  test("model calling the referenced tools against the old server returns 'Unknown tool'", () => {
+  test("model calling the referenced tools against the old server returns 'Unknown tool'", async () => {
     appendBatch("skew-session", [
       call("Read", { file_path: "/a" }, "content"),
     ]);
@@ -126,12 +126,14 @@ describe("hook/server version skew (issue #6)", () => {
       TOOL_DEFS.filter((d) => OLD_SERVER_TOOLS.includes(d.name)),
     );
 
-    // Simulate what mcp.ts:dispatch does when the model calls a tool the
-    // server doesn't have: return "Unknown tool: <name>" (mcp.ts:270).
+    // Drive the REAL unknown-tool formatter (src/mcp.ts's tools/call
+    // dispatch): the response shape the old server serves the model is
+    // this repo's formatter, so the pin keeps the skew story true.
+    const { unknownToolText } = await import("../src/mcp");
     for (const toolName of referencedTools) {
       const exists = oldServer.has(toolName);
       if (!exists) {
-        const errorResponse = `Unknown tool: ${toolName}`;
+        const errorResponse = unknownToolText(toolName);
         expect(errorResponse).toContain("Unknown tool");
         expect(errorResponse).toContain(toolName);
       } else {

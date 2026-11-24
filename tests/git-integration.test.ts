@@ -62,15 +62,13 @@ describe("detectRepo", () => {
     // No remote set
     const repo = await detectRepo(cwd);
     // git-common-dir in a plain repo returns ".git", parent is the temp dir
-    expect(repo).not.toBe("unknown");
-    expect(typeof repo).toBe("string");
+    expect(repo).toBe(basename(cwd));
   });
 
   test("falls back to directory basename outside git", async () => {
     const repo = await detectRepo(cwd);
     // No git repo at all — should use CWD basename
-    expect(typeof repo).toBe("string");
-    expect(repo).not.toBe("unknown");
+    expect(repo).toBe(basename(cwd));
   });
 });
 

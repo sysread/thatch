@@ -57,12 +57,13 @@ describe("diffPrState", () => {
 
   test("body hash change emits pr_description", () => {
     const events = diffPrState(baseState(), baseState({ bodySha: "body-hash-2" }), TGT, URL);
-    expect(events.map((e) => e.type)).toContain("pr_description");
+    // Exact set: a body-only change must not co-fire pr_status or others.
+    expect(events.map((e) => e.type)).toEqual(["pr_description"]);
   });
 
   test("title change emits pr_description", () => {
     const events = diffPrState(baseState(), baseState({ title: "Rename widget" }), TGT, URL);
-    expect(events.map((e) => e.type)).toContain("pr_description");
+    expect(events.map((e) => e.type)).toEqual(["pr_description"]);
   });
 
   test("new issue comments emit pr_comment with author, replies emit pr_review_reply", () => {

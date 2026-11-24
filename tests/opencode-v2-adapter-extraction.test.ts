@@ -60,8 +60,16 @@ describe("opencode v2 adapter", () => {
     // The v2 execute wraps (input, toolContext) - the host context carries
     // the session the buffer is keyed by.
     const result = await payloadTool!.execute({ limit: 20 }, { sessionID: "ses_v2_title", agent: "build" });
-    const payload = typeof result === "string" ? result : JSON.stringify(result);
-    expect(payload).toContain("mise run check");
+    // The tool returns { content: <the payload JSON string> } -
+    // buildExtractionPayload's shape nested one level.
+    const raw = typeof result === "string" ? result : (result as { content: string }).content;
+    // The TITLE specifically pins deriveTitle's bash branch: the command
+    // text also renders into the args field, so a substring assert on the
+    // whole payload passes even with title derivation broken.
+    expect(raw).not.toContain("No queued tool interactions");
+    const parsed = JSON.parse(raw) as { interactions: { title: string }[] };
+    expect(parsed.interactions.length).toBe(1);
+    expect(parsed.interactions[0].title).toBe("mise run check");
   });
 
   test("v2 end-to-end: idle-triggered extraction child completes with zero session ids", async () => {

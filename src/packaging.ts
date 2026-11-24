@@ -11,15 +11,16 @@
  *
  * The shipped manifest is slimmed from the repo's: devDependencies and
  * scripts stripped (npm ci installs devDependencies too, and the full
- * bun.lock once landed ~1 GB of node_modules in the plugin cache - the
- * runtime closure only is ~385 MB), dependencies pinned to the exact
+ * bun.lock once landed ~1 GB of node_modules - the runtime closure
+ * the shipped install needs re-measured 2026-11-24 at ~386 MB), and
+ * dependencies pinned to the exact
  * versions the repo's bun.lock resolves (the shipped install must match
- * the versions development tested, not npm's next range match), plus the
- * bun runtime itself as an optional dependency (the bundled server's
- * launcher prefers the @oven binary it installs; optional keeps a failed
- * ~90 MB binary download from failing the whole install - the launcher
- * falls back to a bun on PATH). The repo's own files stay untouched -
- * prepack saves the original package.json and postpack restores it.
+ * the versions development tested, not npm's next range match). The
+ * package ships NO runtime of its own: the launchers require node
+ * >= 22.13 or bun >= 1.4.2 on PATH (bin/thatch probes node's
+ * node:sqlite directly) and fail loudly when neither exists. The repo's
+ * own files stay untouched - prepack saves the original package.json and
+ * postpack restores it.
  *
  * The shipped lockfile is an npm-shrinkwrap.json (npm packs a shrinkwrap,
  * never a package-lock.json) generated from the shipped manifest. Claude
@@ -31,12 +32,8 @@
  * dependencies") - the lockfile is generated FROM the manifest, so they
  * agree by construction.
  */
+import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-
-/** The bun runtime version the shipped package installs. Pinned exact:
- * the runtime version IS the npm package version. Matches the version
- * docs/user/setup.md recommends for a PATH install. */
-export const BUN_RUNTIME_VERSION = "1.4.4";
 
 export interface BunLockfilePackageMeta {
   dependencies?: Record<string, string>;
@@ -94,14 +91,14 @@ function resolvedVersion(lock: BunLockfile, name: string): string {
 
 /**
  * The shipped manifest's dependency block: the root's dependencies
- * pinned to the exact versions the repo's bun.lock resolves, plus the
- * bun runtime as an optional dependency. npm generates the shipped
- * npm-shrinkwrap.json from this block, so the shipped install and the
- * development-tested versions cannot drift apart.
+ * pinned to the exact versions the repo's bun.lock resolves. npm
+ * generates the shipped npm-shrinkwrap.json from this block, so the
+ * shipped install and the development-tested versions cannot drift
+ * apart. The package ships no runtime: the launchers need node or bun
+ * on PATH (see the module header).
  */
 export function shippedDependencyView(lock: BunLockfile): {
   dependencies: Record<string, string>;
-  optionalDependencies: Record<string, string>;
 } {
   const root = lock.workspaces[""];
   if (!root) throw new Error("bun.lock has no root workspace entry");
@@ -109,7 +106,7 @@ export function shippedDependencyView(lock: BunLockfile): {
   for (const name of Object.keys(root.dependencies ?? {})) {
     dependencies[name] = resolvedVersion(lock, name);
   }
-  return { dependencies, optionalDependencies: { bun: BUN_RUNTIME_VERSION } };
+  return { dependencies };
 }
 
 /**
@@ -156,6 +153,10 @@ export interface BundleDistResult {
 
 export async function bundleNodeDist(opts: BundleDistOptions): Promise<BundleDistResult> {
   const outdir = join(opts.root, opts.outdir ?? "dist");
+  // Clean the outdir first: the bundle is rebuilt from scratch every
+  // pack, never patched over a previous run's output (a stale file that
+  // survives a partial rewrite would ship a mixed bundle).
+  rmSync(outdir, { recursive: true, force: true });
   const first = opts.entries[0];
   if (!first) throw new Error("bundleNodeDist needs at least one entry");
   // Entries share one directory, so a common root keeps the outputs flat
@@ -177,6 +178,21 @@ export async function bundleNodeDist(opts: BundleDistOptions): Promise<BundleDis
   }
   if (!build.success) {
     throw new Error(`bundling the node dist failed:\n${build.logs.map(String).join("\n")}`);
+  }
+  // The entry TS's `#!/usr/bin/env bun` hashbang survives the bundle (bun
+  // build copies it into the output) - and the launchers run dist under
+  // NODE, with hooks recording resolve(process.argv[1]) (= dist/thatch.js)
+  // as the executed command. A bun hashbang on the dist routes the kernel's
+  // exec through `env bun`, which is absent on exactly the node-only
+  // machines the node row targets. The dist is rewritten to the node
+  // hashbang; the shim's probe already gated on a capable node, so the
+  // hashbang's node can be trusted.
+  for (const out of build.outputs) {
+    const code = readFileSync(out.path, "utf8");
+    if (code.startsWith("#!")) {
+      writeFileSync(out.path, `#!/usr/bin/env node${code.slice(code.indexOf("\n"))}`);
+    }
+    chmodSync(out.path, 0o755);
   }
   return { outputs: build.outputs.map((o) => o.path) };
 }
