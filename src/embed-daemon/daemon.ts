@@ -32,7 +32,7 @@
  *   applied to the retired native backend; the same contract the MCP
  *   teardown enforces).
  */
-import { Database } from "bun:sqlite";
+import { Database } from "../sqlite-compat";
 import { createServer, Socket, type Server } from "node:net";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";

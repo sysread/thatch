@@ -7,14 +7,16 @@ on:
     branches: [main]
 
 jobs:
-  # The matrix legs carry the real gate (typecheck, tests, markdownlint) per
-  # Bun runtime: opencode v1 embeds Bun 1.3.14; v2 embeds 1.4.2. The plugin
-  # runs inside the host's embedded runtime, so both must pass.
+  # The bun leg carries the bun-side gate (typecheck, tests, markdownlint).
+  # ONE bun version: opencode v1 (bun 1.3.14) is dropped policy and bun
+  # 1.4.2 is the floor with node:sqlite (the sqlite layer imports
+  # node:sqlite through src/sqlite-compat.ts, which 1.3.14 cannot resolve).
+  # The node floor job is the other half of the gate.
   test-matrix:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        bun-version: ["1.3.14", "1.4.2"]
+        bun-version: ["1.4.2"]
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -25,24 +27,46 @@ jobs:
       - run: bun test tests/*.test.ts
       - run: bunx markdownlint-cli2
 
+  # The node floor leg (node 22.13, the oldest runtime with node:sqlite
+  # unflagged): typecheck the repo against the SAME dependency version
+  # surface the bun legs use (every dep pinned to its bun.lock-resolved
+  # version - no package-lock exists, so npm would otherwise resolve the
+  # package.json ranges fresh and drift), plus the compat smoke over
+  # src/sqlite-compat.ts (open/WAL/params/rollback/savepoints/BEGIN
+  # EXCLUSIVE/get-null). Expected noise: node:sqlite's ExperimentalWarning
+  # on stderr - not a failure.
+  node-floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13
+      # Pinned to the bun.lock-resolved versions; bump these alongside
+      # bun.lock or the legs' type surfaces drift apart.
+      - run: npm install --no-save typescript@5.9.3 @types/bun@1.4.5 @types/node@26.1.0 zod@4.1.8 @opencode/client@2.2.5 @opencode/plugin@2.2.5 @huggingface/transformers@4.2.0 onnxruntime-web@1.26.0-dev.20260416-b7804b056c yaml@2.9.0
+      - run: npx tsc -p tsconfig.check.json
+      - run: node --experimental-strip-types .github/scripts/sqlite-compat-smoke.mjs
+
   # Bare-named summary job: the main branch ruleset requires a status check
-  # with context "test", and matrix legs report as "test (1.3.14)" etc.,
+  # with context "test", and matrix legs report as "test (1.4.2)" etc.,
   # which never satisfies a bare "test" requirement.
   #
-  # !cancelled() keeps this job RUNNING when a matrix leg fails - a skipped
+  # !cancelled() keeps this job RUNNING when a leg fails - a skipped
   # job reports "success" to branch protection, which would let the ruleset
   # go green over a red gate. The step then fails unless every leg
   # succeeded.
   test:
-    needs: test-matrix
+    needs: [test-matrix, node-floor]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      - name: Fail unless every matrix leg succeeded
+      - name: Fail unless every leg succeeded
         run: |
-          results='${{ toJson(needs.test-matrix.result) }}'
-          echo "matrix results: $results"
-          [ "$results" = '"success"' ] || {
-            echo "::error::one or more matrix legs did not succeed ($results)"
+          results='${{ toJson(needs) }}'
+          echo "leg results: $results"
+          failed=$(echo "$results" | jq -r 'to_entries | map(select(.value.result != "success") | .key) | join(", ")')
+          if [ -n "$failed" ]; then
+            echo "::error::the following legs did not succeed: $failed"
             exit 1
-          }
+          fi

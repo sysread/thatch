@@ -11,7 +11,7 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS = "true"
 THATCH_NO_NOTIFY = "1"
 
 [tools]
-bun = "1.3.14"
+bun = "1.4.2"
 
 [tasks.test]
 description = "Run the test suite"

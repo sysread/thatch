@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { Database } from "./sqlite-compat";
 import { blobToVector, cosineSimilarity } from "./vector-math";
 import { ScoringEngine, type NudgeItem, type ScoredNudge, PREDICTION_K, PREDICTION_P0, PREDICTION_W_SOFT } from "./scoring-engine";
 

@@ -1,7 +1,7 @@
 /**
- * Reconstructs a Float32Array from a stored BLOB. The Uint8Array bun:sqlite
- * hands back may itself be a view, so honor its offset and length rather than
- * reading the whole backing buffer.
+ * Reconstructs a Float32Array from a stored BLOB. The Uint8Array the sqlite
+ * layer hands back may itself be a view, so honor its offset and length rather
+ * than reading the whole backing buffer.
  */
 export function blobToVector(blob: Uint8Array): Float32Array {
   return new Float32Array(blob.buffer, blob.byteOffset, blob.byteLength / 4);

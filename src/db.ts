@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { Database } from "./sqlite-compat";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
@@ -162,7 +162,7 @@ export class ThatchDB {
    * Connection accessor. Every read goes through here, so a handle closed by
    * dispose() (a v2 plugin reload tears down the old activation while tool
    * calls may still be in flight) transparently reopens on the next touch
-   * instead of surfacing bun:sqlite's "Cannot use a closed database". WAL
+   * instead of surfacing the closed-connection error. WAL
    * journaling plus busy_timeout make the extra connection safe - the chat
    * subsystem already runs as several concurrent connections by design.
    *
@@ -208,7 +208,7 @@ export class ThatchDB {
 
   #open(): void {
     const path = this.#path;
-    // bun:sqlite creates the file but not its parent directory. On a fresh
+    // SQLite creates the file but not its parent directory. On a fresh
     // machine the default path (~/.config/thatch/thatch.db) has no dir yet, so
     // create it here - otherwise every command fails with SQLITE_CANTOPEN.
     // `:memory:` and other special paths have no meaningful parent to create.
@@ -1218,7 +1218,7 @@ export class ThatchDB {
 
   /**
    * Removes a memory by label and writes the deletion guard. The write is
-   * transactional and WRITE-LOCK-FIRST (bun:sqlite's immediate mode): the
+   * transactional and WRITE-LOCK-FIRST (an explicit BEGIN IMMEDIATE): the
    * lock is taken before the row read, so no read-then-write snapshot
    * hazard and no stale-read window (a concurrent overwrite cannot commit
    * between the read and the tombstone insert). Tombstone before delete,
