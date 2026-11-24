@@ -10,6 +10,7 @@ import { claudeSessionStartReminder } from "../../prompts";
 import { mcpSessionID } from "../../chat";
 import { createHookHelpers } from "../hooks";
 import { projectDir } from "../context";
+import { spawnSync, which } from "../../runtime-ops";
 import type { Subcommand } from "../types";
 
 export const mcp: Subcommand = {
@@ -121,13 +122,13 @@ export const prime: Subcommand = {
   usage: () => ({ synopsis: "thatch prime", flags: [] }),
   async run() {
     const primerPrompt = "Load the thatch-project-primer skill and follow its instructions to prime this project's memory store.";
-    const opencodeBin = Bun.which("opencode");
-    const agentBin = Bun.which("agent");
-    const claudeBin = Bun.which("claude");
+    const opencodeBin = which("opencode");
+    const agentBin = which("agent");
+    const claudeBin = which("claude");
 
     if (opencodeBin) {
       console.error("Priming project memory via opencode...");
-      const proc = Bun.spawnSync([opencodeBin, "run", primerPrompt], {
+      const proc = spawnSync([opencodeBin, "run", primerPrompt], {
         stdout: "inherit",
         stderr: "inherit",
       });
@@ -136,14 +137,14 @@ export const prime: Subcommand = {
       // Cursor CLI: -p for non-interactive print mode, --approve-mcps to
       // auto-approve the thatch MCP server (no interactive UI in -p mode).
       console.error("Priming project memory via cursor agent...");
-      const proc = Bun.spawnSync([agentBin, "-p", primerPrompt, "--approve-mcps"], {
+      const proc = spawnSync([agentBin, "-p", primerPrompt, "--approve-mcps"], {
         stdout: "inherit",
         stderr: "inherit",
       });
       process.exit(proc.exitCode ?? 1);
     } else if (claudeBin) {
       console.error("Priming project memory via claude...");
-      const proc = Bun.spawnSync([claudeBin, primerPrompt], {
+      const proc = spawnSync([claudeBin, primerPrompt], {
         stdout: "inherit",
         stderr: "inherit",
       });

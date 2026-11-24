@@ -30,6 +30,8 @@
 // Event types
 // ---------------------------------------------------------------------------
 
+import { sha256Hex, spawn, type Subprocess } from "./runtime-ops";
+
 /** Event types for source "pr". */
 export type PrWatcherEventType =
   | "pr_comment"
@@ -446,7 +448,7 @@ export async function drainStreamOutput(
  * dup2'd stdout away but kept stderr would otherwise wedge the cycle.
  */
 export async function ghApiRunWithTimeout(apiArgs: string[], timeoutMs: number): Promise<unknown> {
-  const proc = Bun.spawn(["gh", "api", ...apiArgs], {
+  const proc = spawn(["gh", "api", ...apiArgs], {
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -517,7 +519,7 @@ let ghAvailability: boolean | null = null;
 export async function ghAvailable(): Promise<boolean> {
   if (ghAvailability !== null) return ghAvailability;
   try {
-    const proc = Bun.spawn(["gh", "--version"], { stdout: "ignore", stderr: "ignore" });
+    const proc = spawn(["gh", "--version"], { stdout: "ignore", stderr: "ignore" });
     const timeout = setTimeout(() => proc.kill(), 5_000);
     const code = await proc.exited;
     clearTimeout(timeout);
@@ -577,9 +579,9 @@ const COMMAND_DRAIN_GRACE_MS = 2_000;
 export async function runWatchedCommand(command: string, cwd: string, timeoutMs: number): Promise<CommandRunResult> {
   const startedAt = Date.now();
   let killed = false;
-  let proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
+  let proc: Subprocess;
   try {
-    proc = Bun.spawn(["bash", "-c", command], { cwd, stdout: "pipe", stderr: "pipe" });
+    proc = spawn(["bash", "-c", command], { cwd, stdout: "pipe", stderr: "pipe" });
   } catch (err) {
     throw new Error(`failed to start the watched command (check the command and project directory): ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -642,7 +644,7 @@ export async function runWatchedCommand(command: string, cwd: string, timeoutMs:
 // ---------------------------------------------------------------------------
 
 function sha256(text: string): string {
-  return Bun.SHA256.hash(text, "hex");
+  return sha256Hex(text);
 }
 
 interface RawComment {

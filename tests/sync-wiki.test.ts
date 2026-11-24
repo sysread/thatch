@@ -140,7 +140,9 @@ describe("sync-wiki", () => {
   test("README wiki links resolve to rendered pages", () => {
     const repoRoot = path.resolve(import.meta.dir, "..");
     const out = tempDir("sync-wiki-out-");
-    const proc = Bun.spawnSync(["bun", SCRIPT, out, repoRoot]);
+    // The runner's own runtime, never a PATH-resolved bun (an ambient
+    // ~/.bun/bin can shadow mise's pinned one).
+    const proc = Bun.spawnSync([process.execPath, SCRIPT, out, repoRoot]);
     expect(proc.exitCode).toBe(0);
 
     const readme = readFileSync(path.join(repoRoot, "README.md"), "utf8");

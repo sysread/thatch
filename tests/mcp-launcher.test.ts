@@ -4,23 +4,41 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
- * The shipped plugin's bundled-server launcher (bin/mcp) picks the bun
- * runtime the plugin's dependencies install (the `bun` npm package's
- * @oven platform binary at node_modules/@oven/<platform>/bin/bun) over a
- * bun on PATH, and falls back to PATH when the dependency install did
- * not run. Claude Code spawns the launcher directly with a sanitized
- * env, so the pick logic must survive a minimal PATH.
+ * The runtime launchers (bin/mcp -> bin/thatch) pick the runtime by
+ * PROBED capability, not by PATH name (docs/plans/node-sqlite-driver.md,
+ * D12). The stub set pins the whole decision matrix:
+ *
+ * - a capable node (its `node -e 'require("node:sqlite")'` probe exits 0)
+ *   plus the prepack-bundled dist -> node runs dist/thatch.js;
+ * - a flagged-band node (22.5-22.12: the probe exits 1) -> treated as
+ *   absent, the next row runs;
+ * - a capable node WITHOUT dist (the Nix fileset ships none) -> the bun
+ *   row, so the dist-existence test keeps the nix install alive;
+ * - a bun on PATH -> runs the TypeScript source (bin/thatch.ts);
+ * - the plugin's @oven binary -> last resort, same TS source;
+ * - nothing -> a loud failure naming the missing prerequisites.
+ *
+ * Claude Code spawns the launcher directly with a sanitized env, so the
+ * pick must survive a minimal PATH.
  */
-const launcherSource = join(import.meta.dir, "..", "bin", "mcp");
+const repoBin = join(import.meta.dir, "..", "bin");
 
-function makeTree(withOven: boolean): string {
+function makeTree(opts: { withOven?: boolean; withDist?: boolean } = {}): string {
   const root = mkdtempSync(join(tmpdir(), "thatch-mcp-launcher-"));
   mkdirSync(join(root, "bin"), { recursive: true });
-  copyFileSync(launcherSource, join(root, "bin", "mcp"));
+  copyFileSync(join(repoBin, "mcp"), join(root, "bin", "mcp"));
+  copyFileSync(join(repoBin, "thatch"), join(root, "bin", "thatch"));
   chmodSync(join(root, "bin", "mcp"), 0o755);
-  writeFileSync(join(root, "bin", "thatch"), "#!/bin/sh\necho \"thatch $@\"\n");
   chmodSync(join(root, "bin", "thatch"), 0o755);
-  if (withOven) {
+  // The TS source the shim's bun/@oven rows execute (the real one would
+  // open a real db; the stub proves only WHICH runtime got picked).
+  writeFileSync(join(root, "bin", "thatch.ts"), "#!/bin/sh\necho \"ts $@\"\n");
+  chmodSync(join(root, "bin", "thatch.ts"), 0o755);
+  if (opts.withDist) {
+    mkdirSync(join(root, "dist"), { recursive: true });
+    writeFileSync(join(root, "dist", "thatch.js"), "console.log(\"node-dist\");\n");
+  }
+  if (opts.withOven) {
     const ovenBin = join(root, "node_modules", "@oven", "bun-testplatform", "bin");
     mkdirSync(ovenBin, { recursive: true });
     writeFileSync(join(ovenBin, "bun"), "#!/bin/sh\necho \"oven-bun $@\"\n");
@@ -29,46 +47,101 @@ function makeTree(withOven: boolean): string {
   return root;
 }
 
+/** A node stub: the -e capability probe exits $NODE_PROBE_EXIT; any real
+ * invocation echoes its args (so the test sees dist/thatch.js). */
+function makeNodeStub(dir: string, probeExit: number): void {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "node"),
+    `#!/bin/sh\nif [ "\${1:-}" = "-e" ]; then exit ${probeExit}; fi\necho "node $@"\n`,
+  );
+  chmodSync(join(dir, "node"), 0o755);
+}
+
+function makeBunStub(dir: string): void {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "bun"), "#!/bin/sh\necho \"path-bun $@\"\n");
+  chmodSync(join(dir, "bun"), 0o755);
+}
+
 const trees: string[] = [];
 afterAll(() => {
   for (const tree of trees) rmSync(tree, { recursive: true, force: true });
 });
 
-function run(root: string, path: string) {
+function run(root: string, path: string, env: Record<string, string> = {}) {
   return Bun.spawnSync([join(root, "bin", "mcp"), "mcp", "--bundled"], {
-    env: { PATH: path },
+    env: { PATH: path, ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
 }
 
-describe("bin/mcp picks the bun runtime", () => {
-  test("prefers the plugin-installed @oven binary over a bun on PATH", () => {
-    const tree = makeTree(true);
+describe("bin/mcp picks the runtime by capability", () => {
+  test("a capable node with dist runs the bundled dist", () => {
+    const tree = makeTree({ withDist: true });
+    trees.push(tree);
+    const stubDir = join(tree, "path-node");
+    makeNodeStub(stubDir, 0);
+    const result = run(tree, `${stubDir}:/bin:/usr/bin`);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toMatch(/node \S+dist\/thatch\.js/);
+    expect(result.stdout.toString()).toContain("mcp --bundled");
+  });
+
+  test("a flagged-band node (the probe fails) is treated as absent", () => {
+    const tree = makeTree({ withDist: true, withOven: true });
+    trees.push(tree);
+    const stubDir = join(tree, "path-node");
+    makeNodeStub(stubDir, 1);
+    const bunDir = join(tree, "path-bun");
+    makeBunStub(bunDir);
+    const result = run(tree, `${stubDir}:${bunDir}:/bin:/usr/bin`);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toContain("path-bun");
+    expect(result.stdout.toString()).toContain("bin/thatch.ts");
+  });
+
+  test("a capable node without dist falls through (the dist test is load-bearing)", () => {
+    const tree = makeTree({});
+    trees.push(tree);
+    const nodeDir = join(tree, "path-node");
+    makeNodeStub(nodeDir, 0);
+    const bunDir = join(tree, "path-bun");
+    makeBunStub(bunDir);
+    const result = run(tree, `${nodeDir}:${bunDir}:/bin:/usr/bin`);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toContain("path-bun");
+  });
+
+  test("the plugin-installed @oven binary runs the TS source when PATH has nothing", () => {
+    const tree = makeTree({ withOven: true });
     trees.push(tree);
     const result = run(tree, "/bin:/usr/bin");
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toContain("oven-bun");
-    expect(result.stdout.toString()).toContain("mcp --bundled");
+    expect(result.stdout.toString()).toContain("bin/thatch.ts");
   });
 
-  test("falls back to a bun on PATH when the dependency install did not run", () => {
-    const tree = makeTree(false);
-    trees.push(tree);
-    const stubDir = join(tree, "path-bun");
-    mkdirSync(stubDir, { recursive: true });
-    writeFileSync(join(stubDir, "bun"), "#!/bin/sh\necho \"path-bun $@\"\n");
-    chmodSync(join(stubDir, "bun"), 0o755);
-    const result = run(tree, `${stubDir}:/bin:/usr/bin`);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout.toString()).toContain("path-bun");
-    expect(result.stdout.toString()).toContain("mcp --bundled");
-  });
-
-  test("fails when neither runtime exists (the command must not resolve to silence)", () => {
-    const tree = makeTree(false);
+  test("fails loudly when no runtime exists (the command must not resolve to silence)", () => {
+    const tree = makeTree({});
     trees.push(tree);
     const result = run(tree, "/bin:/usr/bin");
     expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toContain("no usable JavaScript runtime");
+  });
+
+  test("the bin/thatch shim answers the same matrix directly", () => {
+    const tree = makeTree({ withDist: true });
+    trees.push(tree);
+    const stubDir = join(tree, "path-node");
+    makeNodeStub(stubDir, 0);
+    const result = Bun.spawnSync([join(tree, "bin", "thatch"), "--version"], {
+      env: { PATH: `${stubDir}:/bin:/usr/bin` },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toMatch(/node \S+dist\/thatch\.js --version/);
   });
 });

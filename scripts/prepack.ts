@@ -1,7 +1,11 @@
 // npm lifecycle script: runs before `npm pack` and `npm publish` build the
-// tarball. Three jobs:
+// tarball. Four jobs:
 //
-// 1. Generates the Claude Code plugin tree into the package root so the
+// 1. Bundles the node-runnable dist/ (src/packaging.ts's bundleNodeDist):
+//    first-party code only, node_modules externalized. The launchers run
+//    it under a capable node before they fall back to bun or @oven.
+//
+// 2. Generates the Claude Code plugin tree into the package root so the
 //    tarball carries a loadable plugin: .claude-plugin/plugin.json (the
 //    manifest Claude Code reads after fetching an npm-sourced plugin) plus
 //    hooks/ (the mod, its modules list, the shim, the rendered
@@ -32,9 +36,16 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { writePluginTree } from "../src/setup";
-import { parseBunLockfile, shippedDependencyView, slimPackageJson } from "../src/packaging";
+import { bundleNodeDist, parseBunLockfile, shippedDependencyView, slimPackageJson } from "../src/packaging";
 
 const root = join(import.meta.dir, "..");
+
+// The node-runnable dist/: the launchers' first choice under a capable
+// node (bin/thatch's probe). One bundle over the CLI DISPATCHER - its
+// registry carries both the `mcp` server boot and the `embed-daemon`
+// re-exec target. Prepack runs under bun (the pack scripts do), so the
+// bundle step is bun-only; the OUTPUT runs under node >= 22.13.
+await bundleNodeDist({ root, entries: ["bin/thatch.ts"] });
 
 await writePluginTree(root, {
   command: "${CLAUDE_PLUGIN_ROOT}/bin/mcp",

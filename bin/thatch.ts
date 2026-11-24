@@ -1,0 +1,108 @@
+#!/usr/bin/env bun
+
+// The thatch CLI: a thin dispatcher. Run under a runtime picked by the
+// bin/thatch sh shim (probed node over the prepack bundle, then bun).
+// Every subcommand is a Subcommand object in src/cli/; the registry (src/cli/registry.ts) owns the
+// command list and the help pages render from it (src/cli/help.ts).
+// This file only resolves argv, handles the help and version forms,
+// opens the database, and hands off.
+
+import { homedir } from "node:os";
+import { join } from "node:path";
+import pkg from "../package.json" with { type: "json" };
+import { ThatchDB } from "../src/db";
+import { chatOpenTabs as chatOpenTabsProvider } from "../src/tab-state";
+import { resumableSessionIds } from "../src/session-db";
+import { REGISTRY } from "../src/cli/registry";
+import { renderGlobal, printCommandHelp } from "../src/cli/help";
+import { defaultStore } from "../src/cli/context";
+import type { Subcommand } from "../src/cli/types";
+
+const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+const dbPath = process.env.THATCH_DB_PATH ?? join(configHome, "thatch", "thatch.db");
+
+const argv = process.argv.slice(2);
+const [command, ...args] = argv;
+const helpIdx = argv.findIndex((a) => a === "-h" || a === "--help");
+
+/**
+ * Resolves the command path as deep as the registry goes: namespaces
+ * consume the next token and continue into their children, so
+ * `session get` resolves to the get child, not the session namespace.
+ * Returns the resolved command and the number of argv tokens it
+ * consumed - the run args are everything after them.
+ */
+function resolveEntry(): { entry: Subcommand; depth: number } | undefined {
+  if (command === undefined) return undefined;
+  const first: Subcommand | undefined = REGISTRY.find((c) => c.name === command);
+  if (first === undefined) return undefined;
+  let entry: Subcommand = first;
+  let depth = 1;
+  for (;;) {
+    const children: Subcommand[] | undefined = entry.children;
+    if (children === undefined) break;
+    const child: Subcommand | undefined = argv[depth] ? children.find((c) => c.name === argv[depth]) : undefined;
+    if (child === undefined) break;
+    entry = child;
+    depth++;
+  }
+  return { entry, depth };
+}
+
+/** The global page (the subcommand list): stderr, like every help page. */
+function printGlobalHelp(): never {
+  console.error(renderGlobal(REGISTRY));
+  process.exit(0);
+}
+
+// Help is checked before the DB is opened or any subcommand runs. A
+// help flag before the subcommand (or as the whole command) prints the
+// global list; after a subcommand it prints that subcommand's page. A
+// bad command still exits 1; asking for help never does.
+if (helpIdx !== -1) {
+  const resolved = helpIdx > 0 ? resolveEntry() : undefined;
+  if (helpIdx > 0 && resolved) printCommandHelp(resolved.entry, 0);
+  printGlobalHelp();
+}
+
+// `thatch help [sub...]`: the same pages as the help flags, by name.
+// An unknown help target is a bad command: the global list, exit 1.
+if (command === "help") {
+  if (args.length === 0) printGlobalHelp();
+  let candidates = REGISTRY;
+  let entry: Subcommand | undefined;
+  for (const name of args) {
+    entry = candidates.find((c) => c.name === name);
+    if (!entry) break;
+    candidates = entry.children ?? [];
+  }
+  if (entry) printCommandHelp(entry, 0);
+  console.error(`error: no subcommand named "${args.join(" ")}"`);
+  console.error(renderGlobal(REGISTRY));
+  process.exit(1);
+}
+
+if (command === "--version" || command === "-v") {
+  console.log(pkg.version);
+  process.exit(0);
+}
+
+const resolved = resolveEntry();
+if (!resolved) {
+  console.error(renderGlobal(REGISTRY));
+  process.exit(1);
+}
+
+const db: ThatchDB = new ThatchDB(dbPath, {
+  chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()),
+  // Stale-but-resumable broadcast recipients (the same opencode.db
+  // point lookup the directory re-verification uses).
+  chatResumableSessions: resumableSessionIds,
+});
+try {
+  await resolved.entry.run(argv.slice(resolved.depth), { db, dbPath, defaultStore: () => defaultStore(db) });
+} finally {
+  // Hook commands that process.exit skip this - the same as the old
+  // switch's exit paths. chat tail and mcp close the handle themselves.
+  db.close();
+}

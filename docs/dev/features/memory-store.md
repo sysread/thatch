@@ -2,6 +2,33 @@
 
 The memory store is thatch's core feature: a SQLite-backed store of memories with semantic search via local embeddings. Everything else thatch does — extraction, hygiene, nudges, predictions, behaviors — reads from or writes to this store.
 
+## The sqlite compat layer
+
+Every database file goes through `src/sqlite-compat.ts` (the node:sqlite
+driver plan, docs/plans/node-sqlite-driver.md): a class exposing the
+bun-shaped surface (`query`/`run`/`exec`/`transaction`/`close`) over
+node:sqlite's `DatabaseSync`. No source file imports `bun:sqlite`; a
+drift gate (`tests/no-v1-sdk.test.ts`) keeps it that way. The module
+absorbs the engine deltas in one place - array params spread to
+positional, `.get()` normalizes `undefined` to bun's `null`, the
+constructor translates bun's `{ readonly: true }` spelling, transactions
+return a callable wrapper that nests via savepoints, and lock errors are
+normalized to code `SQLITE_BUSY`.
+
+The same source runs under Node.js >= 22.13 and bun >= 1.4.2 (both ship
+node:sqlite). Bun is not required at runtime: prepack bundles a
+node-runnable `dist/` over the CLI dispatcher (`src/packaging.ts`'s
+`bundleNodeDist`, node_modules externalized), and the `bin/thatch` sh
+shim picks the runtime at each invocation - a probed node (its
+`node -e 'require("node:sqlite")'` must succeed, and `dist/thatch.js`
+must exist), then bun on PATH, then the @oven binary. Bun's runtime
+globals were ported to node APIs in `src/runtime-ops.ts` (spawn,
+spawnSync, sha256, which, sleep, stdin); the only bun-specific step left
+is setup's mod bundling (`Bun.build`), which fails with a named error
+under node. `Bun.SHA256.hash` parity is load-bearing: chat identities
+are stored under that hex digest, and `tests/runtime-ops.test.ts` pins
+the byte-identity of the node crypto path against bun's.
+
 ## What it does
 
 The store persists memories keyed by label, scoped to a project store or the shared "global" store. Each memory is a labeled chunk of text an agent writes for a future session of itself to read.

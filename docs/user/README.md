@@ -93,8 +93,10 @@ directly. Hook output is JSON-wrapped (`--json`) so Cursor injects it as
 
 ### Before running setup
 
-The `thatch` binary must resolve `bun` on PATH. Install from npm (`npm i -g
-@jeffober/thatch`) or from a checkout (`bun run bin/thatch`).
+The `thatch` binary must resolve Node.js >= 22.13 or `bun` >= 1.4.2 on
+PATH (the launcher probes node for `node:sqlite`, then falls back to
+bun). Install from npm (`npm i -g @jeffober/thatch`) or run from a
+checkout (`bun bin/thatch.ts`).
 
 ## How it works
 
@@ -497,7 +499,7 @@ cat notes.md | thatch remember --label "merge notes"   # long content via stdin
 thatch notifications [--limit N]   # recent notification delivery attempts
 
 # Before publish: run from a git checkout or symlink
-bun run bin/thatch stores
+bin/thatch stores
 # or
 ln -s ~/dev/thatch/bin/thatch ~/.local/bin/thatch
 ```

@@ -9,6 +9,7 @@ import { writeRegimeMarker, readRegimeMarker, clearRegimeMarker } from "../../ve
 import { installSkills, type InstallReport } from "../../skills";
 import { installCommandsToDir, opencodeCommandDefs } from "../../commands";
 import { projectDir } from "../context";
+import { which } from "../../runtime-ops";
 import type { Subcommand } from "../types";
 
 export const setup: Subcommand = {
@@ -159,7 +160,7 @@ export const setup: Subcommand = {
     // If `thatch` is on PATH (npm global install, opencode plugin install),
     // use the bare name - it survives updates and works across machines.
     // If not on PATH (local dev checkout), use the absolute path to this script.
-    const thatchOnPath = Bun.which("thatch");
+    const thatchOnPath = which("thatch");
     const thatchBin = thatchOnPath ?? resolve(process.argv[1] ?? process.execPath);
     const dir = projectDir();
     // The PLUGIN regime pins the CHECKOUT'S OWN binary, never the PATH

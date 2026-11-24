@@ -18,6 +18,7 @@
   },
   "files": [
     "src",
+    "dist",
     "docs",
     "bin",
     "artifacts",

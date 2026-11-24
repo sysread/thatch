@@ -49,7 +49,9 @@ process.exitCode = 0;
 `;
 
 async function runScript(script: string): Promise<{ code: number; stdout: string; stderr: string }> {
-  const proc = Bun.spawn(["bun", "-e", script], { stdout: "pipe", stderr: "pipe" });
+  // The runner's own runtime, never a PATH-resolved bun (an ambient
+  // ~/.bun/bin can shadow mise's pinned one).
+  const proc = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
   return { code: await proc.exited, stdout, stderr };
 }

@@ -513,8 +513,8 @@ export async function runMcpServer(mode: McpServerMode = "standalone"): Promise<
   const decoder = new TextDecoder();
   let buf = "";
 
-  for await (const chunk of Bun.stdin.stream()) {
-    buf += decoder.decode(chunk as unknown as ArrayBuffer);
+  for await (const chunk of process.stdin) {
+    buf += decoder.decode(chunk as Buffer);
 
     let nl: number;
     while ((nl = buf.indexOf("\n")) >= 0) {

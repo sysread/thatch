@@ -106,7 +106,8 @@ Claude Code plugin path
                         plugin_lifecycle tool: alerts, wrap-up
                         arming/greenlight, buffer push, session-end cleanup
 
-bin/thatch             → CLI: stores|list|show|forget|search|tombstones|remember|mcp|embed-daemon|reminder|hygiene|
+bin/thatch (sh shim)   → runtime pick: probed node over dist/, then bun, then @oven
+bin/thatch.ts          → CLI: stores|list|show|forget|search|tombstones|remember|mcp|embed-daemon|reminder|hygiene|
                         prime|buffer-batch|buffer-tool|flush-tools|flush-predictions|setup|doctor|
                         notifications (journal)|session (archaeology)|chat (list|tail|broadcast)
 ```

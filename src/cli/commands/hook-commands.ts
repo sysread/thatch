@@ -17,6 +17,7 @@ import {
 import { chatEnabled, loadConfig } from "../../config";
 import { chatNotificationNudge } from "../../prompts";
 import { createHookHelpers } from "../hooks";
+import { stdinText } from "../../runtime-ops";
 import type { Subcommand } from "../types";
 
 export const bufferBatch: Subcommand = {
@@ -29,7 +30,7 @@ export const bufferBatch: Subcommand = {
     // JSONL queue. Silent on success - no stdout - so the next model call
     // is not delayed waiting for an exit code-driven message.
     try {
-      const raw = await Bun.stdin.text();
+      const raw = await stdinText();
       hh.logHookPayload("buffer-batch", raw);
       const data = JSON.parse(raw) as { session_id?: string; tool_calls?: unknown[] };
       if (data.session_id && Array.isArray(data.tool_calls)) {
@@ -55,7 +56,7 @@ export const bufferTool: Subcommand = {
     // Claude Code). The tool result field name is not explicitly documented,
     // so we try the most likely candidates.
     try {
-      const raw = await Bun.stdin.text();
+      const raw = await stdinText();
       hh.logHookPayload("buffer-tool", raw);
       const data = JSON.parse(raw) as {
         conversation_id?: string;
@@ -110,7 +111,7 @@ export const flushTools: Subcommand = {
     // Without --json, stdout is plain text (Claude Code style).
     const isJson = args.includes("--json");
     try {
-      const raw = await Bun.stdin.text();
+      const raw = await stdinText();
       hh.logHookPayload("flush-tools", raw);
       const data = JSON.parse(raw) as {
         session_id?: string;
@@ -372,7 +373,7 @@ export const flushPredictions: Subcommand = {
     // extraction nudges.
     const isJson = args.includes("--json");
     try {
-      const raw = await Bun.stdin.text();
+      const raw = await stdinText();
       const data = JSON.parse(raw) as {
         prompt?: string;
         message?: string;

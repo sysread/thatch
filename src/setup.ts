@@ -1,9 +1,11 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { claudeInstructions, cursorInstructions } from "./prompts";
 import { installSkills, type InstallReport } from "./skills";
 import { installClaudeCommands } from "./commands";
 import { readRegimeMarker } from "./version-check";
+import { spawn, spawnSync, which } from "./runtime-ops";
 import pkg from "../package.json";
 
 // ---------------------------------------------------------------------------
@@ -64,9 +66,9 @@ export function claudeVersionSupportsMods(versionOutput: string | null): boolean
 /** Reads the installed claude CLI's --version output; null when claude is
  *  not on PATH or fails to run. */
 export function claudeVersionOutput(): string | null {
-  if (!Bun.which("claude")) return null;
+  if (!which("claude")) return null;
   try {
-    const r = Bun.spawnSync(["claude", "--version"], { stdout: "pipe" });
+    const r = spawnSync(["claude", "--version"], { stdout: "pipe" });
     return r.exitCode === 0 ? r.stdout.toString().trim() : null;
   } catch {
     return null;
@@ -677,8 +679,17 @@ export function register(on) {
 
   // The mod bundle: browser target - a node: import anywhere in the mod's
   // graph fails HERE (at generation) instead of at load in Claude Code.
+  // Bun.build has no node equivalent, so under a node runtime this step
+  // fails loudly with its name instead of a raw ReferenceError.
+  if (typeof Bun === "undefined") {
+    throw new Error(
+      "bundling the thatch mod requires bun (Bun.build has no node equivalent): " +
+        "run setup under bun, or reinstall the npm package, whose prepack " +
+        "already bundles the mod into hooks/",
+    );
+  }
   const build = await Bun.build({
-    entrypoints: [join(import.meta.dir, "..", "src", "claude-plugin", "mod.ts")],
+    entrypoints: [join(dirname(fileURLToPath(import.meta.url)), "..", "src", "claude-plugin", "mod.ts")],
     target: "browser",
     outdir: hooksDir,
     naming: "mod.js",
@@ -811,7 +822,7 @@ export interface CommandRunResult {
 }
 
 async function defaultCommandRun(argv: string[]): Promise<CommandRunResult> {
-  const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
+  const proc = spawn(argv, { stdout: "pipe", stderr: "pipe" });
   await proc.exited;
   return { exitCode: proc.exitCode ?? 1 };
 }
@@ -835,7 +846,7 @@ export async function registerClaudeMcpServer(
     run?: (argv: string[]) => Promise<CommandRunResult>;
   } = {},
 ): Promise<ClaudeMcpRegistration> {
-  const claudeBin = opts.claudeBin === undefined ? Bun.which("claude") : opts.claudeBin;
+  const claudeBin = opts.claudeBin === undefined ? which("claude") : opts.claudeBin;
   const manualCommand = `claude mcp add --scope user thatch -- ${thatchBin} mcp`;
   const run = opts.run ?? defaultCommandRun;
   if (!claudeBin) {

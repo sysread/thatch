@@ -97,9 +97,11 @@ Prerequisites:
 1. git on PATH - the marketplace add and the plugin install both clone
    (`git --version` to check).
 2. npm on PATH - the dependency install runs `npm ci` on the lockfile
-   shipped with the plugin (`npm --version` to check). bun is NOT
-   required: the plugin ships its own bun runtime (the launcher prefers
-   the installed copy and falls back to a bun on PATH).
+   shipped with the plugin (`npm --version` to check). No bun and no
+   node on PATH is required: the plugin bundles a node-runnable dist/
+   (the launcher probes a node >= 22.13 first, then falls back to bun
+   >= 1.4.2 on PATH, then to the bun runtime installed with the
+   plugin's own dependencies).
 
 If the dependency install did not complete, the `/plugin` Errors tab
 says "The packages it lists are not installed" and the server fails to
@@ -171,7 +173,11 @@ record the paths of the checkout that ran setup, so re-running either
 from a checkout regenerates the plugin directory from it. `--plugin`
 still works as a deprecated alias for `--dev` and prints a redirect.
 
-`bun` must be on PATH (the thatch binary runs under bun). Setup is
+Setup runs under Node.js >= 22.13 or Bun >= 1.4.2 - the same runtime
+pick the launchers use. One exception: when setup generates the plugin
+regime's mod bundle it needs bun specifically (the bundling step has no
+node equivalent); under a node-only PATH that step fails with a named
+error saying so. Setup is
 idempotent. Re-running it updates drifted content without clobbering
 unrelated config, and reports what it did: the skills directory plus
 how many skills were added, updated (replaced with a newer version),
@@ -201,7 +207,10 @@ As with Claude Code, `--skills-only` refreshes just the skill files and
 skips the MCP config, instructions, and hooks.
 
 Cursor uses a flat hooks format (`{version, hooks:{event:[{command}]}}`)
-and `--json` output for hook commands.
+and `--json` output for hook commands. The recorded MCP command and hook
+commands all point at the installed `bin/thatch` launcher, which picks
+its runtime at each invocation: a probed node (>= 22.13, with the
+bundled dist present), then bun (>= 1.4.2), then the @oven binary.
 
 ## Other harnesses
 
@@ -274,11 +283,14 @@ instructions are deployed without requiring you to manually re-run
 
 ## Limitations
 
-- For non-Nix installs, `bun` must be available: on PATH for the setup
-  regimes and the `thatch` CLI, or installed as the Claude Code
-  marketplace plugin's own dependency (that install needs node/npm on
-  PATH instead). Thatch does not bundle a runtime in the repo itself
-  (the Nix package bundles it; see the README's Nix section).
+- No runtime is required on PATH beyond what each install surface
+  names: the launchers pick Node.js >= 22.13 (probed for `node:sqlite`
+  directly, so the flagged 22.5-22.12 band is skipped), then bun
+  >= 1.4.2, then the @oven bun binary the Claude Code plugin's
+  dependencies install. The marketplace install needs node/npm on PATH
+  for the dependency install (`npm ci`). Thatch does not bundle a
+  runtime in the repo itself (the Nix package bundles bun; see the
+  README's Nix section).
 - The embedding model (~34 MB) is downloaded once on first use and
   cached in the platform's per-user cache dir
   (`~/Library/Caches/thatch/models` on macOS (or

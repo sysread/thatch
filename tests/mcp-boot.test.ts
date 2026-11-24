@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootStdioJsonRpcClient } from "./helpers/stdio-client";
@@ -89,6 +89,33 @@ describe("MCP server boot (characterization)", () => {
       const listText = list.result?.content?.[0]?.text ?? "";
       expect(list.result?.isError).toBe(false);
       expect(listText).toContain("loader-anchors-parser");
+    } finally {
+      await server.close();
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  }, 60000);
+
+  test("boots with a poisoned PATH (a broken bun first on it)", async () => {
+    // The hermeticity regression: a shell personalization can put a
+    // node:sqlite-less bun FIRST on the ambient PATH, and the spawned
+    // shim resolves `bun` by PATH name. The harness pins the child's
+    // PATH to the runner's own runtime directory, so the boot must
+    // survive the poison; before the fix this test died with "No such
+    // built-in module: node:sqlite".
+    const sandbox = mkdtempSync(join(tmpdir(), "thatch-mcp-boot-"));
+    const brokenBun = join(sandbox, "broken-bun");
+    mkdirSync(brokenBun, { recursive: true });
+    writeFileSync(join(brokenBun, "bun"), "#!/bin/sh\necho 'Bun v0.0-broken, no node:sqlite' >&2\nexit 1\n");
+    chmodSync(join(brokenBun, "bun"), 0o755);
+    const env = sandboxEnv(sandbox);
+    const server = bootStdioJsonRpcClient(
+      [join(REPO_ROOT, "bin", "thatch"), "mcp", "--bundled"],
+      // Broken bun FIRST: the poison must lose to the runner's runtime.
+      { ...env, PATH: `${brokenBun}:${env.PATH!}` },
+    );
+    try {
+      const init = await server.request("initialize", {});
+      expect(init.result?.serverInfo?.name).toBe("thatch");
     } finally {
       await server.close();
       rmSync(sandbox, { recursive: true, force: true });

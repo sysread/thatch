@@ -31,6 +31,7 @@
  * dependencies") - the lockfile is generated FROM the manifest, so they
  * agree by construction.
  */
+import { dirname, join } from "node:path";
 
 /** The bun runtime version the shipped package installs. Pinned exact:
  * the runtime version IS the npm package version. Matches the version
@@ -124,4 +125,58 @@ export function slimPackageJson(pkg: Record<string, unknown>): Record<string, un
   delete slim.devDependencies;
   delete slim.scripts;
   return slim;
+}
+
+/**
+ * The node-runnable dist/ (docs/plans/node-sqlite-driver.md, D12a):
+ * bundles the first-party entry graph with bun build --target=node, with
+ * ALL of node_modules externalized - dist carries first-party code only,
+ * and the plugin install provides the dependencies via the shrinkwrap's
+ * `npm ci`. Externalization keeps the dynamic-import graphs intact: the
+ * embedding model's lazy `import("onnxruntime-web")` /
+ * `import("@huggingface/transformers")` stay as imports in the output
+ * and resolve from the installed node_modules at runtime. The entry is
+ * the CLI DISPATCHER - its registry carries both the `mcp` server boot
+ * and the `embed-daemon` subcommand, so the daemon's re-exec of
+ * process.argv[1] + "embed-daemon" dispatches through the same bundle.
+ */
+export interface BundleDistOptions {
+  /** The package root: entries resolve against it, outdir lands in it. */
+  root: string;
+  /** Entry files, relative to root. Each becomes <basename>.js in outdir. */
+  entries: string[];
+  /** The output directory, relative to root. Default "dist". */
+  outdir?: string;
+}
+
+export interface BundleDistResult {
+  /** The bundle output files' absolute paths. */
+  outputs: string[];
+}
+
+export async function bundleNodeDist(opts: BundleDistOptions): Promise<BundleDistResult> {
+  const outdir = join(opts.root, opts.outdir ?? "dist");
+  const first = opts.entries[0];
+  if (!first) throw new Error("bundleNodeDist needs at least one entry");
+  // Entries share one directory, so a common root keeps the outputs flat
+  // (bin/thatch.ts -> dist/thatch.js) instead of mirroring the tree.
+  let build: Awaited<ReturnType<typeof Bun.build>>;
+  try {
+    build = await Bun.build({
+      entrypoints: opts.entries.map((e) => join(opts.root, e)),
+      root: join(opts.root, dirname(first)),
+      outdir,
+      target: "node",
+      format: "esm",
+      packages: "external",
+    });
+  } catch (err) {
+    // Bun.build THROWS on resolution failures (it does not always
+    // surface them through success/logs).
+    throw new Error(`bundling the node dist failed:\n${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!build.success) {
+    throw new Error(`bundling the node dist failed:\n${build.logs.map(String).join("\n")}`);
+  }
+  return { outputs: build.outputs.map((o) => o.path) };
 }

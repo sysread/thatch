@@ -4,6 +4,7 @@ import { openSync, readSync, closeSync, readdirSync, statSync, mkdtempSync, writ
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { CHAT_NAME_POOL } from "./chat-names";
+import { sha256Hex } from "./runtime-ops";
 import type { ThatchDB } from "./db";
 import { withDidYouMean } from "./fuzzy";
 import { DeliverySkippedError } from "./capabilities";
@@ -109,7 +110,7 @@ export interface ChatInboxItem {
  * that find() relies on.
  */
 export function mcpSessionID(hostSessionID: string): string {
-  const hash = Bun.SHA256.hash(hostSessionID.toLowerCase(), "hex").slice(0, 12);
+  const hash = sha256Hex(hostSessionID.toLowerCase()).slice(0, 12);
   return `mcp_${hash}`;
 }
 

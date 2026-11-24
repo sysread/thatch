@@ -282,13 +282,14 @@ surfacing so it does not repeat on every tool call.
 
 ### Binary resolution
 
-Setup resolves the thatch binary via `Bun.which("thatch")`. If `thatch` is on
+Setup resolves the thatch binary via the runtime-ops `which` (a PATH
+scan). If `thatch` is on
 `PATH` (npm global install, opencode plugin install), it uses the bare name.
 This survives updates --- the resolved path points to whatever `thatch` is
 current at hook execution time, not a stale absolute path.
 
 If `thatch` is not on `PATH`, setup falls back to the absolute path of the
-running script. This handles one-off invocations (e.g., `bun run bin/thatch
+running script. This handles one-off invocations (e.g., `bun bin/thatch.ts
 setup --claude`).
 
 The resolved binary is baked into every installed hook command. Hooks are

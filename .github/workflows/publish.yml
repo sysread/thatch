@@ -125,7 +125,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git rm -q --cached bun.lock
-          git add -f .claude-plugin/plugin.json hooks package.json
+          git add -f .claude-plugin/plugin.json hooks dist package.json
           git add -f npm-shrinkwrap.json
           git commit -m "plugin tree for v${version}"
       - name: Push the plugin-release branch

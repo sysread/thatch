@@ -8,6 +8,7 @@
 // while terminal-notifier supports a click action (see the banner branch).
 // Dispatch is darwin and linux only by design: win32 support is not a goal,
 // and the tool reports the gap honestly rather than half-working.
+import { spawn } from "./runtime-ops";
 
 export type NotifyChannel = "both" | "banner" | "voice";
 
@@ -123,7 +124,7 @@ export type Spawner = (cmd: string[]) => Promise<SpawnResult>;
 
 /** The real runner. Tests inject a mock so nothing actually speaks. */
 export const defaultSpawner: Spawner = async (cmd) => {
-  const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
+  const proc = spawn(cmd, { stdout: "pipe", stderr: "pipe" });
   const stderr = await new Response(proc.stderr).text();
   await proc.exited;
   return { exitCode: proc.exitCode, stderr };

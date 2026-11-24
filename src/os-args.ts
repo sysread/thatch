@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { spawnSync } from "./runtime-ops";
 
 /**
  * Parses the session id a harness was started to continue from an argument
@@ -61,14 +62,15 @@ export function continuesLastSessionId(
 export interface OsArgsDeps {
   /** Reads a file as UTF-8, throwing when it does not exist. */
   readFile: (path: string) => string;
-  /** Runs `ps -p <pid> -o args=`; returns its exit code and stdout. */
-  ps: (pid: number) => { exitCode: number; stdout: string };
+  /** Runs `ps -p <pid> -o args=`; returns its exit code (null when the
+   *  child died to a signal) and stdout. */
+  ps: (pid: number) => { exitCode: number | null; stdout: string };
 }
 
 const defaultOsArgsDeps: OsArgsDeps = {
   readFile: (path) => readFileSync(path, "utf8"),
   ps: (pid) => {
-    const res = Bun.spawnSync(["ps", "-p", String(pid), "-o", "args="]);
+    const res = spawnSync(["ps", "-p", String(pid), "-o", "args="]);
     return { exitCode: res.exitCode, stdout: res.stdout.toString() };
   },
 };

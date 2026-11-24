@@ -16,6 +16,7 @@
  * builder, the wait timeout); _resetForTesting clears the memo between
  * cases, because bun shares one process across all test files.
  */
+import { spawn as nodeSpawn } from "node:child_process";
 import { DaemonProtocolError, decodeResponse, encodeMessage } from "./protocol";
 import type { HelloResponse } from "./protocol";
 import { dialSocket } from "./socket";
@@ -46,13 +47,11 @@ function defaultSpawnCommand(): string[] {
 }
 
 function defaultSpawn(cmd: string[]): void {
-  const proc = Bun.spawn(cmd, {
+  const proc = nodeSpawn(cmd[0]!, cmd.slice(1), {
     detached: true,
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "ignore",
+    stdio: "ignore",
   });
-  proc.unref?.();
+  proc.unref();
 }
 
 /**

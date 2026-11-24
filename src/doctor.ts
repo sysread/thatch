@@ -25,6 +25,7 @@ import { join, dirname, resolve } from "node:path";
 import { realpathSync } from "node:fs";
 import pkg from "../package.json";
 import { compareSemver, readRegimeMarker, readModLiveness, MOD_LIVENESS_STALE_MS, npmCachePath } from "./version-check";
+import { spawnSync, which } from "./runtime-ops";
 import { embedSocketPath, embedLockPath, daemonEnabled } from "./embed-daemon/client";
 import { probeEmbedLock, type LockProbe } from "./embed-daemon/daemon";
 import { helloProbe } from "./embed-daemon/supervisor";
@@ -281,10 +282,10 @@ function npmUpdateFinding(deps: DoctorDeps): DoctorFinding {
 const OPENCODE_FLOOR = "2.1.0";
 
 function defaultOpencodeVersion(): string | null {
-  const bin = Bun.which("opencode");
+  const bin = which("opencode");
   if (!bin) return null;
   try {
-    const r = Bun.spawnSync([bin, "--version"], { stdout: "pipe" });
+    const r = spawnSync([bin, "--version"], { stdout: "pipe" });
     return r.exitCode === 0 ? r.stdout.toString().trim() : null;
   } catch {
     return null;
@@ -503,10 +504,10 @@ function shimFindings(paths: { fileShim: string; dirShim: string; hasShim: boole
 // ---------------------------------------------------------------------------
 
 async function defaultClaudeMcpGetThatch(): Promise<{ exitCode: number }> {
-  const claudeBin = Bun.which("claude");
+  const claudeBin = which("claude");
   if (!claudeBin) return { exitCode: 1 };
   try {
-    const proc = Bun.spawnSync([claudeBin, "mcp", "get", "thatch"], { stdout: "pipe", stderr: "pipe" });
+    const proc = spawnSync([claudeBin, "mcp", "get", "thatch"], { stdout: "pipe", stderr: "pipe" });
     return { exitCode: proc.exitCode ?? 1 };
   } catch {
     return { exitCode: 1 };

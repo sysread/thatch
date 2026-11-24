@@ -1,7 +1,8 @@
 // npm lifecycle script: runs after `npm pack` and `npm publish` have built
 // the tarball. Restores what scripts/prepack.ts changed in the working
 // tree (the slimmed package.json comes back from .pack-orig/) and removes
-// the generated plugin tree and shrinkwrap, so packs leave no droppings.
+// the generated plugin tree, the bundled dist, and the shrinkwrap, so
+// packs leave no droppings.
 // Only GENERATED paths are touched: .claude-plugin/marketplace.json is
 // committed (the repo IS the marketplace) and must survive every pack.
 import { copyFileSync, existsSync, rmSync } from "node:fs";
@@ -17,3 +18,4 @@ if (existsSync(origDir)) {
 rmSync(join(root, "npm-shrinkwrap.json"), { force: true });
 rmSync(join(root, ".claude-plugin", "plugin.json"), { force: true });
 rmSync(join(root, "hooks"), { recursive: true, force: true });
+rmSync(join(root, "dist"), { recursive: true, force: true });

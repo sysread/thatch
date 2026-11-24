@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   REVIEW_SPECIALISTS,
   defragCore,
@@ -49,7 +50,7 @@ import {
  *   session close-out), so they are opencode-only. Each greenlights with
  *   its zero-arg tool call (thatch_compact / thatch_exit).
  */
-export const COMMANDS_ARTIFACTS_DIR = join(import.meta.dir, "..", "artifacts", "commands");
+export const COMMANDS_ARTIFACTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "artifacts", "commands");
 
 /**
  * Shared wrap-up persistence checklist, spliced into both wrap-up artifacts

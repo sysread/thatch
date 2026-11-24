@@ -1,6 +1,6 @@
-import { $ } from "bun";
 import { statSync, realpathSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
+import { spawnSync } from "./runtime-ops";
 
 /**
  * Classifies the checkout the given directory serves: "worktree" for a
@@ -123,7 +123,7 @@ export function pathExists(dir: string): boolean {
  */
 export async function resolveMainCheckout(dir: string): Promise<string | null> {
   try {
-    const out = await $`git rev-parse --path-format=absolute --git-common-dir`.cwd(dir).quiet();
+    const out = spawnSync(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: dir });
     if (out.exitCode !== 0) return null;
     const d = out.stdout.toString().trim();
     if (!d.endsWith("/.git")) return null;
@@ -149,7 +149,7 @@ async function validateMainPath(row: RepoPathRow, cache: RepoPathCache): Promise
   if (!pathExists(row.mainPath)) return "kept";
 
   try {
-    const rd = await $`git rev-parse --git-common-dir`.cwd(row.mainPath).quiet();
+    const rd = spawnSync(["git", "rev-parse", "--git-common-dir"], { cwd: row.mainPath });
     if (rd.exitCode !== 0) {
       cache.evict(row.worktreePath);
       return "evicted";
@@ -159,7 +159,7 @@ async function validateMainPath(row: RepoPathRow, cache: RepoPathCache): Promise
   }
 
   try {
-    const remote = await $`git remote get-url origin`.cwd(row.mainPath).quiet();
+    const remote = spawnSync(["git", "remote", "get-url", "origin"], { cwd: row.mainPath });
     if (remote.exitCode === 0) {
       const parsed = parseGitUrl(remote.stdout.toString());
       if (parsed !== row.repoSlug) {
@@ -252,7 +252,7 @@ export async function detectRepo(cwd?: string, cache?: RepoPathCache): Promise<s
   const dir = cwd ?? process.env.CURSOR_PROJECT_DIR ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
 
   try {
-    const remote = await $`git remote get-url origin`.cwd(dir).quiet();
+    const remote = spawnSync(["git", "remote", "get-url", "origin"], { cwd: dir });
     if (remote.exitCode === 0) {
       const parsed = parseGitUrl(remote.stdout.toString());
       if (parsed) {
@@ -300,11 +300,9 @@ export async function detectRepo(cwd?: string, cache?: RepoPathCache): Promise<s
  */
 export async function listBranches(cwd: string, cache?: RepoPathCache): Promise<string[]> {
   const dir = (await resolveSpawnCwd(cwd, cache)) ?? cwd;
-  // The format string is interpolated because Bun's shell parser rejects
-  // bare parentheses in template literals.
   const fmt = "%(refname)";
   try {
-    const out = await $`git for-each-ref --format=${fmt} refs/heads refs/remotes`.cwd(dir).quiet();
+    const out = spawnSync(["git", "for-each-ref", `--format=${fmt}`, "refs/heads", "refs/remotes"], { cwd: dir });
     if (out.exitCode !== 0) return [];
     const names = new Set<string>();
     for (const ref of out.stdout.toString().split("\n").map((s) => s.trim()).filter(Boolean)) {

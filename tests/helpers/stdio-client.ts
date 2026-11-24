@@ -8,11 +8,22 @@
  * Failures surface through `report` when given (QA use cases accumulate
  * failures and keep going) or by throwing when not (unit tests).
  */
+import { dirname } from "node:path";
 
 export interface StdioJsonRpcClient {
   proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
   request: (method: string, params?: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, any>>;
   close: () => Promise<void>;
+}
+
+/** Prepends the RUNNER's own runtime directory to the child's PATH. The
+ * spawned bin/thatch shim resolves `bun` by PATH name, so an ambient
+ * shell personalization (a stale ~/.bun/bin first) would boot the server
+ * under a bun without node:sqlite. The runner knows its own runtime -
+ * the same capability hermeticity the product launcher owes (the
+ * poisoned-PATH regression case in tests/mcp-boot.test.ts). */
+function hermeticEnv(env: Record<string, string>): Record<string, string> {
+  return { ...env, PATH: `${dirname(process.execPath)}:${env.PATH ?? process.env.PATH ?? ""}` };
 }
 
 export function bootStdioJsonRpcClient(
@@ -27,7 +38,7 @@ export function bootStdioJsonRpcClient(
     }
     throw new Error(message);
   };
-  const proc = Bun.spawn(argv, { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(argv, { env: hermeticEnv(env), stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   const reader = proc.stdout.getReader();
   const dec = new TextDecoder();
   let buf = "";

@@ -1,104 +1,41 @@
-#!/usr/bin/env bun
+#!/bin/sh
+# The thatch launcher: picks the runtime by PROBED capability, not by
+# PATH name alone (docs/plans/node-sqlite-driver.md, D12). Every row
+# must resolve without a login shell - hook hosts spawn this file
+# directly, shebang honored. The dist-existence test is load-bearing:
+# the Nix package ships no dist/ (no bundle step in the derivation), so
+# a capable system node must fall through to the bun row instead of
+# exec'ing a nonexistent file.
+root=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
 
-// The thatch CLI: a thin dispatcher. Every subcommand is a Subcommand
-// object in src/cli/; the registry (src/cli/registry.ts) owns the
-// command list and the help pages render from it (src/cli/help.ts).
-// This file only resolves argv, handles the help and version forms,
-// opens the database, and hands off.
+# Row 1: a node on PATH whose node:sqlite actually resolves - the probe,
+# not the name: node 22.5-22.12 ships the module behind a flag and would
+# die at import - plus the bundled dist (bin/thatch.ts bundled by
+# prepack). A node that fails the probe is treated as absent.
+if command -v node >/dev/null 2>&1; then
+    if node -e 'require("node:sqlite")' >/dev/null 2>&1 && [ -f "$root/dist/thatch.js" ]; then
+        exec node "$root/dist/thatch.js" "$@"
+    fi
+fi
 
-import { homedir } from "node:os";
-import { join } from "node:path";
-import pkg from "../package.json" with { type: "json" };
-import { ThatchDB } from "../src/db";
-import { chatOpenTabs as chatOpenTabsProvider } from "../src/tab-state";
-import { resumableSessionIds } from "../src/session-db";
-import { REGISTRY } from "../src/cli/registry";
-import { renderGlobal, printCommandHelp } from "../src/cli/help";
-import { defaultStore } from "../src/cli/context";
-import type { Subcommand } from "../src/cli/types";
+# Row 2: a bun on PATH runs the TypeScript source.
+if command -v bun >/dev/null 2>&1; then
+    exec bun "$root/bin/thatch.ts" "$@"
+fi
 
-const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
-const dbPath = process.env.THATCH_DB_PATH ?? join(configHome, "thatch", "thatch.db");
+# Row 3: the @oven binary the plugin's dependencies installed (the `bun`
+# npm package's platform binary; the .bin shims stay unwired because
+# plugin dependency installs run with --ignore-scripts). Last resort.
+for oven in "$root"/node_modules/@oven/bun-*/bin/bun; do
+    if [ -x "$oven" ]; then
+        exec "$oven" "$root/bin/thatch.ts" "$@"
+    fi
+done
 
-const argv = process.argv.slice(2);
-const [command, ...args] = argv;
-const helpIdx = argv.findIndex((a) => a === "-h" || a === "--help");
-
-/**
- * Resolves the command path as deep as the registry goes: namespaces
- * consume the next token and continue into their children, so
- * `session get` resolves to the get child, not the session namespace.
- * Returns the resolved command and the number of argv tokens it
- * consumed - the run args are everything after them.
- */
-function resolveEntry(): { entry: Subcommand; depth: number } | undefined {
-  if (command === undefined) return undefined;
-  let entry = REGISTRY.find((c) => c.name === command);
-  if (!entry) return undefined;
-  let depth = 1;
-  while (entry.children) {
-    const child = argv[depth] ? entry.children.find((c) => c.name === argv[depth]) : undefined;
-    if (!child) break;
-    entry = child;
-    depth++;
-  }
-  return { entry, depth };
-}
-
-/** The global page (the subcommand list): stderr, like every help page. */
-function printGlobalHelp(): never {
-  console.error(renderGlobal(REGISTRY));
-  process.exit(0);
-}
-
-// Help is checked before the DB is opened or any subcommand runs. A
-// help flag before the subcommand (or as the whole command) prints the
-// global list; after a subcommand it prints that subcommand's page. A
-// bad command still exits 1; asking for help never does.
-if (helpIdx !== -1) {
-  const resolved = helpIdx > 0 ? resolveEntry() : undefined;
-  if (helpIdx > 0 && resolved) printCommandHelp(resolved.entry, 0);
-  printGlobalHelp();
-}
-
-// `thatch help [sub...]`: the same pages as the help flags, by name.
-// An unknown help target is a bad command: the global list, exit 1.
-if (command === "help") {
-  if (args.length === 0) printGlobalHelp();
-  let candidates = REGISTRY;
-  let entry: Subcommand | undefined;
-  for (const name of args) {
-    entry = candidates.find((c) => c.name === name);
-    if (!entry) break;
-    candidates = entry.children ?? [];
-  }
-  if (entry) printCommandHelp(entry, 0);
-  console.error(`error: no subcommand named "${args.join(" ")}"`);
-  console.error(renderGlobal(REGISTRY));
-  process.exit(1);
-}
-
-if (command === "--version" || command === "-v") {
-  console.log(pkg.version);
-  process.exit(0);
-}
-
-const resolved = resolveEntry();
-if (!resolved) {
-  console.error(renderGlobal(REGISTRY));
-  process.exit(1);
-}
-
-const db: ThatchDB = new ThatchDB(dbPath, {
-  chatOpenTabs: chatOpenTabsProvider(() => db.chatTabClosures()),
-  // Stale-but-resumable broadcast recipients (the same opencode.db
-  // point lookup the directory re-verification uses).
-  chatResumableSessions: resumableSessionIds,
-});
-try {
-  await resolved.entry.run(argv.slice(resolved.depth), { db, dbPath, defaultStore: () => defaultStore(db) });
-} finally {
-  // Hook commands that process.exit skip this - the same as the old
-  // switch's exit paths. chat tail and mcp close the handle themselves.
-  db.close();
-}
+# Row 4: nothing usable - fail loudly with the missing prerequisites.
+echo "thatch: no usable JavaScript runtime found" >&2
+echo "  one of these must hold:" >&2
+echo "  - node >= 22.13 on PATH (its node:sqlite is probed directly) with dist/thatch.js bundled" >&2
+echo "  - bun >= 1.4.2 on PATH" >&2
+echo "  - the @oven binary under $root/node_modules (installed with the plugin's dependencies)" >&2
+exit 1

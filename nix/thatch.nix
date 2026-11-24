@@ -123,8 +123,14 @@ stdenv.mkDerivation {
     rm -rf "$dest"/node_modules/@img/*musl* \
            "$dest"/node_modules/sharp/vendor 2>/dev/null || true
 
-    makeBinaryWrapper ${bun}/bin/bun $out/bin/thatch \
-      --add-flags "$dest/bin/thatch"
+    # The wrapper execs the bin/thatch shim DIRECTLY (bun cannot exec a sh
+    # script) and prefixes PATH with bun's bin: the shim's runtime rows
+    # (probed node with dist/, then bun, then @oven) resolve on the
+    # prefixed PATH. The derivation ships no dist/ (no bundle step here),
+    # so the shim's node row falls through to the bun row - the package's
+    # guaranteed-runtime property holds even on a bare PATH.
+    makeBinaryWrapper "$dest/bin/thatch" $out/bin/thatch \
+      --prefix PATH ${bun}/bin
 
     runHook postInstall
   '';

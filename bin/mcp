@@ -1,16 +1,8 @@
 #!/bin/sh
 # The shipped plugin's bundled MCP server launcher. Claude Code spawns
 # this file directly (no shell, shebang honored), so it must stay
-# executable. It runs bin/thatch under a bun runtime, preferring the one
-# installed with the plugin's own dependencies - the `bun` npm package
-# places the platform binary at node_modules/@oven/<platform>/bin/bun;
-# its .bin shims stay unwired because plugin dependency installs run with
-# --ignore-scripts. A `bun` on PATH is the fallback for installs whose
-# dependency install did not run or predates the bundled runtime.
+# executable. Runtime picking lives in bin/thatch (probed node with the
+# bundled dist, then a bun on PATH, then the @oven binary); this
+# launcher only delegates to it.
 root=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
-for bun in "$root"/node_modules/@oven/bun-*/bin/bun; do
-    if [ -x "$bun" ]; then
-        exec "$bun" "$root/bin/thatch" "$@"
-    fi
-done
-exec bun "$root/bin/thatch" "$@"
+exec "$root/bin/thatch" "$@"

@@ -27,7 +27,7 @@ run = "bun test --coverage --coverage-reporter=text --coverage-reporter=lcov"
 
 [tasks.cli]
 description = "Run the thatch CLI (list, show, search, forget, remember)"
-run = "bun run bin/thatch"
+run = "bin/thatch"
 
 [tasks.typecheck]
 description = "Typecheck src + tests (tsconfig.check.json)"

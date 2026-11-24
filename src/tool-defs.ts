@@ -199,8 +199,9 @@ export interface CoreContext {
   /** The plugin host's project directory. Command watchers run their
    *  commands here. Only wired on the opencode path, alongside watchers. */
   projectDir?: string;
-  /** Injectable command runner for notify_user. Defaults to Bun.spawn.
-   *  Tests inject a mock so notifications never actually fire or speak. */
+  /** Injectable command runner for notify_user. Defaults to the
+   * runtime-ops spawn (node child_process under both runtimes).
+   * Tests inject a mock so notifications never actually fire or speak. */
   spawner?: Spawner;
   /** Notification journal writer for notify_user: every delivery attempt
    *  (delivered / failed / suppressed / unsupported) appends one row to

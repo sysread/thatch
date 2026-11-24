@@ -40,6 +40,7 @@ import { chatOpenTabs as chatOpenTabsProvider } from "../../tab-state";
 import { flagValue, flagValues } from "../args";
 import { printCommandHelp } from "../help";
 import type { Subcommand } from "../types";
+import { sleep, spawnSync } from "../../runtime-ops";
 
 /** Column headers for the `chat list` roster, in display order. */
 const CHAT_ROSTER_HEADER = ["NAME", "SESSION ID", "AGE", "STATUS", "PROJECT", "TOPIC"];
@@ -399,7 +400,7 @@ const tail: Subcommand = {
         process.exit(0);
       });
       for (;;) {
-        await Bun.sleep(2000);
+        await sleep(2000);
         try {
           // Follow polls re-filter the live feed: matching messages
           // surface as they arrive, non-matching ones stay invisible.
@@ -520,7 +521,7 @@ const broadcast: Subcommand = {
     // user; sanitizeCliSenderName strips anything NAME_CHARSET forbids.
     let rawName = process.env.USER ?? "";
     try {
-      const gitName = Bun.spawnSync(["git", "config", "user.name"], { stdout: "pipe" }).stdout.toString().trim();
+      const gitName = spawnSync(["git", "config", "user.name"], { stdout: "pipe" }).stdout.toString().trim();
       if (gitName) rawName = gitName;
     } catch {
       // No git available or not a repo: the env fallback stands.
