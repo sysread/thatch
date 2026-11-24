@@ -65,9 +65,8 @@ jobs:
         run: |
           results='${{ toJson(needs) }}'
           echo "leg results: $results"
-          for leg in test-matrix node-floor; do
-            echo "$results" | grep -q "\"$leg\":\"success\"" || {
-              echo "::error::the $leg leg did not succeed ($results)"
-              exit 1
-            }
-          done
+          failed=$(echo "$results" | jq -r 'to_entries | map(select(.value.result != "success") | .key) | join(", ")')
+          if [ -n "$failed" ]; then
+            echo "::error::the following legs did not succeed: $failed"
+            exit 1
+          fi
