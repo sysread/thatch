@@ -69,6 +69,19 @@ describe("bundleNodeDist", () => {
     }
   });
 
+  test("a bundle that embeds the build path is refused", async () => {
+    const root = mkdtempSync(join(tmpdir(), "thatch-bundle-"));
+    try {
+      writeFileSync(join(root, "package.json"), "{}");
+      mkdirSync(join(root, "bin"), { recursive: true });
+      writeFileSync(join(root, "bin", "dir.ts"), "console.log(__dirname);");
+      await expect(bundleNodeDist({ root, entries: ["bin/dir.ts"] })).rejects.toThrow("embeds the build path");
+      expect(existsSync(join(root, "dist"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a failed bundle throws with the build logs", async () => {
     const root = mkdtempSync(join(tmpdir(), "thatch-bundle-"));
     try {

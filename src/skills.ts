@@ -1,5 +1,6 @@
 import { mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { REVIEW_SPECIALISTS } from "./prompts";
 
 export interface SkillDef {
@@ -34,7 +35,9 @@ export interface InstallReport {
 }
 
 function loadSkillFile(name: string): string {
-  const artifactsDir = join(__dirname, "..", "artifacts", "skills");
+  // Not __dirname: bun build replaces it with the build machine's path,
+  // so the node dist would look for artifacts on the CI runner.
+  const artifactsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "artifacts", "skills");
   const filePath = join(artifactsDir, name + ".md");
   const raw = readFileSync(filePath, "utf8");
   // Interpolate REVIEW_COMMON only when it appears on its own line (the

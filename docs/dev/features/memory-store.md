@@ -21,7 +21,10 @@ node-runnable `dist/` over the CLI dispatcher (`src/packaging.ts`'s
 `bundleNodeDist`, node_modules externalized), and the `bin/thatch` sh
 shim picks the runtime at each invocation - a probed node (its
 `node -e 'require("node:sqlite")'` must succeed, and `dist/thatch.js`
-must exist), then bun on PATH. Bun's runtime globals were ported to
+must exist), then bun on PATH. The bundle step refuses output that
+embeds the build machine's path: bun build turns `__dirname` and
+`__filename` into string literals, so source code finds its files with
+`import.meta.url` instead. Bun's runtime globals were ported to
 node APIs in `src/runtime-ops.ts` (spawn,
 spawnSync, sha256, which, sleep, stdin); the only bun-specific step left
 is setup's mod bundling (`Bun.build`), which fails with a named error
