@@ -32,8 +32,8 @@
  * dependencies") - the lockfile is generated FROM the manifest, so they
  * agree by construction.
  */
-import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
 export interface BunLockfilePackageMeta {
   dependencies?: Record<string, string>;
@@ -187,8 +187,22 @@ export async function bundleNodeDist(opts: BundleDistOptions): Promise<BundleDis
   // machines the node row targets. The dist is rewritten to the node
   // hashbang; the shim's probe already gated on a capable node, so the
   // hashbang's node can be trusted.
+  //
+  // bun build turns __dirname and __filename into string literals of the
+  // build machine's path. A bundle that carries that path only works on
+  // the machine that built it, so refuse to ship one. Only quoted paths
+  // count: bun's "// path/to/source.ts" comments can contain the root too.
+  const buildPaths = [...new Set([resolve(opts.root), realpathSync(opts.root)])];
   for (const out of build.outputs) {
     const code = readFileSync(out.path, "utf8");
+    const leaked = buildPaths.find((p) => ['"', "'", "`"].some((q) => code.includes(q + p)));
+    if (leaked) {
+      rmSync(outdir, { recursive: true, force: true });
+      throw new Error(
+        `bundling the node dist failed: ${out.path} embeds the build path ${leaked} ` +
+          "(use import.meta.url, not __dirname or __filename)",
+      );
+    }
     if (code.startsWith("#!")) {
       writeFileSync(out.path, `#!/usr/bin/env node${code.slice(code.indexOf("\n"))}`);
     }
